@@ -91,8 +91,13 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
         }
         case 'admin': {
           if (rest.length === 0) return ok(adminHelp())
-          const operation = rest[0]!
-          return ok(await runAdminOperation(engine, operation, rest.slice(1).join(' ')))
+          const text = raw.trim()
+          const bodyStart = text.search(/\s/)
+          const body = bodyStart === -1 ? '' : text.slice(bodyStart + 1).trim()
+          const separator = body.search(/\s/)
+          const operation = separator === -1 ? body : body.slice(0, separator)
+          const args = separator === -1 ? '' : body.slice(separator + 1)
+          return ok(await runAdminOperation(engine, operation, args))
         }
         default:
           return bad(`未知子命令 "${head}"\n${usage()}`)

@@ -12,7 +12,7 @@
 npm install dsh-novel-write-engine
 ```
 
-在 profile 的 bundle 列表里加入 `dsh-novel-write-engine`，重启 DSH。插件声明了 `dsh.bundle.patch`（两层：根行 + 内置预设）与 `dsh.client`（Web 面板）。
+在 profile 的 bundle 列表里加入 `dsh-novel-write-engine`，重启 DSH。插件声明了 `dsh.bundle.patch`（两层：根行 + 内置预设）与 `dsh.client`（Web 面板）。内置预设依赖 Web bundle 的 `agentPresets` 服务；headless/acp/sdk profile 不提供该服务，预设行会处于等待状态，但 `novel_*` 工具本身仍可用。
 
 要求：Node ≥ 24.9，DSH `>=0.2.1-rc.2 <0.3.0`（`engines.dsh`）。
 
@@ -35,7 +35,7 @@ npm install dsh-novel-write-engine
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `projectRoot` | `.` | 默认项目根；工具可用 `project_root` 覆盖 |
+| `projectRoot` | `./novel` | 默认项目根；工具可用 `project_root` 覆盖 |
 | `minScore` | `120` | PG-07 过关线，唯一 owner |
 | `toolsMode` | `all` | `core` 只注册 8 个高频工具，其余走 `/novel admin <op> <json>` |
 | `briefsOverrides` | 空 | 自定义任务书目录；空则使用随包 `briefs/` |

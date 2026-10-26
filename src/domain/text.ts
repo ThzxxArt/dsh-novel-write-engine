@@ -51,7 +51,9 @@ export function dialogueCharacterRatio(paragraph: string): number {
   const total = Array.from(paragraph).length
   if (total === 0) return 0
   let quoted = 0
-  for (const match of paragraph.matchAll(/"([^"]*)"/g)) quoted += Array.from(match[1]!).length
+  for (const match of paragraph.matchAll(/["“]([^"“”]*)["”]/g)) {
+    quoted += Array.from(match[1]!).length
+  }
   return quoted / total
 }
 

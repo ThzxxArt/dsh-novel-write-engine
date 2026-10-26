@@ -40,6 +40,20 @@ describe('rule edge cases', () => {
     expect(codesOf('他说——然后走了——停下来。')).not.toContain('DASH_BUDGET')
   })
 
+  it('flags an overlong ellipsis run', () => {
+    expect(codesOf('他走了………………')).toContain('ELLIPSIS_RUN')
+  })
+
+  it('allows a zero-tolerance term only when the entry is dialogue-exempt', () => {
+    const strict = structuredClone(pack)
+    strict.lexicon.zero_tolerance = [{ term: '禁词' }]
+    expect(codesOf('“禁词。”', { rulepack: strict })).toContain('LEX_ZERO_TOLERANCE')
+    const voice = structuredClone(pack)
+    voice.lexicon.zero_tolerance = [{ term: '禁词', dialogueExempt: true }]
+    expect(codesOf('“禁词。”', { rulepack: voice })).not.toContain('LEX_ZERO_TOLERANCE')
+    expect(codesOf('他使用了禁词。', { rulepack: voice })).toContain('LEX_ZERO_TOLERANCE')
+  })
+
   it('relaxes contextual words for their genre and forbids them elsewhere', () => {
     const text = '这次赋能很关键。'.repeat(2)
     expect(codesOf(text, { genre: '都市现代' })).not.toContain('LEX_SOFT_LIMIT')
@@ -216,6 +230,34 @@ describe('rule edge cases', () => {
         evidence: { ...options().evidence, locks },
       }),
     ).toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('does not compare an empty locked appearance', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {
+        他: { first_appearance: 1, locked_at: 1, appearance: '' },
+      },
+      locations: {},
+    }
+    expect(
+      codesOf('他今天穿着鲜红铠甲，骑着白马冲进广场。', {
+        evidence: { ...options().evidence, locks },
+      }),
+    ).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('detects a water-word cluster that straddles a window boundary', () => {
+    const water = structuredClone(pack)
+    water.semantics.water_words = {
+      window: 10,
+      threshold: 0.4,
+      terms: ['水'],
+      scene_thresholds: {},
+    }
+    const text = `${'甲'.repeat(8)}${'水'.repeat(5)}${'甲'.repeat(7)}`
+    expect(codesOf(text, { rulepack: water })).toContain('WATER_WORDS')
   })
 
   it('uses the rulepack system labels instead of a hardcoded list', () => {

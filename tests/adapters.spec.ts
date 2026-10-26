@@ -14,6 +14,7 @@ const result = <T>(data: T): { data: T; revision: number; warnings: never[] } =>
 
 const fakeEngine = () => {
   const engine = {
+    withSignal: vi.fn(async (_signal: unknown, task: () => Promise<unknown>) => task()),
     initProject: vi.fn(async () => result({ root: '/tmp/x', title: 't', chapter: 1, stage: 'idle' })),
     getStatus: vi.fn(async () =>
       result({
@@ -150,6 +151,39 @@ describe('tool adapters', () => {
       expect(rendered[0]!.text, name).not.toContain('undefined')
       expect(rendered[0]!.text, name).not.toContain('"data"')
     }
+  })
+
+  it('forwards the host cancellation signal into the engine work', async () => {
+    const engine = fakeEngine()
+    const map = tools(engine)
+    const signal = new AbortController().signal
+    await map.get('novel_status')!.execute({ chapter: 1 }, { signal })
+    expect(engine.withSignal).toHaveBeenCalledWith(signal, expect.any(Function))
+  })
+
+  it('parses a provider-serialized JSON string for free-form parameters', async () => {
+    const engine = fakeEngine()
+    const map = tools(engine)
+    await map.get('novel_write_draft')!.execute(
+      {
+        chapter: 1,
+        content: '正文',
+        chapter_title: '标题',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: JSON.stringify({ events: ['事件'] }),
+      },
+      {},
+    )
+    expect(engine.submitDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ summary: { events: ['事件'] } }),
+    )
+    await map
+      .get('novel_archive')!
+      .execute({ chapter: 1, state_delta: JSON.stringify({ characters: {} }) }, {})
+    expect(engine.archiveChapter).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state_delta: { characters: {} } }),
+    )
   })
 
   it('narrows arguments and calls exactly one operation', async () => {
@@ -292,6 +326,17 @@ describe('command adapters', () => {
     const unknown = await novel.handler(invocation('admin novel_missing {}'))
     expect(unknown.kind).toBe('error')
     expect(unknown.text).toContain('未知')
+
+    await novel.handler(invocation('admin novel_plan_chapter {"title":"t"}'))
+    expect(engine.submitChapterPlan).toHaveBeenLastCalledWith(
+      expect.objectContaining({ target_words: [2000, 3000], beats: [] }),
+    )
+    await novel.handler(
+      invocation('admin novel_amend {"path":"state/world.yaml","content":{"note":"a  b"},"reason":"r"}'),
+    )
+    expect(engine.amend).toHaveBeenLastCalledWith(expect.objectContaining({ content: { note: 'a  b' } }))
+    await novel.handler(invocation('admin novel_export {"kind":"md","project_root":"/other"}'))
+    expect(engine.export).toHaveBeenLastCalledWith(expect.objectContaining({ root: '/other' }))
 
     for (const [operation, args] of [
       ['novel_plan_world', '{"objective":"o"}'],

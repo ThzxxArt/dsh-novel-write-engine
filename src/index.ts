@@ -28,7 +28,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  projectRoot: Schema.string().default('.'),
+  projectRoot: Schema.string().default('./novel'),
   minScore: Schema.number().default(120),
   toolsMode: Schema.string().default('all'),
   briefsOverrides: Schema.string().default(''),
@@ -63,7 +63,7 @@ export function apply(ctx: Context, config: Config): void {
   const toolsMode = config.toolsMode
   const minScore = config.minScore
   const engineConfig: EngineConfig = {
-    projectRoot: config.projectRoot === '' ? '.' : config.projectRoot,
+    projectRoot: config.projectRoot === '' ? './novel' : config.projectRoot,
     stateDir: config.stateDir,
     tools: { mode: toolsMode },
     quality: { minScore },

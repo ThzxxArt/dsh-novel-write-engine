@@ -193,7 +193,6 @@ crosschapter:
   duplicate_advisory: 0.75
   foreshadow_min_dormancy: 2
   foreshadow_dormant_after: 20
-  resource_tolerance: 0
   check_time: true
   lock_similarity: 0.75
 

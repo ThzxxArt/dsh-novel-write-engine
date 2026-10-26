@@ -9,6 +9,7 @@ const result = <T>(data: T): { data: T; revision: number; warnings: never[] } =>
 })
 
 const engine = () => ({
+  withSignal: async (_signal: unknown, task: () => Promise<unknown>) => task(),
   initProject: vi.fn(async () => result({ root: '/tmp/x', title: 't', chapter: 1, stage: 'idle' })),
   getStatus: vi.fn(async () =>
     result({

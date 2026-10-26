@@ -60,6 +60,22 @@ describe('engine lifecycle', () => {
     }
   })
 
+  it('aborts before commit when the host signal is already cancelled', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const controller = new AbortController()
+      controller.abort()
+      await expect(
+        engine.withSignal(controller.signal, () =>
+          engine.initProject({ title: '取消之书', genre: '都市现代', platform: 'fanqie', root }),
+        ),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await readProjectFile(root, 'novel.yaml')).toBeNull()
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('blocks on a gate without writing a single file (T-01)', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -113,7 +129,7 @@ describe('engine lifecycle', () => {
     }
   })
 
-  it('serializes concurrent archives: one commits, the other fails cleanly (T-02)', async () => {
+  it('serializes concurrent archives: one commits, the other replays (T-02)', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine })
@@ -122,9 +138,13 @@ describe('engine lifecycle', () => {
         engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root }),
       ])
       const fulfilled = results.filter((result) => result.status === 'fulfilled')
-      const rejected = results.filter((result) => result.status === 'rejected')
-      expect(fulfilled).toHaveLength(1)
-      expect(rejected).toHaveLength(1)
+      expect(fulfilled).toHaveLength(2)
+      expect(
+        fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed === true),
+      ).toHaveLength(1)
+      expect(
+        fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed !== true),
+      ).toHaveLength(1)
       const rows = (await engine.panelChapters({ root })).rows
       expect(rows).toHaveLength(1)
     } finally {

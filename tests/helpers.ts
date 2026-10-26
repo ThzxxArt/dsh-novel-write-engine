@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { EngineService } from '../src/engine/service.js'
@@ -138,9 +138,10 @@ export async function snapshotTree(root: string): Promise<Map<string, string>> {
         continue
       }
       const content = await readFile(absolute)
+      const metadata = await stat(absolute)
       result.set(
         relative(root, absolute).replace(/\\/g, '/'),
-        `${content.byteLength}:${createHash('sha256').update(content).digest('hex')}`,
+        `${metadata.mtimeMs}:${content.byteLength}:${createHash('sha256').update(content).digest('hex')}`,
       )
     }
   }

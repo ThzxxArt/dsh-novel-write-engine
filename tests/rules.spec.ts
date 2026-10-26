@@ -90,12 +90,164 @@ describe('rule pack compiler', () => {
         },
         /not a valid regular expression/,
       ],
+      [
+        'empty term',
+        (draft) => {
+          draft.lexicon.zero_tolerance.push({ term: ' ' })
+        },
+        /empty term/,
+      ],
+      [
+        'self exclusion',
+        (draft) => {
+          draft.exclusions.push({ pair: ['LEX_ZERO_TOLERANCE', 'LEX_ZERO_TOLERANCE'], family: 'x' })
+        },
+        /pairs/,
+      ],
+      [
+        'empty exclusion family',
+        (draft) => {
+          draft.exclusions[0].family = ''
+        },
+        /family is empty/,
+      ],
+      [
+        'paragraph max',
+        (draft) => {
+          draft.format.paragraph_max_words = 501
+        },
+        /paragraph_max_words/,
+      ],
+      [
+        'title min',
+        (draft) => {
+          draft.format.title.min_chars = 0
+        },
+        /min_chars/,
+      ],
+      [
+        'title order',
+        (draft) => {
+          draft.format.title.max_chars = 1
+        },
+        /max_chars/,
+      ],
+      [
+        'dash token',
+        (draft) => {
+          draft.punctuation.dash.token = ''
+        },
+        /dash.token/,
+      ],
+      [
+        'period order',
+        (draft) => {
+          draft.punctuation.period_density.min = 9
+          draft.punctuation.period_density.max = 1
+        },
+        /period_density/,
+      ],
+      [
+        'ellipsis max',
+        (draft) => {
+          draft.punctuation.ellipsis_run.max = -1
+        },
+        /ellipsis_run.max/,
+      ],
+      [
+        'uniform minimum',
+        (draft) => {
+          draft.punctuation.uniform_sentence.min_sentences = 0
+        },
+        /min_sentences/,
+      ],
+      [
+        'consecutive maximum',
+        (draft) => {
+          draft.punctuation.consecutive_le.max = -1
+        },
+        /consecutive_le.max/,
+      ],
+      [
+        'advisory order',
+        (draft) => {
+          draft.crosschapter.duplicate_advisory = 2
+        },
+        /duplicate_advisory/,
+      ],
+      [
+        'advisory above similarity',
+        (draft) => {
+          draft.crosschapter.duplicate_advisory = 0.9
+          draft.crosschapter.duplicate_similarity = 0.5
+        },
+        /must not exceed/,
+      ],
+      [
+        'dialogueExempt type',
+        (draft) => {
+          draft.lexicon.zero_tolerance.push({ term: '新词', dialogueExempt: 'yes' })
+        },
+        /dialogueExempt/,
+      ],
+      [
+        'text list value',
+        (draft) => {
+          draft.format.system_labels = [1]
+        },
+        /system_labels/,
+      ],
+      [
+        'consecutive char',
+        (draft) => {
+          draft.punctuation.consecutive_le.char = 'ab'
+        },
+        /one character/,
+      ],
+      [
+        'platform missing words',
+        (draft) => {
+          draft.platform.fanqie.words_per_chapter = null
+        },
+        /words_per_chapter/,
+      ],
+      [
+        'platform word order',
+        (draft) => {
+          draft.platform.fanqie.words_per_chapter = [3000, 2000]
+        },
+        /min must not exceed max/,
+      ],
+      [
+        'platform dialogue order',
+        (draft) => {
+          draft.platform.fanqie.dialogue_ratio = [0.9, 0.1]
+        },
+        /dialogue_ratio min must not exceed max/,
+      ],
+      [
+        'foreshadow dormancy',
+        (draft) => {
+          draft.crosschapter.foreshadow_min_dormancy = -1
+        },
+        /foreshadow_min_dormancy/,
+      ],
+      [
+        'unknown exemption',
+        (draft) => {
+          draft.exemptions = ['NOPE']
+        },
+        /exemption references unknown/,
+      ],
     ]
     for (const [name, mutate, pattern] of cases) {
       const draft = structuredClone(rawPack)
       mutate(draft)
       expect(() => compileRulepack(draft), name).toThrow(pattern)
     }
+    const nested = structuredClone(rawPack) as Record<string, any>
+    nested.format.unknown_nested_key = true
+    expect(() => compileRulepack(nested)).not.toThrow()
     const missingPlatform = structuredClone(rawPack) as { platform: Record<string, unknown> }
     delete missingPlatform.platform.fanqie
     expect(() => compileRulepack(missingPlatform)).toThrow(/platform.fanqie/)
@@ -288,6 +440,16 @@ describe('machine pipeline', () => {
     expect(codes).toContain('LOCKED_DETAIL_DRIFT')
   })
 
+  it('compiles partial packs without freezing shared defaults and rejects dead thresholds', () => {
+    expect(() => compileRulepack({ ...DEFAULT_RULEPACK, name: 'partial-a', version: '1' })).not.toThrow()
+    expect(() => compileRulepack({ ...DEFAULT_RULEPACK, name: 'partial-b', version: '1' })).not.toThrow()
+    const dead = structuredClone(DEFAULT_RULEPACK) as unknown as Record<string, unknown>
+    const punctuation = dead.punctuation as Record<string, unknown>
+    const dash = punctuation.dash as Record<string, unknown>
+    dash.scale_words = 0
+    expect(() => compileRulepack(dead)).toThrow(/scale_words/)
+  })
+
   it('flags a foreshadow that reappears too soon', () => {
     const result = runMachineChecks(
       '他再次看见那封旧信封。',
@@ -321,5 +483,44 @@ describe('machine pipeline', () => {
       }),
     )
     expect(result.violations.map((violation) => violation.code)).toContain('FS_REVISITED_TOO_SOON')
+    const advanced = runMachineChecks(
+      '他再次看见那封旧信封。',
+      options({
+        chapter: 2,
+        summary: {
+          foreshadows: {
+            planted: [],
+            advanced: [{ key: 'FS-001', note: '日期被改', new_info: true }],
+            resolved: [],
+          },
+        } as never,
+        evidence: {
+          characters: null,
+          previousText: null,
+          previousTexts: [],
+          foreshadows: {
+            schema_version: 1,
+            next_seq: 2,
+            items: [
+              {
+                id: 'FS-001',
+                title: '旧信封',
+                planted: 1,
+                last_touched: 1,
+                status: 'planted',
+                resolved_at: null,
+                description: '',
+                advance_log: [],
+              },
+            ],
+          },
+          timeline: null,
+          relationships: null,
+          world: null,
+          locks: null,
+        },
+      }),
+    )
+    expect(advanced.violations.map((violation) => violation.code)).not.toContain('FS_REVISITED_TOO_SOON')
   })
 })

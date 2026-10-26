@@ -112,7 +112,10 @@ export function buildEpub(project: NovelProject, chapters: readonly ExportChapte
     .update(`${project.title}\u0000${project.author}\u0000${project.created_at}`)
     .digest('hex')
   const id = `urn:uuid:${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`
-  const modified = project.created_at.endsWith('Z') ? project.created_at : `${project.created_at}Z`
+  const created = new Date(project.created_at)
+  const modified = (Number.isNaN(created.getTime()) ? new Date(0) : created)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, 'Z')
   const manifestItems = chapters
     .map(
       (_, index) =>

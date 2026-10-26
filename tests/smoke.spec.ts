@@ -6,6 +6,11 @@ import { CORE_TOOLS, TOOL_NAMES } from '../src/constants.js'
 const config = (Config as unknown as (init: Record<string, unknown>) => never)({})
 
 describe('plugin assembly', () => {
+  it('defaults projectRoot to ./novel', () => {
+    const resolved = (Config as unknown as (init: Record<string, unknown>) => { projectRoot: string })({})
+    expect(resolved.projectRoot).toBe('./novel')
+  })
+
   it('registers all eighteen tools, five commands, the skill and the panel route', () => {
     const host = fakeHost()
     apply(host.ctx as never, config)

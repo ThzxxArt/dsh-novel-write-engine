@@ -11,7 +11,15 @@ type Handler = (engine: EngineService, args: Record<string, unknown>) => Promise
  */
 const OPERATIONS: Record<string, Handler> = {
   novel_plan_world: (engine, args) => engine.submitWorldPlan({ chapter: 0, ...args } as never),
-  novel_plan_chapter: (engine, args) => engine.submitChapterPlan({ chapter: 0, ...args } as never),
+  novel_plan_chapter: (engine, args) =>
+    engine.submitChapterPlan({
+      chapter: 0,
+      beats: [],
+      opening: '',
+      ending: '',
+      target_words: [2000, 3000],
+      ...args,
+    } as never),
   novel_word_count: (engine, args) => engine.countWords(args as never),
   novel_amend: (engine, args) => engine.amend(args as never),
   novel_rollback: (engine, args) =>
@@ -80,7 +88,11 @@ export async function runAdminOperation(
       `available: ${ADMIN_OPERATION_NAMES.join(', ')}`,
     )
   }
-  const args = parseAdminArguments(rawArguments, operation)
+  const parsed = parseAdminArguments(rawArguments, operation)
+  const args =
+    parsed.root === undefined && typeof parsed.project_root === 'string'
+      ? { ...parsed, root: parsed.project_root }
+      : parsed
   const result = await handler(engine, args)
   const payload =
     typeof result === 'object' && result !== null && 'data' in result

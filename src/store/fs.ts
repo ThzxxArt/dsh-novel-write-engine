@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
 import { resolveInside } from './path.js'
+import { MIGRATIONS, migrateDocument } from './migrate.js'
 import { narrow, type DocKind } from './schema.js'
 
 /** Hash used by journals, dedupe keys and content bindings. */
@@ -72,8 +73,9 @@ export class FsStore {
     try {
       await fs.access(await this.safePath(relativePath))
       return true
-    } catch {
-      return false
+    } catch (error) {
+      if (isMissing(error)) return false
+      throw error
     }
   }
 
@@ -81,16 +83,18 @@ export class FsStore {
     try {
       const stat = await fs.stat(await this.safePath(relativePath))
       return { size: stat.size, mtimeMs: stat.mtimeMs }
-    } catch {
-      return null
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw error
     }
   }
 
   async list(relativeDir: string): Promise<string[]> {
     try {
       return (await fs.readdir(await this.safePath(relativeDir))).sort()
-    } catch {
-      return []
+    } catch (error) {
+      if (isMissing(error)) return []
+      throw error
     }
   }
 
@@ -110,7 +114,18 @@ export class FsStore {
   ): Promise<ReturnType<typeof narrow<K>> | null> {
     const text = await this.readText(relativePath)
     if (text === null) return null
-    return narrow(kind, parseYaml(text) as unknown) as ReturnType<typeof narrow<K>>
+    const parsed = parseYaml(text) as unknown
+    const version =
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as Record<string, unknown>).schema_version === 'number'
+        ? ((parsed as Record<string, unknown>).schema_version as number)
+        : 1
+    const document =
+      version < SCHEMA_VERSION
+        ? migrateDocument(parsed as Record<string, unknown>, MIGRATIONS, SCHEMA_VERSION)
+        : parsed
+    return narrow(kind, document) as ReturnType<typeof narrow<K>>
   }
 
   /** Write text atomically: temp file, fsync, rename, directory fsync. */
@@ -147,7 +162,14 @@ export class FsStore {
   async appendText(relativePath: string, text: string): Promise<void> {
     const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
-    await fs.appendFile(absolute, text, 'utf8')
+    const handle = await fs.open(absolute, 'a')
+    try {
+      await handle.writeFile(text, 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await syncDirectory(dirname(absolute))
   }
 
   /** Read raw bytes, used by export and integrity checks. */
@@ -164,7 +186,13 @@ export class FsStore {
     const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     const temp = `${absolute}.${randomUUID()}.tmp`
-    await fs.writeFile(temp, bytes)
+    const handle = await fs.open(temp, 'w')
+    try {
+      await handle.writeFile(bytes)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await fs.rename(temp, absolute)
     await syncDirectory(dirname(absolute))
   }
@@ -201,7 +229,7 @@ function isMissing(error: unknown): boolean {
     typeof error === 'object' &&
     error !== null &&
     'code' in error &&
-    (error as { code?: string }).code === 'ENOENT'
+    ((error as { code?: string }).code === 'ENOENT' || (error as { code?: string }).code === 'ENOTDIR')
   )
 }
 

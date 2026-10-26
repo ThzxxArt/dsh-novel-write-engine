@@ -9,29 +9,31 @@ import { join, relative } from 'node:path'
 import ts from 'typescript'
 
 const root = new URL('..', import.meta.url).pathname
-const configPath = join(root, 'tsconfig.json')
-const configFile = ts.readConfigFile(configPath, ts.sys.readFile)
-const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root)
-const compilerOptions = { ...parsed.options, noEmit: true, declaration: false, incremental: false }
+const readOptions = (configName) => {
+  const configPath = join(root, configName)
+  const configFile = ts.readConfigFile(configPath, ts.sys.readFile)
+  const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root)
+  return { ...parsed.options, noEmit: true, declaration: false, incremental: false }
+}
+const hostOptions = readOptions('tsconfig.json')
+const clientOptions = readOptions('tsconfig.client.json')
 
 const files = []
 const walk = (directory) => {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const absolute = join(directory, entry.name)
-    if (entry.isDirectory()) {
-      if (entry.name === 'client') continue
-      walk(absolute)
-    } else if (entry.name.endsWith('.ts')) {
-      files.push(absolute)
-    }
+    if (entry.isDirectory()) walk(absolute)
+    else if (entry.name.endsWith('.ts')) files.push(absolute)
   }
 }
 walk(join(root, 'src'))
 files.sort()
+const clientRoot = join(root, 'src', 'client')
 
 let failures = 0
 for (const file of files) {
-  const program = ts.createProgram({ rootNames: [file], options: compilerOptions })
+  const options = file.startsWith(clientRoot) ? clientOptions : hostOptions
+  const program = ts.createProgram({ rootNames: [file], options })
   const diagnostics = ts
     .getPreEmitDiagnostics(program)
     .filter((diagnostic) => diagnostic.file !== undefined && diagnostic.file.fileName === file)

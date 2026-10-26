@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
@@ -295,6 +296,12 @@ export class EngineService {
   }
 
   private readonly onEvent: ((event: EngineEvent) => void) | undefined
+  private readonly signalContext = new AsyncLocalStorage<AbortSignal | undefined>()
+
+  /** Bind the host cancellation signal to the engine work of one tool call. */
+  withSignal<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+    return this.signalContext.run(signal, task)
+  }
 
   /** The configured default project root. */
   defaultRoot(): string {
@@ -777,7 +784,14 @@ export class EngineService {
       root: input.root,
       op: 'submitReview',
       key: (snapshot) =>
-        `review:${input.chapter}:${snapshot.pipeline.rounds.review + 1}:${sha256(snapshot.text ?? '')}`,
+        `review:${input.chapter}:${sha256(snapshot.text ?? '')}:${sha256(
+          stableJson({
+            dimensions: input.dimensions,
+            issues: input.issues,
+            total: input.total,
+            proof: input.proof,
+          }),
+        )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
@@ -870,14 +884,20 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'submitRevision',
-      key: (snapshot) =>
-        `revision:${input.chapter}:${snapshot.pipeline.rounds.revise + 1}:${sha256(input.content)}`,
+      key: () =>
+        `revision:${input.chapter}:${sha256(input.content)}:${sha256(
+          stableJson({ summary: input.summary, issues: input.issues, proof: input.proof }),
+        )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const patchedReview =
           snapshot.review === null
             ? null
-            : { ...snapshot.review, issues: input.issues ?? snapshot.review.issues }
+            : {
+                ...snapshot.review,
+                content_hash: sha256(input.content),
+                issues: input.issues ?? snapshot.review.issues,
+              }
         await this.assertGates(snapshot, 'submitRevision', {
           briefStage: briefStageFor('submitRevision', snapshot.pipeline.stage),
           text: input.content,
@@ -886,6 +906,20 @@ export class EngineService {
           review: patchedReview,
           proof: input.proof,
         })
+        // P5 may omit the summary only while it still describes the revised
+        // opening. Otherwise the stale PG-05 opening survives to P6 and costs
+        // another revision (and a PG-11 round) to repair.
+        if (input.summary === undefined && snapshot.plan?.summary !== undefined) {
+          const opening = snapshot.plan.summary.opening
+          const firstTwo = splitParagraphs(input.content).slice(0, 2)
+          if (!firstTwo.some((paragraph) => paragraph.includes(opening))) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'summary omitted, but the stored opening no longer appears in the revised first two paragraphs',
+              'resubmit novel_revise with a summary whose opening quotes the revised text',
+            )
+          }
+        }
         const machine = this.machine(snapshot, input.content, {
           summary: input.summary ?? snapshot.plan?.summary ?? null,
         })
@@ -1001,7 +1035,13 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'archiveChapter',
-      key: (snapshot) => `archive:${input.chapter}:${sha256(snapshot.text ?? '')}`,
+      key: (snapshot) => {
+        // After the first archive the chapter file is indexed and the active
+        // manuscript is gone. Bind the replay key to the indexed content hash so
+        // a duplicate call is idempotent instead of a stage-order failure.
+        const archived = snapshot.chapters.chapters.find((record) => record.num === input.chapter)
+        return `archive:${input.chapter}:${archived?.content_hash ?? sha256(snapshot.text ?? '')}`
+      },
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
@@ -1083,6 +1123,7 @@ export class EngineService {
           foreshadows: snapshot.foreshadows,
           timeline: snapshot.timeline,
           relationships: snapshot.relationships,
+          narrator: snapshot.plan?.narrator ?? null,
         })
         const foreshadows = ledger.foreshadows
         const timeline = ledger.timeline
@@ -1586,6 +1627,13 @@ export class EngineService {
         text: snapshot.text,
       })
     }
+    if (chapters.length === 0) {
+      throw new EngineInputError(
+        ERROR_CODES.STAGE_ORDER,
+        'no chapter is available to export',
+        'write or archive at least one chapter first',
+      )
+    }
     return chapters
   }
 
@@ -1621,7 +1669,7 @@ export class EngineService {
 
   private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
     const machine =
-      (stage === 'P4' || stage === 'P5') && snapshot.text !== null
+      ['P4', 'P5', 'P6'].includes(stage) && snapshot.text !== null
         ? this.machine(snapshot, snapshot.text, { summary: snapshot.plan?.summary ?? null })
         : undefined
     return briefContext({
@@ -1896,6 +1944,17 @@ export class EngineService {
     }>
   }): Promise<OpResult<T>> {
     const root = resolve(options.root ?? this.config.projectRoot)
+    const signal = this.signalContext.getStore()
+    const abortIfNeeded = (): void => {
+      if (signal?.aborted === true) {
+        throw new EngineFaultError(
+          ERROR_CODES.TXN_ABORTED,
+          `${options.op} was aborted before commit`,
+          'retry the call if you still want the write',
+        )
+      }
+    }
+    abortIfNeeded()
     return this.mutex.run(root, async () => {
       if (options.emptyAllowed === true) ensureDirAt(root)
       const store = this.storeFor(root)
@@ -1927,6 +1986,7 @@ export class EngineService {
               revision: 1,
               files: created.files,
               backup: false,
+              signal,
             })
             this.replay.clear()
             return { data: created.data, revision: 1, warnings: created.warnings ?? [] }
@@ -1943,7 +2003,9 @@ export class EngineService {
           if (cached !== undefined) return { ...(cached as OpResult<T>), replayed: true }
         }
         const revision = snapshot.pipeline.revision + 1
+        abortIfNeeded()
         const outcome = await options.run(snapshot, { store, revision })
+        abortIfNeeded()
         await runTransaction(store, {
           txid: randomUUID(),
           op: options.op,
@@ -1952,6 +2014,7 @@ export class EngineService {
           files: outcome.files,
           backup: outcome.backup ?? false,
           backupRetention: this.config.storage.backupRetention,
+          signal,
         })
         const result: OpResult<T> = { data: outcome.data, revision, warnings: outcome.warnings ?? [] }
         if (key !== undefined) {

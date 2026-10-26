@@ -93,7 +93,16 @@ export async function fetchPanel(
 ): Promise<{ payload: PanelPayloadDto | null; error: string | null }> {
   try {
     const response = await fetcher(path, { headers: { accept: 'application/json' } })
-    if (!response.ok) return { payload: null, error: `宿主返回 ${response.status}` }
+    if (!response.ok) {
+      let detail = `宿主返回 ${response.status}`
+      try {
+        const body = (await response.json()) as { error?: unknown }
+        if (typeof body?.error === 'string' && body.error !== '') detail = body.error
+      } catch {
+        // A non-JSON error body keeps the status-only message.
+      }
+      return { payload: null, error: detail }
+    }
     const payload = (await response.json()) as PanelPayloadDto
     return { payload, error: null }
   } catch (error) {

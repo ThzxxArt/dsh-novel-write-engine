@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { BACKUP_DIR, STAGING_DIR } from '../constants.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
-import { FsStore, joinRel, sha256 } from './fs.js'
+import { FsStore, joinRel, sha256, syncDirectory } from './fs.js'
 import { appendJournal } from './journal.js'
 import { pruneBackups } from './backup.js'
 
@@ -76,6 +76,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
   const expected = new Map<string, string>()
   const before = new Map<string, Uint8Array | null>()
   const renamed: string[] = []
+  const targetDirectories = new Set<string>()
   let journaledCommitted = false
 
   try {
@@ -123,6 +124,15 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     // pending hashes tell startup whether every rename landed. Without it, the
     // previous committed row would look externally corrupted and block every
     // later write forever.
+    const beforeHashes = Object.fromEntries(
+      input.files.map((file) => {
+        const bytes = before.get(file.path)
+        return [
+          file.path,
+          bytes === null || bytes === undefined ? null : sha256(Buffer.from(bytes).toString('base64')),
+        ]
+      }),
+    )
     await appendJournal(store, {
       txid: input.txid,
       at: new Date().toISOString(),
@@ -132,16 +142,19 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       files: input.files.map((file) => file.path),
       status: 'pending',
       hashes: Object.fromEntries(expected),
+      before: beforeHashes,
     })
 
     for (const [index, file] of input.files.entries()) {
       const from = await store.safePath(joinRel(staging, file.path))
       const to = await store.safePath(file.path)
       await fs.mkdir(dirname(to), { recursive: true })
+      targetDirectories.add(dirname(to))
       await fs.rename(from, to)
       renamed.push(file.path)
       if (input.afterRename !== undefined) await input.afterRename(file.path, index)
     }
+    for (const directory of targetDirectories) await syncDirectory(directory)
 
     for (const file of input.files) {
       const written = await store.hashBytes(file.path)

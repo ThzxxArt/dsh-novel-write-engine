@@ -127,6 +127,8 @@ export function briefContext(input: BriefContextInput): Record<string, unknown> 
     case 'P6':
       return {
         ...base,
+        text: input.text ?? '',
+        machine: input.machine ?? null,
         characters: input.characters.characters,
         world: input.world,
         locks: input.locks,

@@ -147,9 +147,16 @@ const systemLabel: Rule = (ctx) => {
 
 const zeroTolerance: Rule = (ctx) =>
   ctx.rulepack.lexicon.zero_tolerance.flatMap((entry) => {
-    const hits = countHits(ctx.text, entry.term)
+    const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
+    const source =
+      entry.dialogueExempt === true
+        ? splitParagraphs(ctx.text)
+            .filter((paragraph) => dialogueCharacterRatio(paragraph) < dominant)
+            .join('\n\n')
+        : ctx.text
+    const hits = countHits(source, entry.term)
     if (hits === 0) return []
-    const paragraph = firstParagraphContaining(ctx.text, entry.term)
+    const paragraph = firstParagraphContaining(source, entry.term)
     return [
       v(
         LEXICON_RULES.ZERO_TOLERANCE,
@@ -255,7 +262,7 @@ const dashBudget: Rule = (ctx) => {
   const token = ctx.rulepack.punctuation.dash.token
   const total = countOccurrences(ctx.text, token)
   let inDialogue = 0
-  for (const match of ctx.text.matchAll(/"[^"]*"/g)) {
+  for (const match of ctx.text.matchAll(/["“][^"“”]*["”]/g)) {
     inDialogue += countOccurrences(match[0], token)
   }
   // A dash inside dialogue carries two speakers' interruption, so it costs double.
@@ -378,8 +385,7 @@ const adjectiveDensity: Rule = (ctx) => {
 const slidingWindows = (text: string, size: number): string[] => {
   if (text.length <= size) return [text]
   const windows: string[] = []
-  for (let start = 0; start + size <= text.length; start += size)
-    windows.push(text.slice(start, start + size))
+  for (let start = 0; start + size <= text.length; start += 1) windows.push(text.slice(start, start + size))
   const tail = text.slice(text.length - size)
   if (windows[windows.length - 1] !== tail) windows.push(tail)
   return windows
@@ -492,13 +498,16 @@ const revisitedTooSoon: Rule = (ctx) => {
   const ledger = ctx.evidence.foreshadows
   if (ledger === null) return []
   const min = ctx.rulepack.crosschapter.foreshadow_min_dormancy
+  const advances = ctx.summary?.foreshadows.advanced ?? []
   return ledger.items
-    .filter(
-      (item) =>
-        ctx.text.includes(item.title) &&
-        ctx.chapter - item.last_touched < min &&
-        ctx.chapter > item.last_touched,
-    )
+    .filter((item) => {
+      if (!ctx.text.includes(item.title)) return false
+      if (ctx.chapter - item.last_touched >= min || ctx.chapter <= item.last_touched) return false
+      // A genuine advance with new information is the documented exception.
+      return !advances.some(
+        (advance) => (advance.key === item.id || advance.key === item.title) && advance.new_info === true,
+      )
+    })
     .map((item) =>
       v(
         CROSS_RULES.FS_REVISITED_TOO_SOON,
@@ -630,6 +639,7 @@ const lockedDetailDrift: Rule = (ctx) => {
   }
   for (const [name, lock] of Object.entries(locks.characters)) {
     if (!ctx.text.includes(name)) continue
+    if (lock.appearance.trim() === '') continue
     const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
     if (paragraph === undefined) continue
     const similarity = textSimilarity(paragraph, lock.appearance)

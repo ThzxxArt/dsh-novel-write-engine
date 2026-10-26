@@ -1,7 +1,34 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
-import { EngineError, GENRES, PLATFORMS, SCENE_TYPES, type Genre, type Platform } from '../types.js'
+import {
+  ERROR_CODES,
+  EngineError,
+  EngineInputError,
+  GENRES,
+  PLATFORMS,
+  SCENE_TYPES,
+  type Genre,
+  type Platform,
+} from '../types.js'
 import type { EngineService } from '../engine/service.js'
+
+/**
+ * Providers sometimes serialize a free-form `json` parameter as a JSON string
+ * even when the model intended an object. Accept both wire shapes; an invalid
+ * string becomes a machine-code error instead of a raw TypeError.
+ */
+const asJson = <T>(value: unknown, field: string): T => {
+  if (typeof value !== 'string') return value as T
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `${field} must be a JSON object or a valid JSON string`,
+      `send ${field} as an object, not a malformed string`,
+    )
+  }
+}
 
 /** Turn an engine failure into the message shape tools surface. */
 const fail = (error: unknown): never => {
@@ -11,12 +38,13 @@ const fail = (error: unknown): never => {
   throw error
 }
 
-/** Wrap an execute body so every failure carries its machine code. */
-const guarded =
+/** Wrap an execute body with cancellation and a machine-code error. */
+const makeGuarded =
+  (engine: EngineService) =>
   <A>(body: (args: A) => Promise<unknown>) =>
-  async (args: A): Promise<any> => {
+  async (args: A, exec?: { signal?: AbortSignal }): Promise<any> => {
     try {
-      return await body(args)
+      return await engine.withSignal(exec?.signal, () => body(args))
     } catch (error) {
       return fail(error)
     }
@@ -51,6 +79,7 @@ const root = { type: 'string' as const, description: 'Project root; defaults to 
  * operation, render the canonical value. They never read a file.
  */
 export function createNovelTools(engine: EngineService): ReturnType<typeof defineTool>[] {
+  const guarded = makeGuarded(engine)
   return [
     defineTool({
       name: 'novel_init',
@@ -152,8 +181,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           chapter: 0,
           objective: args.objective,
           constraints: (args.constraints as string[]) ?? [],
-          characters: (args.characters as never) ?? [],
-          locations: (args.locations as never) ?? [],
+          characters: asJson<never[]>(args.characters, 'characters') ?? [],
+          locations: asJson<never[]>(args.locations, 'locations') ?? [],
           continuity_notes: (args.continuity_notes as string[]) ?? [],
           root: args.project_root,
         }),
@@ -200,7 +229,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         summary: {
           type: 'json',
           required: true,
-          description: 'The ten-field chapter summary required by PG-05.',
+          description:
+            'The ten-field chapter summary required by PG-05. Pass an object (events, characters_appeared, foreshadows, new_elements, resource_changes, opening, continuity, hook_strength, pleasure_points, plot_advancement); a JSON string is accepted too.',
         },
         project_root: root,
       },
@@ -212,7 +242,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           chapter_title: args.chapter_title,
           scene_type: args.scene_type,
           narrator: args.narrator,
-          summary: args.summary as never,
+          summary: asJson(args.summary, 'summary') as never,
           root: args.project_root,
         }),
       ),
@@ -237,10 +267,10 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       execute: guarded(async (args) =>
         engine.submitReview({
           chapter: args.chapter,
-          dimensions: args.dimensions as never,
-          issues: (args.issues as never) ?? [],
+          dimensions: asJson(args.dimensions, 'dimensions') as never,
+          issues: (asJson(args.issues, 'issues') as never) ?? [],
           total: args.total,
-          proof: args.proof as never,
+          proof: asJson(args.proof, 'proof') as never,
           root: args.project_root,
         }),
       ),
@@ -265,9 +295,9 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         engine.submitRevision({
           chapter: args.chapter,
           content: args.content,
-          summary: args.summary as never,
-          issues: args.issues as never,
-          proof: args.proof as never,
+          summary: asJson(args.summary, 'summary') as never,
+          issues: asJson(args.issues, 'issues') as never,
+          proof: asJson(args.proof, 'proof') as never,
           root: args.project_root,
         }),
       ),
@@ -291,7 +321,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         engine.runCheck({
           chapter: args.chapter,
           scope: args.scope as string[],
-          semantic: args.semantic as never[],
+          semantic: asJson(args.semantic, 'semantic') as never[],
           root: args.project_root,
         }),
       ),
@@ -331,8 +361,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       execute: guarded(async (args) =>
         engine.archiveChapter({
           chapter: args.chapter,
-          state_delta: args.state_delta as never,
-          handoff: args.handoff as never,
+          state_delta: asJson(args.state_delta, 'state_delta') as never,
+          handoff: asJson(args.handoff, 'handoff') as never,
           root: args.project_root,
         }),
       ),
@@ -408,7 +438,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       execute: guarded(async (args) =>
         engine.amend({
           path: args.path,
-          content: args.content as Record<string, unknown>,
+          content: asJson<Record<string, unknown>>(args.content, 'content'),
           reason: args.reason,
           root: args.project_root,
         }),

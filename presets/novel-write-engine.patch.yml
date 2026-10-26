@@ -21,7 +21,11 @@
           - { id: time-context, name: '@deepseek-ai/dsh-time-context' }
           - { id: tool-skill, name: '@deepseek-ai/dsh-tool-skill' }
           - { id: tool-ask-user, name: '@deepseek-ai/dsh-tool-ask-user' }
-          - { id: tool-todo, name: '@deepseek-ai/dsh-tool-todo' }
+          - {
+              id: tool-todo,
+              name: '@deepseek-ai/dsh-tool-todo',
+              config: { allowParallelInProgress: false },
+            }
           - { id: present, name: '@deepseek-ai/dsh-tool-present' }
           - {
               id: tool-web,

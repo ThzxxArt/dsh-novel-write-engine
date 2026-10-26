@@ -18,7 +18,8 @@ const readYaml = async (root: string, path: string): Promise<Record<string, unkn
   return parseYaml(text!) as Record<string, unknown>
 }
 
-const ledgerText = (): string => `${cleanText()}\n\n他数了数铜钱，少了 200。配角A站在门口。`
+const ledgerText = (): string =>
+  `${cleanText()}\n\n他数了数铜钱，少了 200。配角A站在旧办公室门口，他有感知雨的能力。桌上压着蜡印。`
 
 const summaryWithLedgerEntities = (): ChapterSummary =>
   sampleSummary({
@@ -202,6 +203,32 @@ describe('archive state_delta reconciliation', () => {
       expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
       // The helper's evidence remains valid when the check is not tampered with.
       expect(sampleSemantic(text)).toHaveLength(4)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses a review edited after submission even when its arithmetic still closes', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      await readyToArchive({ root, engine, summary, text: ledgerText() })
+      const reviewPath = join(root, 'reviews', 'ch001.review.yaml')
+      const review = parseYaml((await readProjectFile(root, 'reviews/ch001.review.yaml'))!) as {
+        dimensions: Array<{ deductions: unknown[] }>
+        total: number
+        content_hash: string
+      }
+      for (const dimension of review.dimensions) dimension.deductions = []
+      review.total = 150
+      review.content_hash = 'deadbeef'
+      await writeFile(reviewPath, `${JSON.stringify(review)}\n`, 'utf8')
+      // The P8 digest covers the review, so refresh it before retrying.
+      await engine.getBrief({ stage: 'P8', root })
+      await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
+        code: 'ENGINE_GATE_BLOCKED',
+      })
+      expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
     } finally {
       await cleanup()
     }

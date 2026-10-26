@@ -97,6 +97,14 @@ describe('preset patch', () => {
     }
   })
 
+  it('supplies every required plugin config, including the todo concurrency choice', () => {
+    const config = rows[0]!.config as {
+      plugins: Array<{ id: string; config?: Record<string, unknown> }>
+    }
+    const todo = config.plugins.find((entry) => entry.id === 'tool-todo')
+    expect(todo?.config).toEqual({ allowParallelInProgress: false })
+  })
+
   it('ships the persona text in the preset, not in code', () => {
     const config = rows[0]!.config as { plugins: Array<{ id: string; config?: { prefix?: string } }> }
     const persona = config.plugins.find((entry) => entry.id === 'persona')

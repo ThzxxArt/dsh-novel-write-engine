@@ -63,3 +63,41 @@ it('T-09 a failing file migration restores the pre-image', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('T-09 is a no-op at the target version and rejects a non-monotonic chain', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))
+  try {
+    const store = new FsStore(root)
+    const before = 'schema_version: 2\ntitle: 原稿\n'
+    await writeFile(join(root, 'novel.yaml'), before, 'utf8')
+    await expect(migrateProjectFile(store, 'novel.yaml', [], 2)).resolves.toBe(false)
+    const chain: MigrationStep[] = [{ from: 1, to: 1, migrate: (document) => document }]
+    await writeFile(join(root, 'novel.yaml'), 'schema_version: 1\ntitle: 原稿\n', 'utf8')
+    await expect(migrateProjectFile(store, 'novel.yaml', chain, 2)).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('T-09 restores the pre-image when the write itself fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))
+  try {
+    class FailingStore extends FsStore {
+      override async writeText(): Promise<void> {
+        throw new Error('disk full')
+      }
+    }
+    const store = new FailingStore(root)
+    const before = 'schema_version: 1\ntitle: 原稿\n'
+    await writeFile(join(root, 'novel.yaml'), before, 'utf8')
+    const chain: MigrationStep[] = [
+      { from: 1, to: 2, migrate: (document) => ({ ...document, title: '新的' }) },
+    ]
+    await expect(migrateProjectFile(store, 'novel.yaml', chain, 2)).rejects.toThrow('disk full')
+    expect(await readFile(join(root, 'novel.yaml'), 'utf8')).toBe(before)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

@@ -70,6 +70,14 @@ describe('panel view model', () => {
     expect((await fetchPanel(ok as unknown as typeof fetch, '/api')).payload?.summary.chapter).toBe(2)
     const notOk = vi.fn(async () => ({ ok: false, status: 503 }))
     expect((await fetchPanel(notOk as unknown as typeof fetch, '/api')).error).toContain('503')
+    const explained = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'database unavailable' }),
+    }))
+    expect((await fetchPanel(explained as unknown as typeof fetch, '/api')).error).toContain(
+      'database unavailable',
+    )
     const broken = vi.fn(async () => {
       throw new Error('offline')
     })

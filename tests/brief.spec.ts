@@ -117,6 +117,8 @@ describe('brief context packs', () => {
           'timeline',
           'relationships',
           'check',
+          'text',
+          'machine',
         ]),
       )
     } finally {

@@ -1,6 +1,6 @@
 import { SCORE_DIMENSIONS, FULL_SCORE, type Exclusion } from '../domain/scoring.js'
 import { ALL_RULE_CODES } from '../codes.js'
-import { ERROR_CODES, GENRES, PLATFORMS, SCHEMA_VERSION, EngineFaultError } from '../types.js'
+import { ERROR_CODES, GENRES, PLATFORMS, SCENE_TYPES, SCHEMA_VERSION, EngineFaultError } from '../types.js'
 import type { Rulepack } from './types.js'
 
 const platformDefaults = (words: [number, number], dialogue: [number, number]) => ({
@@ -67,7 +67,6 @@ export const DEFAULT_RULEPACK: Rulepack = {
     duplicate_advisory: 0.75,
     foreshadow_min_dormancy: 2,
     foreshadow_dormant_after: 20,
-    resource_tolerance: 0,
     check_time: true,
     lock_similarity: 0.75,
   },
@@ -170,7 +169,106 @@ export function compileRulepack(raw: unknown): Rulepack {
     if (entry.term.trim() === '') invalid('lexicon contains an empty term')
     if ('limit' in entry && entry.limit !== undefined && entry.limit < 0)
       invalid(`limit for "${entry.term}" is negative`)
+    if (
+      'dialogueExempt' in entry &&
+      entry.dialogueExempt !== undefined &&
+      typeof entry.dialogueExempt !== 'boolean'
+    ) {
+      invalid(`dialogueExempt for "${entry.term}" must be a boolean`)
+    }
   }
+
+  const nonNegative = (value: number, path: string): void => {
+    if (!Number.isFinite(value) || value < 0) invalid(`${path} must be a non-negative number`)
+  }
+  const positiveInt = (value: number, path: string): void => {
+    if (!Number.isInteger(value) || value <= 0) invalid(`${path} must be a positive integer`)
+  }
+  const ratio = (value: number, path: string): void => {
+    if (!Number.isFinite(value) || value < 0 || value > 1) invalid(`${path} must be within 0..1`)
+  }
+  const textList = (value: readonly string[], path: string): void => {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
+      invalid(`${path} must be a non-empty string array`)
+    }
+  }
+  if (!Number.isInteger(pack.format.title.min_chars) || pack.format.title.min_chars < 1) {
+    invalid('format.title.min_chars must be a positive integer')
+  }
+  if (
+    !Number.isInteger(pack.format.title.max_chars) ||
+    pack.format.title.max_chars < pack.format.title.min_chars
+  ) {
+    invalid('format.title.max_chars must be an integer >= min_chars')
+  }
+  textList(pack.format.system_labels, 'format.system_labels')
+  textList(pack.format.scene_separators, 'format.scene_separators')
+  textList(pack.format.markdown_markers, 'format.markdown_markers')
+  positiveInt(pack.punctuation.dash.scale_words, 'punctuation.dash.scale_words')
+  if (typeof pack.punctuation.dash.token !== 'string' || pack.punctuation.dash.token === '') {
+    invalid('punctuation.dash.token must be a non-empty string')
+  }
+  for (const scene of SCENE_TYPES) {
+    nonNegative(pack.punctuation.dash.base[scene] ?? -1, `punctuation.dash.base.${scene}`)
+  }
+  nonNegative(pack.punctuation.period_density.min, 'punctuation.period_density.min')
+  nonNegative(pack.punctuation.period_density.max, 'punctuation.period_density.max')
+  if (pack.punctuation.period_density.min > pack.punctuation.period_density.max) {
+    invalid('punctuation.period_density.min must not exceed max')
+  }
+  if (!Number.isInteger(pack.punctuation.ellipsis_run.max) || pack.punctuation.ellipsis_run.max < 0) {
+    invalid('punctuation.ellipsis_run.max must be a non-negative integer')
+  }
+  positiveInt(pack.punctuation.uniform_sentence.min_sentences, 'punctuation.uniform_sentence.min_sentences')
+  ratio(pack.punctuation.uniform_sentence.ratio, 'punctuation.uniform_sentence.ratio')
+  if (!Number.isInteger(pack.punctuation.consecutive_le.max) || pack.punctuation.consecutive_le.max < 0) {
+    invalid('punctuation.consecutive_le.max must be a non-negative integer')
+  }
+  if (Array.from(pack.punctuation.consecutive_le.char).length !== 1) {
+    invalid('punctuation.consecutive_le.char must be one character')
+  }
+  ratio(pack.punctuation.dialogue_dominant_ratio, 'punctuation.dialogue_dominant_ratio')
+  nonNegative(pack.semantics.adjective_density.max, 'semantics.adjective_density.max')
+  textList(pack.semantics.adjective_density.adjectives, 'semantics.adjective_density.adjectives')
+  nonNegative(pack.semantics.pleasure_density.min, 'semantics.pleasure_density.min')
+  positiveInt(pack.semantics.pleasure_density.window, 'semantics.pleasure_density.window')
+  textList(pack.semantics.pleasure_density.keywords, 'semantics.pleasure_density.keywords')
+  nonNegative(pack.semantics.sensory_density.min, 'semantics.sensory_density.min')
+  positiveInt(pack.semantics.sensory_density.window, 'semantics.sensory_density.window')
+  textList(pack.semantics.sensory_density.senses, 'semantics.sensory_density.senses')
+  positiveInt(pack.semantics.water_words.window, 'semantics.water_words.window')
+  ratio(pack.semantics.water_words.threshold, 'semantics.water_words.threshold')
+  textList(pack.semantics.water_words.terms, 'semantics.water_words.terms')
+  for (const [scene, value] of Object.entries(pack.semantics.water_words.scene_thresholds ?? {})) {
+    ratio(value as number, `semantics.water_words.scene_thresholds.${scene}`)
+  }
+  for (const platform of PLATFORMS) {
+    const profile = pack.platform[platform]
+    if (!Array.isArray(profile?.words_per_chapter) || !Array.isArray(profile.dialogue_ratio)) {
+      invalid(`platform.${platform} must declare words_per_chapter and dialogue_ratio`)
+    }
+    positiveInt(profile.words_per_chapter[0], `platform.${platform}.words_per_chapter[0]`)
+    positiveInt(profile.words_per_chapter[1], `platform.${platform}.words_per_chapter[1]`)
+    if (profile.words_per_chapter[0] > profile.words_per_chapter[1]) {
+      invalid(`platform.${platform}.words_per_chapter min must not exceed max`)
+    }
+    ratio(profile.dialogue_ratio[0], `platform.${platform}.dialogue_ratio[0]`)
+    ratio(profile.dialogue_ratio[1], `platform.${platform}.dialogue_ratio[1]`)
+    if (profile.dialogue_ratio[0] > profile.dialogue_ratio[1]) {
+      invalid(`platform.${platform}.dialogue_ratio min must not exceed max`)
+    }
+  }
+  ratio(pack.crosschapter.duplicate_similarity, 'crosschapter.duplicate_similarity')
+  ratio(pack.crosschapter.duplicate_advisory, 'crosschapter.duplicate_advisory')
+  if (pack.crosschapter.duplicate_advisory > pack.crosschapter.duplicate_similarity) {
+    invalid('crosschapter.duplicate_advisory must not exceed duplicate_similarity')
+  }
+  for (const key of ['foreshadow_min_dormancy', 'foreshadow_dormant_after'] as const) {
+    if (!Number.isInteger(pack.crosschapter[key]) || pack.crosschapter[key] < 0) {
+      invalid(`crosschapter.${key} must be a non-negative integer`)
+    }
+  }
+  ratio(pack.crosschapter.lock_similarity, 'crosschapter.lock_similarity')
 
   // 3. duplicate ownership: one term may appear once per list.
   const seen = new Map<string, string>()
@@ -201,21 +299,6 @@ export function compileRulepack(raw: unknown): Rulepack {
   // 5. threshold bounds: values that would silently disable a check are refused.
   if (pack.format.paragraph_max_words < 20 || pack.format.paragraph_max_words > 500) {
     invalid('format.paragraph_max_words must be within 20..500')
-  }
-  if (pack.punctuation.period_density.min > pack.punctuation.period_density.max) {
-    invalid('punctuation.period_density.min must not exceed max')
-  }
-  if (pack.crosschapter.duplicate_similarity < 0 || pack.crosschapter.duplicate_similarity > 1) {
-    invalid('crosschapter.duplicate_similarity must be within 0..1')
-  }
-  if (pack.crosschapter.duplicate_advisory < 0 || pack.crosschapter.duplicate_advisory > 1) {
-    invalid('crosschapter.duplicate_advisory must be within 0..1')
-  }
-  if (pack.crosschapter.duplicate_advisory > pack.crosschapter.duplicate_similarity) {
-    invalid('crosschapter.duplicate_advisory must not exceed duplicate_similarity')
-  }
-  for (const [scene, budget] of Object.entries(pack.punctuation.dash.base)) {
-    if (budget < 0) invalid(`dash budget for ${scene} is negative`)
   }
 
   // 6. title pattern must compile; a broken regex must fail at load, not at draft time.
@@ -261,7 +344,11 @@ const merge = <T extends Unknown>(base: T, override: unknown, path: string): T =
 
 /** Fill optional blocks from defaults and check scalar types of the result. */
 export function normalize(raw: Partial<Rulepack>): Rulepack {
-  const merged = merge(DEFAULT_RULEPACK as unknown as Unknown, raw, 'root') as unknown as Rulepack
+  const merged = merge(
+    structuredClone(DEFAULT_RULEPACK) as unknown as Unknown,
+    raw,
+    'root',
+  ) as unknown as Rulepack
   merged.name = string(merged.name, 'name')
   merged.version = string(merged.version, 'version')
   merged.format.paragraph_max_words = num(merged.format.paragraph_max_words, 'format.paragraph_max_words')

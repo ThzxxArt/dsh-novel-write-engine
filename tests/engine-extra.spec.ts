@@ -211,7 +211,7 @@ describe('revision paths', () => {
 
       await engine.getBrief({ stage: 'P5', root })
       const revised = text.replace('他伸手压住', '他因为怕纸飞走，伸手压住')
-      const evidence = '他因为怕纸飞走'
+      const evidence = '他因为怕纸飞走，伸手压住'
       const fixed = await engine.submitRevision({
         chapter: 1,
         content: revised,
@@ -231,6 +231,25 @@ describe('revision paths', () => {
         root,
       })
       expect(fixed.data.stage).toBe('P4')
+      const repeated = await engine.submitRevision({
+        chapter: 1,
+        content: revised,
+        issues: [
+          {
+            id: 'REV-001',
+            severity: 'blocker',
+            dimension: 'R-W-01',
+            location: '第 2 段',
+            problem: '缺动机',
+            fix: '补一句理由',
+            status: 'fixed',
+            evidence,
+          },
+        ],
+        proof: sampleReview(1, revised).proof,
+        root,
+      })
+      expect(repeated.replayed).toBe(true)
       const reviewFile = await engine.queryState({ kind: 'review', root })
       expect((reviewFile.data as { issues: Array<{ status: string }> }).issues[0]!.status).toBe('fixed')
     } finally {
@@ -238,14 +257,52 @@ describe('revision paths', () => {
     }
   })
 
-  it('a failed semantic check moves to P6 and a revision returns to P5', async () => {
+  it('rejects an omitted summary when the revised opening no longer matches it', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
       const text = cleanText()
       await writeDraft({ root, engine, text })
       await engine.getBrief({ stage: 'P4', root })
-      await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+      const blocker = {
+        id: 'REV-001',
+        severity: 'blocker' as const,
+        dimension: 'R-W-01',
+        location: '第 2 段',
+        problem: '缺动机',
+        fix: '补一句理由',
+        status: 'open' as const,
+      }
+      await engine.submitReview({ chapter: 1, ...sampleReview(1, text, { issues: [blocker] }), root })
+      await engine.getBrief({ stage: 'P5', root })
+      const revised = text.replace(/^风从窗缝里挤进来，/, '夜色从窗缝里挤进来，')
+      const evidence = '夜色从窗缝里挤进来'
+      await expect(
+        engine.submitRevision({
+          chapter: 1,
+          content: revised,
+          issues: [{ ...blocker, status: 'fixed', evidence }],
+          proof: sampleReview(1, revised).proof,
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('a failed semantic check moves to P6 and a revision returns to P4', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      const text = cleanText()
+      await writeDraft({ root, engine, text })
+      await engine.getBrief({ stage: 'P4', root })
+      const review = sampleReview(1, text)
+      const submitted = await engine.submitReview({ chapter: 1, ...review, root })
+      expect(submitted.replayed).not.toBe(true)
+      const repeatedReview = await engine.submitReview({ chapter: 1, ...review, root })
+      expect(repeatedReview.replayed).toBe(true)
       await engine.getBrief({ stage: 'P6', root })
       const checked = await engine.runCheck({
         chapter: 1,
@@ -261,7 +318,7 @@ describe('revision paths', () => {
         proof: sampleReview(1, text).proof,
         root,
       })
-      expect(revised.data.stage).toBe('P5')
+      expect(revised.data.stage).toBe('P4')
     } finally {
       await cleanup()
     }
@@ -395,6 +452,97 @@ describe('archive ledger effects', () => {
 })
 
 describe('error families', () => {
+  it('rejects empty plan/draft fields before touching the project', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '输入校验', genre: '都市现代', platform: 'fanqie', root })
+      expect(engine.defaultRoot()).toContain(root)
+      await expect(
+        engine.submitWorldPlan({
+          objective: ' ',
+          constraints: [],
+          characters: [],
+          locations: [],
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitChapterPlan({
+          title: '',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          beats: [],
+          opening: '',
+          ending: '',
+          target_words: [2000, 3000],
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitChapterPlan({
+          title: '开端',
+          scene_type: '未知场景',
+          narrator: '他',
+          beats: [],
+          opening: '',
+          ending: '',
+          target_words: [2000, 3000],
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitChapterPlan({
+          title: '开端',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          beats: [],
+          opening: '',
+          ending: '',
+          target_words: [3000, 2000],
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitDraft({
+          chapter: 1,
+          content: ' ',
+          chapter_title: '开端',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          summary: sampleSummary(),
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitDraft({
+          chapter: 1,
+          content: cleanText(),
+          chapter_title: '',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          summary: sampleSummary(),
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitDraft({
+          chapter: 1,
+          content: cleanText(),
+          chapter_title: '开端',
+          scene_type: '未知场景',
+          narrator: '他',
+          summary: sampleSummary(),
+          root,
+        } as never),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(engine.export({ kind: 'epub', root })).rejects.toMatchObject({
+        code: 'ENGINE_STAGE_ORDER',
+      })
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('reports a missing project with a hint', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -561,7 +709,11 @@ describe('branch coverage exercises', () => {
       const text = cleanText()
       await writeDraft({ root, engine, text })
       await engine.getBrief({ stage: 'P4', root })
-      await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+      const review = sampleReview(1, text)
+      const submitted = await engine.submitReview({ chapter: 1, ...review, root })
+      expect(submitted.replayed).not.toBe(true)
+      const repeatedReview = await engine.submitReview({ chapter: 1, ...review, root })
+      expect(repeatedReview.replayed).toBe(true)
       await engine.getBrief({ stage: 'P6', root })
       await engine.runCheck({
         chapter: 1,
@@ -579,7 +731,7 @@ describe('branch coverage exercises', () => {
         proof: sampleReview(1, text).proof,
         root,
       })
-      expect(revised.data.stage).toBe('P5')
+      expect(revised.data.stage).toBe('P4')
     } finally {
       await cleanup()
     }
@@ -628,7 +780,7 @@ function textFor(chapter: number): string {
     [
       '一月的风穿过走廊，卷起墙边旧纸箱的角。他弯腰把它压稳，指尖沾了一层灰。',
       '走廊尽头传来钥匙碰撞的声音，不快不慢，在门口停了两秒。他没有回头。',
-      '门开时带进一股冷气，来人把一封没有署名的信放在桌角，敲了两下桌面。',
+      '门开时带进一股冷气，来人把一只旧信封放在桌角，敲了两下桌面。',
       '信封封口压着暗红蜡印，边缘磨得发白。他翻到背面，看见一行极小的字。',
     ],
     [

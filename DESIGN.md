@@ -1126,16 +1126,17 @@ interface Store {
 ```
 
 任一步失败：已 rename 的文件按 pre-image 恢复，staging 丢弃，journal 记 `aborted`。
-`pending` 行在 rename 前落盘；启动时若 pending 的所有预期 hash 都与磁盘一致，
-补记 `committed`；若磁盘仍是上一笔 committed 的字节，补记 `aborted`；两者都不是
-（部分 rename 后崩溃）则拒绝自动修复并要求从 `backups/` 恢复。
+`pending` 行在 rename 前落盘，并同时记录每个目标的 pre-image hash（文件不存在为
+`null`）；启动时若 pending 的所有预期 hash 都与磁盘一致，补记 `committed`；若磁盘仍是
+全部 pre-image 的字节，补记 `aborted`；两者都不是（部分 rename 后崩溃）则拒绝自动修复
+并要求从 `backups/` 恢复。
 
 > 这取代了「多表事务 + 事后检测撕裂」的做法——**撕裂窗口在架构上不存在，而不是靠事后检测**。
 
 ### 6.4 journal 格式（JSONL，追加式）
 
 ```json
-{"txid":"01H...","op":"archive","chapter":4,"at":"2026-10-26T14:00:00+08:00","status":"committed","files":[{"rel":"state/pipeline.yaml","before":"sha256:a","after":"sha256:b"}],"revision":43}
+{"txid":"01H...","op":"archive","chapter":4,"at":"2026-10-26T14:00:00+08:00","status":"committed","files":["state/pipeline.yaml"],"hashes":{"state/pipeline.yaml":"sha256:b"},"before":{"state/pipeline.yaml":"sha256:a"},"revision":43}
 ```
 
 - 只追加，不修改（损坏时人工介入，不做自动修复）。
@@ -1231,7 +1232,7 @@ const TRANSITIONS: readonly Transition[] = [
                                             guards: ['PG-07','PG-09','PG-11'] },
   { from: 'P5',    op: 'submitRevision',    to: () => 'P4', guards: ['PG-03','PG-04','PG-08','PG-09'] },
   // 校验不过 → 修订；正文一改，评审分数即失效，必须回 P4 重评
-  { from: 'P6',    op: 'submitRevision',    to: () => 'P5', guards: ['PG-03','PG-04'] },
+  { from: 'P6',    op: 'submitRevision',    to: () => 'P4', guards: ['PG-03','PG-04'] },
   { from: 'P6',    op: 'runCheck',          to: () => 'ready_to_archive', guards: ['PG-10'] },
   { from: 'ready_to_archive', op: 'archiveChapter', to: () => 'done', guards: ['PG-01','PG-02','PG-12'] },
 ]
@@ -1247,7 +1248,7 @@ const TRANSITIONS: readonly Transition[] = [
 | 循环 | 上限 | 超限行为 |
 |---|---|---|
 | P4 ⇄ P5（评审-修订） | 3 轮 | `ENGINE_GATE_BLOCKED`（PG-11），强制 `rollback` 到 P1（保留正文供参考，标记废弃） |
-| P6 → P5（校验-修订） | 3 轮 | 同上 |
+| P6 → P4（校验-修订-重评） | 3 轮 | 同上 |
 | 单章总耗时 | 无上限 | 不做时间门控（创作不是批处理） |
 
 轮次记在 `pipeline.rounds`，由引擎自增，**模型不能传轮次参数**（防自报「这是第 1 轮」）。
@@ -1825,7 +1826,7 @@ interface PresetDefinition {
 
 ```ts
 export interface Config {
-  projectRoot: string          // './'
+  projectRoot: string          // './novel'
   minScore: number             // 120
   toolsMode: 'all' | 'core'    // 'all'
   briefsOverrides: string      // ''（空 = 使用随包任务书）
@@ -1940,7 +1941,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | # | 证伪目标 | 测试方式 | 对应 |
 |---|---|---|---|
 | T-01 | 门控失败时零写盘 | 注入必失败门控，对项目目录做前后快照（路径 + mtime + hash）比对全等 | INV-03 |
-| T-02 | 两个归档并发只有一个成功 | `Promise.all([archive, archive])`，断言一成一败（`ENGINE_LOCK_TIMEOUT` 或幂等 replay），文件无撕裂 | INV-06 |
+| T-02 | 两个归档并发只写一次 | `Promise.all([archive, archive])`，断言一次提交 + 一次幂等 replay（或 `ENGINE_LOCK_TIMEOUT`），文件无撕裂 | INV-06 |
 | T-03 | 读证明不可伪造 | 提交不存在的片段 → `ENGINE_READING_PROOF_INVALID`；片段存在但错段 → 同样拒绝 | PG-09 |
 | T-04 | 分数算术必须闭合 | `total` 与 `150 - Σdelta` 差 1 → 拒绝 | PG-07 |
 | T-05 | delta 不能静默跳过 | 正文出现新角色但 delta 未声明 → 拒绝，错误列出未声明实体 | PG-12 |

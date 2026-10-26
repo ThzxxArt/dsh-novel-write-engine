@@ -46,6 +46,12 @@ export function migrateDocument(
         `no migration from schema_version ${version} to ${target}`,
       )
     }
+    if (!Number.isInteger(step.to) || step.to <= version || step.to > target) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `migration step ${version}->${step.to} does not advance monotonically to ${target}`,
+      )
+    }
     current = step.migrate(current)
     version = step.to
     current = { ...current, schema_version: version }
@@ -69,14 +75,21 @@ export async function migrateProjectFile(
   if (before === null) {
     throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `cannot migrate missing ${path}`)
   }
+  const beforeText = before.toString('utf8')
+  const document = parseYaml(beforeText) as Record<string, unknown>
+  const version = typeof document.schema_version === 'number' ? document.schema_version : 1
+  if (version >= target) return false
+  const migrated = migrateDocument(document, chain, target)
+  const next = stringify(migrated, { lineWidth: 0 })
+  if (next === beforeText) return false
   try {
-    const document = parseYaml(before.toString('utf8')) as Record<string, unknown>
-    const migrated = migrateDocument(document, chain, target)
-    const next = stringify(migrated, { lineWidth: 0 })
     await store.writeText(path, next)
-    return next !== before.toString('utf8')
+    return true
   } catch (error) {
-    await store.writeBytes(path, before)
+    const current = await store.readBytes(path)
+    if (current === null || !Buffer.from(current).equals(before)) {
+      await store.writeBytes(path, before)
+    }
     throw error
   }
 }

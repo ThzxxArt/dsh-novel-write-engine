@@ -70,6 +70,7 @@ describe('pending journal recovery', () => {
         files: ['state/world.yaml'],
         status: 'pending',
         hashes: { 'state/world.yaml': hash! },
+        before: { 'state/world.yaml': null },
       })
       await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
       const journal = await readJournal(store)
@@ -107,6 +108,7 @@ describe('pending journal recovery', () => {
         files: ['state/world.yaml'],
         status: 'pending',
         hashes: { 'state/world.yaml': `${before!}-expected` },
+        before: { 'state/world.yaml': before! },
       })
       await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
     } finally {
@@ -140,10 +142,29 @@ describe('pending journal recovery', () => {
         files: ['state/world.yaml'],
         status: 'pending',
         hashes: { 'state/world.yaml': `${oldHash!}-different` },
+        before: { 'state/world.yaml': oldHash! },
       })
       await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
       const journal = await readJournal(store)
       expect(journal.records.at(-1)).toMatchObject({ txid: 'crash-before-rename', status: 'aborted' })
+    } finally {
+      await cleanup()
+    }
+  })
+  it('counts an unknown journal status as malformed instead of trusting it', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.appendText(
+        'state/journal.jsonl',
+        `${JSON.stringify({ txid: 'bad', op: 'amend', status: 'future' })}\n`,
+      )
+      const journal = await readJournal(store)
+      expect(journal.malformed).toBe(1)
+      expect(journal.records).toHaveLength(0)
+      await expect(assertJournalConsistent(store)).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
     } finally {
       await cleanup()
     }

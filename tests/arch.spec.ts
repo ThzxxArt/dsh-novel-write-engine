@@ -117,6 +117,13 @@ describe('architecture rules', () => {
     expect(TOOL_NAMES).toHaveLength(18)
   })
 
+  it('R7: no test is skipped, focused, or marked todo', async () => {
+    for (const file of await sources(join(root, 'tests'))) {
+      const text = await readFile(file, 'utf8')
+      expect(text, file).not.toMatch(/(?:^|\.)(skip|only|todo)\s*\(/m)
+    }
+  })
+
   it('INV-10: the remote surface exposes no write method', () => {
     const exported = Object.keys(remote).filter(
       (name) => typeof (remote as Record<string, unknown>)[name] === 'function',

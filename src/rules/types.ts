@@ -4,6 +4,8 @@ import type { Genre, Platform, SceneType } from '../types.js'
 export interface TermEntry {
   term: string
   note?: string
+  /** Allow the term inside a dialogue-dominant paragraph (character voice). */
+  dialogueExempt?: boolean
 }
 
 /** A soft-limit word, optionally relaxed for some genres. */
@@ -72,7 +74,6 @@ export interface Rulepack {
     duplicate_advisory: number
     foreshadow_min_dormancy: number
     foreshadow_dormant_after: number
-    resource_tolerance: number
     check_time: boolean
     lock_similarity: number
   }

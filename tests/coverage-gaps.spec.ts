@@ -94,6 +94,7 @@ describe('adapter optional-argument branches', () => {
   it('accepts required-only arguments for every tool', async () => {
     const result = <T>(data: T) => ({ data, revision: 1, warnings: [] })
     const engine = {
+      withSignal: async (_signal: unknown, task: () => Promise<unknown>) => task(),
       initProject: async () => result({}),
       getStatus: async () => result({}),
       getBrief: async () => result({}),

@@ -155,6 +155,63 @@ describe('scoring arithmetic', () => {
     expect(reviewArithmeticProblems(dimensions, 999)).toEqual(
       expect.arrayContaining([expect.stringContaining('outside')]),
     )
+    expect(
+      reviewArithmeticProblems(
+        [
+          null,
+          {},
+          { id: '', max: 1, deductions: [] },
+          { id: 'R-W-01', max: -1, deductions: [] },
+          { id: 'R-W-03', max: 10, deductions: null },
+          { id: 'R-W-02', max: 10, deductions: [null, { delta: 'x', rule: 1, note: null, location: 2 }] },
+        ] as never,
+        Number.NaN,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'each dimension must be an object',
+        'each dimension must have an id',
+        expect.stringContaining('max must be a non-negative number'),
+        expect.stringContaining('each deduction must be an object'),
+        expect.stringContaining('missing rule/location/note'),
+        expect.stringContaining('outside'),
+      ]),
+    )
+    expect(reviewArithmeticProblems(null as never, 0)).toEqual(['dimensions must be an array'])
+    expect(applyExclusions([{ id: 'R-W-01', max: 15, deductions: null }] as never, [])).toEqual({
+      dimensions: [{ id: 'R-W-01', max: 15, deductions: [] }],
+      dropped: 0,
+    })
+    expect(sumDeductions(null as never)).toBe(0)
+    expect(sumDeductions([{ deductions: [{ delta: Number.NaN }] }] as never)).toBe(0)
+    expect(applyExclusions(null as never, [])).toEqual({ dimensions: [], dropped: 0 })
+    expect(
+      applyExclusions(
+        [
+          {
+            id: 'R-W-01',
+            max: 15,
+            deductions: [{ rule: 'A', location: '正文', delta: 1, note: 'n' }],
+          },
+        ],
+        [],
+      ).dimensions[0]!.deductions,
+    ).toHaveLength(1)
+  })
+
+  it('keeps the heaviest duplicate and canonicalizes paragraph spacing for exclusions', () => {
+    const dimensions = fullDimensions()
+    dimensions[0] = dim('R-W-01', 15, [
+      { rule: 'A', location: '第2段', delta: 1 },
+      { rule: 'A', location: '第 2 段', delta: 5 },
+    ])
+    dimensions[1] = dim('R-W-02', 10, [{ rule: 'B', location: '第 2 段', delta: 2 }])
+    dimensions[2] = dim('R-W-03', 10, [{ rule: 'C', location: '第2段', delta: 1 }])
+    const result = applyExclusions(dimensions, [{ pair: ['B', 'C'], family: 'f' }])
+    expect(result.dimensions[0]!.deductions).toHaveLength(1)
+    expect(result.dimensions[0]!.deductions[0]!.delta).toBe(5)
+    expect(result.dimensions[1]!.deductions).toHaveLength(1)
+    expect(result.dimensions[2]!.deductions).toHaveLength(0)
   })
 
   it('drops duplicates and the lighter side of an exclusive pair', () => {

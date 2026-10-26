@@ -160,7 +160,9 @@ export function NovelPanel(): ReactElement {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const result = await fetchPanel(fetch, PANEL_ROUTE)
+    // The host serves the panel under the document root; a leading slash would
+    // bypass a documented --public-url prefix mount.
+    const result = await fetchPanel(fetch, PANEL_ROUTE.replace(/^\/+/, ''))
     setView(buildView(result.payload as PanelPayloadDto | null, result.error))
     setLoading(false)
   }, [])

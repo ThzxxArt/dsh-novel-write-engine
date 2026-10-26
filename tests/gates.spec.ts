@@ -332,6 +332,13 @@ describe('gate evaluation', () => {
       review: review(),
     })
     expect(codes({ ...base, proof: null })).toContain('PG-09')
+    expect(codes({ ...base, proof: {} as never })).toContain('PG-09')
+    expect(
+      codes({
+        ...base,
+        review: { ...review(), dimensions: [{}] } as never,
+      }),
+    ).toContain('PG-07')
     expect(
       codes({
         ...base,

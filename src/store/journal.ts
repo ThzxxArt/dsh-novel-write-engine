@@ -16,6 +16,8 @@ export interface JournalRecord {
   reason?: string
   /** Content hash per target, written before rename and again on commit. */
   hashes?: Record<string, string>
+  /** Pre-commit hash per target; null means the target did not exist. */
+  before?: Record<string, string | null>
 }
 
 export interface JournalRead {
@@ -43,6 +45,9 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
     try {
       const raw = JSON.parse(line) as Partial<JournalRecord>
       if (typeof raw.txid !== 'string' || typeof raw.op !== 'string') throw new Error('shape')
+      if (raw.status !== 'pending' && raw.status !== 'committed' && raw.status !== 'aborted') {
+        throw new Error('status')
+      }
       const record: JournalRecord = {
         txid: raw.txid,
         at: String(raw.at ?? ''),
@@ -50,13 +55,20 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
         chapter: Number(raw.chapter ?? 0),
         revision: Number(raw.revision ?? 0),
         files: Array.isArray(raw.files) ? raw.files.map(String) : [],
-        status: raw.status === 'pending' ? 'pending' : raw.status === 'aborted' ? 'aborted' : 'committed',
+        status: raw.status,
       }
       if (typeof raw.reason === 'string') record.reason = raw.reason
       if (typeof raw.hashes === 'object' && raw.hashes !== null && !Array.isArray(raw.hashes)) {
         record.hashes = Object.fromEntries(
           Object.entries(raw.hashes as Record<string, unknown>).filter(
             (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        )
+      }
+      if (typeof raw.before === 'object' && raw.before !== null && !Array.isArray(raw.before)) {
+        record.before = Object.fromEntries(
+          Object.entries(raw.before as Record<string, unknown>).filter(
+            (entry): entry is [string, string | null] => entry[1] === null || typeof entry[1] === 'string',
           ),
         )
       }
@@ -125,32 +137,37 @@ export async function reconcileJournal(store: FsStore): Promise<{
  * after the pre-images are captured and before the first rename, so it is the
  * only record that can distinguish "renamed but not journaled" from "crashed
  * before touching a target". A fully matching pending transaction is promoted
- * to committed; otherwise the previous committed row is checked and the
- * pending row is closed as aborted when the old bytes are still intact.
+ * to committed; a transaction whose targets all still match their pre-images
+ * is closed as aborted; any mixture is refused as a partial commit.
  */
 export async function recoverPending(store: FsStore): Promise<void> {
   const { records } = await readJournal(store)
   const last = records[records.length - 1]
   if (last?.status !== 'pending') return
-  const matches = async (record: JournalRecord): Promise<boolean> => {
-    if (record.hashes === undefined) return false
-    for (const [path, expected] of Object.entries(record.hashes)) {
+  const matchesExpected = async (): Promise<boolean> => {
+    if (last.hashes === undefined) return false
+    for (const [path, expected] of Object.entries(last.hashes)) {
       if ((await store.hashBytes(path)) !== expected) return false
     }
     return true
   }
-  if (await matches(last)) {
+  const matchesBefore = async (): Promise<boolean> => {
+    if (last.before === undefined) return false
+    for (const [path, expected] of Object.entries(last.before)) {
+      const actual = await store.hashBytes(path)
+      if (expected === null ? actual !== null : actual !== expected) return false
+    }
+    return true
+  }
+  if (await matchesExpected()) {
     await appendJournal(store, { ...last, status: 'committed' })
     return
   }
-  const previous = [...records]
-    .reverse()
-    .find((record) => record.status === 'committed' && record.hashes !== undefined)
-  if (previous !== undefined && (await matches(previous))) {
+  if (await matchesBefore()) {
     await appendJournal(store, {
       ...last,
       status: 'aborted',
-      reason: 'recovered: the process stopped before the transaction renamed its targets',
+      reason: 'recovered: the process stopped before the transaction renamed a target',
     })
     return
   }

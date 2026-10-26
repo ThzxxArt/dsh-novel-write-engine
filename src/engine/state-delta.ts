@@ -82,6 +82,8 @@ export interface DeltaInput {
   foreshadows: ForeshadowsDocument
   timeline: TimelineDocument
   relationships: RelationshipsDocument
+  /** Plan narrator, used to resolve a first-person alias such as 「我」. */
+  narrator?: string | null
 }
 
 /**
@@ -125,9 +127,22 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
 
   const appeared = [...new Set(summary.characters_appeared)]
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
+  const narrator = input.narrator ?? ''
+  const narratorName = narrator.split(/[（(]/, 1)[0]!.trim()
+  const narratorAliases = [...narrator.matchAll(/[「『"]([^」』"]+)[」』"]/g)].map((match) =>
+    match[1]!.trim(),
+  )
+  const appearsInManuscript = (name: string): boolean => {
+    if (input.text.includes(name)) return true
+    // A first-person plan names the protagonist in `narrator`, while the
+    // manuscript itself says 「我」. Accept that declared alias.
+    return (
+      name === narratorName && narratorAliases.some((alias) => alias !== '' && input.text.includes(alias))
+    )
+  }
 
   for (const name of appeared) {
-    if (!input.text.includes(name)) {
+    if (!appearsInManuscript(name)) {
       fail(`character "${name}" is listed in characters_appeared but does not appear in the manuscript`)
     }
     if (delta.characters[name] === undefined) {
@@ -249,6 +264,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     ['artifact', summary.new_elements.artifacts],
   ] as const) {
     for (const name of names) {
+      if (!input.text.includes(name)) {
+        fail(`summary lists new ${kind} "${name}" but the manuscript never mentions it`)
+      }
       const declared = delta.world[name]
       if (declared === undefined) {
         fail(`summary lists new ${kind} "${name}" but world.${name} is not declared`)

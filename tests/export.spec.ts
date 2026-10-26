@@ -96,6 +96,10 @@ describe('renderers', () => {
     expect(zip.includes(Buffer.from('chapter-001.xhtml'))).toBe(true)
     expect(readEntry(zip, 'OEBPS/content.opf')).toContain('href="toc.ncx"')
     expect(readEntry(zip, 'OEBPS/content.opf')).toContain('properties="cover-image"')
+    const offset = buildEpub({ ...project, created_at: '2026-01-01T08:00:00+08:00' }, chapters)
+    expect(readEntry(offset, 'OEBPS/content.opf')).toContain(
+      '<meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>',
+    )
     const bare = buildZip([{ name: 'a.txt', data: Buffer.from('x'), store: false }])
     expect(firstEntry(bare).name).toBe('a.txt')
   })

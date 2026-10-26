@@ -41,7 +41,7 @@ export const TRANSITIONS: readonly Transition[] = [
     to: () => 'P4',
     guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-08', 'PG-09'],
   },
-  { from: 'P6', op: 'submitRevision', to: () => 'P5', guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04'] },
+  { from: 'P6', op: 'submitRevision', to: () => 'P4', guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04'] },
   {
     from: 'P6',
     op: 'runCheck',

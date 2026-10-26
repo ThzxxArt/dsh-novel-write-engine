@@ -5,6 +5,7 @@ import { reviewArithmeticProblems } from '../domain/scoring.js'
 import { splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { runRules } from '../rules/pipeline.js'
+import { sha256 } from '../store/fs.js'
 import type { Rulepack } from '../rules/types.js'
 import type { BlockingItem, GateInput, GateResult, ReadingProofReference, Stage } from '../types.js'
 
@@ -115,7 +116,7 @@ const format: Gate = (input, options) => {
         block(
           'PG-04',
           `${violations.length} format blocker(s) remain`,
-          violations.map((violation) => `${violation.code}@${violation.location.paragraph}`).join(', '),
+          `dialogue must use ASCII double quotes (U+0022), never curly quotes; split paragraphs over ${options.rulepack.format.paragraph_max_words} chars; remove full-width semicolons. ${violations.map((violation) => `${violation.code}@${violation.location.paragraph}`).join(', ')}`,
         ),
       ]
 }
@@ -281,10 +282,17 @@ export function parseParagraphLocation(location: string): number | null {
 const score: Gate = (input, options) => {
   const review = input.review
   if (review === null) return [block('PG-07', 'no review document supplied')]
+  if (!Array.isArray(review.dimensions)) return [block('PG-07', 'review dimensions must be an array')]
   const problems = reviewArithmeticProblems(review.dimensions, review.total)
+  if (review.content_hash !== sha256(input.text)) {
+    problems.push('review content_hash does not match the current manuscript')
+  }
   const paragraphCount = splitParagraphs(input.text).length
   for (const dimension of review.dimensions) {
+    if (typeof dimension !== 'object' || dimension === null || !Array.isArray(dimension.deductions)) continue
     for (const deduction of dimension.deductions) {
+      if (typeof deduction !== 'object' || deduction === null || typeof deduction.location !== 'string')
+        continue
       const paragraph = parseParagraphLocation(deduction.location)
       if (paragraph === null) {
         problems.push(`${dimension.id}: location "${deduction.location}" is not a paragraph reference`)
@@ -303,6 +311,9 @@ const score: Gate = (input, options) => {
 /** PG-08: blocker issues must be fixed with evidence that exists in the text. */
 const issuesCleared: Gate = (input) => {
   if (input.review === null) return []
+  if (!Array.isArray(input.review.issues)) {
+    return [block('PG-08', 'review issues must be an array')]
+  }
   const blockers = input.review.issues.filter((issue) => issue.severity === 'blocker')
   const problems: string[] = []
   for (const issue of blockers) {
@@ -314,8 +325,12 @@ const issuesCleared: Gate = (input) => {
       problems.push(`${issue.id} is still ${issue.status}`)
       continue
     }
-    if (issue.evidence === undefined || issue.evidence.trim() === '') {
+    if (typeof issue.evidence !== 'string' || issue.evidence.trim() === '') {
       problems.push(`${issue.id} is fixed but has no evidence quote`)
+      continue
+    }
+    if (Array.from(issue.evidence.trim()).length < 8) {
+      problems.push(`${issue.id} evidence is shorter than 8 characters`)
       continue
     }
     if (!input.text.includes(issue.evidence)) {
@@ -329,6 +344,7 @@ const issuesCleared: Gate = (input) => {
 
 /** Paragraph index (1-based) that contains the quote, or -1. */
 function actualParagraph(text: string, reference: ReadingProofReference): number {
+  if (typeof reference !== 'object' || reference === null || typeof reference.quote !== 'string') return -1
   const quote = reference.quote.trim()
   if (Array.from(quote).length < LIMITS.minQuoteChars) return -1
   return splitParagraphs(text).findIndex((paragraph) => paragraph.includes(quote)) + 1
@@ -336,6 +352,11 @@ function actualParagraph(text: string, reference: ReadingProofReference): number
 
 /** Verify one reading-proof reference against the manuscript. */
 export function verifyReference(text: string, reference: ReadingProofReference): string | null {
+  if (typeof reference !== 'object' || reference === null) return 'reading proof reference is not an object'
+  if (typeof reference.quote !== 'string') return 'reading proof quote is not text'
+  if (!Number.isInteger(reference.paragraph) || reference.paragraph < 1) {
+    return 'reading proof paragraph must be a positive integer'
+  }
   const quote = reference.quote
   if (Array.from(quote.trim()).length < LIMITS.minQuoteChars) {
     return `quote "${quote}" is shorter than ${LIMITS.minQuoteChars} characters`
@@ -352,6 +373,19 @@ export function verifyReference(text: string, reference: ReadingProofReference):
 /** PG-09: three verifiable quotes from three distinct paragraphs. */
 const readingProof: Gate = (input) => {
   if (input.proof === null) return [block('PG-09', 'no reading proof supplied')]
+  if (
+    typeof input.proof !== 'object' ||
+    input.proof === null ||
+    [input.proof.opening, input.proof.middle, input.proof.ending].some(
+      (reference) =>
+        typeof reference !== 'object' ||
+        reference === null ||
+        typeof reference.quote !== 'string' ||
+        !Number.isInteger(reference.paragraph),
+    )
+  ) {
+    return [block('PG-09', 'reading proof must contain opening/middle/ending quote references')]
+  }
   const problems: string[] = []
   const opening = verifyReference(input.text, input.proof.opening)
   const middle = verifyReference(input.text, input.proof.middle)

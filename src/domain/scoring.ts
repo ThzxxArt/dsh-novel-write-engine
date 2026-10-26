@@ -30,9 +30,17 @@ export interface Exclusion {
 
 /** Sum of every deduction delta across dimensions. */
 export function sumDeductions(dimensions: readonly ScoreDimension[]): number {
+  if (!Array.isArray(dimensions)) return 0
   return dimensions.reduce(
     (total, dimension) =>
-      total + dimension.deductions.reduce((inner, deduction) => inner + deduction.delta, 0),
+      total +
+      (Array.isArray(dimension?.deductions)
+        ? dimension.deductions.reduce(
+            (inner: number, deduction: Deduction) =>
+              inner + (Number.isFinite(deduction?.delta) ? deduction.delta : 0),
+            0,
+          )
+        : 0),
     0,
   )
 }
@@ -54,18 +62,45 @@ export function totalScore(dimensions: readonly ScoreDimension[]): number {
  */
 export function reviewArithmeticProblems(dimensions: readonly ScoreDimension[], total: number): string[] {
   const problems: string[] = []
+  if (!Array.isArray(dimensions)) return ['dimensions must be an array']
   if (dimensions.length !== SCORE_DIMENSIONS.length) {
     problems.push(`expected ${SCORE_DIMENSIONS.length} dimensions, got ${dimensions.length}`)
   }
   const seen = new Set<string>()
   for (const dimension of dimensions) {
+    if (typeof dimension !== 'object' || dimension === null || Array.isArray(dimension)) {
+      problems.push('each dimension must be an object')
+      continue
+    }
+    if (typeof dimension.id !== 'string' || dimension.id.trim() === '') {
+      problems.push('each dimension must have an id')
+      continue
+    }
     if (seen.has(dimension.id)) problems.push(`duplicate dimension ${dimension.id}`)
     seen.add(dimension.id)
+    if (!Array.isArray(dimension.deductions)) {
+      problems.push(`${dimension.id}: deductions must be an array`)
+      continue
+    }
+    if (!Number.isFinite(dimension.max) || dimension.max < 0) {
+      problems.push(`${dimension.id}: max must be a non-negative number`)
+    }
     for (const deduction of dimension.deductions) {
+      if (typeof deduction !== 'object' || deduction === null || Array.isArray(deduction)) {
+        problems.push(`${dimension.id}: each deduction must be an object`)
+        continue
+      }
       if (!Number.isFinite(deduction.delta) || deduction.delta <= 0) {
         problems.push(`${dimension.id}: delta must be > 0 (got ${String(deduction.delta)})`)
       }
-      if (deduction.rule.trim() === '' || deduction.note.trim() === '' || deduction.location.trim() === '') {
+      if (
+        typeof deduction.rule !== 'string' ||
+        typeof deduction.note !== 'string' ||
+        typeof deduction.location !== 'string' ||
+        deduction.rule.trim() === '' ||
+        deduction.note.trim() === '' ||
+        deduction.location.trim() === ''
+      ) {
         problems.push(`${dimension.id}: deduction is missing rule/location/note`)
       }
     }
@@ -73,7 +108,10 @@ export function reviewArithmeticProblems(dimensions: readonly ScoreDimension[], 
       problems.push(`${dimension.id}: unknown dimension id`)
       continue
     }
-    const deducted = dimension.deductions.reduce((sum, deduction) => sum + deduction.delta, 0)
+    const deducted = dimension.deductions.reduce(
+      (sum: number, deduction: Deduction) => sum + (Number.isFinite(deduction?.delta) ? deduction.delta : 0),
+      0,
+    )
     if (dimension.max !== maxOf(dimension.id)) {
       problems.push(`${dimension.id}: max ${dimension.max} does not match spec ${maxOf(dimension.id)}`)
     }
@@ -81,10 +119,12 @@ export function reviewArithmeticProblems(dimensions: readonly ScoreDimension[], 
       problems.push(`${dimension.id}: deductions ${deducted} exceed max ${dimension.max}`)
     }
   }
-  if (totalScore(dimensions) !== total) {
+  if (Number.isFinite(total) && totalScore(dimensions) !== total) {
     problems.push(`total ${total} does not equal 150 - Σdelta (${totalScore(dimensions)})`)
   }
-  if (total < 0 || total > FULL_SCORE) problems.push(`total ${total} outside 0..${FULL_SCORE}`)
+  if (!Number.isFinite(total) || total < 0 || total > FULL_SCORE) {
+    problems.push(`total ${String(total)} outside 0..${FULL_SCORE}`)
+  }
   return problems
 }
 
@@ -102,52 +142,59 @@ export function applyExclusions(
   exclusions: readonly Exclusion[],
 ): { dimensions: ScoreDimension[]; dropped: number } {
   let dropped = 0
-  const seen = new Set<string>()
-  const result = dimensions.map((dimension) => {
-    const kept: Deduction[] = []
-    for (const deduction of dimension.deductions) {
-      const identity = `${deduction.rule}@${deduction.location}`
-      if (seen.has(identity)) {
-        dropped += 1
-        continue
-      }
-      seen.add(identity)
-      kept.push(deduction)
+  const safeDimensions = Array.isArray(dimensions) ? dimensions : []
+  const canonical = (location: string): string => {
+    const paragraph = /第\s*(\d+)\s*段/.exec(location)
+    return paragraph === null ? location.trim() : `paragraph:${paragraph[1]}`
+  }
+  const best = new Map<string, Deduction>()
+  for (const dimension of safeDimensions) {
+    for (const deduction of Array.isArray(dimension?.deductions) ? dimension.deductions : []) {
+      const identity = `${deduction.rule}@${canonical(deduction.location)}`
+      const previous = best.get(identity)
+      if (previous === undefined || deduction.delta > previous.delta) best.set(identity, deduction)
     }
-    return { ...dimension, deductions: kept }
-  })
+  }
+  const deduped = safeDimensions.map((dimension) => ({
+    ...dimension,
+    deductions: (Array.isArray(dimension?.deductions) ? dimension.deductions : []).filter(
+      (deduction: Deduction) => {
+        const identity = `${deduction.rule}@${canonical(deduction.location)}`
+        const winner = best.get(identity) === deduction
+        if (!winner) dropped += 1
+        return winner
+      },
+    ),
+  }))
 
   for (const exclusion of exclusions) {
     const [left, right] = exclusion.pair
-    const byLocation = new Map<string, { dimension: number; deduction: Deduction }[]>()
-    result.forEach((dimension, dimensionIndex) => {
+    const byLocation = new Map<string, { rule: string; dimension: number; deduction: Deduction }[]>()
+    deduped.forEach((dimension, dimensionIndex) => {
       for (const deduction of dimension.deductions) {
         if (deduction.rule !== left && deduction.rule !== right) continue
-        const list = byLocation.get(deduction.location) ?? []
-        list.push({ dimension: dimensionIndex, deduction })
-        byLocation.set(deduction.location, list)
+        const key = canonical(deduction.location)
+        const list = byLocation.get(key) ?? []
+        list.push({ rule: deduction.rule, dimension: dimensionIndex, deduction })
+        byLocation.set(key, list)
       }
     })
-    for (const [location, entries] of byLocation) {
-      const hasLeft = entries.some((entry) => entry.deduction.rule === left)
-      const hasRight = entries.some((entry) => entry.deduction.rule === right)
-      if (!hasLeft || !hasRight) continue
-      const sorted = [...entries].sort((a, b) => b.deduction.delta - a.deduction.delta)
-      const winner = sorted[0]!
-      for (const entry of resultsToDrop(entries)) {
-        const dimension = result[entry.dimension]!
-        dimension.deductions = dimension.deductions.filter((deduction) => deduction !== entry.deduction)
+    for (const entries of byLocation.values()) {
+      const leftEntries = entries.filter((entry) => entry.rule === left)
+      const rightEntries = entries.filter((entry) => entry.rule === right)
+      if (leftEntries.length === 0 || rightEntries.length === 0) continue
+      const leftDelta = leftEntries.reduce((sum, entry) => sum + entry.deduction.delta, 0)
+      const rightDelta = rightEntries.reduce((sum, entry) => sum + entry.deduction.delta, 0)
+      const loser = leftDelta >= rightDelta ? right : left
+      for (const entry of entries) {
+        if (entry.rule !== loser) continue
+        const dimension = deduped[entry.dimension]!
+        dimension.deductions = dimension.deductions.filter(
+          (deduction: Deduction) => deduction !== entry.deduction,
+        )
         dropped += 1
-        void location
-        void winner
       }
     }
   }
-  return { dimensions: result, dropped }
-}
-
-/** Every entry except the heaviest one at this location (ties keep the first). */
-function resultsToDrop(entries: { dimension: number; deduction: Deduction }[]): typeof entries {
-  const sorted = [...entries].sort((a, b) => b.deduction.delta - a.deduction.delta)
-  return sorted.slice(1)
+  return { dimensions: deduped, dropped }
 }

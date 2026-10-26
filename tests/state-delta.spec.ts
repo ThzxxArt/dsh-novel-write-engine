@@ -35,7 +35,7 @@ const run = (
 ): ReturnType<typeof applyStateDelta> =>
   applyStateDelta({
     chapter,
-    text: '甲和乙在门口。风从窗缝里挤进来。他伸手压住。',
+    text: '甲和乙站在屋前，术法还没散。风从窗缝里挤进来。他伸手压住。t',
     summary,
     delta: delta as never,
     ...(docs as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
@@ -55,6 +55,22 @@ const character = (name: string, patch: Record<string, unknown> = {}): Record<st
 })
 
 describe('state_delta shape and character reconciliation', () => {
+  it('accepts the plan narrator alias for a first-person manuscript', () => {
+    const summary = sampleSummary({ characters_appeared: ['陈默'], events: [] })
+    const delta = empty()
+    delta.characters['陈默'] = character('陈默')
+    expect(() =>
+      applyStateDelta({
+        chapter: 1,
+        text: '我站在雨里，手里捏着一封旧信。',
+        summary,
+        delta: delta as never,
+        narrator: '陈默（第一人称「我」）',
+        ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      }),
+    ).not.toThrow()
+  })
+
   it('requires all five sections and valid actions', () => {
     expect(() => run(sampleSummary(), {})).toThrowError(/missing section/)
     const unknownSection = { ...empty(), extra: {} }
