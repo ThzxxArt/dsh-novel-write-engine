@@ -1,0 +1,6 @@
+- insert:
+    - id: novel-write-engine
+      name: dsh-novel-write-engine
+      config:
+        toolsMode: all
+        minScore: 120

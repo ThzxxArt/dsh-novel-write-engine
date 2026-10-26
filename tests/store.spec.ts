@@ -1,0 +1,276 @@
+import { describe, expect, it } from 'vitest'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { FsStore, joinRel, sha256 } from '../src/store/fs.js'
+import { assertSafeRelative, resolveInside, toProjectPath } from '../src/store/path.js'
+import { narrow, DOC_KINDS } from '../src/store/schema.js'
+import { runTransaction } from '../src/store/txn.js'
+import { FileLock, KeyedMutex } from '../src/store/lock.js'
+import { appendJournal, readJournal } from '../src/store/journal.js'
+import { migrateDocument } from '../src/store/migrate.js'
+
+const temp = async (): Promise<string> => mkdtemp(join(tmpdir(), 'novel-store-'))
+
+describe('path guard', () => {
+  it('rejects every escape vector', () => {
+    for (const bad of [
+      '../x',
+      '/etc/passwd',
+      'C:\\x',
+      'a\\b',
+      'a\0b',
+      'CON',
+      'com1.txt',
+      '',
+      'a/../../b',
+      './a',
+    ]) {
+      expect(() => assertSafeRelative(bad), bad).toThrow(/refusing path/)
+    }
+    expect(() => assertSafeRelative('state/pipeline.yaml')).not.toThrow()
+    expect(() => resolveInside('/tmp/root', '../x')).toThrow(/refusing path|escapes/)
+    expect(resolveInside('/tmp/root', 'a/b.yaml')).toContain('a/b.yaml')
+  })
+
+  it('recognises project-relative paths', () => {
+    expect(toProjectPath('/tmp/root', '/tmp/root/state/a.yaml')).toBe('state/a.yaml')
+    expect(() => assertSafeRelative('a//b')).toThrow()
+  })
+})
+
+describe('schema narrowing', () => {
+  it('covers every document kind and rejects defects', () => {
+    expect(DOC_KINDS).toHaveLength(14)
+    const pipeline = {
+      schema_version: 1,
+      revision: 1,
+      chapter: 1,
+      stage: 'idle',
+      rounds: {},
+      briefs: {},
+      blocking: [],
+      last_action: null,
+    }
+    expect(() => narrow('pipeline', pipeline)).not.toThrow()
+    expect(() => narrow('pipeline', null)).toThrow(/not an object/)
+    expect(() => narrow('pipeline', { ...pipeline, extra: true })).toThrow(/unknown key/)
+    expect(() => narrow('pipeline', { ...pipeline, schema_version: 2 })).toThrow(/newer than supported/)
+    expect(() => narrow('pipeline', {})).toThrow(/schema_version/)
+    expect(() => narrow('project', { schema_version: 1 })).toThrow(/missing required key/)
+    expect(() =>
+      narrow('project', {
+        schema_version: 1,
+        title: 'x',
+        genre: '未知',
+        platform: 'fanqie',
+        author: '',
+        description: '',
+        created_at: '',
+        targets: {},
+      }),
+    ).toThrow(/must be one of/)
+    expect(() => narrow('pipeline', { ...pipeline, revision: 'x' })).toThrow(/must be integer/)
+  })
+})
+
+describe('FsStore', () => {
+  it('writes atomically, reads back and hashes', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/a.yaml', 'hello')
+      expect(await store.readText('state/a.yaml')).toBe('hello')
+      expect(await store.readText('state/missing.yaml')).toBeNull()
+      expect(await store.exists('state/a.yaml')).toBe(true)
+      expect(await store.hashOf('state/a.yaml')).toBe(sha256('hello'))
+      expect(await store.hashBytes('state/a.yaml')).not.toBeNull()
+      expect(await store.stat('state/a.yaml')).toMatchObject({ size: 5 })
+      expect(await store.stat('state/missing')).toBeNull()
+      await store.writeBytes('state/b.bin', Buffer.from([1, 2, 3]))
+      expect((await store.readBytes('state/b.bin'))?.length).toBe(3)
+      expect(await store.list('state')).toEqual(['a.yaml', 'b.bin'])
+      expect(await store.list('nope')).toEqual([])
+      const leftovers = (await readdir(join(root, 'state'))).filter((name) => name.endsWith('.tmp'))
+      expect(leftovers).toEqual([])
+      await store.remove('state/a.yaml')
+      expect(await store.exists('state/a.yaml')).toBe(false)
+      await expect(store.writeText('../escape', 'x')).rejects.toThrow()
+      await store.ensureDir('chapters')
+      expect(await store.exists('chapters')).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('transactions', () => {
+  it('commits text and binary files and journals the txid', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('chapters/chapter-001.md', '旧稿')
+      await runTransaction(store, {
+        txid: 'tx-1',
+        op: 'archiveChapter',
+        chapter: 1,
+        revision: 2,
+        files: [
+          { path: 'novel.yaml', text: 'live: true' },
+          { path: 'bin', bytes: Buffer.from([0, 255]) },
+        ],
+        backup: true,
+      })
+      expect(await store.readText('novel.yaml')).toBe('live: true')
+      expect((await store.readBytes('bin'))?.length).toBe(2)
+      const journal = await readJournal(store)
+      expect(journal.rows).toEqual([
+        expect.objectContaining({ txid: 'tx-1', status: 'committed', op: 'archiveChapter' }),
+      ])
+      expect(await store.readBytes(joinRel('backups', 'tx-1', 'chapters/chapter-001.md'))).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('aborts with zero target changes and an aborted journal row (T-09)', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('chapters/chapter-001.md', '旧稿')
+      const before = await store.readText('chapters/chapter-001.md')
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-2',
+          op: 'submitDraft',
+          chapter: 1,
+          revision: 3,
+          backup: true,
+          files: [
+            { path: 'chapters/chapter-001.md', text: '新稿' },
+            { path: 'state/a.yaml', text: 'x' },
+            { path: 'state/b.yaml', text: 'y' },
+          ],
+          afterVerify: async () => {
+            throw new Error('injected failure')
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await store.readText('chapters/chapter-001.md')).toBe(before)
+      expect(await store.exists('state/a.yaml')).toBe(false)
+      const journal = await readJournal(store)
+      expect(journal.rows.at(-1)).toMatchObject({ status: 'aborted', txid: 'tx-2' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('honours a pre-aborted signal before touching targets', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      const controller = new AbortController()
+      controller.abort()
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-3',
+          op: 'submitDraft',
+          chapter: 1,
+          revision: 1,
+          files: [{ path: 'x.yaml', text: 'x' }],
+          backup: false,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await store.exists('x.yaml')).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('locks and mutex', () => {
+  it('serializes by key and keeps different keys independent', async () => {
+    const mutex = new KeyedMutex()
+    const order: string[] = []
+    const first = mutex.run('a', async () => {
+      order.push('a1-start')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      order.push('a1-end')
+    })
+    const second = mutex.run('a', async () => {
+      order.push('a2')
+    })
+    const other = mutex.run('b', async () => {
+      order.push('b')
+    })
+    await Promise.all([first, second, other])
+    expect(order.indexOf('a2')).toBeGreaterThan(order.indexOf('a1-end'))
+    expect(mutex.size).toBe(0)
+  })
+
+  it('acquires, releases, and reclaims a stale lock', async () => {
+    const root = await temp()
+    const path = join(root, '.engine.lock')
+    try {
+      const lock = new FileLock(path, 50, 100)
+      await lock.acquire()
+      await expect(new FileLock(path, 50, 20).acquire()).rejects.toMatchObject({
+        code: 'ENGINE_LOCK_TIMEOUT',
+      })
+      await lock.release()
+      await writeFile(path, JSON.stringify({ pid: 999_999, startedAt: new Date(0).toISOString() }))
+      const reclaimed = new FileLock(path, 1_000, 200)
+      await reclaimed.acquire()
+      await reclaimed.release()
+      expect(await readdir(root)).not.toContain('.engine.lock')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats corrupt lock content as stale', async () => {
+    const root = await temp()
+    const path = join(root, '.engine.lock')
+    try {
+      await writeFile(path, 'not json')
+      const lock = new FileLock(path, 1000, 100)
+      await lock.acquire()
+      await lock.release()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('journal and migrations', () => {
+  it('reads records and counts malformed lines without rewriting', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await appendJournal(store, {
+        txid: 't1',
+        at: '2026-01-01',
+        op: 'x',
+        chapter: 1,
+        revision: 1,
+        files: [],
+        status: 'committed',
+      })
+      await store.appendText('state/journal.jsonl', 'broken\n{"txid":2}\n')
+      const result = await readJournal(store)
+      expect(result.rows).toHaveLength(1)
+      expect(result.malformed).toBe(2)
+      expect((await readJournal(new FsStore(join(root, 'empty')))).rows).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('migrates through a synthetic chain and refuses unknown versions', () => {
+    const chain = [{ from: 1, to: 2, migrate: (doc: Record<string, unknown>) => ({ ...doc, added: true }) }]
+    expect(migrateDocument({ schema_version: 1 }, chain, 1)).toEqual({ schema_version: 1 })
+    expect(() => migrateDocument({ schema_version: 3 }, chain, 2)).toThrow(/newer than supported/)
+    expect(() => migrateDocument({ schema_version: 1 }, [], 2)).toThrow(/no migration/)
+  })
+})

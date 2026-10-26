@@ -1,0 +1,205 @@
+schema_version: 1
+name: default
+version: "1.0.0"
+
+lexicon:
+  zero_tolerance:
+    - { term: "总而言之", note: "AI 套话" }
+    - { term: "不可否认", note: "AI 套话" }
+    - { term: "不禁", note: "AI 套话" }
+    - { term: "仿佛", note: "AI 套话" }
+    - { term: "似乎", note: "AI 套话" }
+    - { term: "嘴角微微上扬", note: "模板动作" }
+    - { term: "眼中闪过一丝", note: "模板表情" }
+    - { term: "心中暗道", note: "模板心理" }
+    - { term: "殊不知", note: "叙事套话" }
+    - { term: "与此同时", note: "转场套话" }
+    - { term: "话虽如此", note: "转折套话" }
+    - { term: "换句话说", note: "解释套话" }
+    - { term: "与此同时的", note: "重复表达" }
+    - { term: "油然而生", note: "成语套话" }
+    - { term: "不由自主", note: "成语套话" }
+    - { term: "若有所思", note: "成语套话" }
+    - { term: "意味深长", note: "成语套话" }
+    - { term: "哭笑不得", note: "成语套话" }
+    - { term: "五味杂陈", note: "成语套话" }
+    - { term: "如释重负", note: "成语套话" }
+    - { term: "醍醐灌顶", note: "成语套话" }
+    - { term: "恍然大悟", note: "成语套话" }
+    - { term: "电光火石", note: "成语套话" }
+    - { term: "千钧一发", note: "成语套话" }
+    - { term: "浑然不觉", note: "成语套话" }
+    - { term: "不置可否", note: "成语套话" }
+    - { term: "若有所思地", note: "成语套话" }
+    - { term: "深吸一口气", note: "模板动作" }
+    - { term: "缓缓开口", note: "模板动作" }
+    - { term: "淡淡说道", note: "模板台词" }
+    - { term: "冷冷地说", note: "模板台词" }
+    - { term: "微微一笑", note: "模板动作" }
+    - { term: "眉头一皱", note: "模板动作" }
+    - { term: "心中一凛", note: "模板心理" }
+    - { term: "心头一震", note: "模板心理" }
+    - { term: "后背发凉", note: "模板生理" }
+    - { term: "头皮发麻", note: "模板生理" }
+    - { term: "瞳孔骤缩", note: "模板生理" }
+    - { term: "倒吸一口凉气", note: "模板生理" }
+    - { term: "空气仿佛凝固", note: "模板环境" }
+    - { term: "死一般的寂静", note: "模板环境" }
+    - { term: "时间仿佛静止", note: "模板环境" }
+    - { term: "命运的齿轮", note: "叙事套话" }
+    - { term: "一波未平一波又起", note: "叙事套话" }
+    - { term: "说来话长", note: "叙事套话" }
+    - { term: "果然不出所料", note: "叙事套话" }
+    - { term: "果不其然", note: "叙事套话" }
+    - { term: "毫无意外", note: "叙事套话" }
+    - { term: "显而易见", note: "叙事套话" }
+    - { term: "显而易见地", note: "叙事套话" }
+    - { term: "不容置疑", note: "叙事套话" }
+    - { term: "毋庸置疑", note: "叙事套话" }
+    - { term: "众所周知", note: "元叙述" }
+    - { term: "值得一提的是", note: "元叙述" }
+    - { term: "需要指出的是", note: "元叙述" }
+    - { term: "让我们", note: "读者侵入" }
+    - { term: "读者朋友们", note: "读者侵入" }
+    - { term: "各位看官", note: "读者侵入" }
+    - { term: "话说回来", note: "转场套话" }
+    - { term: "另一方面", note: "转场套话" }
+    - { term: "正因如此", note: "解释套话" }
+    - { term: "正是因为", note: "解释套话" }
+
+  soft:
+    - { term: "犹如", limit: 1 }
+    - { term: "宛若", limit: 1 }
+    - { term: "宛如", limit: 1 }
+    - { term: "仿佛置身", limit: 1 }
+    - { term: "瞬间", limit: 3 }
+    - { term: "立刻", limit: 4 }
+    - { term: "顿时", limit: 4 }
+    - { term: "猛地", limit: 3 }
+    - { term: "陡然", limit: 2 }
+    - { term: "骤然", limit: 2 }
+    - { term: "缓缓", limit: 4 }
+    - { term: "轻轻", limit: 4 }
+    - { term: "微微", limit: 4 }
+    - { term: "淡淡", limit: 3 }
+    - { term: "冷冷", limit: 3 }
+    - { term: "默默", limit: 3 }
+    - { term: "静静", limit: 3 }
+    - { term: "深深", limit: 3 }
+    - { term: "紧紧", limit: 3 }
+    - { term: "死死", limit: 2 }
+
+  contextual:
+    - { term: "赋能", limit: 2, genres: [都市现代, 游戏系统, 职场商战] }
+    - { term: "闭环", limit: 2, genres: [都市现代, 职场商战, 科幻未来] }
+    - { term: "颗粒度", limit: 1, genres: [职场商战] }
+    - { term: "对齐", limit: 2, genres: [职场商战, 都市现代] }
+    - { term: "灵根", limit: 6, genres: [玄幻仙侠] }
+    - { term: "灵气", limit: 8, genres: [玄幻仙侠] }
+    - { term: "副本", limit: 8, genres: [游戏系统, 无限流] }
+    - { term: "系统提示", limit: 6, genres: [游戏系统, 无限流] }
+
+  meta_narration:
+    - { term: "不难看出" }
+    - { term: "可以看出" }
+    - { term: "由此可见" }
+    - { term: "话说" }
+    - { term: "且说" }
+    - { term: "却说" }
+
+  reader_intrusion:
+    - { pattern: "我们(可以)?看" }
+    - { pattern: "各位读者" }
+    - { pattern: "屏幕前的" }
+
+  god_view:
+    - { pattern: "这注定是" }
+    - { pattern: "当时的.{0,4}还不知道" }
+    - { pattern: "多年以后" }
+    - { pattern: "命运早已" }
+
+  conclusion_first:
+    verbs: [感到, 觉得, 知道, 明白, 意识到, 发现, 察觉]
+    causals: [因为, 所以, 于是, 因此, 由于]
+
+format:
+  paragraph_max_words: 90
+  forbid_markdown: true
+  forbid_semicolon: true
+  forbid_english_ellipsis: true
+  legal_quote: '"'
+  title:
+    pattern: "^第\\d+章\\s"
+    min_chars: 4
+    max_chars: 8
+  system_labels: ["Day 3", "第3卷", "作者按"]
+  scene_separators: ["———", "***", "…………"]
+  markdown_markers: ["#", "**", "---", ">", "|"]
+
+punctuation:
+  dash:
+    base: { 战斗/动作章: 3, 日常过渡章: 4, 情感爆发章: 6, 纯叙事章: 3 }
+    scale_words: 3000
+    token: "——"
+  period_density: { min: 1.5, max: 8 }
+  ellipsis_run: { max: 1, token: "……" }
+  uniform_sentence: { min_sentences: 8, ratio: 0.6 }
+  consecutive_le: { max: 3, char: "了" }
+
+rhythm:
+  min_sentences: 8
+  uniform_ratio: 0.6
+  short_ratio: 0.25
+
+semantics:
+  adjective_density:
+    max: 4
+    adjectives: [美丽, 漂亮, 英俊, 巨大, 渺小, 愤怒, 悲伤, 开心, 恐怖, 温柔, 冰冷, 炙热, 明亮, 昏暗]
+  pleasure_density:
+    min: 1
+    keywords: [打脸, 逆袭, 震惊, 哗然, 跪, 服气, 反转, 暴涨, 秒杀, 碾压, 掌声, 惊呼, 目瞪口呆, 傻眼]
+    window: 600
+  sensory_density:
+    min: 2
+    senses: [看, 听, 闻, 触, 尝, 冷, 热, 香, 臭, 疼, 痒, 麻, 亮, 暗, 声, 响]
+    window: 800
+  water_words:
+    window: 150
+    threshold: 0.35
+    terms: [的就是, 的时候, 时候, 一个, 一种, 一些, 这个, 那个, 这样, 那样, 其实, 确实, 真的, 非常, 十分]
+
+crosschapter:
+  duplicate_similarity: 0.9
+  foreshadow_min_dormancy: 3
+  resource_tolerance: 0
+  check_time: true
+  lock_similarity: 0.75
+
+quality:
+  min_score: 120
+  dimensions:
+    - { id: R-W-01, max: 15 }
+    - { id: R-W-02, max: 10 }
+    - { id: R-W-03, max: 10 }
+    - { id: R-W-04, max: 20 }
+    - { id: R-W-05, max: 15 }
+    - { id: R-W-12, max: 20 }
+    - { id: R-W-11, max: 10 }
+    - { id: R-W-13, max: 15 }
+    - { id: R-W-14, max: 10 }
+    - { id: R-W-15, max: 10 }
+    - { id: R-W-06, max: 4 }
+    - { id: R-W-07, max: 4 }
+    - { id: R-W-08, max: 4 }
+    - { id: R-W-09, max: 2 }
+    - { id: R-W-10, max: 1 }
+
+exclusions:
+  - { pair: [META_NARRATION, LEX_ZERO_TOLERANCE], family: meta }
+  - { pair: [READER_INTRUSION, LEX_ZERO_TOLERANCE], family: reader }
+  - { pair: [GOD_VIEW, CONCLUSION_FIRST], family: perspective }
+  - { pair: [DUPLICATE_PARAGRAPH, FS_REVISITED_TOO_SOON], family: repetition }
+  - { pair: [RESOURCE_MISMATCH, TIME_REGRESSION], family: continuity }
+  - { pair: [LEX_SOFT_LIMIT, LEX_ZERO_TOLERANCE], family: style }
+
+exemptions: []

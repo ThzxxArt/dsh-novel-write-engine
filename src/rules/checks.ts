@@ -1,0 +1,620 @@
+import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
+import { sentenceRhythm, splitParagraphs } from '../domain/text.js'
+import { maxParagraphSimilarity, textSimilarity } from '../domain/simhash.js'
+import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
+import type { Severity, Violation } from '../types.js'
+import type { Rule } from './types.js'
+
+const v = (code: string, severity: Severity, paragraph: number, detail: string): Violation => ({
+  code,
+  severity,
+  location: { paragraph },
+  detail,
+})
+
+const countOccurrences = (text: string, needle: string): number => {
+  if (needle === '') return 0
+  let count = 0
+  let index = text.indexOf(needle)
+  while (index !== -1) {
+    count += 1
+    index = text.indexOf(needle, index + needle.length)
+  }
+  return count
+}
+
+const countHits = (text: string, term: string): number => countOccurrences(text, term)
+
+/* ------------------------------------------------------------------ format */
+
+const mdContamination: Rule = (ctx) => {
+  if (!ctx.rulepack.format.forbid_markdown) return []
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    for (const marker of ctx.rulepack.format.markdown_markers) {
+      if (paragraph.includes(marker))
+        results.push(
+          v(FORMAT_RULES.MD_CONTAMINATION, 'blocker', index + 1, `contains Markdown marker "${marker}"`),
+        )
+    }
+  })
+  return results
+}
+
+const illegalQuote: Rule = (ctx) => {
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    const matches = paragraph.match(/[“”「」『』]/g)
+    if (matches !== null)
+      results.push(
+        v(
+          FORMAT_RULES.ILLEGAL_QUOTE,
+          'blocker',
+          index + 1,
+          `contains ${matches.length} curly/CJK quote mark(s)`,
+        ),
+      )
+  })
+  return results
+}
+
+const semicolon: Rule = (ctx) => {
+  if (!ctx.rulepack.format.forbid_semicolon) return []
+  return splitParagraphs(ctx.text).flatMap((paragraph, index) =>
+    paragraph.includes('；')
+      ? [v(FORMAT_RULES.SEMICOLON, 'blocker', index + 1, 'contains a full-width semicolon')]
+      : [],
+  )
+}
+
+const englishEllipsis: Rule = (ctx) => {
+  if (!ctx.rulepack.format.forbid_english_ellipsis) return []
+  return splitParagraphs(ctx.text).flatMap((paragraph, index) =>
+    /\.{3,}/.test(paragraph)
+      ? [v(FORMAT_RULES.ENGLISH_ELLIPSIS, 'blocker', index + 1, 'contains "..." instead of "……"')]
+      : [],
+  )
+}
+
+const sceneSeparator: Rule = (ctx) => {
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    for (const separator of ctx.rulepack.format.scene_separators) {
+      if (paragraph.includes(separator))
+        results.push(
+          v(FORMAT_RULES.SCENE_SEPARATOR, 'blocker', index + 1, `contains scene separator "${separator}"`),
+        )
+    }
+  })
+  return results
+}
+
+const longParagraph: Rule = (ctx) => {
+  const max = ctx.rulepack.format.paragraph_max_words
+  return splitParagraphs(ctx.text).flatMap((paragraph, index) => {
+    const words = countWordMetricsOfParagraph(paragraph)
+    return words > max
+      ? [
+          v(
+            FORMAT_RULES.LONG_PARAGRAPH,
+            'blocker',
+            index + 1,
+            `paragraph has ${words} words, limit is ${max}`,
+          ),
+        ]
+      : []
+  })
+}
+
+const titleFormat: Rule = (ctx) => {
+  if (ctx.title === null) return []
+  const template = ctx.rulepack.format.title
+  if (!new RegExp(template.pattern).test(ctx.title)) {
+    return [
+      v(FORMAT_RULES.TITLE_FORMAT, 'blocker', 0, `title "${ctx.title}" does not match /${template.pattern}/`),
+    ]
+  }
+  const suffix = ctx.title.replace(new RegExp(template.pattern), '').trim()
+  const length = Array.from(suffix).length
+  if (length < template.min_chars || length > template.max_chars) {
+    return [
+      v(
+        FORMAT_RULES.TITLE_FORMAT,
+        'blocker',
+        0,
+        `title body has ${length} characters, expected ${template.min_chars}..${template.max_chars}`,
+      ),
+    ]
+  }
+  return []
+}
+
+const systemLabel: Rule = (ctx) => {
+  const labels = [...ctx.rulepack.format.system_labels, 'Day 1', 'Day 2', '第1卷', '第2卷', '读者', '书友']
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    for (const label of labels) {
+      if (paragraph.includes(label))
+        results.push(
+          v(FORMAT_RULES.SYSTEM_LABEL, 'blocker', index + 1, `contains out-of-story label "${label}"`),
+        )
+    }
+  })
+  return results
+}
+
+/* ----------------------------------------------------------------- lexicon */
+
+const zeroTolerance: Rule = (ctx) =>
+  ctx.rulepack.lexicon.zero_tolerance.flatMap((entry) => {
+    const hits = countHits(ctx.text, entry.term)
+    if (hits === 0) return []
+    const paragraph = firstParagraphContaining(ctx.text, entry.term)
+    return [
+      v(
+        LEXICON_RULES.ZERO_TOLERANCE,
+        'blocker',
+        paragraph,
+        `"${entry.term}" is zero-tolerance (${hits}x)${entry.note === undefined ? '' : `: ${entry.note}`}`,
+      ),
+    ]
+  })
+
+/** Soft limits apply chapter-wide; contextual limits relax by genre (0 elsewhere). */
+const softLimit: Rule = (ctx) =>
+  [...ctx.rulepack.lexicon.soft, ...ctx.rulepack.lexicon.contextual].flatMap((entry) => {
+    const genres = 'genres' in entry ? entry.genres : undefined
+    const allowed = genres === undefined || genres.includes(ctx.genre)
+    const limit = allowed ? entry.limit : 0
+    const hits = countHits(ctx.text, entry.term)
+    if (hits <= limit) return []
+    return [
+      v(
+        LEXICON_RULES.SOFT_LIMIT,
+        'advisory',
+        firstParagraphContaining(ctx.text, entry.term),
+        `"${entry.term}" used ${hits}x, limit is ${limit}`,
+      ),
+    ]
+  })
+
+const metaNarration: Rule = (ctx) =>
+  ctx.rulepack.lexicon.meta_narration.flatMap((entry) => {
+    const hits = countHits(ctx.text, entry.term)
+    if (hits === 0) return []
+    return [
+      v(
+        LEXICON_RULES.META_NARRATION,
+        'blocker',
+        firstParagraphContaining(ctx.text, entry.term),
+        `"${entry.term}" is meta narration`,
+      ),
+    ]
+  })
+
+const readerIntrusion: Rule = (ctx) =>
+  ctx.rulepack.lexicon.reader_intrusion.flatMap((entry) => {
+    const match = new RegExp(entry.pattern).exec(ctx.text)
+    if (match === null) return []
+    return [
+      v(
+        LEXICON_RULES.READER_INTRUSION,
+        'blocker',
+        paragraphOfIndex(ctx.text, match.index),
+        `reader-address pattern /${entry.pattern}/ matched "${match[0]}"`,
+      ),
+    ]
+  })
+
+const godView: Rule = (ctx) =>
+  ctx.rulepack.lexicon.god_view.flatMap((entry) => {
+    const match = new RegExp(entry.pattern).exec(ctx.text)
+    if (match === null) return []
+    return [
+      v(
+        LEXICON_RULES.GOD_VIEW,
+        'advisory',
+        paragraphOfIndex(ctx.text, match.index),
+        `omniscient-view pattern /${entry.pattern}/ matched "${match[0]}"`,
+      ),
+    ]
+  })
+
+const conclusionFirst: Rule = (ctx) => {
+  const { verbs, causals } = ctx.rulepack.lexicon.conclusion_first
+  if (verbs.length === 0 || causals.length === 0) return []
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    for (const verb of verbs) {
+      const position = paragraph.indexOf(verb)
+      if (position === -1) continue
+      const window = paragraph.slice(Math.max(0, position - 8), position + 20)
+      if (causals.some((causal) => window.includes(causal))) {
+        results.push(
+          v(
+            LEXICON_RULES.CONCLUSION_FIRST,
+            'advisory',
+            index + 1,
+            `conclusion before action: "${verb}" with a causal marker`,
+          ),
+        )
+        break
+      }
+    }
+  })
+  return results
+}
+
+/* ------------------------------------------------------------- punctuation */
+
+const dashBudget: Rule = (ctx) => {
+  const metrics = countWordMetrics(ctx.text)
+  const budget = ctx.rulepack.punctuation.dash.base[ctx.sceneType]
+  const scaled =
+    budget * Math.max(1, Math.ceil(metrics.total_word_count / ctx.rulepack.punctuation.dash.scale_words))
+  const hits = countOccurrences(ctx.text, ctx.rulepack.punctuation.dash.token)
+  if (hits <= scaled) return []
+  return [
+    v(
+      PUNCTUATION_RULES.DASH_BUDGET,
+      'advisory',
+      firstParagraphContaining(ctx.text, ctx.rulepack.punctuation.dash.token),
+      `dash used ${hits}x, budget is ${scaled} for ${ctx.sceneType}`,
+    ),
+  ]
+}
+
+const periodDensity: Rule = (ctx) => {
+  const metrics = countWordMetrics(ctx.text)
+  if (metrics.non_ws_chars === 0) return []
+  const density = (countOccurrences(ctx.text, '。') / metrics.non_ws_chars) * 100
+  const { min, max } = ctx.rulepack.punctuation.period_density
+  if (density >= min && density <= max) return []
+  return [
+    v(
+      PUNCTUATION_RULES.PERIOD_DENSITY,
+      'advisory',
+      1,
+      `period density ${density.toFixed(2)}/100 chars is outside ${min}..${max}`,
+    ),
+  ]
+}
+
+const ellipsisRun: Rule = (ctx) => {
+  const token = ctx.rulepack.punctuation.ellipsis_run.token
+  const max = ctx.rulepack.punctuation.ellipsis_run.max
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    const runs = paragraph.match(new RegExp(`(?:${token}){${max + 1},}`, 'g'))
+    if (runs !== null)
+      results.push(
+        v(
+          PUNCTUATION_RULES.ELLIPSIS_RUN,
+          'advisory',
+          index + 1,
+          `ellipsis repeated ${max + 1}+ times in a row`,
+        ),
+      )
+  })
+  return results
+}
+
+const uniformSentence: Rule = (ctx) => {
+  const rhythm = sentenceRhythm(ctx.text)
+  const { min_sentences, ratio } = ctx.rulepack.punctuation.uniform_sentence
+  if (rhythm.count < min_sentences || rhythm.uniformRatio < ratio) return []
+  return [
+    v(
+      PUNCTUATION_RULES.UNIFORM_SENTENCE,
+      'advisory',
+      1,
+      `${Math.round(rhythm.uniformRatio * 100)}% of sentences share one length`,
+    ),
+  ]
+}
+
+const consecutiveLe: Rule = (ctx) => {
+  const { max, char } = ctx.rulepack.punctuation.consecutive_le
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    let run = 0
+    for (const character of paragraph) {
+      run = character === char ? run + 1 : 0
+      if (run > max) {
+        results.push(
+          v(
+            PUNCTUATION_RULES.CONSECUTIVE_LE,
+            'advisory',
+            index + 1,
+            `"${char}" appears ${run} times in a row`,
+          ),
+        )
+        break
+      }
+    }
+  })
+  return results
+}
+
+/* --------------------------------------------------------------- semantics */
+
+const adjectiveDensity: Rule = (ctx) => {
+  const { max, adjectives } = ctx.rulepack.semantics.adjective_density
+  if (adjectives.length === 0) return []
+  const metrics = countWordMetrics(ctx.text)
+  const hits = adjectives.reduce((total, adjective) => total + countOccurrences(ctx.text, adjective), 0)
+  if (metrics.non_ws_chars === 0) return []
+  const density = (hits / metrics.non_ws_chars) * 100
+  if (density <= max) return []
+  return [
+    v(
+      SEMANTIC_RULES.ADJECTIVE_DENSITY,
+      'advisory',
+      1,
+      `adjectives every ${(100 / density).toFixed(1)} chars; limit is ${max}%`,
+    ),
+  ]
+}
+
+const slidingWindows = (text: string, size: number): string[] => {
+  if (text.length <= size) return [text]
+  const windows: string[] = []
+  for (let start = 0; start + size <= text.length; start += size)
+    windows.push(text.slice(start, start + size))
+  const tail = text.slice(text.length - size)
+  if (windows[windows.length - 1] !== tail) windows.push(tail)
+  return windows
+}
+
+const pleasureDensity: Rule = (ctx) => {
+  const { min, keywords, window } = ctx.rulepack.semantics.pleasure_density
+  if (keywords.length === 0) return []
+  const results: Violation[] = []
+  const windows = slidingWindows(ctx.text, window)
+  const bare = windows.findIndex((slice) => keywords.every((keyword) => !slice.includes(keyword)))
+  if (bare !== -1)
+    results.push(
+      v(
+        SEMANTIC_RULES.PLEASURE_DENSITY,
+        'advisory',
+        1,
+        `a ${window}-char window has no pleasure keyword (minimum ${min})`,
+      ),
+    )
+  return results
+}
+
+const sensoryDensity: Rule = (ctx) => {
+  const { min, senses, window } = ctx.rulepack.semantics.sensory_density
+  if (senses.length === 0) return []
+  const bare = slidingWindows(ctx.text, window).findIndex((slice) => {
+    const hits = senses.reduce((total, sense) => total + countOccurrences(slice, sense), 0)
+    return hits < min
+  })
+  return bare === -1
+    ? []
+    : [
+        v(
+          SEMANTIC_RULES.SENSORY_DENSITY,
+          'advisory',
+          1,
+          `a ${window}-char window has fewer than ${min} sensory words`,
+        ),
+      ]
+}
+
+const waterWords: Rule = (ctx) => {
+  const { window, threshold, terms } = ctx.rulepack.semantics.water_words
+  if (terms.length === 0) return []
+  const results: Violation[] = []
+  for (const slice of slidingWindows(ctx.text, window)) {
+    const hits = terms.reduce((total, term) => total + countOccurrences(slice, term), 0)
+    const density = hits / window
+    if (density > threshold) {
+      results.push(
+        v(
+          SEMANTIC_RULES.WATER_WORDS,
+          'advisory',
+          1,
+          `a ${window}-char window is ${Math.round(density * 100)}% filler words`,
+        ),
+      )
+      break
+    }
+  }
+  return results
+}
+
+/* ------------------------------------------------------------ crosschapter */
+
+const duplicateParagraph: Rule = (ctx) => {
+  if (ctx.evidence.previousText === null) return []
+  const best = maxParagraphSimilarity(ctx.text, [ctx.evidence.previousText])
+  if (best < ctx.rulepack.crosschapter.duplicate_similarity) return []
+  return [
+    v(
+      CROSS_RULES.DUPLICATE_PARAGRAPH,
+      'advisory',
+      1,
+      `paragraph reuses ${Math.round(best * 100)}% of a paragraph from the previous chapter`,
+    ),
+  ]
+}
+
+const foreshadowDormant: Rule = (ctx) => {
+  const ledger = ctx.evidence.foreshadows
+  if (ledger === null) return []
+  return ledger.items
+    .filter((item) => item.status === 'dormant' && ctx.chapter - item.last_touched >= 20)
+    .map((item) =>
+      v(
+        CROSS_RULES.FORESHADOW_DORMANT,
+        'advisory',
+        1,
+        `foreshadow ${item.id} has slept for ${ctx.chapter - item.last_touched} chapters`,
+      ),
+    )
+}
+
+const revisitedTooSoon: Rule = (ctx) => {
+  const ledger = ctx.evidence.foreshadows
+  if (ledger === null) return []
+  const min = ctx.rulepack.crosschapter.foreshadow_min_dormancy
+  return ledger.items
+    .filter(
+      (item) =>
+        ctx.text.includes(item.title) &&
+        ctx.chapter - item.last_touched < min &&
+        ctx.chapter > item.last_touched,
+    )
+    .map((item) =>
+      v(
+        CROSS_RULES.FS_REVISITED_TOO_SOON,
+        'advisory',
+        1,
+        `foreshadow ${item.id} reappears after ${ctx.chapter - item.last_touched} chapters (minimum ${min})`,
+      ),
+    )
+}
+
+const resourceMismatch: Rule = (ctx) => {
+  const changes = ctx.summary?.resource_changes ?? []
+  return changes.flatMap((change) => {
+    if (change.delta === 0) return []
+    const magnitude = String(Math.abs(change.delta))
+    const mentioned = ctx.text.includes(change.character) && ctx.text.includes(magnitude)
+    return mentioned
+      ? []
+      : [
+          v(
+            CROSS_RULES.RESOURCE_MISMATCH,
+            'advisory',
+            1,
+            `${change.character}'s ${change.resource} change (${change.delta}) is not stated in the text`,
+          ),
+        ]
+  })
+}
+
+const timeRegression: Rule = (ctx) => {
+  if (!ctx.rulepack.crosschapter.check_time) return []
+  const ledger = ctx.evidence.timeline
+  if (ledger === null || ledger.items.length === 0) return []
+  const dayOf = (value: string): number | null => {
+    const match = /Day\s*(\d+)/i.exec(value)
+    return match === null ? null : Number(match[1])
+  }
+  const last = [...ledger.items].sort((a, b) => b.chapter - a.chapter)[0]
+  if (last === undefined) return []
+  const previous = dayOf(last.story_time)
+  const current = dayOf(ctx.text)
+  if (previous === null || current === null || current >= previous) return []
+  return [
+    v(
+      CROSS_RULES.TIME_REGRESSION,
+      'advisory',
+      1,
+      `story time goes back from ${last.story_time} to Day ${current}`,
+    ),
+  ]
+}
+
+const relationUnknown: Rule = (ctx) => {
+  if (ctx.evidence.relationships === null) return []
+  const ledger = ctx.evidence.relationships
+  const names = new Set<string>()
+  for (const item of ledger.items) {
+    names.add(item.a)
+    names.add(item.b)
+  }
+  const results: Violation[] = []
+  for (const first of names) {
+    for (const second of names) {
+      if (first >= second) continue
+      if (!ctx.text.includes(first) || !ctx.text.includes(second)) continue
+      const declared = ledger.items.some(
+        (item) => (item.a === first && item.b === second) || (item.a === second && item.b === first),
+      )
+      if (!declared)
+        results.push(
+          v(
+            CROSS_RULES.RELATION_UNKNOWN,
+            'advisory',
+            1,
+            `${first} and ${second} appear together but have no ledger entry`,
+          ),
+        )
+    }
+  }
+  return results
+}
+
+const lockedDetailDrift: Rule = (ctx) => {
+  if (ctx.evidence.locks === null) return []
+  const locks = ctx.evidence.locks
+  const results: Violation[] = []
+  for (const [name, lock] of Object.entries(locks.locations)) {
+    if (!ctx.text.includes(name)) continue
+    const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
+    if (paragraph === undefined) continue
+    const similarity = textSimilarity(paragraph, lock.layout)
+    if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
+      results.push(
+        v(
+          CROSS_RULES.LOCKED_DETAIL_DRIFT,
+          'advisory',
+          paragraphOfIndex(ctx.text, ctx.text.indexOf(paragraph)),
+          `${name} is described differently from its locked layout`,
+        ),
+      )
+    }
+  }
+  return results
+}
+
+/* ----------------------------------------------------------------- helpers */
+
+function firstParagraphContaining(text: string, needle: string): number {
+  const paragraphs = splitParagraphs(text)
+  const index = paragraphs.findIndex((paragraph) => paragraph.includes(needle))
+  return Math.max(1, index + 1)
+}
+
+function paragraphOfIndex(text: string, index: number): number {
+  const prefix = text.slice(0, Math.max(0, index))
+  return prefix.split(/\n+/).filter((line) => line.trim() !== '').length + 1
+}
+
+/** All built-in rules by code. The registry is populated from this table. */
+export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
+  [FORMAT_RULES.MD_CONTAMINATION]: mdContamination,
+  [FORMAT_RULES.ILLEGAL_QUOTE]: illegalQuote,
+  [FORMAT_RULES.SEMICOLON]: semicolon,
+  [FORMAT_RULES.ENGLISH_ELLIPSIS]: englishEllipsis,
+  [FORMAT_RULES.SCENE_SEPARATOR]: sceneSeparator,
+  [FORMAT_RULES.LONG_PARAGRAPH]: longParagraph,
+  [FORMAT_RULES.TITLE_FORMAT]: titleFormat,
+  [FORMAT_RULES.SYSTEM_LABEL]: systemLabel,
+  [LEXICON_RULES.ZERO_TOLERANCE]: zeroTolerance,
+  [LEXICON_RULES.SOFT_LIMIT]: softLimit,
+  [LEXICON_RULES.META_NARRATION]: metaNarration,
+  [LEXICON_RULES.READER_INTRUSION]: readerIntrusion,
+  [LEXICON_RULES.GOD_VIEW]: godView,
+  [LEXICON_RULES.CONCLUSION_FIRST]: conclusionFirst,
+  [PUNCTUATION_RULES.DASH_BUDGET]: dashBudget,
+  [PUNCTUATION_RULES.PERIOD_DENSITY]: periodDensity,
+  [PUNCTUATION_RULES.ELLIPSIS_RUN]: ellipsisRun,
+  [PUNCTUATION_RULES.UNIFORM_SENTENCE]: uniformSentence,
+  [PUNCTUATION_RULES.CONSECUTIVE_LE]: consecutiveLe,
+  [SEMANTIC_RULES.ADJECTIVE_DENSITY]: adjectiveDensity,
+  [SEMANTIC_RULES.PLEASURE_DENSITY]: pleasureDensity,
+  [SEMANTIC_RULES.SENSORY_DENSITY]: sensoryDensity,
+  [SEMANTIC_RULES.WATER_WORDS]: waterWords,
+  [CROSS_RULES.DUPLICATE_PARAGRAPH]: duplicateParagraph,
+  [CROSS_RULES.FORESHADOW_DORMANT]: foreshadowDormant,
+  [CROSS_RULES.FS_REVISITED_TOO_SOON]: revisitedTooSoon,
+  [CROSS_RULES.RESOURCE_MISMATCH]: resourceMismatch,
+  [CROSS_RULES.TIME_REGRESSION]: timeRegression,
+  [CROSS_RULES.RELATION_UNKNOWN]: relationUnknown,
+  [CROSS_RULES.LOCKED_DETAIL_DRIFT]: lockedDetailDrift,
+}

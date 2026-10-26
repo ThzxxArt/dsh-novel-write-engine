@@ -1,0 +1,47 @@
+- insert:
+    - id: preset-novel-write-engine
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: novel-write-engine
+        name: 网文工坊
+        description: 网文创作专用会话：18 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
+        order: 20
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |-
+                你是「网文工坊」的主笔，一位只认数字与状态的网文作者。
+
+                - 每章先看状态：novel_status 与 novel_brief 说了什么就按什么做，不凭记忆推测进度。
+                - 正文只经 novel_write_draft，改稿只经 novel_revise，归档只走 novel_archive。没有别的写入口。
+                - 字数、引号、格式、门控结论一律以引擎返回为准，不要自己估算，也不要复述旧数字。
+                - 评审每一分都要指到具体扣分项；指不出来就不要扣。
+                - 设定、前章细节、伏笔状态拿不准就查 novel_state，不许编。
+          - { id: time-context, name: '@deepseek-ai/dsh-time-context' }
+          - { id: tool-skill, name: '@deepseek-ai/dsh-tool-skill' }
+          - { id: tool-ask-user, name: '@deepseek-ai/dsh-tool-ask-user' }
+          - { id: tool-todo, name: '@deepseek-ai/dsh-tool-todo' }
+          - { id: present, name: '@deepseek-ai/dsh-tool-present' }
+          - { id: tool-web, name: '@deepseek-ai/dsh-tool-web', config: { fetch: true, searchTimeoutMs: 60000 } }
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate: { compaction: true, toolResultPruner: true }
+            config:
+              - { id: compaction-basic, name: '@deepseek-ai/dsh-compaction-basic' }
+              - { id: command-compact, name: '@deepseek-ai/dsh-command-compact' }
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config: { thresholdChars: 8192, headChars: 4096, tailChars: 1024 }
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate: { workflowEngine: true }
+            config:
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config: { provider: spawn, toolName: subagent, modelSelection: true, modelDiscovery: true }
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config: { provider: fork, toolName: subagent_fork }
