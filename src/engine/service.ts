@@ -10,11 +10,12 @@ import {
   STATE_FILES,
   chapterFile,
   checkFile,
+  deprecatedChapterFile,
   planChapterFile,
   planWorldFile,
   reviewFile,
 } from '../constants.js'
-import { allocateIds, canRun, STAGE_NEXT, nextStage as computeNextStage } from '../domain/index.js'
+import { canRun, STAGE_NEXT, nextStage as computeNextStage } from '../domain/index.js'
 import { textSimilarity } from '../domain/simhash.js'
 import { splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
@@ -32,13 +33,18 @@ import {
   type StagedFile,
 } from '../store/index.js'
 import { homedir } from 'node:os'
+import { ensureDirAt } from '../assets.js'
 import { runTransaction } from '../store/txn.js'
 import { KeyedMutex, FileLock } from '../store/lock.js'
-import { readJournal } from '../store/journal.js'
+import { assertJournalConsistent, readJournal, reconcileJournal } from '../store/journal.js'
+import { listBackups } from '../store/backup.js'
 import { narrow, type DocKind } from '../store/schema.js'
 import { buildEpub } from '../export/epub.js'
 import { renderCover, renderMarkdown, renderPlainText, type ExportChapter } from '../export/render.js'
 import { BriefLibrary } from './brief.js'
+import { briefContext } from './context.js'
+import { applyStateDelta } from './state-delta.js'
+import { evaluateSemantic } from './semantic.js'
 import { briefStageFor, evaluateGates, gateName } from './gates.js'
 import {
   phaseStrip,
@@ -63,6 +69,7 @@ import {
   EngineFaultError,
   EngineInputError,
   type AuditRow,
+  type ArchiveHandoff,
   type BlockingItem,
   type ChapterPlanInput,
   type ChapterRecord,
@@ -83,6 +90,7 @@ import {
   type ScoreDimension,
   type SemanticItem,
   type Stage,
+  type StateDelta,
   type StatusReport,
   type Warning,
   type WordMetrics,
@@ -103,7 +111,6 @@ export interface InitProjectInput {
 
 export interface StatusInput {
   chapter?: number
-  format?: 'json' | 'markdown'
   root?: string
 }
 
@@ -153,6 +160,10 @@ export interface CheckSubmission {
 
 export interface ArchiveSubmission {
   chapter: number
+  /** Mandatory reconciliation sheet for the five derived ledgers. */
+  state_delta: StateDelta
+  /** Optional volume/act override; omitted values are derived by the engine. */
+  handoff?: ArchiveHandoff
   root?: string
 }
 
@@ -214,6 +225,7 @@ interface Snapshot {
   handoff: import('../types.js').HandoffDocument | null
   text: string | null
   previousText: string | null
+  previousTexts: string[]
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
   review: ReviewDocument | null
   check: CheckDocument | null
@@ -257,7 +269,8 @@ export class EngineService {
     options: { briefs?: BriefLibrary; now?: () => Date; onEvent?: (event: EngineEvent) => void } = {},
   ) {
     this.rulepackSource = typeof rulepack === 'function' ? rulepack : () => rulepack
-    this.briefs = options.briefs ?? new BriefLibrary()
+    this.briefs =
+      options.briefs ?? new BriefLibrary(config.briefs.overrides === '' ? undefined : config.briefs.overrides)
     this.now = options.now ?? (() => new Date())
     this.onEvent = options.onEvent
   }
@@ -313,9 +326,10 @@ export class EngineService {
           description: input.description ?? '',
           created_at: this.now().toISOString(),
           targets: {
-            words_per_chapter: input.words_per_chapter ?? [2000, 3000],
+            words_per_chapter:
+              input.words_per_chapter ?? this.rulepack.platform[input.platform].words_per_chapter,
             total_chapters: input.total_chapters ?? null,
-            dialogue_ratio: input.dialogue_ratio ?? [0.4, 0.6],
+            dialogue_ratio: input.dialogue_ratio ?? this.rulepack.platform[input.platform].dialogue_ratio,
           },
         }
         const pipeline = emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' })
@@ -458,11 +472,13 @@ export class EngineService {
       content: string
       content_hash: string
       fields: Record<string, unknown>
+      context: Record<string, unknown>
     }>
   > {
     const snapshot = await this.load(input.root)
     const chapter = input.chapter ?? snapshot.pipeline.chapter
-    const digest = this.briefDigest(input.stage, snapshot)
+    const context = this.briefContextFor(input.stage, snapshot, chapter)
+    const digest = this.briefDigest(input.stage, snapshot, context)
     const variables = this.briefVariables(snapshot, chapter)
     const rendered = this.briefs.render(input.stage, variables)
     const fields = {
@@ -472,6 +488,8 @@ export class EngineService {
       min_words: snapshot.project.targets.words_per_chapter[0],
       min_score: this.config.quality.minScore,
       scene_types: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'],
+      platform_style: this.rulepack.platform[snapshot.project.platform],
+      genre_guide: this.rulepack.genres[snapshot.project.genre],
       next_tool: STAGE_NEXT[snapshot.pipeline.stage].tool,
     }
     const existing = snapshot.pipeline.briefs[input.stage]
@@ -485,6 +503,7 @@ export class EngineService {
           content: rendered.content,
           content_hash: rendered.contentHash,
           fields,
+          context,
         },
         revision: snapshot.pipeline.revision,
         warnings: [],
@@ -493,9 +512,8 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'getBrief',
-      key: () => `brief:${input.stage}:${chapter}:${digest}`,
-      run: async (fresh, context) => {
-        const nextPipeline = pipelineWith(fresh, context.revision, {
+      run: async (fresh, ctx) => {
+        const nextPipeline = pipelineWith(fresh, ctx.revision, {
           briefs: {
             ...fresh.pipeline.briefs,
             [input.stage]: { issued_at: this.now().toISOString(), digest },
@@ -513,6 +531,7 @@ export class EngineService {
             content: rendered.content,
             content_hash: rendered.contentHash,
             fields,
+            context,
           },
         }
       },
@@ -613,7 +632,13 @@ export class EngineService {
         const planPath = planChapterFile(chapter)
         const planText = await context.store.readText(planPath)
         const plan = planText === null ? null : (parseYamlLoose(planText) as Record<string, unknown>)
-        const mergedPlan = { ...(plan ?? { schema_version: 1, ...input, chapter }), summary: input.summary }
+        const mergedPlan = {
+          ...(plan ?? { schema_version: 1, chapter }),
+          title: input.chapter_title,
+          scene_type: input.scene_type,
+          narrator: input.narrator,
+          summary: input.summary,
+        }
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: 'P4',
           blocking: [],
@@ -651,7 +676,21 @@ export class EngineService {
         const text = snapshot.text ?? ''
         const provided: ScoreDimension[] = input.dimensions
         const excluded = applyExclusions(provided, this.rulepack.exclusions)
-        const total = totalScore(excluded.dimensions)
+        const computed = totalScore(excluded.dimensions)
+        if (!Number.isInteger(input.total) || input.total !== computed) {
+          throw new EngineInputError(
+            ERROR_CODES.SCORE_MISMATCH,
+            `claimed total ${String(input.total)} does not equal 150 - Σdelta (${computed})`,
+            'recompute the total after applying the rulepack exclusions',
+          )
+        }
+        const arithmetic = reviewArithmeticProblems(excluded.dimensions, input.total)
+        if (arithmetic.length > 0) {
+          throw new EngineInputError(
+            ERROR_CODES.SCORE_MISMATCH,
+            `review arithmetic does not close: ${arithmetic.join('; ')}`,
+          )
+        }
         const review: ReviewDocument = {
           schema_version: 1,
           chapter: input.chapter,
@@ -659,7 +698,7 @@ export class EngineService {
           content_hash: sha256(text),
           dimensions: excluded.dimensions,
           issues: input.issues,
-          total,
+          total: input.total,
         }
         await this.assertGates(snapshot, 'submitReview', {
           briefStage: 'P4',
@@ -671,13 +710,6 @@ export class EngineService {
             ERROR_CODES.STAGE_ORDER,
             `chapter ${input.chapter} has no draft to review`,
             'call novel_write_draft first',
-          )
-        }
-        const problems = reviewArithmeticProblems(review.dimensions, review.total)
-        if (problems.length > 0) {
-          throw new EngineInputError(
-            ERROR_CODES.SCORE_MISMATCH,
-            `review arithmetic does not close: ${problems.join('; ')}`,
           )
         }
         const openBlockers = input.issues.filter(
@@ -795,9 +827,10 @@ export class EngineService {
         await this.assertGates(snapshot, 'runCheck', { briefStage: 'P6', text })
         const semantic = input.semantic ?? []
         const machine = this.machine(snapshot, text, { summary: snapshot.plan?.summary ?? null })
-        const blocking = machine.violations.filter((violation) => violation.severity === 'blocker').length
-        const semanticFailed = semantic.some((item) => item.verdict === 'fail')
-        const verdict: 'pass' | 'fail' = blocking === 0 && !semanticFailed ? 'pass' : 'fail'
+        const machineBlocking = machine.violations.filter((violation) => violation.severity === 'blocker')
+        const semanticResult = evaluateSemantic(text, semantic)
+        const blocking = machineBlocking.length
+        const verdict: 'pass' | 'fail' = blocking === 0 && !semanticResult.failed ? 'pass' : 'fail'
         const check: CheckDocument = {
           schema_version: 1,
           chapter: input.chapter,
@@ -808,11 +841,16 @@ export class EngineService {
           verdict,
         }
         const nextStage: Stage = verdict === 'pass' ? 'ready_to_archive' : 'P6'
-        const blockingItems =
+        const blockingItems: BlockingItem[] =
           verdict === 'fail'
-            ? machine.violations
-                .filter((violation) => violation.severity === 'blocker')
-                .map((violation) => ({ code: violation.code, scope: 'check', detail: violation.detail }))
+            ? [
+                ...machineBlocking.map((violation) => ({
+                  code: violation.code,
+                  scope: 'check',
+                  detail: violation.detail,
+                })),
+                ...semanticResult.blocking,
+              ]
             : []
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: nextStage,
@@ -871,7 +909,8 @@ export class EngineService {
         const metrics = countWordMetrics(text)
         const score = snapshot.review?.total ?? 0
         const chapter = input.chapter
-        const title = snapshot.plan?.title ?? `第${chapter}章`
+        const storedTitle = (snapshot.plan?.title ?? '').replace(/^第\s*\d+\s*章\s*/, '').trim()
+        const title = storedTitle === '' ? `第${chapter}章` : storedTitle
         const record: ChapterRecord = {
           num: chapter,
           title,
@@ -887,72 +926,44 @@ export class EngineService {
           summary,
         }
 
-        const foreshadows = structuredClone(snapshot.foreshadows)
-        const assigned: Record<string, string> = {}
-        let nextSeq = foreshadows.next_seq
-        for (const plant of summary.foreshadows.planted) {
-          const allocated = allocateIds('FS', nextSeq, 1)
-          nextSeq = allocated.nextSeq
-          const id = allocated.ids[0]!
-          assigned[plant.key] = id
-          foreshadows.items.push({
-            id,
-            title: plant.title,
-            planted: chapter,
-            last_touched: chapter,
-            status: 'planted',
-            resolved_at: null,
-            description: plant.description,
-            advance_log: [],
-          })
-        }
-        for (const advance of summary.foreshadows.advanced) {
-          const item = foreshadows.items.find(
-            (candidate) => candidate.id === assigned[advance.key] || candidate.id === advance.key,
-          )
-          const target = item ?? foreshadows.items.find((candidate) => candidate.planted < chapter)
-          if (target === undefined) continue
-          target.last_touched = chapter
-          target.status = 'advanced'
-          target.advance_log.push({ chapter, note: advance.note, new_info: advance.new_info })
-          assigned[advance.key] = target.id
-        }
-        for (const key of summary.foreshadows.resolved) {
-          const item = foreshadows.items.find(
-            (candidate) => candidate.id === key || candidate.id === assigned[key],
-          )
-          if (item === undefined) continue
-          item.status = 'resolved'
-          item.last_touched = chapter
-          item.resolved_at = chapter
-          assigned[key] = item.id
-        }
-        foreshadows.next_seq = nextSeq
-
-        const timeline = structuredClone(snapshot.timeline)
-        const allocatedTimeline = allocateIds('TE', timeline.next_seq, 1)
-        timeline.items.push({
-          id: allocatedTimeline.ids[0]!,
+        const ledger = applyStateDelta({
           chapter,
-          story_time: `第${chapter}章`,
-          description: summary.events[0] ?? '',
-          location: '',
-          characters: summary.characters_appeared,
+          text,
+          summary,
+          delta: input.state_delta,
+          characters: snapshot.characters,
+          world: snapshot.world,
+          locks: snapshot.locks,
+          foreshadows: snapshot.foreshadows,
+          timeline: snapshot.timeline,
+          relationships: snapshot.relationships,
         })
-        timeline.next_seq = allocatedTimeline.nextSeq
+        const foreshadows = ledger.foreshadows
+        const timeline = ledger.timeline
+        for (const item of foreshadows.items) {
+          if (
+            item.status !== 'resolved' &&
+            chapter - item.last_touched >= this.rulepack.crosschapter.foreshadow_dormant_after
+          ) {
+            item.status = 'dormant'
+          }
+        }
 
         const chapters = structuredClone(snapshot.chapters)
         chapters.chapters.push(record)
 
+        const totalChapters = snapshot.project.targets.total_chapters
+        const derivedVolume = Math.max(1, Math.ceil(chapter / 20))
         const handoff = {
           schema_version: 1 as const,
           current_chapter: chapter,
-          volume: 1,
-          volume_name: '第一卷',
-          act: '第一幕',
-          act_progress: `${chapter}/?`,
+          volume: input.handoff?.volume ?? derivedVolume,
+          volume_name: input.handoff?.volume_name ?? `第${derivedVolume}卷`,
+          act: input.handoff?.act ?? `第${Math.max(1, Math.ceil(((chapter - 1) % 20) / 5) + 1)}幕`,
+          act_progress:
+            input.handoff?.act_progress ?? `${chapter}/${totalChapters === null ? '待定' : totalChapters}`,
           next_chapter: chapter + 1,
-          last_summary: summary.opening,
+          last_summary: summary.events.join('；').slice(0, 200),
           open_hooks: foreshadows.items
             .filter((item) => item.status !== 'resolved')
             .slice(-5)
@@ -978,11 +989,15 @@ export class EngineService {
           { path: joinRel(STATE_DIR, STATE_FILES.timeline), text: yaml(timeline) },
           { path: joinRel(STATE_DIR, STATE_FILES.handoff), text: yaml(handoff) },
           { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          { path: joinRel(STATE_DIR, STATE_FILES.characters), text: yaml(ledger.characters) },
+          { path: joinRel(STATE_DIR, STATE_FILES.world), text: yaml(ledger.world) },
+          { path: joinRel(STATE_DIR, STATE_FILES.locks), text: yaml(ledger.locks) },
+          { path: joinRel(STATE_DIR, STATE_FILES.relationships), text: yaml(ledger.relationships) },
         ]
         return {
           files,
           backup: true,
-          data: { chapter, assigned_ids: assigned, metrics, score },
+          data: { chapter, assigned_ids: ledger.assigned, metrics, score },
           event: {
             name: 'novel/archived',
             payload: {
@@ -1057,6 +1072,13 @@ export class EngineService {
       key: () => `rollback:${input.chapter}:${input.toStage}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
+        if (!Object.prototype.hasOwnProperty.call(ROUND_TRANSITIONS, input.toStage)) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `unknown rollback target "${String(input.toStage)}"`,
+            `allowed targets: ${Object.keys(ROUND_TRANSITIONS).join(', ')}`,
+          )
+        }
         const stage = ROUND_TRANSITIONS[input.toStage]
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           chapter: input.chapter,
@@ -1066,8 +1088,15 @@ export class EngineService {
           blocking: [],
           last_action: action('novel_rollback', this.now(), shortDigest(input.reason ?? '')),
         })
+        const files: StagedFile[] = [
+          { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+        ]
+        const current = await context.store.readText(chapterFile(input.chapter))
+        if (current !== null) {
+          files.push({ path: deprecatedChapterFile(input.chapter), text: current })
+        }
         return {
-          files: [{ path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) }],
+          files,
           backup: true,
           data: { chapter: input.chapter, stage },
         }
@@ -1105,8 +1134,16 @@ export class EngineService {
     const snapshot = await this.load(input.root)
     const store = this.storeFor(input.root)
     const { rows, malformed } = await readJournal(store)
-    const warnings: Warning[] =
-      malformed > 0 ? [{ code: 'JOURNAL_MALFORMED', message: `${malformed} malformed journal line(s)` }] : []
+    const health = await reconcileJournal(store)
+    const warnings: Warning[] = []
+    if (malformed > 0)
+      warnings.push({ code: 'JOURNAL_MALFORMED', message: `${malformed} malformed journal line(s)` })
+    if (health.mismatches.length > 0) {
+      warnings.push({
+        code: 'JOURNAL_HASH_MISMATCH',
+        message: `${health.mismatches.length} file(s) changed after the last commit; first: ${health.mismatches[0]!.path}`,
+      })
+    }
     const limit = input.limit ?? 50
     return { data: rows.slice(-limit), revision: snapshot.pipeline.revision, warnings }
   }
@@ -1118,7 +1155,8 @@ export class EngineService {
       key: () => `export:${input.kind}:${input.chapter ?? 'all'}`,
       run: async (snapshot, context) => {
         const chapters = await this.chaptersForExport(snapshot, input.chapter)
-        const base = joinRel(EXPORT_DIR, `book.${input.kind}`)
+        const suffix = input.chapter === undefined ? '' : `-ch${String(input.chapter).padStart(3, '0')}`
+        const base = joinRel(EXPORT_DIR, `book${suffix}.${input.kind}`)
         const files: StagedFile[] = [
           { path: joinRel(EXPORT_DIR, 'cover.svg'), text: renderCover(snapshot.project) },
         ]
@@ -1132,6 +1170,7 @@ export class EngineService {
         files.push({ path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) })
         return {
           files,
+          backup: false,
           data: { kind: input.kind, files: files.map((file) => file.path) },
         }
       },
@@ -1152,16 +1191,43 @@ export class EngineService {
     return projectGates(await this.panelSnapshot(input.root))
   }
 
-  async stats(
-    input: { root?: string } = {},
-  ): Promise<{ totalWords: number; chapters: number; revision: number; rulepack: string }> {
+  /** One snapshot, three projections: the panel never mixes revisions. */
+  async panelBundle(input: { root?: string } = {}): Promise<{
+    summary: PanelSummaryDto
+    chapters: PanelChaptersDto
+    gates: PanelGatesDto
+  }> {
+    const snapshot = await this.panelSnapshot(input.root)
+    return {
+      summary: projectSummary(snapshot),
+      chapters: projectChapters(snapshot),
+      gates: projectGates(snapshot),
+    }
+  }
+
+  async stats(input: { root?: string } = {}): Promise<{
+    totalWords: number
+    chapters: number
+    revision: number
+    rulepack: string
+    averageScore: number
+    lastScore: number
+    openForeshadows: number
+  }> {
     const snapshot = await this.load(input.root)
     const totalWords = snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0)
+    const scores = snapshot.chapters.chapters.map((chapter) => chapter.score)
     return {
       totalWords,
       chapters: snapshot.chapters.chapters.length,
       revision: snapshot.pipeline.revision,
       rulepack: `${this.rulepack.name}@${this.rulepack.version}`,
+      averageScore:
+        scores.length === 0
+          ? 0
+          : Math.round(scores.reduce((total, score) => total + score, 0) / scores.length),
+      lastScore: scores.length === 0 ? 0 : scores[scores.length - 1]!,
+      openForeshadows: snapshot.foreshadows.items.filter((item) => item.status !== 'resolved').length,
     }
   }
 
@@ -1293,9 +1359,8 @@ export class EngineService {
   }
 
   private async latestBackup(store: FsStore, path: string): Promise<string | null> {
-    const dirs = await store.list(BACKUP_DIR)
-    for (const dir of [...dirs].reverse()) {
-      const text = await store.readText(joinRel(BACKUP_DIR, dir, path))
+    for (const entry of await listBackups(store)) {
+      const text = await store.readText(joinRel(BACKUP_DIR, entry.name, path))
       if (text !== null) return text
     }
     return null
@@ -1303,13 +1368,27 @@ export class EngineService {
 
   private async chaptersForExport(snapshot: Snapshot, chapter?: number): Promise<ExportChapter[]> {
     const records = snapshot.chapters.chapters
+    if (chapter !== undefined && !records.some((record) => record.num === chapter)) {
+      throw new EngineInputError(
+        ERROR_CODES.STAGE_ORDER,
+        `chapter ${chapter} is not in the archive index`,
+        'archive the chapter first, or export all archived chapters',
+      )
+    }
     const selected = chapter === undefined ? records : records.filter((record) => record.num === chapter)
     const chapters: ExportChapter[] = []
     for (const record of selected) {
       const text = await this.readChapter(snapshot, record.num)
-      if (text !== null) chapters.push({ num: record.num, title: record.title, text })
+      if (text === null) {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `chapter ${record.num} is indexed but its file is missing`,
+          'restore the chapter from backups/',
+        )
+      }
+      chapters.push({ num: record.num, title: record.title, text })
     }
-    if (chapters.length === 0 && snapshot.text !== null) {
+    if (chapters.length === 0 && snapshot.text !== null && chapter === undefined) {
       chapters.push({
         num: snapshot.pipeline.chapter,
         title: snapshot.plan?.title ?? '未命名',
@@ -1336,7 +1415,9 @@ export class EngineService {
       rulepack: this.rulepack,
       summary: extra.summary ?? snapshot.plan?.summary ?? null,
       evidence: {
+        characters: snapshot.characters.characters.length > 0 ? snapshot.characters : null,
         previousText: snapshot.previousText,
+        previousTexts: snapshot.previousTexts,
         foreshadows: snapshot.foreshadows.items.length > 0 ? snapshot.foreshadows : null,
         timeline: snapshot.timeline.items.length > 0 ? snapshot.timeline : null,
         relationships: snapshot.relationships.items.length > 0 ? snapshot.relationships : null,
@@ -1347,7 +1428,28 @@ export class EngineService {
     return runMachineChecks(text, options)
   }
 
-  private briefDigest(stage: string, snapshot: Snapshot): string {
+  private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
+    return briefContext({
+      stage,
+      chapter,
+      project: snapshot.project,
+      pipeline: snapshot.pipeline,
+      chapters: snapshot.chapters,
+      characters: snapshot.characters,
+      world: snapshot.world,
+      locks: snapshot.locks,
+      foreshadows: snapshot.foreshadows,
+      timeline: snapshot.timeline,
+      relationships: snapshot.relationships,
+      plan: snapshot.plan,
+      review: snapshot.review,
+      check: snapshot.check,
+      previousText: snapshot.previousText,
+      handoff: snapshot.handoff,
+    })
+  }
+
+  private briefDigest(stage: string, snapshot: Snapshot, context: Record<string, unknown>): string {
     return shortDigest(
       stableJson({
         stage,
@@ -1355,6 +1457,7 @@ export class EngineService {
         pipelineStage: snapshot.pipeline.stage,
         rounds: snapshot.pipeline.rounds,
         rulepack: `${this.rulepack.name}@${this.rulepack.version}`,
+        context,
       }),
     )
   }
@@ -1424,7 +1527,11 @@ export class EngineService {
         extras.briefDigest ??
         (extras.briefStage === undefined || extras.briefStage === null
           ? null
-          : this.briefDigest(extras.briefStage, snapshot)),
+          : this.briefDigest(
+              extras.briefStage,
+              snapshot,
+              this.briefContextFor(extras.briefStage, snapshot, snapshot.pipeline.chapter),
+            )),
       briefStage: extras.briefStage ?? briefStageFor(operation, snapshot.pipeline.stage),
       draftTitle: composeTitle(snapshot.pipeline.chapter, extras.draftTitle ?? snapshot.plan?.title ?? null),
       sceneType: extras.sceneType ?? snapshot.plan?.scene_type ?? null,
@@ -1436,6 +1543,7 @@ export class EngineService {
       rounds: snapshot.pipeline.rounds,
       archive,
       evidence: {
+        characters: snapshot.characters.characters.length > 0 ? snapshot.characters : null,
         foreshadows: snapshot.foreshadows.items.length > 0 ? snapshot.foreshadows : null,
         timeline: snapshot.timeline.items.length > 0 ? snapshot.timeline : null,
         relationships: snapshot.relationships.items.length > 0 ? snapshot.relationships : null,
@@ -1443,11 +1551,21 @@ export class EngineService {
         locks: snapshot.locks,
       },
       previousText: snapshot.previousText,
+      previousTexts: snapshot.previousTexts,
       priorSceneTypes: snapshot.chapters.chapters.map((record) => record.scene_type),
     }
     const result = evaluateGates(input, { rulepack: this.rulepack, minScore: this.config.quality.minScore })
     if (!result.passed) {
       const first = result.blocking[0]!
+      this.onEvent?.({
+        name: 'novel/blocked',
+        payload: {
+          schemaVersion: 1,
+          projectRoot: snapshot.root,
+          operation,
+          blocking: result.blocking.length,
+        },
+      })
       throw new EngineBlockedError(
         ERROR_CODES.GATE_BLOCKED,
         `${operation} blocked by ${result.blocking.length} gate(s), first: ${first.code} ${first.detail}`,
@@ -1523,6 +1641,11 @@ export class EngineService {
     const chapter = pipeline.chapter
     const text = await store.readText(chapterFile(chapter))
     const previousText = chapter > 1 ? await store.readText(chapterFile(chapter - 1)) : null
+    const previousTexts: string[] = []
+    for (let offset = 1; offset <= 3 && chapter - offset >= 1; offset += 1) {
+      const previous = await store.readText(chapterFile(chapter - offset))
+      if (previous !== null) previousTexts.push(previous)
+    }
     const planRaw = await store.readText(planChapterFile(chapter))
     const plan =
       planRaw === null ? null : (parseYamlLoose(planRaw) as ChapterPlanInput & { summary?: ChapterSummary })
@@ -1542,6 +1665,7 @@ export class EngineService {
       handoff,
       text,
       previousText,
+      previousTexts,
       plan,
       review,
       check,
@@ -1565,34 +1689,39 @@ export class EngineService {
     }>
   }): Promise<OpResult<T>> {
     const root = resolve(options.root ?? this.config.projectRoot)
-    if (options.emptyAllowed === true) {
-      const store = this.storeFor(root)
-      const exists = await store.exists(PROJECT_FILE)
-      if (!exists) {
-        const created = await options.run(this.emptySnapshot(root), { store, revision: 1 })
-        await runTransaction(store, {
-          txid: randomUUID(),
-          op: options.op,
-          chapter: 1,
-          revision: 1,
-          files: created.files,
-          backup: false,
-        })
-        return { data: created.data, revision: 1, warnings: created.warnings ?? [] }
-      }
-    }
     return this.mutex.run(root, async () => {
-      const snapshot = await this.load(root)
-      const key = options.key?.(snapshot)
-      if (key !== undefined) {
-        const cached = this.replay.get(`${root}|${options.op}|${key}`)
-        if (cached !== undefined) return { ...(cached as OpResult<T>), replayed: true }
-      }
-      const revision = snapshot.pipeline.revision + 1
-      const store = this.storeFor(root)
+      if (options.emptyAllowed === true) ensureDirAt(root)
       const lock = new FileLock(join(root, LOCK_FILE))
       await lock.acquire()
       try {
+        const store = this.storeFor(root)
+        if (options.emptyAllowed === true) {
+          const exists = await store.exists(PROJECT_FILE)
+          if (!exists) {
+            const created = await options.run(this.emptySnapshot(root), { store, revision: 1 })
+            await runTransaction(store, {
+              txid: randomUUID(),
+              op: options.op,
+              chapter: 1,
+              revision: 1,
+              files: created.files,
+              backup: false,
+            })
+            this.replay.clear()
+            return { data: created.data, revision: 1, warnings: created.warnings ?? [] }
+          }
+        }
+        // The snapshot must be read while holding the cross-process lock;
+        // otherwise a second process can commit between read and write and the
+        // later writer silently overwrites it with a stale revision.
+        await assertJournalConsistent(store)
+        const snapshot = await this.load(root)
+        const key = options.key?.(snapshot)
+        if (key !== undefined) {
+          const cached = this.replay.get(`${root}|${options.op}|${key}`)
+          if (cached !== undefined) return { ...(cached as OpResult<T>), replayed: true }
+        }
+        const revision = snapshot.pipeline.revision + 1
         const outcome = await options.run(snapshot, { store, revision })
         await runTransaction(store, {
           txid: randomUUID(),
@@ -1600,16 +1729,35 @@ export class EngineService {
           chapter: snapshot.pipeline.chapter,
           revision,
           files: outcome.files,
-          backup: outcome.backup ?? true,
+          backup: outcome.backup ?? false,
+          backupRetention: this.config.storage.backupRetention,
         })
         const result: OpResult<T> = { data: outcome.data, revision, warnings: outcome.warnings ?? [] }
-        if (key !== undefined) this.replay.set(`${root}|${options.op}|${key}`, result)
+        if (key !== undefined) {
+          this.invalidateReplay(root, options.op)
+          this.replay.set(`${root}|${options.op}|${key}`, result)
+        } else {
+          this.invalidateReplay(root, options.op)
+        }
         if (outcome.event !== undefined) this.onEvent?.(outcome.event)
         return result
       } finally {
         await lock.release()
       }
     })
+  }
+
+  private invalidateReplay(root: string, op: Operation): void {
+    const prefix = `${root}|`
+    // A content-changing commit invalidates every cached answer for the
+    // project, including exports. A narrower commit keeps export entries,
+    // whose output depends only on the archived content.
+    const contentChanging =
+      op === 'archiveChapter' || op === 'amend' || op === 'rollback' || op === 'initProject'
+    for (const key of [...this.replay.keys()]) {
+      if (!key.startsWith(prefix)) continue
+      if (contentChanging || !key.includes('|export|')) this.replay.delete(key)
+    }
   }
 
   private emptySnapshot(root: string): Snapshot {
@@ -1627,6 +1775,7 @@ export class EngineService {
       handoff: null,
       text: null,
       previousText: null,
+      previousTexts: [],
       plan: null,
       review: null,
       check: null,

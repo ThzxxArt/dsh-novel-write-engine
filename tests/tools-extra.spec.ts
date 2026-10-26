@@ -103,13 +103,19 @@ describe('every tool executes one operation', () => {
     expect(fake.submitChapterPlan).toHaveBeenCalledWith(
       expect.objectContaining({ chapter: 0, target_words: [100, 200] }),
     )
-    await map.get('novel_review')!.execute({ chapter: 1, dimensions: [], proof: {} }, {})
+    await map.get('novel_review')!.execute({ chapter: 1, dimensions: [], total: 150, proof: {} }, {})
     expect(fake.submitReview).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, issues: [] }))
     await map.get('novel_revise')!.execute({ chapter: 1, content: 'x', issues: [], proof: {} }, {})
     expect(fake.submitRevision).toHaveBeenCalledWith(expect.objectContaining({ issues: [], proof: {} }))
     await map.get('novel_check')!.execute({ chapter: 1, semantic: [], scope: ['content'] }, {})
     expect(fake.runCheck).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1 }))
-    await map.get('novel_archive')!.execute({ chapter: 1 }, {})
+    await map.get('novel_archive')!.execute(
+      {
+        chapter: 1,
+        state_delta: { characters: {}, foreshadows: {}, timeline: {}, world: {}, relationships: {} },
+      },
+      {},
+    )
     expect(fake.archiveChapter).toHaveBeenCalled()
     await map.get('novel_state')!.execute({ kind: 'chapters', chapter: 1 }, {})
     expect(fake.queryState).toHaveBeenCalledWith({ kind: 'chapters', chapter: 1 })

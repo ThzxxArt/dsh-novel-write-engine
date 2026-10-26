@@ -4,7 +4,7 @@ import type { Genre, Platform, SceneType, Stage } from './types.js'
 export const PLUGIN_NAME = 'dsh-novel-write-engine'
 export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
-export const SKILL_NAME = 'novel-writing'
+export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 1
 
 /** Project-relative locations. Every write goes through these constants. */
@@ -38,6 +38,10 @@ export const STATE_FILES = {
 /** Chapter file name, zero padded to three digits. */
 export const chapterFile = (chapter: number): string =>
   `${CHAPTERS_DIR}/chapter-${String(chapter).padStart(3, '0')}.md`
+
+/** Kept for reference when a rollback discards the current draft. */
+export const deprecatedChapterFile = (chapter: number): string =>
+  `${CHAPTERS_DIR}/chapter-${String(chapter).padStart(3, '0')}.deprecated.md`
 
 export const planWorldFile = (chapter: number): string =>
   `${PLAN_DIR}/ch${String(chapter).padStart(3, '0')}.world.yaml`

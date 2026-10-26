@@ -73,19 +73,14 @@ describe('entry skill', () => {
   })
 })
 
-describe('locale and enums', () => {
-  it('keeps zh/en key sets identical', () => {
-    const zh = JSON.parse(readFileSync(join(repoRoot, 'locale', 'zh.json'), 'utf8')) as Record<string, string>
-    const en = JSON.parse(readFileSync(join(repoRoot, 'locale', 'en.json'), 'utf8')) as Record<string, string>
-    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort())
-    for (const value of [...Object.values(zh), ...Object.values(en)]) expect(value.length).toBeGreaterThan(0)
-    expect(zh['panel.title']).toBe('网文工坊')
-  })
-
+describe('enums and rulepack coverage', () => {
   it('declares all twelve genres, four platforms and four scene types', () => {
     expect(GENRES).toHaveLength(12)
     expect(PLATFORMS).toEqual(['fanqie', 'qidian', 'qimao', 'jinjiang'])
     expect(SCENE_TYPES).toHaveLength(4)
+    const pack = loadRulepack()
+    expect(Object.keys(pack.platform).sort()).toEqual([...PLATFORMS].sort())
+    expect(Object.keys(pack.genres).sort()).toEqual([...GENRES].sort())
   })
 
   it('declares a genre-specific entry for every context genre and no unknown genre', () => {

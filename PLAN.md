@@ -144,7 +144,7 @@ tests/harness/context.ts  tests/arch.spec.ts  tests/smoke.spec.ts
 ```
 
 **要点**
-- `dsh.bundle.patch` 指向根补丁；`dsh.client` 声明 web 半边；`files` 白名单 `lib/rulepacks/briefs/locale`。
+- `dsh.bundle.patch` 指向根补丁；`dsh.client` 声明 web 半边；`files` 白名单 `lib/rulepacks/briefs/skills`。
 - `apply()` 只装配：建 store（懒连接）、编译规则包（S4 前用空包桩）、注册适配器（S1 为空）、`ctx.effect` 托管清理。
 - `tests/harness/context.ts`：12 个原语的假 `Context`（tools/skills/commands/logger/effect/inject/remote/...）。
 - `tests/arch.spec.ts`：R1–R6 的扫描器从第一天就在（此时全绿是平凡真）。
@@ -336,16 +336,15 @@ tests/tools/*.spec.ts  tests/commands/*.spec.ts  tests/remote/*.spec.ts
 ```
 src/skills/entry.md + index.ts
 briefs/{P1,P2,P3,P4,P5,P6,P8}.md
-locale/{zh,en}.json
 rulepacks/default.yaml        # 补全：90 词零容忍、soft/contextual、12 类型、4 平台
 tests/knowledge/*.spec.ts
 ```
 
 **测试（先写）**
 - 入口技能 ≤120 行，六条铁律齐全（快照 + 断言关键句）。
-- 6 份任务书 digest 稳定；`getBrief` 对每个阶段返回的字段集合固定。
-- locale 键覆盖：所有 `tool.*` / `panel.*` / `error.*` 在中英两边都存在。
+- 7 份任务书 digest 稳定；`getBrief` 对每个阶段返回字段与上下文包固定。
 - 规则包：12 类型全部有键；4 平台全部有覆盖；词条无重复、无空值；`validate-rulepack` 通过。
+- 0.1.0 仅中文：不期待 `locale/`，配置里也没有语言字段。
 
 **验收**：`pnpm test -- knowledge`；`pnpm validate:rulepack`；规则包加载 <50ms。
 

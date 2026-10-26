@@ -16,6 +16,8 @@ console.log(`  lexicon terms: ${terms}`)
 console.log(`  zero tolerance: ${pack.lexicon.zero_tolerance.length}`)
 console.log(`  exemptions: ${pack.exemptions.length}`)
 console.log(`  exclusion pairs: ${pack.exclusions.length}`)
+console.log(`  platforms: ${Object.keys(pack.platform).length}`)
+console.log(`  genres: ${Object.keys(pack.genres).length}`)
 if (dimensions !== 150) {
   console.error('dimension maxima must sum to 150')
   process.exit(1)

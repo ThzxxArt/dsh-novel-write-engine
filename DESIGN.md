@@ -97,9 +97,11 @@ Agent 预设  1 个（「网文工坊」）
 
 | 层 | 载体 | 谁能写 | 用途 |
 |---|---|---|---|
-| **见证书** | `chapters/chapter-NNN.md` | 只有 `novel_write_draft` / `novel_revise` / `novel_amend`，且必须过字数与格式门 | 唯一权威 |
+| **见证书** | `chapters/chapter-NNN.md` | 只有 `novel_write_draft` / `novel_revise`，且必须过字数与格式门 | 唯一权威 |
 | **影子** | `state/*.yaml` | 只有 `novel_archive` 的事务（模型提交 delta，引擎落盘） | 一致性校验、后续章节上下文 |
 | **规划** | `outline/*.yaml`、`plans/*.yaml` | 人可以随便改 | 写作指导，**不是数据来源** |
+
+`novel_amend` 是状态文档的维护通道：只能改 allowlist 内的 `state/*.yaml`，不能写 `chapters/`；不参与阶段门控，但必须给出非空 `reason`。
 
 铁律的落地方式：**引擎没有任何「从 outline 写 state」的代码路径**。大纲里的角色不会自动进角色库——只有正文写了、且归档事务提交了 delta，才会存在。
 
@@ -434,7 +436,7 @@ dsh-novel-write-engine/
 ├── src/                      # §2.2 的十一个模块
 ├── rulepacks/default.yaml
 ├── briefs/{P1,P2,P3,P4,P5,P6,P8}.md
-├── locale/{zh,en}.json
+├── skills/entry.md
 ├── tests/
 └── README.md
 ```
@@ -447,7 +449,7 @@ dsh-novel-write-engine/
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
-  "files": ["lib", "rulepacks", "briefs", "locale", "README.md", "LICENSE"],
+  "files": ["lib", "rulepacks", "briefs", "skills", "presets", "README.md", "LICENSE"],
   "exports": {
     ".":        { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
     "./client": { "types": "./lib/client/index.d.ts", "default": "./lib/client.js" }
@@ -944,13 +946,17 @@ exclusions:                       # 同一片段只计最重一项
   - { when: [LITERARY_CLASSICAL, LITERARY_DISEASE], keep: LITERARY_DISEASE }
 
 platform:
-  fanqie:   { dialogue_ratio: [0.40, 0.60], words: [2000, 3000], pleasure_per_500: 1 }
-  qidian:   { dialogue_ratio: [0.30, 0.50], words: [3000, 5000], pleasure_per_500: 0.5 }
-  qimao:    { dialogue_ratio: [0.50, 0.70], words: [2000, 3000], pleasure_per_500: 0.67 }
-  jinjiang: { dialogue_ratio: [0.35, 0.55], words: [2000, 3000], pleasure_per_500: 1 }
+  fanqie:   { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60], pleasure_min: 1 }
+  qidian:   { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50], pleasure_min: 1 }
+  qimao:    { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65], pleasure_min: 1 }
+  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55], pleasure_min: 1 }
+
+genres:
+  都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
+  # …其余 11 个类型同样必填，编译器缺一即拒绝
 ```
 
-> **平台覆盖的是参数，不是规则**：`platform` 只改「爽点密度 / 字数区间 / 对话占比参考」，不改「有没有这条规则」。加载顺序：default → platform → genre → 用户 `overrides`。
+> **平台覆盖的是参数，不是规则**：`platform` 只改「字数区间 / 对话占比 / 爽点下限」，不改「有没有这条规则」。`novel_init` 在调用方未显式给出 `words_per_chapter` / `dialogue_ratio` 时读取它；`genres` 由任务书上下文注入当前类型，不注入全表。
 
 **仓库自带的 `default` 包按本设计书定稿**（§7.8、附录 C）：词条、阈值、严重度全部落成 YAML，同一规则只保留一个值。
 
@@ -1489,7 +1495,7 @@ ctx.skills.register({
 |---|---|---|
 | 1 | 构建期完整 | `scripts/validate-rulepack.ts` 校验每个包：schema 版本、12 类型齐全、必填段与键、词条无重复、`type: exact` 的词不进正则；缺一即构建失败 |
 | 2 | 运行时不读包外路径 | `doctor` 与测试用只读 fs 断言：引擎读过的所有路径必须落在「包目录 / 项目目录」之内 |
-| 3 | 无隐式依赖 | `package.json` 的 `files` 只含 `lib`/`rulepacks`/`briefs`/`locale`（及 README/LICENSE）；启动自检扫描 `import` 图，出现对宿主外模块的引用即失败 |
+| 3 | 无隐式依赖 | `package.json` 的 `files` 只含 `lib`/`rulepacks`/`briefs`/`skills`/`presets`（及 README/LICENSE）；`node:fs` 只允许出现在 `src/assets.ts` 与 `src/store/`，由 arch 测试扫描 |
 | 4 | 更新只有两条路 | 新版本（包随之升级），或用户自备 `rules.overrides`；不做运行时同步、不认环境变量指向的包 |
 
 **为什么写死这四条**：规则包一旦可以「从别处加载」，版本、回滚、可复现性全部失效。自包含让「同一插件版本 + 同一规则包 = 同一判定」成立。
@@ -1594,6 +1600,18 @@ parameters: {
 ```
 
 内部步骤（全在一个事务里）：校验阶段 → **重跑全量机检（不信任旧结果）** → delta 核销 → 分配 ID → staging → 三端一致 → 备份 → 提交 → journal → 读回验证 → 生成 handoff → 返回 `assignedIds + metrics + verdict`。
+
+`state_delta` 的逐实体形状（键即实体标识，未声明即拒绝）：
+
+```ts
+characters:    { [name]: string → { action: 'created'|'updated'|'no_change', reason?, role?, profile?, current_state?, growth? } }
+foreshadows:   { [key]:  string → { action, reason?, title?, description?, note?, new_info? } }
+timeline:      { [index]: string → { action, reason?, story_time?, description?, location?, characters? } }
+world:         { [name]: string → { action, reason?, kind?: 'location'|'ability'|'artifact'|'faction'|'rule', description?, layout?, capacity? } }
+relationships: { ['a|b']: string → { action, reason?, a?, b?, type?, description?, note? } }
+```
+
+`no_change` 必须带非空 `reason`；`created` 的实体若已存在、`updated` 的实体不存在、伏笔 key 找不到对应 `FS-*`，一律 `ENGINE_DELTA_UNVERIFIED`，不做任何回退匹配。
 
 **为什么 delta 必须逐实体声明 `no_change + reason`**：这是义务清单的核销机制。它防的是「这章出现了新角色，但管理员漏了」——静默跳过是这类流水线最隐蔽的失败模式。
 
@@ -1803,42 +1821,24 @@ interface PresetDefinition {
 
 ```ts
 export interface Config {
-  projectRoot: string                    // 默认 './novel'
-  registryPath: string                   // 默认 '~/.dsh/novel-engine/projects.yaml'
-  locale: 'zh' | 'en'                    // 默认 'zh'
-  quality: {
-    minScore: number                     // 120
-    maxReviewRounds: number              // 3
-    maxCheckRounds: number               // 3
-    minWords: number                     // 2000
-    maxWords: number                     // 3000
-    paragraphMaxWords: number            // 90
-  }
-  rules: {
-    pack: string                         // 'default'
-    overrides: Record<string, unknown>   // {}
-    crossChapter: { enabled: boolean; similarityBlocker: number; similarityAdvisory: number; lookback: number }
-    foreshadow: { minDormancy: number; maxDormancy: number }
-  }
-  pipeline: {
-    requireBrief: boolean                // true
-    requireReadingProof: boolean         // true
-    readingProofSegments: number         // 3
-    readingProofMinChars: number         // 12
-  }
-  briefs: { overrides: Record<string, string> }   // 可选：按阶段覆盖任务书正文
-  storage: { keepBackups: number; lockTimeoutMs: number }
-  tools: { mode: 'all' | 'core' }        // 默认 'all'（见下）
+  projectRoot: string          // './'
+  minScore: number             // 120
+  toolsMode: 'all' | 'core'    // 'all'
+  briefsOverrides: string      // ''（空 = 使用随包任务书）
+  backupRetention: number      // 5（只删 backups/ 下自建目录）
+  stateDir: string             // '~/.dsh/novel-write-engine'
 }
 ```
+
+**0.1.0 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
 
 **阈值优先级（同一键只保留一个最终值，不叠乘、不取交集）**：
 
 ```
-rulepack.platform（平台默认） < config.quality（插件默认） < novel.yaml.targets（项目声明） < config.rules.overrides（用户显式覆盖）
+rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插件 Config（显式覆盖）
 ```
 
-项目文件只覆盖它声明了的键；未声明即沿用下一级。这条规则由规则包编译器在 `normalize` 阶段一次算定，运行时不再做二次判断（§5.2）。
+项目文件只覆盖它声明了的键；未声明即沿用下一级。规则包不再携带 `quality.min_score`，过关线只有 `Config.minScore` 一个 owner。
 
 全部字段有默认值且写在 schema 里（指南 §5.4）。**没有硬编码可调参数**：连「90 字段落」都在配置里。
 
@@ -1853,9 +1853,9 @@ rulepack.platform（平台默认） < config.quality（插件默认） < novel.y
 
 ### 12.3 国际化
 
-- `locale/{zh,en}.json`：键值对，key 为 `tool.*`、`panel.*`、`error.*`。
-- 工具描述走 `ctx.locale`，面板走 `ctx.locale`；错误消息中英各一份。
-- 缺失键回退 zh，并在 `doctor` 里报告缺失数量。
+- 0.1.0 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
+- 任务书可用 `briefsOverrides` 指向用户目录覆盖；缺阶段文件时回退随包版本。
+- 英文覆盖与 `ctx.locale` 集成延后到 0.2.0，届时再引入键表与缺失键报告。
 
 ---
 
@@ -1891,7 +1891,7 @@ rulepack.platform（平台默认） < config.quality（插件默认） < novel.y
 | `src/index.ts` | 纯装配（30 行），由集成冒烟覆盖；计入分母会鼓励写「假装配」凑数 |
 | `src/**/*.d.ts`、`src/types.ts` | 纯类型，零运行时 |
 | `src/client/entry.ts` | lazy-CJS 包装，由 bundle 形状测试覆盖 |
-| `locale/*.json`、`rulepacks/*.yaml`、`briefs/*.md`、`presets/*.yml` | 数据，不执行 |
+| `rulepacks/*.yaml`、`briefs/*.md`、`skills/entry.md`、`presets/*.yml` | 数据，不执行 |
 | `tests/**` | 测试自身 |
 
 **不排除的东西**（容易被顺手排除、但不许排）：`store/` 的错误分支、`engine/` 的门控分支、`tools/` 的 render 函数。这三处正是「会撒谎」的地方。

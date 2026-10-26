@@ -1,3 +1,4 @@
+import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { buildEpub, buildZip } from '../src/export/epub.js'
 import {
@@ -9,7 +10,7 @@ import {
   renderPlainText,
 } from '../src/export/render.js'
 import { FsStore } from '../src/store/fs.js'
-import { harness, readyToArchive } from './helpers.js'
+import { archiveDelta, harness, readyToArchive, sampleSummary } from './helpers.js'
 import type { NovelProject } from '../src/types.js'
 
 const project: NovelProject = {
@@ -37,6 +38,25 @@ function firstEntry(zip: Buffer): { name: string; method: number; data: Buffer }
   const name = zip.subarray(30, 30 + nameLength).toString('utf8')
   const data = zip.subarray(30 + nameLength, 30 + nameLength + compressedSize)
   return { name, method, data }
+}
+
+/** Read one local file entry by name, inflating it when needed. */
+function readEntry(zip: Buffer, wanted: string): string {
+  let offset = 0
+  while (offset + 30 <= zip.length && zip.readUInt32LE(offset) === 0x04034b50) {
+    const method = zip.readUInt16LE(offset + 8)
+    const compressedSize = zip.readUInt32LE(offset + 18)
+    const nameLength = zip.readUInt16LE(offset + 26)
+    const extraLength = zip.readUInt16LE(offset + 28)
+    const name = zip.subarray(offset + 30, offset + 30 + nameLength).toString('utf8')
+    const start = offset + 30 + nameLength + extraLength
+    const data = zip.subarray(start, start + compressedSize)
+    if (name === wanted) {
+      return (method === 0 ? data : inflateRawSync(data)).toString('utf8')
+    }
+    offset = start + compressedSize
+  }
+  throw new Error(`zip entry ${wanted} not found`)
 }
 
 describe('renderers', () => {
@@ -74,6 +94,8 @@ describe('renderers', () => {
     expect(first.data.toString()).toBe('application/epub+zip')
     expect(zip.includes(Buffer.from('OEBPS/content.opf'))).toBe(true)
     expect(zip.includes(Buffer.from('chapter-001.xhtml'))).toBe(true)
+    expect(readEntry(zip, 'OEBPS/content.opf')).toContain('href="toc.ncx"')
+    expect(readEntry(zip, 'OEBPS/content.opf')).toContain('properties="cover-image"')
     const bare = buildZip([{ name: 'a.txt', data: Buffer.from('x'), store: false }])
     expect(firstEntry(bare).name).toBe('a.txt')
   })
@@ -84,7 +106,7 @@ describe('engine export', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine })
-      await engine.archiveChapter({ chapter: 1, root })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
       const store = new FsStore(root)
       for (const kind of ['md', 'txt', 'epub'] as const) {
         const result = await engine.export({ kind, root })
@@ -98,6 +120,12 @@ describe('engine export', () => {
       expect(await store.exists('exports/cover.svg')).toBe(true)
       const again = await engine.export({ kind: 'md', root })
       expect(again.replayed).toBe(true)
+      const one = await engine.export({ kind: 'md', chapter: 1, root })
+      expect(one.data.files).toContain('exports/book-ch001.md')
+      expect(await store.exists('exports/book-ch001.md')).toBe(true)
+      await expect(engine.export({ kind: 'md', chapter: 99, root })).rejects.toMatchObject({
+        code: 'ENGINE_STAGE_ORDER',
+      })
     } finally {
       await cleanup()
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createNovelTools, toolNames } from '../src/tools/index.js'
 import { createCommands } from '../src/commands/index.js'
+import { runAdminOperation } from '../src/commands/admin.js'
 import { panelHandler, panelPayload, panelRoute } from '../src/remote/index.js'
 import { EngineInputError } from '../src/types.js'
 import type { EngineService } from '../src/engine/service.js'
@@ -63,7 +64,15 @@ const fakeEngine = () => {
     advise: vi.fn(async () =>
       result({ stage: 'P3', chapter: 1, tool: 'novel_write_draft', args: {}, reason: 'write', blocking: [] }),
     ),
-    stats: vi.fn(async () => ({ totalWords: 100, chapters: 1, revision: 2, rulepack: 'default@1.0.0' })),
+    stats: vi.fn(async () => ({
+      totalWords: 100,
+      chapters: 1,
+      revision: 2,
+      rulepack: 'default@1.0.0',
+      averageScore: 0,
+      lastScore: 0,
+      openForeshadows: 0,
+    })),
     panelSummary: vi.fn(async () => ({
       schemaVersion: 1,
       panelId: 'novel-workshop',
@@ -85,6 +94,24 @@ const fakeEngine = () => {
       stage: 'P3',
       blocking: [],
       explanations: [],
+    })),
+    panelBundle: vi.fn(async () => ({
+      summary: {
+        schemaVersion: 1,
+        panelId: 'novel-workshop',
+        title: 't',
+        genre: '都市现代',
+        platform: 'fanqie',
+        chapter: 1,
+        stage: 'P3',
+        revision: 2,
+        totalWords: 100,
+        totalChapters: 1,
+        phases: [],
+        blocking: [],
+      },
+      chapters: { schemaVersion: 1, panelId: 'novel-workshop', rows: [] },
+      gates: { schemaVersion: 1, panelId: 'novel-workshop', stage: 'P3', blocking: [], explanations: [] },
     })),
   }
   return engine
@@ -223,6 +250,64 @@ describe('command adapters', () => {
       (await commands.find((command) => command.name === 'novel-admin')!.handler(invocation(''))).text,
     ).toContain('novel_init')
   })
+
+  it('executes hidden operations through /novel admin', async () => {
+    const engine = fakeEngine()
+    const commands = createCommands(engine as unknown as EngineService)
+    const novel = commands.find((command) => command.name === 'novel')!
+    const state = await novel.handler(invocation('admin novel_state {"kind":"pipeline"}'))
+    expect(state.kind).toBe('success')
+    expect(engine.queryState).toHaveBeenCalledWith({ kind: 'pipeline' })
+
+    const init = await novel.handler(
+      invocation('admin novel_init {"title":"新书","genre":"都市现代","platform":"fanqie"}'),
+    )
+    expect(init.kind).toBe('success')
+    expect(engine.initProject).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '新书', genre: '都市现代', platform: 'fanqie' }),
+    )
+
+    const rollback = await commands
+      .find((command) => command.name === 'novel-admin')!
+      .handler(invocation('novel_rollback {"chapter":1,"to_stage":"P3"}'))
+    expect(rollback.kind).toBe('success')
+    expect(engine.rollback).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, toStage: 'P3' }))
+
+    const unknown = await novel.handler(invocation('admin novel_missing {}'))
+    expect(unknown.kind).toBe('error')
+    expect(unknown.text).toContain('未知')
+
+    for (const [operation, args] of [
+      ['novel_plan_world', '{"objective":"o"}'],
+      ['novel_plan_chapter', '{"title":"t"}'],
+      ['novel_amend', '{"path":"state/world.yaml","content":{},"reason":"r"}'],
+      ['novel_diff', '{"chapter":1}'],
+      ['novel_export', '{"kind":"md"}'],
+      ['novel_audit', '{"limit":1}'],
+      ['novel_pipeline', '{}'],
+    ] as const) {
+      const result = await novel.handler(invocation(`admin ${operation} ${args}`))
+      expect(result.kind, operation).toBe('success')
+    }
+  })
+
+  it('rejects malformed admin arguments and supports the short command form', async () => {
+    const engine = fakeEngine()
+    const commands = createCommands(engine as unknown as EngineService)
+    const novel = commands.find((command) => command.name === 'novel')!
+    expect((await novel.handler(invocation('admin novel_state {oops}'))).kind).toBe('error')
+    expect((await novel.handler(invocation('admin novel_state []'))).kind).toBe('error')
+    expect((await novel.handler(invocation('admin novel_state null'))).kind).toBe('error')
+    const short = commands.find((command) => command.name === 'novel-admin')!
+    expect((await short.handler(invocation('novel_init'))).kind).toBe('success')
+    expect((await short.handler(invocation('novel_state {"kind":"pipeline"}'))).kind).toBe('success')
+    const controller = new AbortController()
+    controller.abort()
+    expect((await short.handler(invocation('', controller.signal))).kind).toBe('error')
+
+    const plain = { advise: async () => 'plain' } as unknown as EngineService
+    expect(await runAdminOperation(plain, 'novel_pipeline', '')).toContain('plain')
+  })
 })
 
 describe('panel route', () => {
@@ -268,7 +353,7 @@ describe('panel route', () => {
 
   it('degrades to an empty payload when the project cannot be read', async () => {
     const engine = fakeEngine()
-    engine.panelSummary = vi.fn(async () => {
+    engine.panelBundle = vi.fn(async () => {
       throw new Error('no project')
     })
     const handler = panelHandler(engine as unknown as EngineService)

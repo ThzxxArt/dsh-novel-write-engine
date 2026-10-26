@@ -16,21 +16,23 @@ export const inject = ['tools']
 /** Plugin configuration. Every value is also readable in `--dump-config`. */
 export interface Config {
   projectRoot: string
-  rulepack: string
   minScore: number
   /** `all` or `core`; validated in `apply`, so the schema stays a plain string. */
   toolsMode: string
-  briefsLocale: string
+  /** Optional directory with user task-book overrides; empty uses the bundled set. */
+  briefsOverrides: string
+  /** How many archived-chapter backups to keep. */
+  backupRetention: number
   /** Directory for cross-project bookkeeping; never inside a project. */
   stateDir: string
 }
 
 export const Config: Schema<Config> = Schema.object({
   projectRoot: Schema.string().default('.'),
-  rulepack: Schema.string().default(''),
   minScore: Schema.number().default(120),
   toolsMode: Schema.string().default('all'),
-  briefsLocale: Schema.string().default('zh'),
+  briefsOverrides: Schema.string().default(''),
+  backupRetention: Schema.number().default(5),
   stateDir: Schema.string().default(''),
 })
 
@@ -47,7 +49,8 @@ export function apply(ctx: Context, config: Config): void {
     stateDir: config.stateDir,
     tools: { mode: toolsMode },
     quality: { minScore },
-    briefs: { locale: config.briefsLocale === 'en' ? 'en' : 'zh' },
+    briefs: { overrides: config.briefsOverrides },
+    storage: { backupRetention: Math.max(1, Math.floor(config.backupRetention || 5)) },
   }
 
   const emit = (event: EngineEvent): void => {
@@ -55,13 +58,12 @@ export function apply(ctx: Context, config: Config): void {
     emitter.emit?.(event.name, event.payload)
   }
 
-  const engine = new EngineService(
-    engineConfig,
-    () => loadRulepack(config.rulepack === '' ? undefined : config.rulepack),
-    {
-      onEvent: emit,
-    },
-  )
+  const engine = new EngineService(engineConfig, () => loadRulepack(), {
+    onEvent: emit,
+  })
+
+  const provider = ctx as unknown as { provide?: (name: string, value: unknown) => void }
+  provider.provide?.('novelEngine', engine)
 
   for (const tool of createNovelTools(engine)) {
     if (toolsMode === 'core' && !isCoreTool(tool.name)) continue

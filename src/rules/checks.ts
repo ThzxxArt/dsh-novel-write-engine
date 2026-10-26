@@ -1,5 +1,5 @@
 import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
-import { sentenceRhythm, splitParagraphs } from '../domain/text.js'
+import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
 import { maxParagraphSimilarity, textSimilarity } from '../domain/simhash.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import type { Severity, Violation } from '../types.js'
@@ -130,7 +130,7 @@ const titleFormat: Rule = (ctx) => {
 }
 
 const systemLabel: Rule = (ctx) => {
-  const labels = [...ctx.rulepack.format.system_labels, 'Day 1', 'Day 2', '第1卷', '第2卷', '读者', '书友']
+  const labels = ctx.rulepack.format.system_labels
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
     for (const label of labels) {
@@ -252,32 +252,45 @@ const dashBudget: Rule = (ctx) => {
   const budget = ctx.rulepack.punctuation.dash.base[ctx.sceneType]
   const scaled =
     budget * Math.max(1, Math.ceil(metrics.total_word_count / ctx.rulepack.punctuation.dash.scale_words))
-  const hits = countOccurrences(ctx.text, ctx.rulepack.punctuation.dash.token)
-  if (hits <= scaled) return []
+  const token = ctx.rulepack.punctuation.dash.token
+  const total = countOccurrences(ctx.text, token)
+  let inDialogue = 0
+  for (const match of ctx.text.matchAll(/"[^"]*"/g)) {
+    inDialogue += countOccurrences(match[0], token)
+  }
+  // A dash inside dialogue carries two speakers' interruption, so it costs double.
+  const weighted = total - inDialogue + inDialogue * 2
+  if (weighted <= scaled) return []
   return [
     v(
       PUNCTUATION_RULES.DASH_BUDGET,
       'advisory',
-      firstParagraphContaining(ctx.text, ctx.rulepack.punctuation.dash.token),
-      `dash used ${hits}x, budget is ${scaled} for ${ctx.sceneType}`,
+      firstParagraphContaining(ctx.text, token),
+      `dash weight ${weighted} (dialogue ${inDialogue}x double), budget is ${scaled} for ${ctx.sceneType}`,
     ),
   ]
 }
 
 const periodDensity: Rule = (ctx) => {
-  const metrics = countWordMetrics(ctx.text)
-  if (metrics.non_ws_chars === 0) return []
-  const density = (countOccurrences(ctx.text, '。') / metrics.non_ws_chars) * 100
   const { min, max } = ctx.rulepack.punctuation.period_density
-  if (density >= min && density <= max) return []
-  return [
-    v(
-      PUNCTUATION_RULES.PERIOD_DENSITY,
-      'advisory',
-      1,
-      `period density ${density.toFixed(2)}/100 chars is outside ${min}..${max}`,
-    ),
-  ]
+  const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    if (dialogueCharacterRatio(paragraph) >= dominant) return
+    const metrics = countWordMetrics(paragraph)
+    if (metrics.non_ws_chars < 40) return
+    const density = (countOccurrences(paragraph, '。') / metrics.non_ws_chars) * 100
+    if (density >= min && density <= max) return
+    results.push(
+      v(
+        PUNCTUATION_RULES.PERIOD_DENSITY,
+        'advisory',
+        index + 1,
+        `period density ${density.toFixed(2)}/100 chars is outside ${min}..${max}`,
+      ),
+    )
+  })
+  return results
 }
 
 const ellipsisRun: Rule = (ctx) => {
@@ -300,17 +313,23 @@ const ellipsisRun: Rule = (ctx) => {
 }
 
 const uniformSentence: Rule = (ctx) => {
-  const rhythm = sentenceRhythm(ctx.text)
   const { min_sentences, ratio } = ctx.rulepack.punctuation.uniform_sentence
-  if (rhythm.count < min_sentences || rhythm.uniformRatio < ratio) return []
-  return [
-    v(
-      PUNCTUATION_RULES.UNIFORM_SENTENCE,
-      'advisory',
-      1,
-      `${Math.round(rhythm.uniformRatio * 100)}% of sentences share one length`,
-    ),
-  ]
+  const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
+  const results: Violation[] = []
+  splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    if (dialogueCharacterRatio(paragraph) >= dominant) return
+    const rhythm = sentenceRhythm(paragraph)
+    if (rhythm.count < min_sentences || rhythm.uniformRatio < ratio) return
+    results.push(
+      v(
+        PUNCTUATION_RULES.UNIFORM_SENTENCE,
+        'advisory',
+        index + 1,
+        `${Math.round(rhythm.uniformRatio * 100)}% of sentences share one length`,
+      ),
+    )
+  })
+  return results
 }
 
 const consecutiveLe: Rule = (ctx) => {
@@ -404,19 +423,20 @@ const sensoryDensity: Rule = (ctx) => {
 }
 
 const waterWords: Rule = (ctx) => {
-  const { window, threshold, terms } = ctx.rulepack.semantics.water_words
+  const { window, threshold, terms, scene_thresholds } = ctx.rulepack.semantics.water_words
   if (terms.length === 0) return []
+  const sceneThreshold = scene_thresholds?.[ctx.sceneType] ?? threshold
   const results: Violation[] = []
   for (const slice of slidingWindows(ctx.text, window)) {
     const hits = terms.reduce((total, term) => total + countOccurrences(slice, term), 0)
     const density = hits / window
-    if (density > threshold) {
+    if (density > sceneThreshold) {
       results.push(
         v(
           SEMANTIC_RULES.WATER_WORDS,
           'advisory',
           1,
-          `a ${window}-char window is ${Math.round(density * 100)}% filler words`,
+          `a ${window}-char window is ${Math.round(density * 100)}% filler words (limit ${sceneThreshold})`,
         ),
       )
       break
@@ -428,15 +448,21 @@ const waterWords: Rule = (ctx) => {
 /* ------------------------------------------------------------ crosschapter */
 
 const duplicateParagraph: Rule = (ctx) => {
-  if (ctx.evidence.previousText === null) return []
-  const best = maxParagraphSimilarity(ctx.text, [ctx.evidence.previousText])
+  const previous =
+    ctx.evidence.previousTexts.length > 0
+      ? ctx.evidence.previousTexts
+      : ctx.evidence.previousText === null
+        ? []
+        : [ctx.evidence.previousText]
+  if (previous.length === 0) return []
+  const best = maxParagraphSimilarity(ctx.text, previous)
   if (best < ctx.rulepack.crosschapter.duplicate_similarity) return []
   return [
     v(
       CROSS_RULES.DUPLICATE_PARAGRAPH,
-      'advisory',
+      'blocker',
       1,
-      `paragraph reuses ${Math.round(best * 100)}% of a paragraph from the previous chapter`,
+      `paragraph reuses ${Math.round(best * 100)}% of a paragraph from the previous three chapters`,
     ),
   ]
 }
@@ -444,8 +470,9 @@ const duplicateParagraph: Rule = (ctx) => {
 const foreshadowDormant: Rule = (ctx) => {
   const ledger = ctx.evidence.foreshadows
   if (ledger === null) return []
+  const after = ctx.rulepack.crosschapter.foreshadow_dormant_after
   return ledger.items
-    .filter((item) => item.status === 'dormant' && ctx.chapter - item.last_touched >= 20)
+    .filter((item) => item.status !== 'resolved' && ctx.chapter - item.last_touched >= after)
     .map((item) =>
       v(
         CROSS_RULES.FORESHADOW_DORMANT,
@@ -504,46 +531,71 @@ const timeRegression: Rule = (ctx) => {
     const match = /Day\s*(\d+)/i.exec(value)
     return match === null ? null : Number(match[1])
   }
-  const last = [...ledger.items].sort((a, b) => b.chapter - a.chapter)[0]
-  if (last === undefined) return []
-  const previous = dayOf(last.story_time)
-  const current = dayOf(ctx.text)
-  if (previous === null || current === null || current >= previous) return []
+  const ordered = [...ledger.items].sort((left, right) => left.chapter - right.chapter)
+  const last = ordered[ordered.length - 1]!
+  const previous = ordered.length >= 2 ? ordered[ordered.length - 2]! : null
+  const currentFromText = dayOf(ctx.text)
+  const current = currentFromText ?? dayOf(last.story_time)
+  const before = previous === null ? null : dayOf(previous.story_time)
+  if (current === null) return []
+  if (
+    currentFromText !== null &&
+    dayOf(last.story_time) !== null &&
+    currentFromText < dayOf(last.story_time)!
+  ) {
+    return [
+      v(
+        CROSS_RULES.TIME_REGRESSION,
+        'advisory',
+        ctx.chapter,
+        `story time goes back from ${last.story_time} to Day ${currentFromText}`,
+      ),
+    ]
+  }
+  if (before === null || current >= before) return []
   return [
     v(
       CROSS_RULES.TIME_REGRESSION,
       'advisory',
-      1,
-      `story time goes back from ${last.story_time} to Day ${current}`,
+      last.chapter,
+      `story time goes back from ${previous!.story_time} to ${last.story_time}`,
     ),
   ]
 }
 
 const relationUnknown: Rule = (ctx) => {
-  if (ctx.evidence.relationships === null) return []
-  const ledger = ctx.evidence.relationships
-  const names = new Set<string>()
-  for (const item of ledger.items) {
-    names.add(item.a)
-    names.add(item.b)
+  const characters = ctx.evidence.characters
+  const known = characters === null ? [] : characters.characters.map((character) => character.name)
+  const names = new Set(known)
+  if (ctx.evidence.relationships !== null) {
+    for (const item of ctx.evidence.relationships.items) {
+      names.add(item.a)
+      names.add(item.b)
+    }
   }
+  if (names.size < 2) return []
   const results: Violation[] = []
-  for (const first of names) {
-    for (const second of names) {
-      if (first >= second) continue
-      if (!ctx.text.includes(first) || !ctx.text.includes(second)) continue
-      const declared = ledger.items.some(
-        (item) => (item.a === first && item.b === second) || (item.a === second && item.b === first),
-      )
-      if (!declared)
-        results.push(
-          v(
-            CROSS_RULES.RELATION_UNKNOWN,
-            'advisory',
-            1,
-            `${first} and ${second} appear together but have no ledger entry`,
-          ),
-        )
+  for (const [index, paragraph] of splitParagraphs(ctx.text).entries()) {
+    const present = [...names].filter((name) => paragraph.includes(name))
+    for (let first = 0; first < present.length; first += 1) {
+      for (let second = first + 1; second < present.length; second += 1) {
+        const a = present[first]!
+        const b = present[second]!
+        const declared =
+          ctx.evidence.relationships?.items.some(
+            (item) => (item.a === a && item.b === b) || (item.a === b && item.b === a),
+          ) ?? false
+        if (!declared) {
+          results.push(
+            v(
+              CROSS_RULES.RELATION_UNKNOWN,
+              'advisory',
+              index + 1,
+              `${a} and ${b} appear together but have no ledger entry`,
+            ),
+          )
+        }
+      }
     }
   }
   return results
@@ -565,6 +617,22 @@ const lockedDetailDrift: Rule = (ctx) => {
           'advisory',
           paragraphOfIndex(ctx.text, ctx.text.indexOf(paragraph)),
           `${name} is described differently from its locked layout`,
+        ),
+      )
+    }
+  }
+  for (const [name, lock] of Object.entries(locks.characters)) {
+    if (!ctx.text.includes(name)) continue
+    const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
+    if (paragraph === undefined) continue
+    const similarity = textSimilarity(paragraph, lock.appearance)
+    if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
+      results.push(
+        v(
+          CROSS_RULES.LOCKED_DETAIL_DRIFT,
+          'advisory',
+          paragraphOfIndex(ctx.text, ctx.text.indexOf(paragraph)),
+          `${name} is described differently from the locked first appearance`,
         ),
       )
     }

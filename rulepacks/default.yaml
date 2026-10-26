@@ -132,7 +132,7 @@ format:
     pattern: "^第\\d+章\\s"
     min_chars: 4
     max_chars: 8
-  system_labels: ["Day 3", "第3卷", "作者按"]
+  system_labels: ["Day 1", "Day 2", "Day 3", "第1卷", "第2卷", "第3卷", "作者按", "读者", "书友"]
   scene_separators: ["———", "***", "…………"]
   markdown_markers: ["#", "**", "---", ">", "|"]
 
@@ -145,6 +145,7 @@ punctuation:
   ellipsis_run: { max: 1, token: "……" }
   uniform_sentence: { min_sentences: 8, ratio: 0.6 }
   consecutive_le: { max: 3, char: "了" }
+  dialogue_dominant_ratio: 0.60
 
 rhythm:
   min_sentences: 8
@@ -166,17 +167,42 @@ semantics:
   water_words:
     window: 150
     threshold: 0.35
+    scene_thresholds:
+      战斗/动作章: 0.25
+      日常过渡章: 0.35
+      情感爆发章: 0.30
+      纯叙事章: 0.40
     terms: [的就是, 的时候, 时候, 一个, 一种, 一些, 这个, 那个, 这样, 那样, 其实, 确实, 真的, 非常, 十分]
+
+platform:
+  fanqie: { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60], pleasure_min: 1 }
+  qidian: { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50], pleasure_min: 1 }
+  qimao: { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65], pleasure_min: 1 }
+  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55], pleasure_min: 1 }
+
+genres:
+  都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
+  玄幻仙侠: { note: "力量体系必须自洽；升级要有代价，境界不能靠形容词抬升。" }
+  游戏系统: { note: "系统提示是世界观内文本；奖励与惩罚必须可追踪。" }
+  科幻未来: { note: "技术设定只写对情节有用的部分；禁止用术语代替冲突。" }
+  悬疑推理: { note: "线索先于解答出现；每个伏笔都要在归档台账中可核销。" }
+  历史古代: { note: "礼制、称谓与器物要经得起基本推敲；不写现代口号。" }
+  言情甜宠: { note: "关系推进靠具体互动，不靠内心独白宣布。" }
+  青春校园: { note: "校园规则与年龄感要真实；冲突不靠成人化阴谋。" }
+  职场商战: { note: "商业动作要有代价与对手反应；不写空泛战略。" }
+  军事战争: { note: "战术细节服务于人物选择；不写武器参数清单。" }
+  灵异恐怖: { note: "恐惧来自未知与规则；不靠突然的音效式形容词。" }
+  无限流: { note: "副本规则先立后破；每次通关都要付出可记账的代价。" }
 
 crosschapter:
   duplicate_similarity: 0.9
-  foreshadow_min_dormancy: 3
+  foreshadow_min_dormancy: 2
+  foreshadow_dormant_after: 20
   resource_tolerance: 0
   check_time: true
   lock_similarity: 0.75
 
 quality:
-  min_score: 120
   dimensions:
     - { id: R-W-01, max: 15 }
     - { id: R-W-02, max: 10 }

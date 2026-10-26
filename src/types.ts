@@ -292,6 +292,82 @@ export interface RoundCounters {
   check: number
 }
 
+/** How one ledger entity changed in this chapter. */
+export type DeltaAction = 'created' | 'updated' | 'no_change'
+
+/** One character declaration inside `state_delta.characters`. */
+export interface CharacterDelta {
+  action: DeltaAction
+  reason?: string
+  role?: string
+  profile?: Record<string, unknown>
+  current_state?: Record<string, unknown>
+  growth?: { chapter: number; change: string; status_change: string }
+}
+
+/** One world entity declaration inside `state_delta.world`. */
+export interface WorldDelta {
+  action: DeltaAction
+  reason?: string
+  kind?: 'location' | 'ability' | 'artifact' | 'faction' | 'rule'
+  description?: string
+  layout?: string
+  capacity?: number
+  detail?: Record<string, unknown>
+}
+
+/** One foreshadow declaration inside `state_delta.foreshadows`. */
+export interface ForeshadowDelta {
+  action: DeltaAction
+  reason?: string
+  title?: string
+  description?: string
+  note?: string
+  new_info?: boolean
+}
+
+/** One timeline-event declaration; keys are `summary.events` indices. */
+export interface TimelineDelta {
+  action: DeltaAction
+  reason?: string
+  story_time?: string
+  description?: string
+  location?: string
+  characters?: string[]
+}
+
+/** One relationship declaration; keys are `"a|b"`. */
+export interface RelationshipDelta {
+  action: DeltaAction
+  reason?: string
+  a?: string
+  b?: string
+  type?: string
+  description?: string
+  note?: string
+}
+
+/**
+ * The archive reconciliation sheet. Every entity the chapter claims (appeared
+ * characters, new world elements, foreshadow keys, events, relationships) must
+ * appear here; omission is a hard error, never an implicit no_change.
+ */
+export interface StateDelta {
+  characters: Record<string, CharacterDelta>
+  foreshadows: Record<string, ForeshadowDelta>
+  timeline: Record<string, TimelineDelta>
+  world: Record<string, WorldDelta>
+  relationships: Record<string, RelationshipDelta>
+}
+
+/** Optional handoff override; omitted values are derived by the engine. */
+export interface ArchiveHandoff {
+  volume?: number
+  volume_name?: string
+  act?: string
+  act_progress?: string
+}
+
 /** Pipeline document (`state/pipeline.yaml`). */
 export interface PipelineState {
   schema_version: 1
@@ -462,6 +538,8 @@ export interface ReviewInput {
   chapter: number
   dimensions: ScoreDimension[]
   issues: ReviewIssue[]
+  /** The model's claimed headline score; checked against 150 - Σdelta. */
+  total: number
   proof: ReadingProof
 }
 
@@ -502,6 +580,7 @@ export interface GateInput {
   /** Facts PG-12 checks before the archive transaction starts. */
   archive: { chapterExists: boolean; checkPassed: boolean; hashMatches: boolean } | null
   evidence: {
+    characters: CharactersDocument | null
     foreshadows: ForeshadowsDocument | null
     timeline: TimelineDocument | null
     relationships: RelationshipsDocument | null
@@ -509,6 +588,8 @@ export interface GateInput {
     locks: LocksDocument | null
   }
   previousText: string | null
+  /** The three preceding chapters, newest first, for the duplicate rule. */
+  previousTexts: string[]
   priorSceneTypes: SceneType[]
 }
 

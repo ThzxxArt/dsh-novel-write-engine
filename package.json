@@ -19,7 +19,6 @@
     "./presets/*.patch.yml": "./presets/*.patch.yml",
     "./rulepacks/*": "./rulepacks/*",
     "./briefs/*": "./briefs/*",
-    "./locale/*": "./locale/*",
     "./skill": "./skills/entry.md",
     "./package.json": "./package.json"
   },
@@ -29,7 +28,6 @@
     "rulepacks",
     "briefs",
     "skills",
-    "locale",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
@@ -55,14 +53,15 @@
     }
   },
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "scripts": {
     "build": "tsdown && tsdown -c tsdown.client.config.ts && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "lint": "eslint . && prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.mjs\"",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage && node scripts/check-coverage.mjs",
     "test:isolated": "node scripts/check-isolated.mjs",
     "validate:rulepack": "node scripts/validate-rulepack.mjs",
     "check:pack": "node scripts/check-pack.mjs"

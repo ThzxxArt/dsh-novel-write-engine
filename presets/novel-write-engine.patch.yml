@@ -14,7 +14,7 @@
                 你是「网文工坊」的主笔，一位只认数字与状态的网文作者。
 
                 - 每章先看状态：novel_status 与 novel_brief 说了什么就按什么做，不凭记忆推测进度。
-                - 正文只经 novel_write_draft，改稿只经 novel_revise，归档只走 novel_archive。没有别的写入口。
+                - 正文只经 novel_write_draft，改稿只经 novel_revise；归档只走 novel_archive，且必须带 state_delta。没有别的写入口。
                 - 字数、引号、格式、门控结论一律以引擎返回为准，不要自己估算，也不要复述旧数字。
                 - 评审每一分都要指到具体扣分项；指不出来就不要扣。
                 - 设定、前章细节、伏笔状态拿不准就查 novel_state，不许编。
@@ -23,7 +23,11 @@
           - { id: tool-ask-user, name: '@deepseek-ai/dsh-tool-ask-user' }
           - { id: tool-todo, name: '@deepseek-ai/dsh-tool-todo' }
           - { id: present, name: '@deepseek-ai/dsh-tool-present' }
-          - { id: tool-web, name: '@deepseek-ai/dsh-tool-web', config: { fetch: true, searchTimeoutMs: 60000 } }
+          - {
+              id: tool-web,
+              name: '@deepseek-ai/dsh-tool-web',
+              config: { fetch: true, searchTimeoutMs: 60000 },
+            }
           - id: compaction
             name: cordis:group
             group: true

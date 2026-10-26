@@ -41,6 +41,23 @@ describe('architecture rules', () => {
     }
   })
 
+  it('R1b: only the store and the asset loader touch the filesystem', async () => {
+    const allowed = /[/\\]src[/\\](store[/\\]|assets\.ts$)/
+    for (const file of await sources(join(root, 'src'))) {
+      const imports = importsOf(await readFile(file, 'utf8'))
+      if (allowed.test(file)) continue
+      expect(
+        imports.some((specifier) => specifier.startsWith('node:fs')),
+        `${file} must use src/assets.ts or src/store`,
+      ).toBe(false)
+    }
+  })
+
+  it('R1c: the filesystem scanner itself can detect a violation (meta test)', () => {
+    const sample = "import { readFileSync } from 'node:fs'"
+    expect(importsOf(sample).some((specifier) => specifier.startsWith('node:fs'))).toBe(true)
+  })
+
   it('R2: the store never imports the engine or the adapters', async () => {
     for (const file of await sources(join(root, 'src/store'))) {
       const imports = importsOf(await readFile(file, 'utf8'))

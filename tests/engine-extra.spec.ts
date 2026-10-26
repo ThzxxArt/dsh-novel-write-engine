@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { FsStore } from '../src/store/fs.js'
 import {
+  archiveDelta,
   harness,
   bootstrapToDraft,
   cleanText,
+  readProjectFile,
   readyToArchive,
   sampleReview,
   sampleSummary,
@@ -49,12 +51,12 @@ describe('query operations', () => {
     }
   })
 
-  it('reports status in both formats and falls back when a chapter has no file', async () => {
+  it('reports status and falls back when a chapter has no file', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
       const plain = await engine.getStatus({ root })
-      const markdown = await engine.getStatus({ root, format: 'markdown', chapter: 99 })
+      const markdown = await engine.getStatus({ root, chapter: 99 })
       expect(markdown.data.metrics).toBeNull()
       expect(markdown.data.chapter).toBe(99)
       expect(plain.data.next.tool).toBe('novel_write_draft')
@@ -130,15 +132,20 @@ describe('maintenance operations', () => {
     }
   })
 
-  it('rolls back to an earlier stage and resets rounds', async () => {
+  it('rolls back to an earlier stage, resets rounds and keeps the discarded draft', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
-      const result = await engine.rollback({ chapter: 1, toStage: 'P2', reason: '重排', root })
-      expect(result.data.stage).toBe('P2')
+      await writeDraft({ root, engine })
+      await expect(engine.rollback({ chapter: 1, toStage: 'P9' as never, root })).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+      const result = await engine.rollback({ chapter: 1, toStage: 'P3', reason: '重排', root })
+      expect(result.data.stage).toBe('P3')
       const status = await engine.getStatus({ root })
       expect(status.data.rounds).toEqual({ review: 0, revise: 0, check: 0 })
-      expect((await engine.advise({ root })).data.tool).toBe('novel_plan_chapter')
+      expect((await engine.advise({ root })).data.tool).toBe('novel_write_draft')
+      expect(await readProjectFile(root, 'chapters/chapter-001.deprecated.md')).toBe(cleanText())
     } finally {
       await cleanup()
     }
@@ -151,7 +158,7 @@ describe('maintenance operations', () => {
       const explicit = await engine.diff({ chapter: 1, before: 'a\nb', after: 'a\nc', root })
       expect(explicit.data).toMatchObject({ added: 1, removed: 1 })
       const archivedText = cleanText()
-      await engine.archiveChapter({ chapter: 1, root })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
       const fromBackup = await engine.diff({ chapter: 1, after: archivedText, root })
       expect(fromBackup.data.before.length).toBeGreaterThan(0)
       const empty = await engine.diff({ chapter: 1, before: '', after: '', root })
@@ -289,6 +296,30 @@ describe('revision paths', () => {
 })
 
 describe('archive ledger effects', () => {
+  it('reissues a brief after rollback instead of replaying a stale answer', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      await writeDraft({ root, engine })
+      await engine.rollback({ chapter: 1, toStage: 'P3', reason: '重写', root })
+      const brief = await engine.getBrief({ stage: 'P3', root })
+      expect(brief.replayed).not.toBe(true)
+      const state = await engine.queryState({ kind: 'pipeline', root })
+      expect((state.data as { briefs: Record<string, unknown> }).briefs.P3).toBeDefined()
+      await engine.submitDraft({
+        chapter: 1,
+        content: cleanText(),
+        chapter_title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: sampleSummary(),
+        root,
+      })
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('allocates, advances and resolves foreshadows across chapters', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -494,6 +525,7 @@ describe('branch coverage exercises', () => {
         chapter: 1,
         dimensions: dims,
         issues: [],
+        total: 144,
         proof: sampleReview(1, text).proof,
         root,
       })
@@ -645,13 +677,17 @@ async function archiveOne(input: {
     root,
   })
   await engine.getBrief({ stage: 'P3', root })
+  const summary: ChapterSummary = {
+    ...input.summary,
+    opening: text.split('\n\n')[0]!.slice(0, 20),
+  }
   await engine.submitDraft({
     chapter,
     content: text,
     chapter_title: title,
     scene_type: scene,
     narrator: '他',
-    summary: input.summary,
+    summary,
     root,
   })
   await engine.getBrief({ stage: 'P4', root })
@@ -659,6 +695,10 @@ async function archiveOne(input: {
   await engine.getBrief({ stage: 'P6', root })
   await engine.runCheck({ chapter, root })
   await engine.getBrief({ stage: 'P8', root })
-  const archived = await engine.archiveChapter({ chapter, root })
+  const archived = await engine.archiveChapter({
+    chapter,
+    state_delta: archiveDelta(summary, { existing: chapter > 1 ? ['他'] : [] }),
+    root,
+  })
   return { assigned_ids: archived.data.assigned_ids }
 }

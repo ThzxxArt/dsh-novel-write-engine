@@ -17,7 +17,9 @@ const options = (): MachineOptions => ({
   rulepack: pack,
   summary: null,
   evidence: {
+    characters: null,
     previousText: null,
+    previousTexts: [],
     foreshadows: null,
     timeline: null,
     relationships: null,
@@ -125,7 +127,7 @@ describe('adapter optional-argument branches', () => {
     await run('novel_brief', { stage: 'P1' })
     await run('novel_plan_world', { objective: 'o' })
     await run('novel_plan_chapter', { title: 't', scene_type: '日常过渡章', narrator: 'n' })
-    await run('novel_review', { chapter: 1, dimensions: [], proof: {} })
+    await run('novel_review', { chapter: 1, dimensions: [], total: 150, proof: {} })
     await run('novel_revise', { chapter: 1, content: 'x' })
     await run('novel_check', { chapter: 1 })
     await run('novel_word_count', {})

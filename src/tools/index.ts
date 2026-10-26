@@ -93,7 +93,6 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       description: 'Read the project state: chapter, stage, rounds, blocking items and the next legal step.',
       parameters: {
         chapter: { type: 'integer' },
-        format: { type: 'string', enum: ['json', 'markdown'] as const },
         project_root: root,
       },
       output: {
@@ -117,9 +116,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             ].join('\n'),
           ),
       },
-      execute: guarded(async (args) =>
-        engine.getStatus({ chapter: args.chapter, format: args.format, root: args.project_root }),
-      ),
+      execute: guarded(async (args) => engine.getStatus({ chapter: args.chapter, root: args.project_root })),
     }),
     defineTool({
       name: 'novel_brief',
@@ -131,8 +128,14 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       },
       output: {
         schema: { type: 'json' as const },
-        render: (_args: unknown, value: { content: string; digest: string }) =>
-          text(`${value.content}\n\n---\nbrief digest: ${value.digest}`),
+        render: (_args: unknown, raw: unknown) => {
+          const value = raw as { content: string; digest: string; context?: Record<string, unknown> }
+          return text(
+            `${value.content}\n\n---\nbrief digest: ${value.digest}${
+              value.context === undefined ? '' : `\ncontext:\n${JSON.stringify(value.context, null, 2)}`
+            }`,
+          )
+        },
       },
       execute: guarded(async (args) =>
         engine.getBrief({ stage: args.stage, chapter: args.chapter, root: args.project_root }),
@@ -236,6 +239,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         chapter: { type: 'integer', required: true },
         dimensions: { type: 'json', required: true },
         issues: { type: 'json' },
+        total: {
+          type: 'integer',
+          required: true,
+          description: '150 - Σdelta, the same number the review reports.',
+        },
         proof: { type: 'json', required: true },
         project_root: root,
       },
@@ -245,6 +253,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           chapter: args.chapter,
           dimensions: args.dimensions as never,
           issues: (args.issues as never) ?? [],
+          total: args.total,
           proof: args.proof as never,
           root: args.project_root,
         }),
@@ -296,8 +305,13 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     defineTool({
       name: 'novel_archive',
       description:
-        'Archive the active chapter: all gates run, then one transaction writes the index, ledgers and handoff.',
-      parameters: { chapter: { type: 'integer', required: true }, project_root: root },
+        'Archive the active chapter: all gates run, then one transaction writes the index, five ledgers and handoff.',
+      parameters: {
+        chapter: { type: 'integer', required: true },
+        state_delta: { type: 'json', required: true },
+        handoff: { type: 'json' },
+        project_root: root,
+      },
       output: {
         schema: { type: 'json' as const },
         render: (
@@ -322,7 +336,12 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           ),
       },
       execute: guarded(async (args) =>
-        engine.archiveChapter({ chapter: args.chapter, root: args.project_root }),
+        engine.archiveChapter({
+          chapter: args.chapter,
+          state_delta: args.state_delta as never,
+          handoff: args.handoff as never,
+          root: args.project_root,
+        }),
       ),
     }),
     defineTool({

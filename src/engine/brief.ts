@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { bundledDir, readTextAt } from '../assets.js'
 import { ERROR_CODES, EngineFaultError, type BriefStage } from '../types.js'
 
 /** One rendered task book. */
@@ -30,7 +29,7 @@ export class BriefLibrary {
   private readonly directory: string
 
   constructor(directory?: string) {
-    this.directory = directory ?? resolveBundledDirectory()
+    this.directory = directory ?? bundledDir('briefs')
   }
 
   /** Absolute path of the task book for a stage. */
@@ -42,7 +41,7 @@ export class BriefLibrary {
     const path = this.pathFor(stage)
     let content: string
     try {
-      content = readFileSync(path, 'utf8')
+      content = readTextAt(path)
     } catch (error) {
       throw new EngineFaultError(
         ERROR_CODES.CONFIG_INVALID,
@@ -62,16 +61,6 @@ export class BriefLibrary {
     )
     return { ...brief, content }
   }
-}
-
-/** Resolve `briefs/` from the bundled layout, falling back to the source layout. */
-export function resolveBundledDirectory(): string {
-  const candidates = [
-    fileURLToPath(new URL('../briefs/', import.meta.url)),
-    fileURLToPath(new URL('../../briefs/', import.meta.url)),
-  ]
-  const found = candidates.find((candidate) => existsSync(candidate))
-  return found ?? candidates[candidates.length - 1]!
 }
 
 const hash = (text: string): string => {

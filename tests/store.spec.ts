@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsStore, joinRel, sha256 } from '../src/store/fs.js'
@@ -133,7 +133,7 @@ describe('transactions', () => {
     }
   })
 
-  it('aborts with zero target changes and an aborted journal row (T-09)', async () => {
+  it('aborts with zero target changes and an aborted journal row', async () => {
     const root = await temp()
     try {
       const store = new FsStore(root)
@@ -229,14 +229,18 @@ describe('locks and mutex', () => {
     }
   })
 
-  it('treats corrupt lock content as stale', async () => {
+  it('reclaims corrupt lock content only after the stale window', async () => {
     const root = await temp()
     const path = join(root, '.engine.lock')
     try {
       await writeFile(path, 'not json')
-      const lock = new FileLock(path, 1000, 100)
-      await lock.acquire()
-      await lock.release()
+      const fresh = new FileLock(path, 1000, 80)
+      await expect(fresh.acquire()).rejects.toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
+      const old = new Date(Date.now() - 5_000)
+      await utimes(path, old, old)
+      const stale = new FileLock(path, 1000, 200)
+      await stale.acquire()
+      await stale.release()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -272,5 +276,21 @@ describe('journal and migrations', () => {
     expect(migrateDocument({ schema_version: 1 }, chain, 1)).toEqual({ schema_version: 1 })
     expect(() => migrateDocument({ schema_version: 3 }, chain, 2)).toThrow(/newer than supported/)
     expect(() => migrateDocument({ schema_version: 1 }, [], 2)).toThrow(/no migration/)
+  })
+
+  it('T-09: a failing migration step leaves the source document untouched', () => {
+    const original = { schema_version: 1, value: 'kept' }
+    const chain = [
+      {
+        from: 1,
+        to: 2,
+        migrate: (doc: Record<string, unknown>) => {
+          doc.value = 'partially-mutated'
+          throw new Error('migration failed')
+        },
+      },
+    ]
+    expect(() => migrateDocument(original, chain, 2)).toThrow(/migration failed/)
+    expect(original).toEqual({ schema_version: 1, value: 'kept' })
   })
 })

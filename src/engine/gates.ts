@@ -98,7 +98,9 @@ const format: Gate = (input, options) => {
       rulepack: options.rulepack,
       summary: input.summary,
       evidence: {
+        characters: input.evidence.characters,
         previousText: input.previousText,
+        previousTexts: input.previousTexts,
         foreshadows: input.evidence.foreshadows,
         timeline: input.evidence.timeline,
         relationships: input.evidence.relationships,
@@ -131,12 +133,11 @@ const SUMMARY_FIELDS = [
   'plot_advancement',
 ] as const
 
-/** PG-05: the ten summary fields exist and have the right coarse type. */
+/** PG-05: the ten summary fields exist and have the right shape. */
 const summarySchema: Gate = (input) => {
   if (input.summary === null) return [block('PG-05', 'no chapter summary supplied')]
-  const missing = SUMMARY_FIELDS.filter(
-    (field) => (input.summary as unknown as Record<string, unknown>)[field] === undefined,
-  )
+  const summary = input.summary as unknown as Record<string, unknown>
+  const missing = SUMMARY_FIELDS.filter((field) => summary[field] === undefined)
   if (missing.length > 0) {
     return [
       block(
@@ -146,19 +147,111 @@ const summarySchema: Gate = (input) => {
       ),
     ]
   }
-  const summary = input.summary
   const problems: string[] = []
-  if (!Array.isArray(summary.events) || summary.events.length === 0)
-    problems.push('events must be a non-empty array')
-  if (typeof summary.opening !== 'string' || summary.opening.trim() === '')
+  const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+  const textArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText)
+  if (!textArray(summary.events) || summary.events.length === 0) {
+    problems.push('events must be a non-empty array of strings')
+  }
+  if (!textArray(summary.characters_appeared)) problems.push('characters_appeared must be a string array')
+  if (!textArray(summary.pleasure_points)) problems.push('pleasure_points must be a string array')
+
+  const foreshadows = summary.foreshadows as Record<string, unknown> | undefined
+  if (typeof foreshadows !== 'object' || foreshadows === null) {
+    problems.push('foreshadows must be an object with planted/advanced/resolved')
+  } else {
+    const planted = foreshadows.planted
+    const advanced = foreshadows.advanced
+    const resolved = foreshadows.resolved
+    if (
+      !Array.isArray(planted) ||
+      !planted.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          isText((item as Record<string, unknown>).key) &&
+          isText((item as Record<string, unknown>).title) &&
+          isText((item as Record<string, unknown>).description),
+      )
+    ) {
+      problems.push('foreshadows.planted must contain key/title/description strings')
+    }
+    if (
+      !Array.isArray(advanced) ||
+      !advanced.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          isText((item as Record<string, unknown>).key) &&
+          isText((item as Record<string, unknown>).note) &&
+          typeof (item as Record<string, unknown>).new_info === 'boolean',
+      )
+    ) {
+      problems.push('foreshadows.advanced must contain key/note/new_info')
+    }
+    if (!Array.isArray(resolved) || !resolved.every(isText)) {
+      problems.push('foreshadows.resolved must be a string array')
+    }
+    if (Array.isArray(planted)) {
+      const keys = planted.map((item) => (item as Record<string, unknown>).key)
+      if (new Set(keys).size !== keys.length) problems.push('foreshadows.planted contains a duplicate key')
+    }
+  }
+
+  const newElements = summary.new_elements as Record<string, unknown> | undefined
+  if (typeof newElements !== 'object' || newElements === null) {
+    problems.push('new_elements must be an object')
+  } else {
+    for (const key of ['locations', 'abilities', 'artifacts'] as const) {
+      if (!textArray(newElements[key])) problems.push(`new_elements.${key} must be a string array`)
+    }
+  }
+
+  const resources = summary.resource_changes
+  if (
+    !Array.isArray(resources) ||
+    !resources.every(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        isText((item as Record<string, unknown>).character) &&
+        isText((item as Record<string, unknown>).resource) &&
+        Number.isInteger((item as Record<string, unknown>).delta) &&
+        (item as Record<string, unknown>).delta !== 0 &&
+        isText((item as Record<string, unknown>).reason),
+    )
+  ) {
+    problems.push('resource_changes must contain character/resource/non-zero delta/reason')
+  }
+
+  if (!isText(summary.opening)) {
     problems.push('opening must be text')
-  if (typeof summary.continuity !== 'object' || summary.continuity === null)
+  } else {
+    const opening = summary.opening
+    const firstTwo = splitParagraphs(input.text).slice(0, 2)
+    if (!firstTwo.some((paragraph) => paragraph.includes(opening))) {
+      problems.push('opening must be quoted from the first two paragraphs')
+    }
+  }
+
+  const continuity = summary.continuity as Record<string, unknown> | undefined
+  if (typeof continuity !== 'object' || continuity === null) {
     problems.push('continuity must be an object')
-  if (!Number.isInteger(summary.hook_strength) || summary.hook_strength < 1 || summary.hook_strength > 5) {
+  } else {
+    if (!isText(continuity.opens_from)) problems.push('continuity.opens_from must be text')
+    if (!isText(continuity.ends_with)) problems.push('continuity.ends_with must be text')
+  }
+
+  if (
+    !Number.isInteger(summary.hook_strength) ||
+    (summary.hook_strength as number) < 1 ||
+    (summary.hook_strength as number) > 5
+  ) {
     problems.push('hook_strength must be 1..5')
   }
-  if (!['high', 'mid', 'low'].includes(summary.plot_advancement))
+  if (!['high', 'mid', 'low'].includes(summary.plot_advancement as string)) {
     problems.push('plot_advancement must be high|mid|low')
+  }
   return problems.length === 0 ? [] : [block('PG-05', problems.join('; '))]
 }
 
@@ -232,6 +325,13 @@ const issuesCleared: Gate = (input) => {
     : [block('PG-08', problems.join('; '), 'mark every blocker fixed and quote the revised text as evidence')]
 }
 
+/** Paragraph index (1-based) that contains the quote, or -1. */
+function actualParagraph(text: string, reference: ReadingProofReference): number {
+  const quote = reference.quote.trim()
+  if (Array.from(quote).length < LIMITS.minQuoteChars) return -1
+  return splitParagraphs(text).findIndex((paragraph) => paragraph.includes(quote)) + 1
+}
+
 /** Verify one reading-proof reference against the manuscript. */
 export function verifyReference(text: string, reference: ReadingProofReference): string | null {
   const quote = reference.quote
@@ -247,7 +347,7 @@ export function verifyReference(text: string, reference: ReadingProofReference):
   return null
 }
 
-/** PG-09: three verifiable quotes, one near the opening and one near the end. */
+/** PG-09: three verifiable quotes from three distinct paragraphs. */
 const readingProof: Gate = (input) => {
   if (input.proof === null) return [block('PG-09', 'no reading proof supplied')]
   const problems: string[] = []
@@ -260,6 +360,12 @@ const readingProof: Gate = (input) => {
     problems.push('the opening quote must come from the first two paragraphs')
   if (input.proof.ending.paragraph < Math.max(1, paragraphs - 1)) {
     problems.push('the ending quote must come from the last two paragraphs')
+  }
+  const actuals = [input.proof.opening, input.proof.middle, input.proof.ending].map((reference) =>
+    actualParagraph(input.text, reference),
+  )
+  if (new Set(actuals.filter((index) => index > 0)).size < 3) {
+    problems.push('the three quotes must come from three distinct paragraphs')
   }
   return problems.length === 0
     ? []
@@ -287,7 +393,9 @@ const consistency: Gate = (input, options) => {
       rulepack: options.rulepack,
       summary: input.summary,
       evidence: {
+        characters: input.evidence.characters,
         previousText: input.previousText,
+        previousTexts: input.previousTexts,
         foreshadows: input.evidence.foreshadows,
         timeline: input.evidence.timeline,
         relationships: input.evidence.relationships,
@@ -297,10 +405,12 @@ const consistency: Gate = (input, options) => {
     },
   )
   if (violations.length === 0) return []
+  const blockers = violations.filter((violation) => violation.severity === 'blocker')
+  if (blockers.length === 0) return []
   return [
     block(
       'PG-10',
-      violations.map((violation) => `${violation.code}: ${violation.detail}`).join('; '),
+      blockers.map((violation) => `${violation.code}: ${violation.detail}`).join('; '),
       'reconcile the manuscript with state/ before archiving',
     ),
   ]
@@ -380,7 +490,7 @@ export function applicableGates(input: GateInput): GateId[] {
     case 'runCheck':
       return [...always, 'PG-10']
     case 'archiveChapter':
-      return ['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-07', 'PG-08', 'PG-10', 'PG-12']
+      return ['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-10', 'PG-12']
     default:
       return always
   }

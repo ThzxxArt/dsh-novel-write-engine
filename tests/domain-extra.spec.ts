@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { countCharacters } from '../src/domain/wordcount.js'
+import { dialogueCharacterRatio } from '../src/domain/text.js'
 import { simhash, similarity } from '../src/domain/simhash.js'
 import { SCORE_DIMENSIONS, reviewArithmeticProblems } from '../src/domain/scoring.js'
 import { nextStage } from '../src/domain/transitions.js'
@@ -31,5 +32,11 @@ describe('domain edge cases', () => {
     } catch (error) {
       expect((error as { hint?: string }).hint).toContain('allowed here: submitDraft')
     }
+  })
+
+  it('measures the quoted share of a paragraph, including the empty case', () => {
+    expect(dialogueCharacterRatio('')).toBe(0)
+    expect(dialogueCharacterRatio('"甲乙"')).toBeCloseTo(2 / 4)
+    expect(dialogueCharacterRatio('叙述"一句话"结束')).toBeCloseTo(3 / 9)
   })
 })

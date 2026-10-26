@@ -1,5 +1,6 @@
 import type { EngineService } from '../engine/service.js'
 import { EngineError } from '../types.js'
+import { adminHelp, runAdminOperation } from './admin.js'
 
 /** Result shape accepted by `ctx.commands.register`. */
 export interface CommandResultShape {
@@ -49,10 +50,11 @@ const usage = () =>
     '/novel stats         字数与章节统计',
     '/novel export md|txt|epub',
     '/novel admin         隐藏操作与参数说明',
+    '/novel admin <op> <json>  执行隐藏操作',
     '/novel-next          等价于 /novel next',
     '/novel-stats         等价于 /novel stats',
     '/novel-export <kind>',
-    '/novel-admin',
+    '/novel-admin [<op> <json>]',
   ].join('\n')
 
 /** The five slash commands; every one calls a service operation, none touches a file. */
@@ -77,7 +79,7 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
         case 'stats': {
           const stats = await engine.stats({})
           return ok(
-            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
           )
         }
         case 'export': {
@@ -87,17 +89,11 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
           const { data } = await engine.export({ kind })
           return ok(`已导出 ${data.kind}：${data.files.join(', ')}`)
         }
-        case 'admin':
-          return ok(
-            [
-              '隐藏操作（tools.mode=core 时仍可用）：',
-              '  novel_init / novel_plan_world / novel_plan_chapter / novel_amend',
-              '  novel_rollback / novel_diff / novel_export / novel_audit / novel_pipeline / novel_state',
-              '这些操作以工具形式注册；在 core 模式下请让模型直接调用工具名。',
-              '',
-              usage(),
-            ].join('\n'),
-          )
+        case 'admin': {
+          if (rest.length === 0) return ok(adminHelp())
+          const operation = rest[0]!
+          return ok(await runAdminOperation(engine, operation, rest.slice(1).join(' ')))
+        }
         default:
           return bad(`未知子命令 "${head}"\n${usage()}`)
       }
@@ -133,7 +129,9 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
         if (invocation.signal.aborted) return bad('已取消')
         try {
           const stats = await engine.stats({})
-          return ok(`章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 规则包 ${stats.rulepack}`)
+          return ok(
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 规则包 ${stats.rulepack}`,
+          )
         } catch (error) {
           return failure(error)
         }
@@ -157,20 +155,17 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
     },
     {
       name: 'novel-admin',
-      description: 'List the operations hidden from the core tool set.',
+      description: 'Run an operation hidden from the core tool set: /novel-admin <op> <json>.',
+      input: { hint: '[<operation> <json>]' },
       handler: async (invocation) => {
         if (invocation.signal.aborted) return bad('已取消')
         try {
-          const { data } = await engine.advise({})
-          return ok(
-            [
-              '核心模式下隐藏的操作仍可通过工具名调用：',
-              'novel_init, novel_plan_world, novel_plan_chapter, novel_amend,',
-              'novel_rollback, novel_diff, novel_export, novel_audit, novel_pipeline, novel_state',
-              '',
-              `当前阶段 ${data.stage}，建议 ${data.tool}`,
-            ].join('\n'),
-          )
+          const text = invocation.rawInput.trim()
+          if (text === '') return ok(adminHelp())
+          const separator = text.search(/\s/)
+          const operation = separator === -1 ? text : text.slice(0, separator)
+          const args = separator === -1 ? '' : text.slice(separator + 1)
+          return ok(await runAdminOperation(engine, operation, args))
         } catch (error) {
           return failure(error)
         }

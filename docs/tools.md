@@ -10,10 +10,10 @@
 | `novel_plan_world` | P1 | `submitWorldPlan` | 是 |
 | `novel_plan_chapter` | P2 | `submitChapterPlan` | 是 |
 | `novel_write_draft` | P3 | `submitDraft` | 是 |
-| `novel_review` | P4 | `submitReview` | 是 |
+| `novel_review` | P4 | `submitReview` | 是（`total` 必填） |
 | `novel_revise` | P5/P6 | `submitRevision` | 是 |
 | `novel_check` | P6 | `runCheck` | 是 |
-| `novel_archive` | 归档 | `archiveChapter` | 事务 |
+| `novel_archive` | 归档 | `archiveChapter` | 事务（必须带 `state_delta`） |
 | `novel_word_count` | 任意 | `countWords` | 否 |
 | `novel_state` | 任意 | `queryState` | 否 |
 | `novel_amend` | 任意 | `amend` | 是 |
@@ -37,4 +37,4 @@
 
 ## core 模式
 
-`toolsMode=core` 只注册 8 个高频工具；其余 10 个仍可按名字调用（工具形态不变），`/novel admin` 列出清单。
+`toolsMode=core` 只注册 8 个高频工具；其余 10 个通过 `/novel admin <op> <json>` 执行（例如 `/novel admin novel_state {"kind":"pipeline"}`），不是“仍可按名字调用”。

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
+import { entryListProblem } from '@deepseek-ai/dsh-agent-preset-registry'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -37,9 +38,10 @@ describe('root patch', () => {
       './presets/novel-write-engine.patch.yml',
     ])
     expect(manifest.dsh.client.platform).toBe('web')
-    for (const required of ['lib', 'rulepacks', 'briefs', 'locale', 'presets', 'cordis.patch.yml']) {
+    for (const required of ['lib', 'rulepacks', 'briefs', 'skills', 'presets', 'cordis.patch.yml']) {
       expect(manifest.files, required).toContain(required)
     }
+    expect(manifest.files).not.toContain('locale')
   })
 })
 
@@ -54,6 +56,7 @@ describe('preset patch', () => {
     expect(config.name).toBe('网文工坊')
     expect(config.order).toBe(20)
     expect(config.plugins.length).toBeGreaterThanOrEqual(8)
+    expect(entryListProblem(config.plugins)).toBeUndefined()
   })
 
   it('gives every nested row an id and keeps them unique', () => {

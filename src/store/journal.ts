@@ -14,6 +14,14 @@ export interface JournalRecord {
   files: string[]
   status: 'committed' | 'aborted'
   reason?: string
+  /** Content hash per target, written on commit for startup reconciliation. */
+  hashes?: Record<string, string>
+}
+
+export interface JournalRead {
+  rows: AuditRow[]
+  malformed: number
+  records: JournalRecord[]
 }
 
 const JOURNAL_PATH = joinRel(STATE_DIR, STATE_FILES.journal)
@@ -24,30 +32,49 @@ export async function appendJournal(store: FsStore, record: JournalRecord): Prom
 }
 
 /** Read every parsable record; malformed lines are counted, never rewritten. */
-export async function readJournal(store: FsStore): Promise<{ rows: AuditRow[]; malformed: number }> {
+export async function readJournal(store: FsStore): Promise<JournalRead> {
   const text = await store.readText(JOURNAL_PATH)
-  if (text === null) return { rows: [], malformed: 0 }
+  if (text === null) return { rows: [], malformed: 0, records: [] }
   const rows: AuditRow[] = []
+  const records: JournalRecord[] = []
   let malformed = 0
   for (const line of text.split('\n')) {
     if (line.trim() === '') continue
     try {
       const raw = JSON.parse(line) as Partial<JournalRecord>
       if (typeof raw.txid !== 'string' || typeof raw.op !== 'string') throw new Error('shape')
-      rows.push({
+      const record: JournalRecord = {
+        txid: raw.txid,
         at: String(raw.at ?? ''),
         op: raw.op,
         chapter: Number(raw.chapter ?? 0),
         revision: Number(raw.revision ?? 0),
-        txid: raw.txid,
-        status: raw.status === 'aborted' ? 'aborted' : 'committed',
         files: Array.isArray(raw.files) ? raw.files.map(String) : [],
+        status: raw.status === 'aborted' ? 'aborted' : 'committed',
+      }
+      if (typeof raw.reason === 'string') record.reason = raw.reason
+      if (typeof raw.hashes === 'object' && raw.hashes !== null && !Array.isArray(raw.hashes)) {
+        record.hashes = Object.fromEntries(
+          Object.entries(raw.hashes as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        )
+      }
+      records.push(record)
+      rows.push({
+        at: record.at,
+        op: record.op,
+        chapter: record.chapter,
+        revision: record.revision,
+        txid: record.txid,
+        status: record.status,
+        files: record.files,
       })
     } catch {
       malformed += 1
     }
   }
-  return { rows, malformed }
+  return { rows, malformed, records }
 }
 
 /** Fail with a diagnostic (never a mutation) when the journal is truncated. */
@@ -57,6 +84,49 @@ export function assertJournalHealthy(malformed: number): void {
       ERROR_CODES.SCHEMA_INVALID,
       `journal has ${malformed} malformed line(s)`,
       'keep a copy of state/journal.jsonl; the engine never rewrites it automatically',
+    )
+  }
+}
+
+export interface JournalMismatch {
+  txid: string
+  path: string
+  expected: string
+  actual: string | null
+}
+
+/**
+ * Compare the last committed transaction's recorded hashes with the files on
+ * disk. A mismatch means an external writer changed the project after commit;
+ * the engine reports it instead of silently building on the altered state.
+ */
+export async function reconcileJournal(store: FsStore): Promise<{
+  malformed: number
+  mismatches: JournalMismatch[]
+}> {
+  const { records, malformed } = await readJournal(store)
+  const last = [...records]
+    .reverse()
+    .find((record) => record.status === 'committed' && record.hashes !== undefined)
+  if (last?.hashes === undefined) return { malformed, mismatches: [] }
+  const mismatches: JournalMismatch[] = []
+  for (const [path, expected] of Object.entries(last.hashes)) {
+    const actual = await store.hashBytes(path)
+    if (actual !== expected) mismatches.push({ txid: last.txid, path, expected, actual })
+  }
+  return { malformed, mismatches }
+}
+
+/** Throw before a write when the journal or the last commit is inconsistent. */
+export async function assertJournalConsistent(store: FsStore): Promise<void> {
+  const { malformed, mismatches } = await reconcileJournal(store)
+  assertJournalHealthy(malformed)
+  if (mismatches.length > 0) {
+    const first = mismatches[0]!
+    throw new EngineFaultError(
+      ERROR_CODES.TXN_ABORTED,
+      `journal hash mismatch for ${first.path} (txid ${first.txid}); expected ${first.expected}, found ${first.actual ?? 'missing'}`,
+      'restore the file from backups/ or fix the external change before retrying',
     )
   }
 }

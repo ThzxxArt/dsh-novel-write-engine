@@ -1,4 +1,4 @@
-import type { Genre, SceneType } from '../types.js'
+import type { Genre, Platform, SceneType } from '../types.js'
 
 /** One blacklisted word. */
 export interface TermEntry {
@@ -44,22 +44,41 @@ export interface Rulepack {
     ellipsis_run: { max: number; token: string }
     uniform_sentence: { min_sentences: number; ratio: number }
     consecutive_le: { max: number; char: string }
+    /** Paragraphs at or above this quoted-character share skip rhythm checks. */
+    dialogue_dominant_ratio: number
   }
   rhythm: { min_sentences: number; uniform_ratio: number; short_ratio: number }
   semantics: {
     adjective_density: { max: number; adjectives: string[] }
     pleasure_density: { min: number; keywords: string[]; window: number }
     sensory_density: { min: number; senses: string[]; window: number }
-    water_words: { window: number; threshold: number; terms: string[] }
+    water_words: {
+      window: number
+      threshold: number
+      scene_thresholds?: Partial<Record<SceneType, number>>
+      terms: string[]
+    }
   }
+  /** Platform style profiles; `initProject` uses these when the caller omits targets. */
+  platform: Record<
+    Platform,
+    {
+      words_per_chapter: [number, number]
+      dialogue_ratio: [number, number]
+      pleasure_min: number
+    }
+  >
+  /** Genre guides injected into the task-book context; no code branches on them. */
+  genres: Record<Genre, { note: string; scene_types?: SceneType[] }>
   crosschapter: {
     duplicate_similarity: number
     foreshadow_min_dormancy: number
+    foreshadow_dormant_after: number
     resource_tolerance: number
     check_time: boolean
     lock_similarity: number
   }
-  quality: { min_score: number; dimensions: Array<{ id: string; max: number }> }
+  quality: { dimensions: Array<{ id: string; max: number }> }
   exclusions: Array<{ pair: [string, string]; family: string }>
   exemptions: string[]
 }
@@ -74,7 +93,10 @@ export interface RuleContext {
   rulepack: Rulepack
   summary: import('../types.js').ChapterSummary | null
   evidence: {
+    characters: import('../types.js').CharactersDocument | null
     previousText: string | null
+    /** Three preceding chapters, newest first, for the duplicate rule. */
+    previousTexts: string[]
     foreshadows: import('../types.js').ForeshadowsDocument | null
     timeline: import('../types.js').TimelineDocument | null
     relationships: import('../types.js').RelationshipsDocument | null

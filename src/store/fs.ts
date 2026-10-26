@@ -109,6 +109,11 @@ export class FsStore {
     await fs.rm(this.path(relativePath), { force: true })
   }
 
+  /** Remove a directory tree inside the project root (backup GC only). */
+  async removeTree(relativePath: string): Promise<void> {
+    await fs.rm(this.path(relativePath), { recursive: true, force: true })
+  }
+
   /** Raw append used only by the journal (JSONL is append-only by design). */
   async appendText(relativePath: string, text: string): Promise<void> {
     const absolute = this.path(relativePath)

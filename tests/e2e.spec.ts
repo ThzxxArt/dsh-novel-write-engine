@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { harness, sampleReview, sampleSummary } from './helpers.js'
+import { archiveDelta, harness, sampleReview, sampleSummary } from './helpers.js'
 import type { ChapterSummary, SceneType } from '../src/types.js'
 
 const TEXTS: Record<number, string> = {
@@ -23,12 +23,103 @@ const TEXTS: Record<number, string> = {
   ].join('\n\n'),
 }
 
-const SUMMARY: ChapterSummary = sampleSummary()
+const summaryFor = (text: string): ChapterSummary =>
+  sampleSummary({
+    opening: text.split('\n\n')[0]!.slice(0, 20),
+    continuity: { opens_from: '上一章结尾', ends_with: '——' },
+  })
 
 const SCENES: Record<number, SceneType> = { 1: '日常过渡章', 2: '纯叙事章', 3: '情感爆发章' }
 const TITLES: Record<number, string> = { 1: '开端之雨', 2: '旧城之影', 3: '灯下之言' }
 
 describe('three-chapter end to end', () => {
+  it('runs a P4 → P5 → P4 revision round with evidence', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '修订之书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+        words_per_chapter: [80, 400],
+      })
+      await engine.getBrief({ stage: 'P1', root })
+      await engine.submitWorldPlan({
+        chapter: 0,
+        objective: '收到信',
+        constraints: [],
+        characters: [],
+        locations: [],
+        continuity_notes: [],
+        root,
+      })
+      await engine.getBrief({ stage: 'P2', root })
+      await engine.submitChapterPlan({
+        chapter: 0,
+        title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        beats: ['起', '承'],
+        opening: '开场',
+        ending: '断章',
+        target_words: [80, 400],
+        root,
+      })
+      const text = [
+        '风从窗缝里挤进来，把桌上的纸吹得翻了一页。他伸手压住，指腹沾了一点灰。',
+        '走廊尽头传来脚步声，不快不慢，在门口停了两秒。他没有抬头，只把笔帽扣紧。',
+        '门被推开时带进一股凉气，来人把一只旧信封放在桌角，指尖敲了两下。',
+        '信封没有署名，封口处压着一枚暗红的蜡印，边缘已经磨得发白。',
+      ].join('\n\n')
+      await engine.getBrief({ stage: 'P3', root })
+      await engine.submitDraft({
+        chapter: 1,
+        content: text,
+        chapter_title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: summaryFor(text),
+        root,
+      })
+      await engine.getBrief({ stage: 'P4', root })
+      const review = sampleReview(1, text)
+      const blocker = {
+        id: 'REV-001',
+        severity: 'blocker' as const,
+        dimension: 'R-W-04',
+        location: '第 2 段',
+        problem: '动机缺失',
+        fix: '补一句动作动机',
+        status: 'open' as const,
+      }
+      const first = await engine.submitReview({
+        chapter: 1,
+        ...review,
+        issues: [blocker],
+        root,
+      })
+      expect(first.data.next_stage).toBe('P5')
+
+      await engine.getBrief({ stage: 'P5', root })
+      const revised = `${text}\n\n他把信翻过来，背面有一行被水晕开的字。`
+      await engine.submitRevision({
+        chapter: 1,
+        content: revised,
+        issues: [{ ...blocker, status: 'fixed', evidence: '风从窗缝里挤进来' }],
+        proof: review.proof,
+        root,
+      })
+      const status = await engine.getStatus({ root })
+      expect(status.data.stage).toBe('P4')
+
+      await engine.getBrief({ stage: 'P4', root })
+      const second = await engine.submitReview({ chapter: 1, ...sampleReview(1, revised), root })
+      expect(second.data.next_stage).toBe('P6')
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('archives three chapters with no manual file edits', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -70,7 +161,7 @@ describe('three-chapter end to end', () => {
           chapter_title: TITLES[chapter]!,
           scene_type: SCENES[chapter]!,
           narrator: '他',
-          summary: SUMMARY,
+          summary: summaryFor(text),
           root,
         })
         await engine.getBrief({ stage: 'P4', root })
@@ -78,7 +169,11 @@ describe('three-chapter end to end', () => {
         await engine.getBrief({ stage: 'P6', root })
         await engine.runCheck({ chapter, root })
         await engine.getBrief({ stage: 'P8', root })
-        const archived = await engine.archiveChapter({ chapter, root })
+        const archived = await engine.archiveChapter({
+          chapter,
+          state_delta: archiveDelta(summaryFor(text), { existing: chapter > 1 ? ['他'] : [] }),
+          root,
+        })
         expect(archived.data.chapter).toBe(chapter)
       }
 
@@ -97,7 +192,7 @@ describe('three-chapter end to end', () => {
       const epub = await engine.export({ kind: 'epub', root })
       expect(epub.data.files).toContain('exports/book.epub')
       const oneChapter = await engine.export({ kind: 'md', chapter: 1, root })
-      expect(oneChapter.data.files).toContain('exports/book.md')
+      expect(oneChapter.data.files).toContain('exports/book-ch001.md')
       const markdown = await engine.diff({ chapter: 1, root })
       expect(markdown.data.before.length).toBeGreaterThan(0)
     } finally {

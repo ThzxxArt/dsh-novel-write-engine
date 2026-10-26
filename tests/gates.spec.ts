@@ -77,8 +77,16 @@ const input = (patch: Partial<GateInput> = {}): GateInput => ({
   proof: null,
   rounds: { review: 0, revise: 0, check: 0 },
   archive: null,
-  evidence: { foreshadows: null, timeline: null, relationships: null, world: null, locks: null },
+  evidence: {
+    characters: null,
+    foreshadows: null,
+    timeline: null,
+    relationships: null,
+    world: null,
+    locks: null,
+  },
   previousText: null,
+  previousTexts: [],
   priorSceneTypes: [],
   ...patch,
 })

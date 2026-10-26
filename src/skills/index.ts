@@ -1,6 +1,4 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { readBundledText } from '../assets.js'
 import { SKILL_NAME } from '../constants.js'
 
 /** The entry skill: routing and the six iron rules, no stage knowledge. */
@@ -12,16 +10,8 @@ export interface SkillContribution {
   whenToUse: string
 }
 
-function entryPath(): string {
-  const candidates = [
-    fileURLToPath(new URL('../skills/entry.md', import.meta.url)),
-    fileURLToPath(new URL('../../skills/entry.md', import.meta.url)),
-  ]
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!
-}
-
-// Read once at module load; `apply()` itself performs no IO.
-const CONTENT = readFileSync(entryPath(), 'utf8')
+/** Read once at module load; `apply()` itself performs no IO. */
+const CONTENT = readBundledText('skills/entry.md')
 
 /** Registration payload for `ctx.skills.register`. */
 export function createSkill(): SkillContribution {
@@ -32,6 +22,6 @@ export function createSkill(): SkillContribution {
     source: 'bundled',
     content: CONTENT,
     whenToUse:
-      '小说创作、章节推进、字数与门控核对、归档与导出。引擎版流程，与旧技能套件互斥，遇到冲突以本技能为准。',
+      '用户要写小说章节、继续写、重写、检查章节一致性，或查看创作项目状态时。由本插件维护状态与门控。',
   }
 }

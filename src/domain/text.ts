@@ -46,6 +46,15 @@ export function sentenceRhythm(text: string): SentenceRhythm {
 }
 
 /** Paragraph numbers are 1-based and refer to non-empty lines, matching `splitParagraphs`. */
+/** Share of a paragraph's characters that sit inside legal straight quotes. */
+export function dialogueCharacterRatio(paragraph: string): number {
+  const total = Array.from(paragraph).length
+  if (total === 0) return 0
+  let quoted = 0
+  for (const match of paragraph.matchAll(/"([^"]*)"/g)) quoted += Array.from(match[1]!).length
+  return quoted / total
+}
+
 export function paragraphAt(text: string, paragraph: number): string | null {
   const paragraphs = splitParagraphs(text)
   if (!Number.isInteger(paragraph) || paragraph < 1 || paragraph > paragraphs.length) return null

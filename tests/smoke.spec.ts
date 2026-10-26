@@ -18,10 +18,14 @@ describe('plugin assembly', () => {
       'novel-stats',
     ])
     expect(host.skills).toHaveLength(1)
-    expect(host.skills[0]!.name).toBe('novel-writing')
+    expect(host.skills[0]!.name).toBe('novel-write-engine')
     expect(host.skills[0]!.content).toContain('六条铁律')
+    expect(host.skills[0]!.content).toContain('name: novel-write-engine')
+    expect(host.skills[0]!.content).toContain('正文只有两个写入口')
+    expect(host.skills[0]!.content).not.toContain('旧技能套件')
     expect(host.routes).toHaveLength(1)
     expect(host.routes[0]!.path).toBe('/api/novel-write-engine/panel')
+    expect(host.provided.novelEngine).toBeDefined()
   })
 
   it('registers only eight tools in core mode', () => {

@@ -20,8 +20,7 @@ const required = [
   'briefs/P5.md',
   'briefs/P6.md',
   'briefs/P8.md',
-  'locale/zh.json',
-  'locale/en.json',
+  'skills/entry.md',
   'cordis.patch.yml',
   'presets/novel-write-engine.patch.yml',
 ]

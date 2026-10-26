@@ -1,33 +1,26 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
+import { readBundledText, readTextAt } from './assets.js'
 import { ERROR_CODES, EngineFaultError } from './types.js'
 import { compileRulepack } from './rules/compiler.js'
 import type { Rulepack } from './rules/types.js'
 
-/** Candidate locations of the bundled pack, from lib/ and from src/. */
+/** Path of the bundled pack, for diagnostics and CLI validation. */
 export function bundledRulepackPath(): string {
-  const candidates = [
-    fileURLToPath(new URL('../rulepacks/default.yaml', import.meta.url)),
-    fileURLToPath(new URL('../../rulepacks/default.yaml', import.meta.url)),
-  ]
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!
+  return 'rulepacks/default.yaml'
 }
 
-/** Read, compile and freeze a pack. Throws `ENGINE_RULEPACK_INVALID` on defects. */
+/** Read, compile and freeze a pack. Runtime callers always use the bundled default. */
 export function loadRulepack(path?: string): Rulepack {
-  const target = path ?? bundledRulepackPath()
   let text: string
   try {
-    text = readFileSync(target, 'utf8')
+    text = path === undefined ? readBundledText('rulepacks/default.yaml') : readTextAt(path)
   } catch (error) {
+    if (error instanceof EngineFaultError && path === undefined) throw error
     throw new EngineFaultError(
       ERROR_CODES.RULEPACK_INVALID,
-      `cannot read rule pack at ${target}`,
+      `cannot read rule pack at ${path ?? 'bundled default'}`,
       undefined,
-      {
-        cause: error,
-      },
+      { cause: error },
     )
   }
   const raw: unknown = parse(text)

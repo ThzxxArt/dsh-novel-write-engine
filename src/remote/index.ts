@@ -9,14 +9,10 @@ export interface PanelPayload {
   gates: unknown
 }
 
-/** Build the payload from the three projection operations. */
+/** Build the payload from one synchronized snapshot of the project. */
 export async function panelPayload(engine: EngineService): Promise<PanelPayload> {
-  const [summary, chapters, gates] = await Promise.all([
-    engine.panelSummary({}),
-    engine.panelChapters({}),
-    engine.panelGates({}),
-  ])
-  return { schemaVersion: REMOTE_VERSION, summary, chapters, gates }
+  const bundle = await engine.panelBundle()
+  return { schemaVersion: REMOTE_VERSION, ...bundle }
 }
 
 interface ServerResponseLike {

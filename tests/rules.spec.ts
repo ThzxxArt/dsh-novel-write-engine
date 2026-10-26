@@ -25,7 +25,9 @@ const options = (overrides: Partial<MachineOptions> = {}): MachineOptions => ({
   rulepack: pack,
   summary: null,
   evidence: {
+    characters: null,
     previousText: null,
+    previousTexts: [],
     foreshadows: null,
     timeline: null,
     relationships: null,
@@ -94,12 +96,9 @@ describe('rule pack compiler', () => {
       mutate(draft)
       expect(() => compileRulepack(draft), name).toThrow(pattern)
     }
-    expect(() =>
-      compileRulepack({
-        ...structuredClone(rawPack),
-        quality: { ...DEFAULT_RULEPACK.quality, min_score: 999 },
-      }),
-    ).toThrow(/min_score/)
+    const missingPlatform = structuredClone(rawPack) as { platform: Record<string, unknown> }
+    delete missingPlatform.platform.fanqie
+    expect(() => compileRulepack(missingPlatform)).toThrow(/platform.fanqie/)
     expect(() => compileRulepack({ ...structuredClone(rawPack), schema_version: 2 })).toThrow(
       /schema_version/,
     )
@@ -229,7 +228,9 @@ describe('machine pipeline', () => {
           plot_advancement: 'mid',
         },
         evidence: {
+          characters: null,
           previousText: text,
+          previousTexts: [text],
           foreshadows: {
             schema_version: 1,
             next_seq: 2,
@@ -293,7 +294,9 @@ describe('machine pipeline', () => {
       options({
         chapter: 2,
         evidence: {
+          characters: null,
           previousText: null,
+          previousTexts: [],
           foreshadows: {
             schema_version: 1,
             next_seq: 2,

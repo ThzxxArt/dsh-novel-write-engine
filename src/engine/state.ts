@@ -7,7 +7,8 @@ export interface EngineConfig {
   stateDir: string
   tools: { mode: 'all' | 'core' }
   quality: { minScore: number }
-  briefs: { locale: 'zh' | 'en' }
+  briefs: { overrides: string }
+  storage: { backupRetention: number }
 }
 
 /** Events other plugins may subscribe to; payloads never contain manuscript text. */

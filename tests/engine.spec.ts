@@ -8,6 +8,7 @@ import {
   cleanText,
   sampleReview,
   sampleSummary,
+  archiveDelta,
   bootstrapToDraft,
   writeDraft,
 } from './helpers.js'
@@ -18,7 +19,11 @@ describe('engine lifecycle', () => {
     const { root, engine, cleanup } = await harness()
     try {
       const text = await readyToArchive({ root, engine })
-      const result = await engine.archiveChapter({ chapter: 1, root })
+      const result = await engine.archiveChapter({
+        chapter: 1,
+        state_delta: archiveDelta(sampleSummary()),
+        root,
+      })
       expect(result.data.chapter).toBe(1)
       expect(result.data.score).toBe(145)
       expect(result.data.metrics.total_word_count).toBeGreaterThan(80)
@@ -113,8 +118,8 @@ describe('engine lifecycle', () => {
     try {
       await readyToArchive({ root, engine })
       const results = await Promise.allSettled([
-        engine.archiveChapter({ chapter: 1, root }),
-        engine.archiveChapter({ chapter: 1, root }),
+        engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root }),
+        engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root }),
       ])
       const fulfilled = results.filter((result) => result.status === 'fulfilled')
       const rejected = results.filter((result) => result.status === 'rejected')

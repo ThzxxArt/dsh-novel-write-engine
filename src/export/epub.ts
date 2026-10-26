@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { deflateRawSync } from 'node:zlib'
 import type { NovelProject } from '../types.js'
-import { chapterHeading, renderCover, renderEpubChapter, type ExportChapter } from './render.js'
+import { chapterHeading, renderBlurb, renderCover, renderEpubChapter, type ExportChapter } from './render.js'
 
 /** Minimal ZIP writer: store `mimetype` first, deflate everything else. */
 interface ZipEntry {
@@ -107,7 +108,11 @@ export function buildZip(entries: readonly ZipEntry[]): Buffer {
 
 /** Build a valid EPUB 3 archive from chapters; `mimetype` is the first entry. */
 export function buildEpub(project: NovelProject, chapters: readonly ExportChapter[]): Buffer {
-  const id = 'urn:uuid:6a7d3f8e-6b4f-4f2a-9c1d-2b8f7a0c1234'
+  const digest = createHash('sha256')
+    .update(`${project.title}\u0000${project.author}\u0000${project.created_at}`)
+    .digest('hex')
+  const id = `urn:uuid:${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`
+  const modified = project.created_at.endsWith('Z') ? project.created_at : `${project.created_at}Z`
   const manifestItems = chapters
     .map(
       (_, index) =>
@@ -128,15 +133,17 @@ export function buildEpub(project: NovelProject, chapters: readonly ExportChapte
     <dc:identifier id="bookid">${id}</dc:identifier>
     <dc:title>${escapeXml(project.title)}</dc:title>
     <dc:creator>${escapeXml(project.author === '' ? '佚名' : project.author)}</dc:creator>
+    <dc:description>${escapeXml(renderBlurb(project))}</dc:description>
     <dc:language>zh-CN</dc:language>
-    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+    <meta property="dcterms:modified">${modified}</meta>
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="cover" href="cover.svg" media-type="image/svg+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="cover" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>
     ${manifestItems}
   </manifest>
-  <spine>
+  <spine toc="ncx">
     ${spineItems}
   </spine>
 </package>`

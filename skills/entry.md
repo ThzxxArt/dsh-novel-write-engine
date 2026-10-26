@@ -1,5 +1,5 @@
 ---
-name: novel-writing
+name: novel-write-engine
 description: 引擎版小说创作流程——状态、门控、字数与写盘入口全部由插件裁决。用于任何「写小说 / 写第 N 章 / 续写 / 改稿 / 归档」任务。
 ---
 
@@ -10,24 +10,24 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 ## 六条铁律
 
 1. **先看状态，再动笔。** 任何创作动作前先 `novel_status`；每章开工先 `novel_brief <阶段>`。
-2. **正文只有三个写入口。** `novel_write_draft`（初稿）、`novel_revise`（修订）、`novel_amend`（状态文档）。没有第四条路。
+2. **正文只有两个写入口。** `novel_write_draft`（初稿）与 `novel_revise`（修订）。`novel_amend` 只改状态文档，不写正文；没有第四条路。
 3. **字数与门控以引擎返回为准。** 不要自己估算字数，不要复述旧数字。
 4. **评审每一分都要定位。** 指不到「第 N 段」的扣分不要写；证据要逐字引用。
 5. **不编设定。** 人物、地点、伏笔、资源状态拿不准就 `novel_state` 查。
-6. **归档是一次事务。** 只调 `novel_archive`，不要手工拼章节索引或交接文件。
+6. **归档是一次事务，且必须核销。** `novel_archive` 必须带 `state_delta`：本章每个角色/伏笔/事件/新设定/关系逐条声明 `created|updated|no_change`；不要手工拼章节索引或交接文件。
 
 ## 流程路由
 
-| 当前阶段 | 任务书 | 下一动作 |
-|---|---|---|
-| idle | `novel_brief P1` | `novel_plan_world` |
-| P2 | `novel_brief P2` | `novel_plan_chapter` |
-| P3 | `novel_brief P3` | `novel_write_draft` |
-| P4 | `novel_brief P4` | `novel_review` |
-| P5 | `novel_brief P5` | `novel_revise` |
-| P6 | `novel_brief P6` | `novel_check` |
-| ready_to_archive | `novel_brief P8` | `novel_archive` |
-| done | — | 下一章从 P1 开始 |
+| 当前阶段         | 任务书           | 下一动作             |
+| ---------------- | ---------------- | -------------------- |
+| idle             | `novel_brief P1` | `novel_plan_world`   |
+| P2               | `novel_brief P2` | `novel_plan_chapter` |
+| P3               | `novel_brief P3` | `novel_write_draft`  |
+| P4               | `novel_brief P4` | `novel_review`       |
+| P5               | `novel_brief P5` | `novel_revise`       |
+| P6               | `novel_brief P6` | `novel_check`        |
+| ready_to_archive | `novel_brief P8` | `novel_archive`      |
+| done             | —                | 下一章从 P1 开始     |
 
 拿不准就走 `novel_pipeline`，它直接告诉你调什么、传什么。
 

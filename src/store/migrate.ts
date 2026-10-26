@@ -33,7 +33,8 @@ export function migrateDocument(
 ): Record<string, unknown> {
   const start = typeof document.schema_version === 'number' ? document.schema_version : 1
   assertNotTooNew(start)
-  let current = document
+  // Migrate a copy: a failing step must not partially mutate the caller's value.
+  let current = structuredClone(document)
   let version = start
   while (version < target) {
     const step = chain.find((candidate) => candidate.from === version)

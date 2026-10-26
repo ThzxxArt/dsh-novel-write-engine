@@ -1,7 +1,13 @@
 import { SCORE_DIMENSIONS, FULL_SCORE, type Exclusion } from '../domain/scoring.js'
 import { ALL_RULE_CODES } from '../codes.js'
-import { ERROR_CODES, SCHEMA_VERSION, EngineFaultError } from '../types.js'
+import { ERROR_CODES, GENRES, PLATFORMS, SCHEMA_VERSION, EngineFaultError } from '../types.js'
 import type { Rulepack } from './types.js'
+
+const platformDefaults = (words: [number, number], dialogue: [number, number], pleasure: number) => ({
+  words_per_chapter: words,
+  dialogue_ratio: dialogue,
+  pleasure_min: pleasure,
+})
 
 /** Minimal pack used to fill optional blocks; every value is overridable in YAML. */
 export const DEFAULT_RULEPACK: Rulepack = {
@@ -38,22 +44,36 @@ export const DEFAULT_RULEPACK: Rulepack = {
     ellipsis_run: { max: 1, token: '……' },
     uniform_sentence: { min_sentences: 8, ratio: 0.6 },
     consecutive_le: { max: 3, char: '了' },
+    dialogue_dominant_ratio: 0.6,
   },
   rhythm: { min_sentences: 8, uniform_ratio: 0.6, short_ratio: 0.25 },
   semantics: {
     adjective_density: { max: 4, adjectives: [] },
     pleasure_density: { min: 1, keywords: [], window: 600 },
     sensory_density: { min: 2, senses: [], window: 800 },
-    water_words: { window: 150, threshold: 0.35, terms: [] },
+    water_words: {
+      window: 150,
+      threshold: 0.35,
+      scene_thresholds: { '战斗/动作章': 0.25, 日常过渡章: 0.35, 情感爆发章: 0.3, 纯叙事章: 0.4 },
+      terms: [],
+    },
   },
+  platform: {
+    fanqie: platformDefaults([2000, 3000], [0.4, 0.6], 1),
+    qidian: platformDefaults([2000, 3500], [0.3, 0.5], 1),
+    qimao: platformDefaults([1500, 2500], [0.45, 0.65], 1),
+    jinjiang: platformDefaults([2500, 4000], [0.35, 0.55], 1),
+  },
+  genres: Object.fromEntries(GENRES.map((genre) => [genre, { note: '' }])) as Rulepack['genres'],
   crosschapter: {
     duplicate_similarity: 0.9,
-    foreshadow_min_dormancy: 3,
+    foreshadow_min_dormancy: 2,
+    foreshadow_dormant_after: 20,
     resource_tolerance: 0,
     check_time: true,
     lock_similarity: 0.75,
   },
-  quality: { min_score: 120, dimensions: SCORE_DIMENSIONS.map(({ id, max }) => ({ id, max })) },
+  quality: { dimensions: SCORE_DIMENSIONS.map(({ id, max }) => ({ id, max })) },
   exclusions: [],
   exemptions: [],
 }
@@ -115,6 +135,8 @@ export function compileRulepack(raw: unknown): Rulepack {
       'punctuation',
       'rhythm',
       'semantics',
+      'platform',
+      'genres',
       'crosschapter',
       'quality',
       'exclusions',
@@ -123,6 +145,14 @@ export function compileRulepack(raw: unknown): Rulepack {
     'root',
   )
   const pack = normalize(raw as Partial<Rulepack>)
+  const rawPlatform = object(root.platform, 'platform')
+  for (const platform of PLATFORMS) {
+    if (rawPlatform[platform] === undefined) invalid(`platform.${platform} is missing`)
+  }
+  const rawGenres = object(root.genres, 'genres')
+  for (const genre of GENRES) {
+    if (rawGenres[genre] === undefined) invalid(`genres.${genre} is missing`)
+  }
 
   // 1. completeness: the fifteen dimensions must sum to exactly 150.
   const sum = pack.quality.dimensions.reduce((total, dimension) => total + dimension.max, 0)
@@ -174,9 +204,6 @@ export function compileRulepack(raw: unknown): Rulepack {
   // 5. threshold bounds: values that would silently disable a check are refused.
   if (pack.format.paragraph_max_words < 20 || pack.format.paragraph_max_words > 500) {
     invalid('format.paragraph_max_words must be within 20..500')
-  }
-  if (pack.quality.min_score < 0 || pack.quality.min_score > FULL_SCORE) {
-    invalid('quality.min_score must be within 0..150')
   }
   if (pack.punctuation.period_density.min > pack.punctuation.period_density.max) {
     invalid('punctuation.period_density.min must not exceed max')
@@ -238,7 +265,6 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
   merged.format.title.pattern = string(merged.format.title.pattern, 'format.title.pattern')
   merged.format.title.min_chars = num(merged.format.title.min_chars, 'format.title.min_chars')
   merged.format.title.max_chars = num(merged.format.title.max_chars, 'format.title.max_chars')
-  merged.quality.min_score = num(merged.quality.min_score, 'quality.min_score')
   merged.punctuation.dash.scale_words = num(
     merged.punctuation.dash.scale_words,
     'punctuation.dash.scale_words',
@@ -247,11 +273,23 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
     merged.crosschapter.duplicate_similarity,
     'crosschapter.duplicate_similarity',
   )
+  merged.crosschapter.foreshadow_min_dormancy = num(
+    merged.crosschapter.foreshadow_min_dormancy,
+    'crosschapter.foreshadow_min_dormancy',
+  )
+  merged.crosschapter.foreshadow_dormant_after = num(
+    merged.crosschapter.foreshadow_dormant_after,
+    'crosschapter.foreshadow_dormant_after',
+  )
   merged.format.forbid_markdown = bool(merged.format.forbid_markdown, 'format.forbid_markdown')
   merged.format.forbid_semicolon = bool(merged.format.forbid_semicolon, 'format.forbid_semicolon')
   merged.format.forbid_english_ellipsis = bool(
     merged.format.forbid_english_ellipsis,
     'format.forbid_english_ellipsis',
+  )
+  merged.punctuation.dialogue_dominant_ratio = num(
+    merged.punctuation.dialogue_dominant_ratio,
+    'punctuation.dialogue_dominant_ratio',
   )
   for (const key of ['zero_tolerance', 'soft', 'contextual', 'meta_narration'] as const) {
     array(merged.lexicon[key], `lexicon.${key}`)

@@ -21,6 +21,7 @@ export interface FakeHost {
   routes: Array<{ kind: string; path: string; handler: (...args: never[]) => unknown }>
   effects: Array<() => void>
   events: Array<{ name: string; payload: unknown }>
+  provided: Record<string, unknown>
   ctx: Record<string, unknown>
   dispose: () => void
 }
@@ -38,6 +39,7 @@ export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'w
     routes: [],
     effects: [],
     events: [],
+    provided: {},
     dispose: () => undefined,
     ctx: {},
   }
@@ -78,6 +80,9 @@ export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'w
     }),
     emit: vi.fn((name: string, payload: unknown) => {
       host.events.push({ name, payload })
+    }),
+    provide: vi.fn((name: string, value: unknown) => {
+      host.provided[name] = value
     }),
   }
   host.dispose = () => {

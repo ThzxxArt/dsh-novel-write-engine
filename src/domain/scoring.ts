@@ -69,6 +69,10 @@ export function reviewArithmeticProblems(dimensions: readonly ScoreDimension[], 
         problems.push(`${dimension.id}: deduction is missing rule/location/note`)
       }
     }
+    if (maxOf(dimension.id) === 0) {
+      problems.push(`${dimension.id}: unknown dimension id`)
+      continue
+    }
     const deducted = dimension.deductions.reduce((sum, deduction) => sum + deduction.delta, 0)
     if (dimension.max !== maxOf(dimension.id)) {
       problems.push(`${dimension.id}: max ${dimension.max} does not match spec ${maxOf(dimension.id)}`)

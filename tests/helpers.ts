@@ -4,7 +4,7 @@ import { join, relative } from 'node:path'
 import { EngineService } from '../src/engine/service.js'
 import type { EngineConfig } from '../src/engine/state.js'
 import { loadRulepack } from '../src/rulepack.js'
-import type { ChapterSummary, ReviewDocument, SceneType, ScoreDimension } from '../src/types.js'
+import type { ChapterSummary, ReviewDocument, SceneType, ScoreDimension, StateDelta } from '../src/types.js'
 
 export const FIXED_NOW = (): Date => new Date('2026-10-26T10:00:00.000Z')
 
@@ -13,7 +13,8 @@ export const TEST_CONFIG: EngineConfig = {
   stateDir: '',
   tools: { mode: 'all' },
   quality: { minScore: 120 },
-  briefs: { locale: 'zh' },
+  briefs: { overrides: '' },
+  storage: { backupRetention: 5 },
 }
 
 export interface Harness {
@@ -75,6 +76,7 @@ export function sampleReview(
 ): {
   dimensions: ScoreDimension[]
   issues: ReviewDocument['issues']
+  total: number
   proof: {
     opening: { paragraph: number; quote: string }
     middle: { paragraph: number; quote: string }
@@ -113,7 +115,7 @@ export function sampleReview(
     middle: { paragraph: 2, quote: paragraphs[1]!.slice(0, 14) },
     ending: { paragraph: paragraphs.length, quote: paragraphs[paragraphs.length - 1]!.slice(0, 14) },
   }
-  return { dimensions, issues: options.issues ?? [], proof }
+  return { dimensions, issues: options.issues ?? [], total: 150 - deduction, proof }
 }
 
 /** Recursively hash every file under a directory, for zero-write assertions. */
@@ -197,10 +199,11 @@ export async function readyToArchive(input: {
   root: string
   engine: EngineService
   text?: string
+  summary?: ChapterSummary
 }): Promise<string> {
   const text = input.text ?? cleanText()
   await bootstrapToDraft(input)
-  await writeDraft({ ...input, text })
+  await writeDraft({ ...input, text, summary: input.summary })
   await input.engine.getBrief({ stage: 'P4', root: input.root })
   await input.engine.submitReview({ chapter: 1, ...sampleReview(1, text), root: input.root })
   await input.engine.getBrief({ stage: 'P6', root: input.root })
@@ -216,4 +219,51 @@ export async function readProjectFile(root: string, path: string): Promise<strin
   } catch {
     return null
   }
+}
+
+/**
+ * Test-only reconciliation sheet for the default summaries. `existing` lists
+ * characters already in the ledger; everything else is declared created.
+ */
+export function archiveDelta(summary: ChapterSummary, options: { existing?: string[] } = {}): StateDelta {
+  const existing = new Set(options.existing ?? [])
+  const characters: StateDelta['characters'] = {}
+  for (const name of summary.characters_appeared) {
+    characters[name] = existing.has(name)
+      ? { action: 'no_change', reason: 'already present before this chapter' }
+      : { action: 'created', role: name === '他' ? 'protagonist' : 'supporting' }
+  }
+  const world: StateDelta['world'] = {}
+  for (const name of summary.new_elements.locations) {
+    world[name] = { action: 'created', kind: 'location', description: name, layout: '', capacity: 0 }
+  }
+  for (const name of summary.new_elements.abilities) {
+    world[name] = { action: 'created', kind: 'ability', description: name }
+  }
+  for (const name of summary.new_elements.artifacts) {
+    world[name] = { action: 'created', kind: 'artifact', description: name }
+  }
+  const foreshadows: StateDelta['foreshadows'] = {}
+  for (const plant of summary.foreshadows.planted) {
+    foreshadows[plant.key] = {
+      action: 'created',
+      title: plant.title,
+      description: plant.description,
+    }
+  }
+  for (const advance of summary.foreshadows.advanced) {
+    foreshadows[advance.key] = {
+      action: 'updated',
+      note: advance.note,
+      new_info: advance.new_info,
+    }
+  }
+  for (const key of summary.foreshadows.resolved) {
+    foreshadows[key] = { action: 'updated' }
+  }
+  const timeline: StateDelta['timeline'] = {}
+  for (const [index, event] of summary.events.entries()) {
+    timeline[String(index)] = { action: 'created', description: event }
+  }
+  return { characters, world, foreshadows, timeline, relationships: {} }
 }

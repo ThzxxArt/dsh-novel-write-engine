@@ -67,9 +67,12 @@ export class FileLock {
         const handle = await fs.open(this.absolutePath, 'wx')
         try {
           await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
-        } finally {
-          await handle.close()
+        } catch (error) {
+          await handle.close().catch(() => undefined)
+          await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
+          throw error
         }
+        await handle.close()
         return
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -102,17 +105,27 @@ export class FileLock {
     }
   }
 
-  /** Stale locks are reclaimed once; a live or fresh lock is not touched. */
+  /** Stale locks are reclaimed once; a live, fresh, or half-written lock is not touched. */
   private async tryReclaim(): Promise<boolean> {
-    let record: LockRecord | null
+    let mtimeMs: number
     try {
-      record = JSON.parse(await fs.readFile(this.absolutePath, 'utf8')) as LockRecord
+      mtimeMs = (await fs.stat(this.absolutePath)).mtimeMs
     } catch {
-      // A lock file whose content is unreadable is treated as stale.
-      await fs.rm(this.absolutePath, { force: true })
+      // The lock disappeared between the failed create and this check.
       return true
     }
-    if (!isLockRecord(record)) {
+    let record: LockRecord | null = null
+    try {
+      const raw: unknown = JSON.parse(await fs.readFile(this.absolutePath, 'utf8'))
+      if (isLockRecord(raw)) record = raw
+    } catch {
+      record = null
+    }
+    // A lock file is created with O_EXCL and then written. During that window
+    // the reader sees an empty or partial file; it must not be mistaken for a
+    // stale lock, or two processes would both believe they hold it.
+    if (record === null) {
+      if (Date.now() - mtimeMs <= this.staleMs) return false
       await fs.rm(this.absolutePath, { force: true })
       return true
     }
