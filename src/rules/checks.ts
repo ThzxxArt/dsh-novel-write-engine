@@ -390,14 +390,17 @@ const pleasureDensity: Rule = (ctx) => {
   if (keywords.length === 0) return []
   const results: Violation[] = []
   const windows = slidingWindows(ctx.text, window)
-  const bare = windows.findIndex((slice) => keywords.every((keyword) => !slice.includes(keyword)))
-  if (bare !== -1)
+  const short = windows.findIndex((slice) => {
+    const hits = keywords.reduce((total, keyword) => total + countOccurrences(slice, keyword), 0)
+    return hits < min
+  })
+  if (short !== -1)
     results.push(
       v(
         SEMANTIC_RULES.PLEASURE_DENSITY,
         'advisory',
         1,
-        `a ${window}-char window has no pleasure keyword (minimum ${min})`,
+        `a ${window}-char window has fewer than ${min} pleasure keyword(s)`,
       ),
     )
   return results
@@ -456,11 +459,13 @@ const duplicateParagraph: Rule = (ctx) => {
         : [ctx.evidence.previousText]
   if (previous.length === 0) return []
   const best = maxParagraphSimilarity(ctx.text, previous)
-  if (best < ctx.rulepack.crosschapter.duplicate_similarity) return []
+  const advisory = ctx.rulepack.crosschapter.duplicate_advisory
+  if (best < advisory) return []
+  const severity = best >= ctx.rulepack.crosschapter.duplicate_similarity ? 'blocker' : 'advisory'
   return [
     v(
       CROSS_RULES.DUPLICATE_PARAGRAPH,
-      'blocker',
+      severity,
       1,
       `paragraph reuses ${Math.round(best * 100)}% of a paragraph from the previous three chapters`,
     ),
@@ -528,8 +533,9 @@ const timeRegression: Rule = (ctx) => {
   const ledger = ctx.evidence.timeline
   if (ledger === null || ledger.items.length === 0) return []
   const dayOf = (value: string): number | null => {
-    const match = /Day\s*(\d+)/i.exec(value)
-    return match === null ? null : Number(match[1])
+    const match = /(?:Day\s*(\d+)|第\s*(\d+)\s*[天日])/i.exec(value)
+    if (match === null) return null
+    return Number(match[1] ?? match[2])
   }
   const ordered = [...ledger.items].sort((left, right) => left.chapter - right.chapter)
   const last = ordered[ordered.length - 1]!
@@ -607,6 +613,7 @@ const lockedDetailDrift: Rule = (ctx) => {
   const results: Violation[] = []
   for (const [name, lock] of Object.entries(locks.locations)) {
     if (!ctx.text.includes(name)) continue
+    if (lock.layout.trim() === '') continue
     const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
     if (paragraph === undefined) continue
     const similarity = textSimilarity(paragraph, lock.layout)
@@ -650,7 +657,11 @@ function firstParagraphContaining(text: string, needle: string): number {
 
 function paragraphOfIndex(text: string, index: number): number {
   const prefix = text.slice(0, Math.max(0, index))
-  return prefix.split(/\n+/).filter((line) => line.trim() !== '').length + 1
+  const completed = splitParagraphs(prefix).length
+  // A match at the first character of a paragraph has no character from that
+  // paragraph in `prefix`; without this adjustment its location is reported as
+  // the previous line.
+  return /\n\s*$/.test(prefix) ? completed + 1 : Math.max(1, completed)
 }
 
 /** All built-in rules by code. The registry is populated from this table. */

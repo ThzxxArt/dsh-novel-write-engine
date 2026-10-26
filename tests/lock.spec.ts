@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FileLock } from '../src/store/lock.js'
+import { harness } from './helpers.js'
 
 describe('file lock reclaim', () => {
   it('does not delete a fresh lock whose record is still being written', async () => {
@@ -28,6 +29,44 @@ describe('file lock reclaim', () => {
       await lock.release()
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('notifies the audit hook when a stale lock is reclaimed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(path, JSON.stringify({ pid: process.pid, startedAt: 'not-a-date' }))
+      let reclaimed: { pid: number } | null = null
+      const lock = new FileLock(path, 1_000, 200, async (record) => {
+        reclaimed = record
+      })
+      await lock.acquire()
+      expect(reclaimed).toMatchObject({ pid: process.pid })
+      await lock.release()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('audits a stale lock reclaimed by the engine before a write', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '锁审计', genre: '都市现代', platform: 'fanqie', root })
+      await writeFile(
+        join(root, '.engine.lock'),
+        JSON.stringify({ pid: process.pid, startedAt: 'not-a-date' }),
+      )
+      await engine.amend({
+        path: 'state/world.yaml',
+        content: { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] },
+        reason: '触发锁回收',
+        root,
+      })
+      const audit = await engine.auditHistory({ root, limit: 10 })
+      expect(audit.data).toContainEqual(expect.objectContaining({ op: 'lock_reclaimed' }))
+    } finally {
+      await cleanup()
     }
   })
 

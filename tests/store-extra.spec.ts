@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsStore, siblingTemp } from '../src/store/fs.js'
@@ -14,6 +14,25 @@ import { loadRulepack } from '../src/rulepack.js'
 const temp = async (): Promise<string> => mkdtemp(join(tmpdir(), 'novel-extra-'))
 
 describe('store extras', () => {
+  it('refuses a symlink that redirects a project path outside the root', async () => {
+    const root = await temp()
+    const outside = await temp()
+    try {
+      const store = new FsStore(root)
+      await symlink(outside, join(root, 'escape'), 'dir')
+      await expect(store.writeText('escape/leak.txt', 'leak')).rejects.toMatchObject({
+        code: 'ENGINE_PATH_ESCAPE',
+      })
+      await expect(readFile(join(outside, 'leak.txt'), 'utf8')).rejects.toThrow()
+      await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8')
+      await symlink(join(outside, 'secret.txt'), join(root, 'leak.txt'), 'file')
+      await expect(store.readText('leak.txt')).rejects.toMatchObject({ code: 'ENGINE_PATH_ESCAPE' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it('round-trips typed documents and hashes missing files as null', async () => {
     const root = await temp()
     try {

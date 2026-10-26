@@ -120,6 +120,7 @@ describe('engine export', () => {
       expect(await store.exists('exports/cover.svg')).toBe(true)
       const again = await engine.export({ kind: 'md', root })
       expect(again.replayed).toBe(true)
+      expect(await store.readText('exports/blurb.txt')).toContain('都市现代')
       const one = await engine.export({ kind: 'md', chapter: 1, root })
       expect(one.data.files).toContain('exports/book-ch001.md')
       expect(await store.exists('exports/book-ch001.md')).toBe(true)

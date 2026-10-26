@@ -98,6 +98,7 @@ export type ToolName = (typeof TOOL_NAMES)[number]
 
 /** The eight high-frequency tools kept when `tools.mode = core`. */
 export const CORE_TOOLS: readonly ToolName[] = [
+  'novel_init',
   'novel_status',
   'novel_brief',
   'novel_write_draft',
@@ -105,5 +106,4 @@ export const CORE_TOOLS: readonly ToolName[] = [
   'novel_revise',
   'novel_check',
   'novel_archive',
-  'novel_word_count',
 ]

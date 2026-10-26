@@ -24,6 +24,7 @@ const payload = (): PanelPayloadDto => ({
       { id: 'P2', done: true, active: true },
     ],
     blocking: [{ code: 'PG-03', detail: '少了 200 字', hint: '再写一点' }],
+    next: { tool: 'novel_revise', reason: '补足字数' },
   },
   chapters: {
     schemaVersion: 1,
@@ -48,6 +49,7 @@ describe('panel view model', () => {
     expect(view.rows[2]!.tone).toBe('bad')
     expect(view.blockingTitle).toBe('阻塞 1 项')
     expect(view.blocking[0]!.hint).toBe('再写一点')
+    expect(view.next).toContain('novel_revise')
   })
 
   it('renders loading, error, outdated and empty states', () => {

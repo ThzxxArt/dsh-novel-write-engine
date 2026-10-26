@@ -25,6 +25,7 @@ export interface SummaryDto {
   totalChapters: number
   phases: PhaseDto[]
   blocking: BlockingDto[]
+  next?: { tool: string; reason: string }
 }
 
 export interface ChapterRowDto {
@@ -34,6 +35,7 @@ export interface ChapterRowDto {
   score: number
   stage: string
   status: 'passed' | 'blocked' | 'draft'
+  details?: string
 }
 
 export interface ChaptersDto {

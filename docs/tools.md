@@ -12,7 +12,7 @@
 | `novel_write_draft` | P3 | `submitDraft` | 是 |
 | `novel_review` | P4 | `submitReview` | 是（`total` 必填） |
 | `novel_revise` | P5/P6 | `submitRevision` | 是 |
-| `novel_check` | P6 | `runCheck` | 是 |
+| `novel_check` | P6 | `runCheck` | 是（四个语义项必填） |
 | `novel_archive` | 归档 | `archiveChapter` | 事务（必须带 `state_delta`） |
 | `novel_word_count` | 任意 | `countWords` | 否 |
 | `novel_state` | 任意 | `queryState` | 否 |
@@ -37,4 +37,4 @@
 
 ## core 模式
 
-`toolsMode=core` 只注册 8 个高频工具；其余 10 个通过 `/novel admin <op> <json>` 执行（例如 `/novel admin novel_state {"kind":"pipeline"}`），不是“仍可按名字调用”。
+`toolsMode=core` 只注册 8 个高频工具：`init/status/brief/write_draft/review/revise/check/archive`。其余 10 个（`plan_world`、`plan_chapter`、`word_count`、`state`、`amend`、`rollback`、`diff`、`export`、`audit`、`pipeline`）通过 `/novel admin <op> <json>` 执行（例如 `/novel admin novel_state {"kind":"pipeline"}`），不是“仍可按名字调用”。多项目与设定包导入也只走命令入口：`novel_registry_list`、`novel_registry_register`、`novel_registry_activate`、`novel_registry_forget`、`novel_import`。

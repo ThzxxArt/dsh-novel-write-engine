@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FsStore } from '../src/store/fs.js'
 import { listBackups } from '../src/store/backup.js'
+import { appendJournal, assertJournalConsistent, readJournal } from '../src/store/journal.js'
 import { runTransaction } from '../src/store/txn.js'
 import { harness } from './helpers.js'
 
@@ -46,6 +47,103 @@ describe('journal reconciliation', () => {
       ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
       const audit = await engine.auditHistory({ root, limit: 20 })
       expect(audit.warnings).toEqual([expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' })])
+    } finally {
+      await cleanup()
+    }
+  })
+})
+
+describe('pending journal recovery', () => {
+  it('promotes a pending transaction when every target already landed', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/world.yaml', world('LANDED'))
+      const hash = await store.hashBytes('state/world.yaml')
+      expect(hash).not.toBeNull()
+      await appendJournal(store, {
+        txid: 'crash-after-rename',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        files: ['state/world.yaml'],
+        status: 'pending',
+        hashes: { 'state/world.yaml': hash! },
+      })
+      await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
+      const journal = await readJournal(store)
+      expect(journal.records.at(-1)).toMatchObject({ txid: 'crash-after-rename', status: 'committed' })
+      expect(journal.rows.at(-1)).toMatchObject({ status: 'committed' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses to guess when a pending transaction partially renamed targets', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/world.yaml', world('OLD'))
+      const before = await store.hashBytes('state/world.yaml')
+      expect(before).not.toBeNull()
+      await appendJournal(store, {
+        txid: 'baseline',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 1,
+        files: ['state/world.yaml'],
+        status: 'committed',
+        hashes: { 'state/world.yaml': before! },
+      })
+      await store.writeText('state/world.yaml', world('PARTIAL'))
+      await appendJournal(store, {
+        txid: 'crash-mid-rename',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        files: ['state/world.yaml'],
+        status: 'pending',
+        hashes: { 'state/world.yaml': `${before!}-expected` },
+      })
+      await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('closes a pending transaction as aborted when the old bytes are intact', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/world.yaml', world('OLD'))
+      const oldHash = await store.hashBytes('state/world.yaml')
+      expect(oldHash).not.toBeNull()
+      await appendJournal(store, {
+        txid: 'baseline',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 1,
+        files: ['state/world.yaml'],
+        status: 'committed',
+        hashes: { 'state/world.yaml': oldHash! },
+      })
+      await appendJournal(store, {
+        txid: 'crash-before-rename',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        files: ['state/world.yaml'],
+        status: 'pending',
+        hashes: { 'state/world.yaml': `${oldHash!}-different` },
+      })
+      await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
+      const journal = await readJournal(store)
+      expect(journal.records.at(-1)).toMatchObject({ txid: 'crash-before-rename', status: 'aborted' })
     } finally {
       await cleanup()
     }

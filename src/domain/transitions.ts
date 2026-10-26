@@ -42,7 +42,12 @@ export const TRANSITIONS: readonly Transition[] = [
     guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-08', 'PG-09'],
   },
   { from: 'P6', op: 'submitRevision', to: () => 'P5', guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04'] },
-  { from: 'P6', op: 'runCheck', to: () => 'ready_to_archive', guards: ['PG-01', 'PG-02', 'PG-10'] },
+  {
+    from: 'P6',
+    op: 'runCheck',
+    to: () => 'ready_to_archive',
+    guards: ['PG-01', 'PG-02', 'PG-04', 'PG-05', 'PG-08', 'PG-09', 'PG-10', 'PG-11'],
+  },
   {
     from: 'ready_to_archive',
     op: 'archiveChapter',

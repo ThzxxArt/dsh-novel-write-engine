@@ -94,6 +94,9 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     dimensions: req('array'),
     issues: req('array'),
     total: req('integer'),
+    // Optional for documents written before P6 began re-checking PG-09; a
+    // missing proof makes the P6 gate fail rather than silently passing.
+    proof: f('object'),
   },
   check: {
     chapter: req('integer'),

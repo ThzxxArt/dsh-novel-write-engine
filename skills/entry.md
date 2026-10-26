@@ -31,9 +31,33 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 
 拿不准就走 `novel_pipeline`，它直接告诉你调什么、传什么。
 
+## 工具速查
+
+| 工具 | 用途 |
+| --- | --- |
+| `novel_init` | 建项目 |
+| `novel_status` | 当前章/阶段/阻塞/下一步 |
+| `novel_brief` | 取阶段任务书与上下文 |
+| `novel_plan_world` | P1 世界观计划 |
+| `novel_plan_chapter` | P2 章节计划 |
+| `novel_write_draft` | P3 初稿 |
+| `novel_review` | P4 十五维评分 |
+| `novel_revise` | P5 修订 |
+| `novel_check` | P6 一致性校验 |
+| `novel_archive` | 归档事务 |
+| `novel_word_count` | 字数口径 |
+| `novel_state` | 只读台账/计划/评审 |
+| `novel_amend` | 受控改状态文档 |
+| `novel_rollback` | 回退阶段 |
+| `novel_diff` | 与备份/文本对比 |
+| `novel_export` | md/txt/epub |
+| `novel_audit` | 事务审计 |
+| `novel_pipeline` | 推荐下一步与参数 |
+
 ## 工具怎么用
 
 - 参数是 JSON 对象；`summary`、`dimensions`、`issues`、`proof` 是结构化对象，按任务书字段填。
+- `novel_check` 必须带四个语义项（`L2-SCENE-ANCHOR` / `L2-CHARACTER-STATE` / `L2-CAUSALITY` / `L2-VOICE`），每项都要有正文逐字引用；缺一项即校验不过。
 - 失败分三类：参数错（改参数）、门控没过（改正文）、系统故障（查目录/稍后重试）。错误消息里的 code 说明属于哪类。
 - 门控失败会一次列出**全部**阻塞项；一次改完再交，不要逐条试。
 

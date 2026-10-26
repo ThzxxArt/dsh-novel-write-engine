@@ -893,7 +893,6 @@ format:
   forbid_markdown: true
   forbid_semicolon: true
   forbid_english_ellipsis: true
-  legal_quote: '"'
   title: { pattern: "^第\\d+章\\s", min_chars: 4, max_chars: 8 }
 
 punctuation:
@@ -906,7 +905,6 @@ punctuation:
     - { max_words: 50,  limit: 6 }
     - { max_words: 90,  limit: 4 }
     - { max_words: null, limit: 3 }
-  fast_rhythm_genres: [都市现代, 轻小说, 军事, 末世流, 言情]
   dialogue_dominant_exempt: true
   ellipsis_runs_max: 10
   uniform_sentence: { run: 3, tolerance: 2, window: [6, 40] }
@@ -931,7 +929,7 @@ semantics:
     max_words: { O-3: 50, O-4: 200 }
 
 cross_chapter:
-  repeat:     { lookback: 3, blocker: 0.90, advisory: 0.75 }
+  repeat:     { lookback: 3, blocker: 0.90, advisory: 0.75 }  # 实现：duplicate_similarity / duplicate_advisory
   foreshadow: { min_dormancy: 2, max_dormancy: 40, max_mentions_per_chapter: 2 }
   resource:   { min_balance: 0 }
   scene_type: { max_consecutive_same: 2, combat_max_consecutive: 1 }
@@ -946,17 +944,17 @@ exclusions:                       # 同一片段只计最重一项
   - { when: [LITERARY_CLASSICAL, LITERARY_DISEASE], keep: LITERARY_DISEASE }
 
 platform:
-  fanqie:   { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60], pleasure_min: 1 }
-  qidian:   { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50], pleasure_min: 1 }
-  qimao:    { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65], pleasure_min: 1 }
-  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55], pleasure_min: 1 }
+  fanqie:   { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60] }
+  qidian:   { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50] }
+  qimao:    { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65] }
+  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55] }
 
 genres:
   都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
   # …其余 11 个类型同样必填，编译器缺一即拒绝
 ```
 
-> **平台覆盖的是参数，不是规则**：`platform` 只改「字数区间 / 对话占比 / 爽点下限」，不改「有没有这条规则」。`novel_init` 在调用方未显式给出 `words_per_chapter` / `dialogue_ratio` 时读取它；`genres` 由任务书上下文注入当前类型，不注入全表。
+> **平台覆盖的是参数，不是规则**：`platform` 只改「字数区间 / 对话占比」，不改「有没有这条规则」。`novel_init` 在调用方未显式给出 `words_per_chapter` / `dialogue_ratio` 时读取它；`genres` 由任务书上下文注入当前类型，不注入全表。
 
 **仓库自带的 `default` 包按本设计书定稿**（§7.8、附录 C）：词条、阈值、严重度全部落成 YAML，同一规则只保留一个值。
 
@@ -1044,9 +1042,11 @@ rhythm:
 
 **这张表的意义**：11 维不该全压给模型。引擎直接判 3 维（●），给出事实层让模型判 4 维（◐），模型只需对剩下的 4 维（○）做判断并附原文证据。**机检度不是装饰，它决定哪一层负责**。
 
+> **0.1.0 实现边界**：已落地时间回溯、资源余额、关系未声明、锁定地点描写、重复段落、伏笔休眠/过早回收；POV、章间桥接、姓名来源、空间布局、势力人数与物品流转仍由 P6 的四个语义项覆盖，尚未各自升级为独立规则码。这里明确写出，避免把“设计目标”误读成“已交付”。
+
 ### 5.10 十二种类型的关键差异
 
-类型不是「风格标签」，它会改变阈值。规则包按 `genre` 应用：
+类型不是「风格标签」，但 0.1.0 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
 
 | 类型 | 首个卖点位置 | 专项约束 |
 |---|---|---|
@@ -1063,7 +1063,7 @@ rhythm:
 | 末世流 | 前 300 字内爆发 | 句号密度收紧至 2.5；生存资源计入 `resource_changes` |
 | 言情 | ≤500 字首次接触 | 亲密关系阶梯 7 级；单次独白 ≤3 段；情感爆发章心理阈值 200 |
 
-**引擎怎么用**：`genre` 决定 `rulepack.genres` 的键；未列出的类型走默认值。表本身是**配置**，不是代码常量。
+**引擎怎么用**：`genre` 决定 `rulepack.genres` 的键，并把该条 `note` 注入任务书上下文；`contextual` 词表可按 `genre` 放宽。表本身是**配置**，不是代码常量。0.1.0 不实现按类型切换数值阈值，避免规则包与代码各存一套口径。
 
 ### 5.11 违规输出结构
 
@@ -1119,13 +1119,16 @@ interface Store {
 1. 取写锁（进程内 keyed mutex + 跨进程 .engine.lock）
 2. 计算全部新内容 → 写入 .staging/<txid>/
 3. 在 staging 内跑三端一致性校验（正文 ↔ 索引 ↔ 影子）
-4. 通过 → 备份受影响文件到 backups/<txid>/ → 逐个 rename 覆盖
-5. 追加 journal（intent + 结果 + 文件清单 + 前后 hash）
-6. 读回校验：重读文件、重算 hash、与预期比对
+4. 通过 → 备份受影响文件到 backups/<txid>/ → 追加 pending（预期 hash）→ 逐个 rename 覆盖
+5. 读回校验：重读文件、重算 hash、与预期比对
+6. 追加 committed（结果 + 文件清单 + hash）
 7. 释放锁
 ```
 
-任一步失败：staging 丢弃，真实文件不动，journal 记 `aborted`。
+任一步失败：已 rename 的文件按 pre-image 恢复，staging 丢弃，journal 记 `aborted`。
+`pending` 行在 rename 前落盘；启动时若 pending 的所有预期 hash 都与磁盘一致，
+补记 `committed`；若磁盘仍是上一笔 committed 的字节，补记 `aborted`；两者都不是
+（部分 rename 后崩溃）则拒绝自动修复并要求从 `backups/` 恢复。
 
 > 这取代了「多表事务 + 事后检测撕裂」的做法——**撕裂窗口在架构上不存在，而不是靠事后检测**。
 
@@ -1136,7 +1139,8 @@ interface Store {
 ```
 
 - 只追加，不修改（损坏时人工介入，不做自动修复）。
-- 启动对账：最后一条 `committed` 与文件实际 hash 不符 → 报 `ENGINE_TXN_ABORTED` 并提示从 `backups/` 恢复。
+- 状态为 `pending` / `committed` / `aborted`；`pending` 是崩溃恢复元数据，不出现在 `/novel audit` 的用户行里。
+- 启动对账：先收敛末尾 `pending`（见 §6.3），再比较最后一条 `committed` 与文件实际 hash；不符 → 报 `ENGINE_TXN_ABORTED` 并提示从 `backups/` 恢复。
 - journal 不参与门控，只用于追溯与恢复提示。
 
 ### 6.5 锁
@@ -1463,7 +1467,7 @@ ctx.skills.register({
 
 **为什么不给 9 个阶段各注册一个技能**：那等于把 9 份阶段文档搬进上下文，token 成本高，且模型会在错误阶段加载错误文档。阶段知识由 `novel_brief` 精确投递。
 
-### 8.2 阶段任务书（6 份，外置）
+### 8.2 阶段任务书（7 份，外置）
 
 `briefs/{P1,P2,P3,P4,P5,P6,P8}.md`，由 `getBrief` 读取 + 组装上下文包：
 
@@ -1474,8 +1478,8 @@ ctx.skills.register({
 | P3 | 写作铁律（字数/引号/直引号/摘要 10 字段） | 角色全文、锁定描写、前章结尾、本章预检表 |
 | P4 | 15 维评分标准 + 扣分项写法 + proof 要求 | 机检报告、全量角色、前章、历史评分 |
 | P5 | 按 issue 逐条修复的规则 + 证据要求 | 评审报告、issue 清单、当前正文 |
-| P6 | 一致性 11 维 + 语义项证据要求 | 全量台账、机检报告、历史 check |
-| P8 | 终审清单（三端一致性的模型侧部分） | P6 结果、delta 草稿 |
+| P6 | 一致性 11 维 + 语义项证据要求 | 全量台账、当前机检、评审与 summary（历史 check 不在 0.1.0 上下文包内） |
+| P8 | 终审清单（三端一致性的模型侧部分） | 当前 check、评审、summary、近 5 章摘要（delta 由 `novel_archive.state_delta` 提交） |
 
 任务书是**外置文件**：改写作指导不改代码；升级时与引擎版本一起发布，用户可覆盖（`briefs.overrides`）。
 
@@ -1595,7 +1599,7 @@ parameters: {
     world:      { type: 'object', required: true, additionalProperties: true },
     relationships: { type: 'object', required: true, additionalProperties: true },
   } },
-  handoff: { type: 'object', required: true, additionalProperties: true },
+  handoff: { type: 'object', required: false, additionalProperties: true }, // P8 可覆盖卷/幕/进度；缺省由章节数与规划派生
 }
 ```
 
@@ -1847,7 +1851,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 18 个工具常驻所有会话，估算 prompt 成本约 1.5–2k tokens。提供一个逃生门：
 
 - `tools.mode = 'all'`（默认）：18 个全注册。
-- `tools.mode = 'core'`：只注册 8 个高频工具（`init/status/brief/write_draft/review/revise/check/archive`），其余 10 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。
+- `tools.mode = 'core'`：只注册 8 个高频工具（`init/status/brief/write_draft/review/revise/check/archive`），其余 10 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。多项目注册表与设定包导入（§6.8）也只走 `/novel admin`：`novel_registry_list/register/activate/forget`、`novel_import`。
 
 **为什么能做到**：工具与命令共用 `EngineService`（§2.6），所以「隐藏工具」不损失能力——这正是单一入口带来的额外收益。
 
@@ -2039,7 +2043,7 @@ tests/fixtures/
 | S5 | 门控层：12 门控 · 求值器 · 证据模型 | 4 |
 | S6 | 引擎服务：22 操作 · 幂等 · 4 个投影 | 7 |
 | S7 | 适配层：18 工具 · 5 命令 · 3 remote | 5 |
-| S8 | 知识层：入口技能 · 6 份任务书 · 类型与平台 · 规则包内容 | 3 |
+| S8 | 知识层：入口技能 · 7 份任务书 · 类型与平台 · 规则包内容 | 3 |
 | S9 | 客户端：构建链 · slot 注册 · 面板 · remote | 4.5 |
 | S10 | 预设：补丁 · 人格 · 名录测试 | 0.5 |
 | S11 | 导出：md / txt / epub（内置 zlib）· 封面 SVG · 平台简介 | 2.5 |

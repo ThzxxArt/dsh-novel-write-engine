@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateSemantic, evidenceQuote } from '../src/engine/semantic.js'
+import { evaluateSemantic, evidenceQuote, SEMANTIC_CHECK_IDS } from '../src/engine/semantic.js'
 
 const TEXT = '风从窗缝里挤进来，把桌上的纸吹得翻了一页。\n\n他伸手压住，指腹沾了一点灰。'
 
@@ -40,7 +40,13 @@ describe('semantic evidence validation', () => {
     expect(result.blocking[0]).toMatchObject({ code: 'SEMANTIC_CHECK_FAILED' })
   })
 
-  it('passes a real quote', () => {
-    expect(evaluateSemantic(TEXT, [item()])).toEqual({ blocking: [], failed: false })
+  it('passes when all four required checks carry a real quote', () => {
+    const complete = SEMANTIC_CHECK_IDS.map((id) => ({
+      id,
+      verdict: 'pass' as const,
+      evidence: '风从窗缝里挤进来',
+      note: 'ok',
+    }))
+    expect(evaluateSemantic(TEXT, complete)).toEqual({ blocking: [], failed: false })
   })
 })

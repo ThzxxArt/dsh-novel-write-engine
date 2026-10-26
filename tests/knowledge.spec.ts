@@ -42,10 +42,10 @@ describe('task books', () => {
     }
   })
 
-  it('fails loudly when a task book is missing', async () => {
+  it('falls back to the bundled task book when an override file is missing', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'briefs-'))
     try {
-      expect(() => new BriefLibrary(empty).load('P1')).toThrow(/brief P1 is missing/)
+      expect(new BriefLibrary(empty).load('P1').content).toContain('P1')
     } finally {
       await rm(empty, { recursive: true, force: true })
     }

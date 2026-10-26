@@ -31,6 +31,23 @@ export function ensureDirAt(path: string): void {
   mkdirSync(path, { recursive: true })
 }
 
+/** Read an optional file; `null` means it is absent, never an IO failure. */
+export function readTextIfExists(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return null
+    }
+    throw new EngineFaultError(
+      ERROR_CODES.CONFIG_INVALID,
+      `cannot read ${path}`,
+      'check the path and its permissions',
+      { cause: error },
+    )
+  }
+}
+
 /** Read an explicitly supplied file (CLI validation and user brief overrides). */
 export function readTextAt(path: string, label = path): string {
   try {

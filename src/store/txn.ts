@@ -64,10 +64,12 @@ async function restoreTargets(
 }
 
 /**
- * The seven-step transaction: stage → verify → backup → commit → journal →
- * readback → cleanup. A failure at any point leaves target files untouched:
- * already-renamed targets are restored from their pre-commit images, and the
- * journal records exactly one terminal row (`committed` only after readback).
+ * The transaction: stage → verify → backup → pending journal → rename →
+ * readback → committed journal → cleanup. A failure at any point leaves target
+ * files untouched: already-renamed targets are restored from their pre-commit
+ * images, and the journal records exactly one terminal row (`committed` only
+ * after readback; a pending row lets startup recover a crash between rename and
+ * that terminal row).
  */
 export async function runTransaction(store: FsStore, input: TransactionInput): Promise<void> {
   const staging = stagingDir(input.txid)
@@ -117,9 +119,24 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       }
     }
 
+    // A crash after this row but before the committed row is recoverable: the
+    // pending hashes tell startup whether every rename landed. Without it, the
+    // previous committed row would look externally corrupted and block every
+    // later write forever.
+    await appendJournal(store, {
+      txid: input.txid,
+      at: new Date().toISOString(),
+      op: input.op,
+      chapter: input.chapter,
+      revision: input.revision,
+      files: input.files.map((file) => file.path),
+      status: 'pending',
+      hashes: Object.fromEntries(expected),
+    })
+
     for (const [index, file] of input.files.entries()) {
-      const from = store.path(joinRel(staging, file.path))
-      const to = store.path(file.path)
+      const from = await store.safePath(joinRel(staging, file.path))
+      const to = await store.safePath(file.path)
       await fs.mkdir(dirname(to), { recursive: true })
       await fs.rename(from, to)
       renamed.push(file.path)

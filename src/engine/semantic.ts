@@ -1,5 +1,13 @@
 import type { BlockingItem, SemanticItem } from '../types.js'
 
+/** The four checks the P6 task book requires; a subset cannot pass. */
+export const SEMANTIC_CHECK_IDS = [
+  'L2-SCENE-ANCHOR',
+  'L2-CHARACTER-STATE',
+  'L2-CAUSALITY',
+  'L2-VOICE',
+] as const
+
 /** Extract the quoted part of an evidence string, tolerating "第 N 段：" labels. */
 export function evidenceQuote(value: string): string {
   let candidate = value.trim()
@@ -92,6 +100,25 @@ export function evaluateSemantic(
         code: 'SEMANTIC_CHECK_FAILED',
         scope: 'check',
         detail: `${item.id}: ${typeof item.note === 'string' && item.note.trim() !== '' ? item.note : 'semantic check failed'}`,
+      })
+    }
+  }
+  const required = new Set<string>(SEMANTIC_CHECK_IDS)
+  for (const id of SEMANTIC_CHECK_IDS) {
+    if (!seen.has(id)) {
+      blocking.push({
+        code: 'SEMANTIC_MISSING',
+        scope: 'check',
+        detail: `${id} is required by the P6 task book`,
+      })
+    }
+  }
+  for (const id of seen) {
+    if (!required.has(id)) {
+      blocking.push({
+        code: 'SEMANTIC_ITEM_INVALID',
+        scope: 'check',
+        detail: `${id} is not one of the required P6 semantic checks`,
       })
     }
   }

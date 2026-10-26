@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
 import { resolveInside } from './path.js'
@@ -32,16 +32,45 @@ export class FsStore {
     return resolveInside(this.root, relativePath)
   }
 
+  /**
+   * Resolve and prove that no existing path component is a symlink. The
+   * lexical check in `resolveInside` cannot see a link inside the project that
+   * points at `/etc` or a sibling checkout; every read and write goes through
+   * this async check so the filesystem's own redirection cannot escape.
+   */
+  async safePath(relativePath: string): Promise<string> {
+    const absolute = this.path(relativePath)
+    const root = resolve(this.root)
+    let current = root
+    for (const segment of relative(root, absolute).split(sep)) {
+      if (segment === '') continue
+      current = join(current, segment)
+      try {
+        const stat = await fs.lstat(current)
+        if (stat.isSymbolicLink()) {
+          throw new EngineFaultError(
+            ERROR_CODES.PATH_ESCAPE,
+            `refusing path "${relativePath}": "${segment}" is a symlink`,
+          )
+        }
+      } catch (error) {
+        if (isMissing(error)) break
+        throw error
+      }
+    }
+    return absolute
+  }
+
   /** Absolute path of an internal file outside the project root (locks live at root). */
   async ensureDir(relativePath: string): Promise<string> {
-    const absolute = this.path(relativePath)
+    const absolute = await this.safePath(relativePath)
     await fs.mkdir(absolute, { recursive: true })
     return absolute
   }
 
   async exists(relativePath: string): Promise<boolean> {
     try {
-      await fs.access(this.path(relativePath))
+      await fs.access(await this.safePath(relativePath))
       return true
     } catch {
       return false
@@ -50,7 +79,7 @@ export class FsStore {
 
   async stat(relativePath: string): Promise<{ size: number; mtimeMs: number } | null> {
     try {
-      const stat = await fs.stat(this.path(relativePath))
+      const stat = await fs.stat(await this.safePath(relativePath))
       return { size: stat.size, mtimeMs: stat.mtimeMs }
     } catch {
       return null
@@ -59,7 +88,7 @@ export class FsStore {
 
   async list(relativeDir: string): Promise<string[]> {
     try {
-      return (await fs.readdir(this.path(relativeDir))).sort()
+      return (await fs.readdir(await this.safePath(relativeDir))).sort()
     } catch {
       return []
     }
@@ -67,7 +96,7 @@ export class FsStore {
 
   async readText(relativePath: string): Promise<string | null> {
     try {
-      return await fs.readFile(this.path(relativePath), 'utf8')
+      return await fs.readFile(await this.safePath(relativePath), 'utf8')
     } catch (error) {
       if (isMissing(error)) return null
       throw error
@@ -86,7 +115,7 @@ export class FsStore {
 
   /** Write text atomically: temp file, fsync, rename, directory fsync. */
   async writeText(relativePath: string, text: string): Promise<void> {
-    const absolute = this.path(relativePath)
+    const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     const temp = `${absolute}.${randomUUID()}.tmp`
     const handle = await fs.open(temp, 'w')
@@ -106,17 +135,17 @@ export class FsStore {
   }
 
   async remove(relativePath: string): Promise<void> {
-    await fs.rm(this.path(relativePath), { force: true })
+    await fs.rm(await this.safePath(relativePath), { force: true })
   }
 
   /** Remove a directory tree inside the project root (backup GC only). */
   async removeTree(relativePath: string): Promise<void> {
-    await fs.rm(this.path(relativePath), { recursive: true, force: true })
+    await fs.rm(await this.safePath(relativePath), { recursive: true, force: true })
   }
 
   /** Raw append used only by the journal (JSONL is append-only by design). */
   async appendText(relativePath: string, text: string): Promise<void> {
-    const absolute = this.path(relativePath)
+    const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     await fs.appendFile(absolute, text, 'utf8')
   }
@@ -124,7 +153,7 @@ export class FsStore {
   /** Read raw bytes, used by export and integrity checks. */
   async readBytes(relativePath: string): Promise<Buffer | null> {
     try {
-      return await fs.readFile(this.path(relativePath))
+      return await fs.readFile(await this.safePath(relativePath))
     } catch (error) {
       if (isMissing(error)) return null
       throw error
@@ -132,7 +161,7 @@ export class FsStore {
   }
 
   async writeBytes(relativePath: string, bytes: Uint8Array): Promise<void> {
-    const absolute = this.path(relativePath)
+    const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     const temp = `${absolute}.${randomUUID()}.tmp`
     await fs.writeFile(temp, bytes)

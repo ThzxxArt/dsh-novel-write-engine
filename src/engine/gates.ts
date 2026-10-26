@@ -135,6 +135,8 @@ const SUMMARY_FIELDS = [
 
 /** PG-05: the ten summary fields exist and have the right shape. */
 const summarySchema: Gate = (input) => {
+  // P5 may omit the summary and reuse the one already validated at P3/P4.
+  if (input.operation === 'submitRevision' && input.summaryProvided !== true) return []
   if (input.summary === null) return [block('PG-05', 'no chapter summary supplied')]
   const summary = input.summary as unknown as Record<string, unknown>
   const missing = SUMMARY_FIELDS.filter((field) => summary[field] === undefined)
@@ -484,11 +486,11 @@ export function applicableGates(input: GateInput): GateId[] {
     case 'submitDraft':
       return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06']
     case 'submitRevision':
-      return [...always, 'PG-04', 'PG-03', 'PG-09', 'PG-08']
+      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08']
     case 'submitReview':
       return [...always, 'PG-09', 'PG-07', 'PG-11']
     case 'runCheck':
-      return [...always, 'PG-10']
+      return [...always, 'PG-04', 'PG-05', 'PG-08', 'PG-09', 'PG-10', 'PG-11']
     case 'archiveChapter':
       return ['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-10', 'PG-12']
     default:

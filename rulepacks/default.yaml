@@ -90,12 +90,12 @@ lexicon:
     - { term: "死死", limit: 2 }
 
   contextual:
-    - { term: "赋能", limit: 2, genres: [都市现代, 游戏系统, 职场商战] }
-    - { term: "闭环", limit: 2, genres: [都市现代, 职场商战, 科幻未来] }
-    - { term: "颗粒度", limit: 1, genres: [职场商战] }
-    - { term: "对齐", limit: 2, genres: [职场商战, 都市现代] }
-    - { term: "灵根", limit: 6, genres: [玄幻仙侠] }
-    - { term: "灵气", limit: 8, genres: [玄幻仙侠] }
+    - { term: "赋能", limit: 2, genres: [都市现代, 游戏系统] }
+    - { term: "闭环", limit: 2, genres: [都市现代, 科幻] }
+    - { term: "颗粒度", limit: 1, genres: [都市现代] }
+    - { term: "对齐", limit: 2, genres: [都市现代] }
+    - { term: "灵根", limit: 6, genres: [玄幻修仙] }
+    - { term: "灵气", limit: 8, genres: [玄幻修仙] }
     - { term: "副本", limit: 8, genres: [游戏系统, 无限流] }
     - { term: "系统提示", limit: 6, genres: [游戏系统, 无限流] }
 
@@ -127,7 +127,6 @@ format:
   forbid_markdown: true
   forbid_semicolon: true
   forbid_english_ellipsis: true
-  legal_quote: '"'
   title:
     pattern: "^第\\d+章\\s"
     min_chars: 4
@@ -146,11 +145,6 @@ punctuation:
   uniform_sentence: { min_sentences: 8, ratio: 0.6 }
   consecutive_le: { max: 3, char: "了" }
   dialogue_dominant_ratio: 0.60
-
-rhythm:
-  min_sentences: 8
-  uniform_ratio: 0.6
-  short_ratio: 0.25
 
 semantics:
   adjective_density:
@@ -175,27 +169,28 @@ semantics:
     terms: [的就是, 的时候, 时候, 一个, 一种, 一些, 这个, 那个, 这样, 那样, 其实, 确实, 真的, 非常, 十分]
 
 platform:
-  fanqie: { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60], pleasure_min: 1 }
-  qidian: { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50], pleasure_min: 1 }
-  qimao: { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65], pleasure_min: 1 }
-  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55], pleasure_min: 1 }
+  fanqie: { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60] }
+  qidian: { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50] }
+  qimao: { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65] }
+  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55] }
 
 genres:
+  玄幻修仙: { note: "力量体系必须自洽；升级要有代价，境界不能靠形容词抬升。" }
   都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
-  玄幻仙侠: { note: "力量体系必须自洽；升级要有代价，境界不能靠形容词抬升。" }
-  游戏系统: { note: "系统提示是世界观内文本；奖励与惩罚必须可追踪。" }
-  科幻未来: { note: "技术设定只写对情节有用的部分；禁止用术语代替冲突。" }
+  西方奇幻: { note: "种族、语言与力量来源要建条目；奇观不能替代人物选择。" }
   悬疑推理: { note: "线索先于解答出现；每个伏笔都要在归档台账中可核销。" }
-  历史古代: { note: "礼制、称谓与器物要经得起基本推敲；不写现代口号。" }
-  言情甜宠: { note: "关系推进靠具体互动，不靠内心独白宣布。" }
-  青春校园: { note: "校园规则与年龄感要真实；冲突不靠成人化阴谋。" }
-  职场商战: { note: "商业动作要有代价与对手反应；不写空泛战略。" }
-  军事战争: { note: "战术细节服务于人物选择；不写武器参数清单。" }
-  灵异恐怖: { note: "恐惧来自未知与规则；不靠突然的音效式形容词。" }
+  科幻: { note: "技术设定只写对情节有用的部分；禁止用术语代替冲突。" }
+  游戏系统: { note: "系统提示是世界观内文本；奖励与惩罚必须可追踪。" }
+  历史架空: { note: "礼制、称谓与器物要经得起基本推敲；不写现代口号。" }
   无限流: { note: "副本规则先立后破；每次通关都要付出可记账的代价。" }
+  轻小说: { note: "关系推进靠具体互动，不靠内心独白宣布；对话要能区分说话人。" }
+  军事: { note: "战术细节服务于人物选择；不写武器参数清单。" }
+  末世流: { note: "生存资源必须记账；恐惧来自规则崩塌，不靠突然的音效式形容词。" }
+  言情: { note: "亲密关系按阶梯推进；单次独白要短，情绪落在动作上。" }
 
 crosschapter:
   duplicate_similarity: 0.9
+  duplicate_advisory: 0.75
   foreshadow_min_dormancy: 2
   foreshadow_dormant_after: 20
   resource_tolerance: 0

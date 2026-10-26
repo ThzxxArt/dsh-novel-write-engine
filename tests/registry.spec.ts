@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runAdminOperation } from '../src/commands/admin.js'
 import { FsStore } from '../src/store/fs.js'
 import { ProjectRegistry } from '../src/store/registry.js'
 import { harness, bootstrapToDraft } from './helpers.js'
@@ -38,6 +39,38 @@ describe('project registry', () => {
       expect((await engine.setActiveProject({ root })).active).toBe(root)
       const forgotten = await engine.forgetProject({ root })
       expect(forgotten.projects).toEqual([])
+    } finally {
+      await cleanup()
+      await rm(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reaches the registry and settings-pack import through /novel admin', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'novel-state-'))
+    const { root, engine, cleanup } = await harness({ stateDir })
+    try {
+      await bootstrapToDraft({ root, engine })
+      expect(await runAdminOperation(engine, 'novel_registry_list', '{}')).toContain('projects')
+      expect(await runAdminOperation(engine, 'novel_registry_register', JSON.stringify({ root }))).toContain(
+        root,
+      )
+      expect(await runAdminOperation(engine, 'novel_registry_activate', JSON.stringify({ root }))).toContain(
+        root,
+      )
+      expect(await runAdminOperation(engine, 'novel_registry_forget', JSON.stringify({ root }))).toContain(
+        'projects',
+      )
+      const preview = await runAdminOperation(
+        engine,
+        'novel_import',
+        JSON.stringify({
+          kind: 'characters',
+          content: { schema_version: 1, characters: [] },
+          dryRun: true,
+          root,
+        }),
+      )
+      expect(preview).toContain('"applied": false')
     } finally {
       await cleanup()
       await rm(stateDir, { recursive: true, force: true })

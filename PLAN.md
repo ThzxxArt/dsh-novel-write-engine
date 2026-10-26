@@ -336,7 +336,7 @@ tests/tools/*.spec.ts  tests/commands/*.spec.ts  tests/remote/*.spec.ts
 ```
 src/skills/entry.md + index.ts
 briefs/{P1,P2,P3,P4,P5,P6,P8}.md
-rulepacks/default.yaml        # 补全：90 词零容忍、soft/contextual、12 类型、4 平台
+rulepacks/default.yaml        # 补全：62 词零容忍（总词条 96）、soft/contextual、12 类型、4 平台
 tests/knowledge/*.spec.ts
 ```
 

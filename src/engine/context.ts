@@ -31,6 +31,10 @@ export interface BriefContextInput {
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
   review: ReviewDocument | null
   check: CheckDocument | null
+  /** The active chapter manuscript; P4/P5 need it to judge and revise the real text. */
+  text: string | null
+  /** Fresh machine findings, so P4 is not asked to rediscover format defects. */
+  machine?: unknown
   previousText: string | null
   handoff: HandoffDocument | null
 }
@@ -99,10 +103,15 @@ export function briefContext(input: BriefContextInput): Record<string, unknown> 
         characters: input.characters.characters,
         locks: input.locks,
         precheck: input.plan,
+        open_foreshadows: pendingForeshadows(input.foreshadows),
+        recent_summaries: input.chapters.chapters.slice(-5).map(compactSummary),
       }
     case 'P4':
       return {
         ...base,
+        text: input.text ?? '',
+        summary: input.plan?.summary ?? null,
+        machine: input.machine ?? null,
         characters: input.characters.characters,
         check: input.check,
         score_history: input.chapters.chapters.slice(-5).map((row) => ({ num: row.num, score: row.score })),
@@ -110,6 +119,8 @@ export function briefContext(input: BriefContextInput): Record<string, unknown> 
     case 'P5':
       return {
         ...base,
+        text: input.text ?? '',
+        machine: input.machine ?? null,
         review: input.review,
         issues: input.review?.issues ?? [],
       }
@@ -120,16 +131,21 @@ export function briefContext(input: BriefContextInput): Record<string, unknown> 
         world: input.world,
         locks: input.locks,
         foreshadows: input.foreshadows,
-        timeline: input.timeline.items.slice(-5),
+        timeline: input.timeline.items,
         relationships: input.relationships,
         check: input.check,
+        review: input.review,
+        summary: input.plan?.summary ?? null,
+        score_history: input.chapters.chapters.slice(-5).map((row) => ({ num: row.num, score: row.score })),
       }
     case 'P8':
       return {
         ...base,
         check: input.check,
+        review: input.review,
         summary: input.plan?.summary ?? null,
         open_foreshadows: pendingForeshadows(input.foreshadows),
+        recent_summaries: input.chapters.chapters.slice(-5).map(compactSummary),
       }
     default:
       return base

@@ -15,18 +15,18 @@ export type BriefStage = 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6' | 'P8'
 
 /** The twelve supported commercial genres. */
 export const GENRES = [
+  '玄幻修仙',
   '都市现代',
-  '玄幻仙侠',
-  '游戏系统',
-  '科幻未来',
+  '西方奇幻',
   '悬疑推理',
-  '历史古代',
-  '言情甜宠',
-  '青春校园',
-  '职场商战',
-  '军事战争',
-  '灵异恐怖',
+  '科幻',
+  '游戏系统',
+  '历史架空',
   '无限流',
+  '轻小说',
+  '军事',
+  '末世流',
+  '言情',
 ] as const
 export type Genre = (typeof GENRES)[number]
 
@@ -114,6 +114,7 @@ export const ERROR_CODES = {
   READING_PROOF_INVALID: 'ENGINE_READING_PROOF_INVALID',
   SCORE_MISMATCH: 'ENGINE_SCORE_MISMATCH',
   DELTA_UNVERIFIED: 'ENGINE_DELTA_UNVERIFIED',
+  RESOURCE_NEGATIVE_BALANCE: 'ENGINE_RESOURCE_NEGATIVE_BALANCE',
   SCHEMA_TOO_NEW: 'ENGINE_SCHEMA_TOO_NEW',
   SCHEMA_INVALID: 'ENGINE_SCHEMA_INVALID',
   PATH_ESCAPE: 'ENGINE_PATH_ESCAPE',
@@ -202,6 +203,8 @@ export interface ReviewDocument {
   dimensions: ScoreDimension[]
   issues: ReviewIssue[]
   total: number
+  /** The three reading proofs accepted at P4; PG-09 re-verifies them at P6. */
+  proof?: ReadingProof
 }
 
 /** Structured machine finding. */
@@ -572,6 +575,8 @@ export interface GateInput {
   draftTitle: string | null
   sceneType: SceneType | null
   summary: ChapterSummary | null
+  /** P5 may omit `summary`; when omitted, the previous plan summary is reused. */
+  summaryProvided?: boolean
   review: ReviewDocument | null
   check: CheckDocument | null
   semantic: SemanticItem[]

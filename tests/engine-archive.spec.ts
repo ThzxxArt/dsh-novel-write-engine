@@ -1,6 +1,15 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { cleanText, harness, readyToArchive, readProjectFile, sampleSummary } from './helpers.js'
+import {
+  cleanText,
+  harness,
+  readyToArchive,
+  readProjectFile,
+  sampleSemantic,
+  sampleSummary,
+} from './helpers.js'
 import type { ChapterSummary } from '../src/types.js'
 
 const readYaml = async (root: string, path: string): Promise<Record<string, unknown>> => {
@@ -9,7 +18,7 @@ const readYaml = async (root: string, path: string): Promise<Record<string, unkn
   return parseYaml(text!) as Record<string, unknown>
 }
 
-const ledgerText = (): string => `${cleanText()}\n\n他数了数铜钱，少了 200。`
+const ledgerText = (): string => `${cleanText()}\n\n他数了数铜钱，少了 200。配角A站在门口。`
 
 const summaryWithLedgerEntities = (): ChapterSummary =>
   sampleSummary({
@@ -29,7 +38,11 @@ const fullDelta = (summary: ChapterSummary): Record<string, Record<string, unkno
   const characters = Object.fromEntries(
     summary.characters_appeared.map((name) => [
       name,
-      { action: 'created', role: name === '他' ? 'protagonist' : 'supporting' },
+      {
+        action: 'created',
+        role: name === '他' ? 'protagonist' : 'supporting',
+        ...(name === '他' ? { current_state: { resources: { 铜钱: 1000 } } } : {}),
+      },
     ]),
   )
   const world: Record<string, unknown> = {}
@@ -135,7 +148,7 @@ describe('archive state_delta reconciliation', () => {
       const rows = characters.characters as Array<Record<string, unknown>>
       expect(rows.map((row) => row.name)).toEqual(['他', '配角A'])
       expect(rows[0]).toMatchObject({ role: 'protagonist', first_appearance: 1 })
-      expect((rows[0]!.current_state as Record<string, unknown>).resources).toEqual({ 铜钱: -200 })
+      expect((rows[0]!.current_state as Record<string, unknown>).resources).toEqual({ 铜钱: 800 })
 
       const world = await readYaml(root, 'state/world.yaml')
       expect((world.locations as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -164,6 +177,31 @@ describe('archive state_delta reconciliation', () => {
       expect(events[1]).toMatchObject({ id: 'TE-002', story_time: 'Day 1 2' })
 
       expect(result.data.assigned_ids).toMatchObject({ fs001: 'FS-001', '他|配角A': 'RL-001' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('re-validates the semantic evidence at the archive boundary', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      const text = ledgerText()
+      await readyToArchive({ root, engine, summary, text })
+      const checkPath = join(root, 'checks', 'ch001.check.yaml')
+      const check = parseYaml((await readProjectFile(root, 'checks/ch001.check.yaml'))!) as {
+        semantic: { items: unknown[] }
+      }
+      // A hand-edited check document keeps a valid content hash but removes the
+      // four evidence-backed semantic items. Archive must not trust it.
+      check.semantic = { items: [] }
+      await writeFile(checkPath, `${JSON.stringify(check)}\n`, 'utf8')
+      await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
+        code: 'ENGINE_GATE_BLOCKED',
+      })
+      expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
+      // The helper's evidence remains valid when the check is not tampered with.
+      expect(sampleSemantic(text)).toHaveLength(4)
     } finally {
       await cleanup()
     }

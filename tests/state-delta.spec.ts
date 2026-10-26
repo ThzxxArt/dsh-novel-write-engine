@@ -35,7 +35,7 @@ const run = (
 ): ReturnType<typeof applyStateDelta> =>
   applyStateDelta({
     chapter,
-    text: '风从窗缝里挤进来。他伸手压住。',
+    text: '甲和乙在门口。风从窗缝里挤进来。他伸手压住。',
     summary,
     delta: delta as never,
     ...(docs as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
@@ -91,14 +91,14 @@ describe('state_delta shape and character reconciliation', () => {
     delta.characters['甲'] = character('甲', {
       role: 'protagonist',
       profile: { identity: 'A' },
-      current_state: { emotion: '平静' },
+      current_state: { emotion: '平静', resources: { 钱: 10 } },
     })
     delta.timeline['0'] = { action: 'created' }
     const first = run(summary, delta)
     expect(first.characters.characters[0]).toMatchObject({
       name: '甲',
       first_appearance: 1,
-      current_state: { resources: { 钱: -2 } },
+      current_state: { resources: { 钱: 8 } },
     })
     expect(Object.keys(first.locks.characters)).toContain('甲')
     const secondSummary = sampleSummary({
@@ -114,6 +114,45 @@ describe('state_delta shape and character reconciliation', () => {
     const second = run(secondSummary, secondDelta, first as unknown as Record<string, unknown>, 2)
     expect(second.characters.characters[0]!.growth[0]).toMatchObject({ chapter: 2, change: '成长' })
     expect(second.characters.characters[0]!.updated_at).toBe(2)
+  })
+
+  it('rejects malformed nested character and resource fields', () => {
+    const summary = sampleSummary({ characters_appeared: ['甲'] })
+    const badProfile = empty()
+    badProfile.characters['甲'] = character('甲', { profile: 'not-an-object' })
+    fails(summary, badProfile)
+    const badGrowth = empty()
+    badGrowth.characters['甲'] = character('甲', { growth: 'not-an-object' })
+    fails(summary, badGrowth)
+    const badResourceSummary = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: 1, reason: '' }],
+    })
+    const badResource = empty()
+    badResource.characters['甲'] = character('甲')
+    fails(badResourceSummary, badResource)
+    const badWorld = empty()
+    badWorld.world['屋'] = { action: 'created', kind: 'location', capacity: -1 }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+      }),
+      badWorld,
+    )
+  })
+
+  it('refuses a resource change that would leave a negative balance', () => {
+    const summary = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: -2, reason: '买' }],
+    })
+    const delta = empty()
+    delta.characters['甲'] = character('甲')
+    delta.timeline['0'] = { action: 'created' }
+    expect(() => run(summary, delta)).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_RESOURCE_NEGATIVE_BALANCE' }),
+    )
   })
 })
 
@@ -191,6 +230,37 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     fails(sampleSummary({ characters_appeared: [] }), extra)
   })
 
+  it('appends an explicit note update and refuses creating an existing key', () => {
+    const plantSummary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: { planted: [{ key: 'fs1', title: 't', description: 'd' }], advanced: [], resolved: [] },
+    })
+    const plantDelta = empty()
+    plantDelta.foreshadows['fs1'] = { action: 'created', title: 't', description: 'd' }
+    const first = run(plantSummary, plantDelta)
+
+    const note = empty()
+    note.foreshadows['FS-001'] = { action: 'updated', note: '补充线索', new_info: true }
+    const second = run(
+      sampleSummary({ characters_appeared: [], events: [] }),
+      note,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.foreshadows.items[0]!.advance_log).toEqual([
+      { chapter: 2, note: '补充线索', new_info: true },
+    ])
+
+    const duplicate = empty()
+    duplicate.foreshadows['FS-001'] = { action: 'created' }
+    fails(
+      sampleSummary({ characters_appeared: [], events: [] }),
+      duplicate,
+      first as unknown as Record<string, unknown>,
+    )
+  })
+
   it('allocates foreshadow ids and resolves them later', () => {
     const plantSummary = sampleSummary({
       characters_appeared: [],
@@ -229,5 +299,44 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     }
     const result = run(summary, delta)
     expect(result.relationships.items[0]).toMatchObject({ id: 'RL-001', a: '甲', b: '乙' })
+  })
+
+  it('updates a relationship and refuses an update before creation', () => {
+    const docs = base() as {
+      characters: { characters: Array<Record<string, unknown>> }
+      relationships: { items: Array<Record<string, unknown>> }
+    }
+    docs.characters.characters.push({ name: '甲' }, { name: '乙' })
+    const create = empty()
+    create.relationships['甲|乙'] = { action: 'created', type: '朋友' }
+    const first = run(
+      sampleSummary({ events: [], characters_appeared: [] }),
+      create,
+      docs as unknown as Record<string, unknown>,
+    )
+    expect(first.relationships.items[0]).toMatchObject({ id: 'RL-001', type: '朋友' })
+
+    const update = empty()
+    update.relationships['甲|乙'] = {
+      action: 'updated',
+      type: '同事',
+      description: '一起办案',
+      note: '关系变化',
+    }
+    const second = run(
+      sampleSummary({ events: [], characters_appeared: [] }),
+      update,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.relationships.items[0]).toMatchObject({
+      type: '同事',
+      description: '一起办案',
+      evolution: [{ chapter: 2, note: '关系变化' }],
+    })
+
+    const missing = empty()
+    missing.relationships['甲|乙'] = { action: 'updated' }
+    fails(sampleSummary({ events: [], characters_appeared: [] }), missing)
   })
 })

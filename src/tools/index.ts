@@ -1,6 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
-import { EngineError, type Genre, type Platform } from '../types.js'
+import { EngineError, GENRES, PLATFORMS, SCENE_TYPES, type Genre, type Platform } from '../types.js'
 import type { EngineService } from '../engine/service.js'
 
 /** Turn an engine failure into the message shape tools surface. */
@@ -26,9 +26,21 @@ const text = (value: unknown): Array<{ type: 'text'; text: string }> => [
   { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) },
 ]
 
+/**
+ * The host passes the value `execute` returned straight to `output.render`.
+ * That value is an `OpResult` envelope, while renderers speak in payloads. A
+ * direct render call in a unit test may pass either shape, so unwrap only when
+ * the envelope is unambiguous.
+ */
+const payload = (raw: unknown): unknown => {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
+  if (!('data' in raw) || !('revision' in raw) || !('warnings' in raw)) return raw
+  return (raw as { data: unknown }).data
+}
+
 const jsonOutput = {
   schema: { type: 'json' as const },
-  render: (_args: unknown, value: unknown) => text(value),
+  render: (_args: unknown, raw: unknown) => text(payload(raw)),
 }
 
 const stringArray = { type: 'array' as const, items: { type: 'string' as const } }
@@ -45,29 +57,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       description: 'Create a novel project at the project root (novel.yaml plus the state documents).',
       parameters: {
         title: { type: 'string', required: true },
-        genre: {
-          type: 'string',
-          required: true,
-          enum: [
-            '都市现代',
-            '玄幻仙侠',
-            '游戏系统',
-            '科幻未来',
-            '悬疑推理',
-            '历史古代',
-            '言情甜宠',
-            '青春校园',
-            '职场商战',
-            '军事战争',
-            '灵异恐怖',
-            '无限流',
-          ] as const,
-        },
-        platform: {
-          type: 'string',
-          required: true,
-          enum: ['fanqie', 'qidian', 'qimao', 'jinjiang'] as const,
-        },
+        genre: { type: 'string', required: true, enum: GENRES },
+        platform: { type: 'string', required: true, enum: PLATFORMS },
         author: { type: 'string' },
         description: { type: 'string' },
         words_per_chapter: { type: 'array', items: { type: 'integer' } },
@@ -97,24 +88,23 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       },
       output: {
         schema: { type: 'json' as const },
-        render: (
-          _args: unknown,
-          value: {
+        render: (_args: unknown, raw: unknown) => {
+          const value = payload(raw) as {
             project: { title: string }
             chapter: number
             stage: string
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
-          },
-        ) =>
-          text(
+          }
+          return text(
             [
               `《${value.project.title}》 第 ${value.chapter} 章 · ${value.stage}`,
               value.blocking.length === 0 ? '门控：全部通过' : `门控：${value.blocking.length} 条阻塞`,
               ...value.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
               `下一步：${value.next.tool} — ${value.next.reason}`,
             ].join('\n'),
-          ),
+          )
+        },
       },
       execute: guarded(async (args) => engine.getStatus({ chapter: args.chapter, root: args.project_root })),
     }),
@@ -129,7 +119,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       output: {
         schema: { type: 'json' as const },
         render: (_args: unknown, raw: unknown) => {
-          const value = raw as { content: string; digest: string; context?: Record<string, unknown> }
+          const value = payload(raw) as {
+            content: string
+            digest: string
+            context?: Record<string, unknown>
+          }
           return text(
             `${value.content}\n\n---\nbrief digest: ${value.digest}${
               value.context === undefined ? '' : `\ncontext:\n${JSON.stringify(value.context, null, 2)}`
@@ -170,11 +164,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       description: 'Submit the P2 chapter plan for the active chapter.',
       parameters: {
         title: { type: 'string', required: true },
-        scene_type: {
-          type: 'string',
-          required: true,
-          enum: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'] as const,
-        },
+        scene_type: { type: 'string', required: true, enum: SCENE_TYPES },
         narrator: { type: 'string', required: true },
         beats: stringArray,
         opening: { type: 'string' },
@@ -205,11 +195,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         chapter: { type: 'integer', required: true },
         content: { type: 'string', required: true },
         chapter_title: { type: 'string', required: true },
-        scene_type: {
-          type: 'string',
-          required: true,
-          enum: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'] as const,
-        },
+        scene_type: { type: 'string', required: true, enum: SCENE_TYPES },
         narrator: { type: 'string', required: true },
         summary: {
           type: 'json',
@@ -267,7 +253,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         content: { type: 'string', required: true },
         summary: { type: 'json' },
         issues: { type: 'json', description: 'Updated issue statuses and evidence for PG-08.' },
-        proof: { type: 'json', description: 'Three quotes from the revised text; PG-09 verifies them.' },
+        proof: {
+          type: 'json',
+          required: true,
+          description: 'Three quotes from the revised text; PG-09 verifies them.',
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -289,7 +279,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       parameters: {
         chapter: { type: 'integer', required: true },
         scope: stringArray,
-        semantic: { type: 'json' },
+        semantic: {
+          type: 'json',
+          required: true,
+          description: 'Exactly the four P6 semantic items, each with a verbatim evidence quote.',
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -297,7 +291,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         engine.runCheck({
           chapter: args.chapter,
           scope: args.scope as string[],
-          semantic: args.semantic as never,
+          semantic: args.semantic as never[],
           root: args.project_root,
         }),
       ),
@@ -314,16 +308,14 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       },
       output: {
         schema: { type: 'json' as const },
-        render: (
-          _args: unknown,
-          value: {
+        render: (_args: unknown, raw: unknown) => {
+          const value = payload(raw) as {
             chapter: number
             score: number
             metrics: { total_word_count: number }
             assigned_ids: Record<string, string>
-          },
-        ) =>
-          text(
+          }
+          return text(
             [
               `第 ${value.chapter} 章已归档`,
               `字数 ${value.metrics.total_word_count} · 评分 ${value.score}/150`,
@@ -333,7 +325,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
                     .map(([key, id]) => `${key}→${id}`)
                     .join(', ')}`,
             ].join('\n'),
-          ),
+          )
+        },
       },
       execute: guarded(async (args) =>
         engine.archiveChapter({

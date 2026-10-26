@@ -38,6 +38,7 @@ const entry = <T extends { action?: unknown }>(
   where: string,
 ): T & { action: DeltaAction } => {
   if (value === undefined) fail(`${where} is not declared`)
+  if (!isRecord(value)) fail(`${where} must be an object`)
   if (!ACTIONS.includes(value.action as DeltaAction)) {
     fail(`${where} must declare action created|updated|no_change`)
   }
@@ -99,6 +100,21 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (!isRecord(delta[section])) fail(`missing section "${section}"`)
   }
 
+  if (!isRecord(summary.new_elements)) fail('summary.new_elements must be an object')
+  for (const key of ['locations', 'abilities', 'artifacts'] as const) {
+    if (!Array.isArray(summary.new_elements[key])) {
+      fail(`summary.new_elements.${key} must be an array`)
+    }
+  }
+  if (!Array.isArray(summary.resource_changes)) fail('summary.resource_changes must be an array')
+  if (!Array.isArray(summary.events)) fail('summary.events must be an array')
+  if (!isRecord(summary.foreshadows)) fail('summary.foreshadows must be an object')
+  for (const key of ['planted', 'advanced', 'resolved'] as const) {
+    if (!Array.isArray(summary.foreshadows[key])) {
+      fail(`summary.foreshadows.${key} must be an array`)
+    }
+  }
+
   const characters = structuredClone(input.characters)
   const world = structuredClone(input.world)
   const locks = structuredClone(input.locks)
@@ -111,6 +127,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
 
   for (const name of appeared) {
+    if (!input.text.includes(name)) {
+      fail(`character "${name}" is listed in characters_appeared but does not appear in the manuscript`)
+    }
     if (delta.characters[name] === undefined) {
       fail(`character "${name}" appeared in the chapter but is not declared in characters`)
     }
@@ -119,6 +138,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   for (const [name, raw] of Object.entries(delta.characters)) {
     const declared = entry<CharacterDelta>(raw, `characters.${name}`)
     requireReason(declared, `characters.${name}`)
+    for (const field of ['profile', 'current_state', 'growth'] as const) {
+      if (declared[field] !== undefined && !isRecord(declared[field])) {
+        fail(`characters.${name}.${field} must be an object`)
+      }
+    }
     const existing = byName.get(name)
     if (declared.action === 'created') {
       if (existing !== undefined) fail(`character "${name}" already exists; use updated or no_change`)
@@ -153,8 +177,23 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   }
 
   for (const change of summary.resource_changes) {
+    if (
+      !isRecord(change) ||
+      typeof change.character !== 'string' ||
+      change.character.trim() === '' ||
+      typeof change.resource !== 'string' ||
+      change.resource.trim() === '' ||
+      !Number.isInteger(change.delta) ||
+      typeof change.reason !== 'string' ||
+      change.reason.trim() === ''
+    ) {
+      fail('every resource_changes entry must declare character/resource/delta/reason')
+    }
     if (delta.characters[change.character] === undefined) {
       fail(`resource change for "${change.character}" has no character declaration`)
+    }
+    if (delta.characters[change.character]!.action === 'no_change') {
+      fail(`resource change for "${change.character}" conflicts with a no_change declaration`)
     }
     const character = byName.get(change.character)
     if (character === undefined) fail(`resource change names unknown character "${change.character}"`)
@@ -165,7 +204,15 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const resources: Record<string, unknown> = isRecord(state.resources) ? { ...state.resources } : {}
     const current =
       typeof resources[change.resource] === 'number' ? (resources[change.resource] as number) : 0
-    resources[change.resource] = current + change.delta
+    const next = current + change.delta
+    if (next < 0) {
+      throw new EngineInputError(
+        ERROR_CODES.RESOURCE_NEGATIVE_BALANCE,
+        `${change.character}'s ${change.resource} would drop to ${next}`,
+        'state the resource cap or earn the balance before spending it',
+      )
+    }
+    resources[change.resource] = next
     character.current_state = { ...state, resources }
   }
 
@@ -193,9 +240,43 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     return null
   }
 
+  // The inverse direction matters as much as the lookup above: every element
+  // the summary announces must be declared as created. Otherwise a chapter can
+  // announce a new location and never write it into the world ledger.
+  for (const [kind, names] of [
+    ['location', summary.new_elements.locations],
+    ['ability', summary.new_elements.abilities],
+    ['artifact', summary.new_elements.artifacts],
+  ] as const) {
+    for (const name of names) {
+      const declared = delta.world[name]
+      if (declared === undefined) {
+        fail(`summary lists new ${kind} "${name}" but world.${name} is not declared`)
+      }
+      if (declared.action !== 'created') {
+        fail(`world.${name} is new in this chapter; its action must be created`)
+      }
+      if (declared.kind !== undefined && declared.kind !== kind) {
+        fail(`world.${name} is declared as ${declared.kind} but the summary lists it as ${kind}`)
+      }
+    }
+  }
+
   for (const [name, raw] of Object.entries(delta.world)) {
     const declared = entry<WorldDelta>(raw, `world.${name}`)
     requireReason(declared, `world.${name}`)
+    if (declared.description !== undefined && typeof declared.description !== 'string') {
+      fail(`world.${name}.description must be a string`)
+    }
+    if (declared.layout !== undefined && typeof declared.layout !== 'string') {
+      fail(`world.${name}.layout must be a string`)
+    }
+    if (declared.capacity !== undefined && (!Number.isInteger(declared.capacity) || declared.capacity < 0)) {
+      fail(`world.${name}.capacity must be a non-negative integer`)
+    }
+    if (declared.detail !== undefined && !isRecord(declared.detail)) {
+      fail(`world.${name}.detail must be an object`)
+    }
     const expected = expectedKind(name)
     if (expected !== null) {
       if (declared.action !== 'created') {
@@ -252,8 +333,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           change: declared.reason ?? declared.description ?? 'updated',
           reason: declared.reason ?? '',
         })
-      } else if (isRecord(existing.value) && declared.detail !== undefined) {
-        Object.assign(existing.value, declared.detail)
+      } else if (isRecord(existing.value)) {
+        if (declared.description !== undefined && 'description' in existing.value) {
+          existing.value.description = declared.description
+        }
+        if (declared.detail !== undefined) Object.assign(existing.value, declared.detail)
       }
     }
   }
@@ -372,7 +456,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     timeline.items.push({
       id,
       chapter,
-      story_time: declared.story_time ?? `第${chapter}章`,
+      story_time: declared.story_time ?? '未记录',
       description: declared.description ?? event,
       location: declared.location ?? '',
       characters: declared.characters ?? appeared,

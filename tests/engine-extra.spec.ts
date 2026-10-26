@@ -8,6 +8,7 @@ import {
   readProjectFile,
   readyToArchive,
   sampleReview,
+  sampleSemantic,
   sampleSummary,
   writeDraft,
 } from './helpers.js'
@@ -569,6 +570,9 @@ describe('branch coverage exercises', () => {
       })
       await engine.getBrief({ stage: 'P6', root })
       await new FsStore(root).remove('plans/ch001.chapter.yaml')
+      // The plan is part of the P6 context, so removing it invalidates the
+      // previously issued brief; refresh it before revising.
+      await engine.getBrief({ stage: 'P6', root })
       const revised = await engine.submitRevision({
         chapter: 1,
         content: text,
@@ -693,7 +697,7 @@ async function archiveOne(input: {
   await engine.getBrief({ stage: 'P4', root })
   await engine.submitReview({ chapter, ...sampleReview(chapter, text), root })
   await engine.getBrief({ stage: 'P6', root })
-  await engine.runCheck({ chapter, root })
+  await engine.runCheck({ chapter, semantic: sampleSemantic(text), root })
   await engine.getBrief({ stage: 'P8', root })
   const archived = await engine.archiveChapter({
     chapter,

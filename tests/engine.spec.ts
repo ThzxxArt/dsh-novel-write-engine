@@ -180,6 +180,7 @@ describe('engine lifecycle', () => {
       expect(summary.stage).toBe(gates.stage)
       expect(summary.chapter).toBe(3 - 2)
       expect(summary.phases.find((phase) => phase.active)?.id).toBe('P3')
+      expect(summary.next).toMatchObject({ tool: 'novel_write_draft' })
     } finally {
       await cleanup()
     }

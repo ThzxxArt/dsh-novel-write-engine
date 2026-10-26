@@ -31,6 +31,7 @@ const review = (total = 150, delta = 0, patch: Partial<ReviewDocument> = {}): Re
   dimensions: dimensions(delta),
   issues: [],
   total,
+  proof: proof(),
   ...patch,
 })
 
@@ -104,7 +105,16 @@ describe('gate evaluation', () => {
       'PG-07',
       'PG-11',
     ])
-    expect(applicableGates(input({ operation: 'runCheck' }))).toEqual(['PG-01', 'PG-02', 'PG-10'])
+    expect(applicableGates(input({ operation: 'runCheck' }))).toEqual([
+      'PG-01',
+      'PG-02',
+      'PG-04',
+      'PG-05',
+      'PG-08',
+      'PG-09',
+      'PG-10',
+      'PG-11',
+    ])
     expect(applicableGates(input({ operation: 'archiveChapter' }))).toContain('PG-12')
     expect(applicableGates(input({ operation: 'submitWorldPlan' }))).toEqual(['PG-01', 'PG-02'])
     expect(briefStageFor('submitWorldPlan', 'idle')).toBe('P1')

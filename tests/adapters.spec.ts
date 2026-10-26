@@ -117,7 +117,11 @@ const fakeEngine = () => {
   return engine
 }
 
-type Tool = { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }
+type Tool = {
+  name: string
+  execute: (args: unknown, exec: unknown) => Promise<unknown>
+  output?: { render: (args: unknown, value: unknown) => Array<{ type: string; text: string }> }
+}
 
 const tools = (engine: ReturnType<typeof fakeEngine>): Map<string, Tool> =>
   new Map(
@@ -130,6 +134,22 @@ describe('tool adapters', () => {
     expect(toolNames('core')).toHaveLength(8)
     const map = tools(fakeEngine())
     expect(map.size).toBe(18)
+  })
+
+  it('renders the payload after the host passes execute() straight to output.render', async () => {
+    const map = tools(fakeEngine())
+    const cases: Array<[string, unknown]> = [
+      ['novel_status', { chapter: 1 }],
+      ['novel_brief', { stage: 'P1' }],
+      ['novel_archive', { chapter: 1, state_delta: {} }],
+    ]
+    for (const [name, args] of cases) {
+      const tool = map.get(name)!
+      const returned = await tool.execute(args, {})
+      const rendered = tool.output!.render(args, returned)
+      expect(rendered[0]!.text, name).not.toContain('undefined')
+      expect(rendered[0]!.text, name).not.toContain('"data"')
+    }
   })
 
   it('narrows arguments and calls exactly one operation', async () => {
@@ -248,7 +268,7 @@ describe('command adapters', () => {
     ).toBe('error')
     expect(
       (await commands.find((command) => command.name === 'novel-admin')!.handler(invocation(''))).text,
-    ).toContain('novel_init')
+    ).toContain('novel_word_count')
   })
 
   it('executes hidden operations through /novel admin', async () => {
@@ -259,13 +279,9 @@ describe('command adapters', () => {
     expect(state.kind).toBe('success')
     expect(engine.queryState).toHaveBeenCalledWith({ kind: 'pipeline' })
 
-    const init = await novel.handler(
-      invocation('admin novel_init {"title":"新书","genre":"都市现代","platform":"fanqie"}'),
-    )
-    expect(init.kind).toBe('success')
-    expect(engine.initProject).toHaveBeenCalledWith(
-      expect.objectContaining({ title: '新书', genre: '都市现代', platform: 'fanqie' }),
-    )
+    const wordCount = await novel.handler(invocation('admin novel_word_count {"text":"一段正文"}'))
+    expect(wordCount.kind).toBe('success')
+    expect(engine.countWords).toHaveBeenCalledWith({ text: '一段正文' })
 
     const rollback = await commands
       .find((command) => command.name === 'novel-admin')!
@@ -280,6 +296,7 @@ describe('command adapters', () => {
     for (const [operation, args] of [
       ['novel_plan_world', '{"objective":"o"}'],
       ['novel_plan_chapter', '{"title":"t"}'],
+      ['novel_word_count', '{"text":"x"}'],
       ['novel_amend', '{"path":"state/world.yaml","content":{},"reason":"r"}'],
       ['novel_diff', '{"chapter":1}'],
       ['novel_export', '{"kind":"md"}'],
@@ -299,7 +316,7 @@ describe('command adapters', () => {
     expect((await novel.handler(invocation('admin novel_state []'))).kind).toBe('error')
     expect((await novel.handler(invocation('admin novel_state null'))).kind).toBe('error')
     const short = commands.find((command) => command.name === 'novel-admin')!
-    expect((await short.handler(invocation('novel_init'))).kind).toBe('success')
+    expect((await short.handler(invocation('novel_word_count {"text":"x"}'))).kind).toBe('success')
     expect((await short.handler(invocation('novel_state {"kind":"pipeline"}'))).kind).toBe('success')
     const controller = new AbortController()
     controller.abort()
@@ -332,9 +349,9 @@ describe('panel route', () => {
     return res
   }
 
-  it('serves GET/HEAD and refuses writes', async () => {
+  it('serves GET/HEAD and refuses writes after admission', async () => {
     const engine = fakeEngine()
-    const handler = panelHandler(engine as unknown as EngineService)
+    const handler = panelHandler(engine as unknown as EngineService, () => undefined)
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
@@ -351,15 +368,46 @@ describe('panel route', () => {
     expect(post.record.headers.allow).toBe('GET, HEAD')
   })
 
-  it('degrades to an empty payload when the project cannot be read', async () => {
+  it('denies access unless the connection guard admits the request', async () => {
+    const engine = fakeEngine()
+    const denied = panelHandler(engine as unknown as EngineService, () => 401)
+    const res = response()
+    await denied({ method: 'GET' }, res)
+    expect(res.record.statusCode).toBe(401)
+    expect(res.record.body).toBe('unauthorized')
+
+    const defaultDeny = panelHandler(engine as unknown as EngineService)
+    const closed = response()
+    await defaultDeny({ method: 'GET' }, closed)
+    expect(closed.record.statusCode).toBe(503)
+
+    const forbidden = response()
+    await panelHandler(engine as unknown as EngineService, () => 403)(
+      { method: 'GET', headers: { host: 'evil.example' } },
+      forbidden,
+    )
+    expect(forbidden.record.statusCode).toBe(403)
+    expect(panelRoute(engine as unknown as EngineService, () => undefined).path).toBe(
+      '/api/novel-write-engine/panel',
+    )
+  })
+
+  it('returns the project-not-found envelope as empty, and other failures as 500', async () => {
     const engine = fakeEngine()
     engine.panelBundle = vi.fn(async () => {
-      throw new Error('no project')
+      throw new EngineInputError('ENGINE_PROJECT_NOT_FOUND', 'no project')
     })
-    const handler = panelHandler(engine as unknown as EngineService)
-    const res = response()
-    await handler({ method: 'GET' }, res)
-    expect(JSON.parse(res.record.body)).toMatchObject({ empty: true, error: 'no project' })
-    expect(panelRoute(engine as unknown as EngineService).path).toBe('/api/novel-write-engine/panel')
+    const empty = response()
+    await panelHandler(engine as unknown as EngineService, () => undefined)({ method: 'GET' }, empty)
+    expect(empty.record.statusCode).toBe(200)
+    expect(JSON.parse(empty.record.body)).toMatchObject({ empty: true })
+
+    engine.panelBundle = vi.fn(async () => {
+      throw new Error('disk failed')
+    })
+    const failed = response()
+    await panelHandler(engine as unknown as EngineService, () => undefined)({ method: 'GET' }, failed)
+    expect(failed.record.statusCode).toBe(500)
+    expect(JSON.parse(failed.record.body)).toMatchObject({ error: 'disk failed' })
   })
 })

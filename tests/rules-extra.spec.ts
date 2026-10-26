@@ -43,7 +43,15 @@ describe('rule edge cases', () => {
   it('relaxes contextual words for their genre and forbids them elsewhere', () => {
     const text = '这次赋能很关键。'.repeat(2)
     expect(codesOf(text, { genre: '都市现代' })).not.toContain('LEX_SOFT_LIMIT')
-    expect(codesOf('这次赋能很关键。', { genre: '玄幻仙侠' })).toContain('LEX_SOFT_LIMIT')
+    expect(codesOf('这次赋能很关键。', { genre: '玄幻修仙' })).toContain('LEX_SOFT_LIMIT')
+  })
+
+  it('reports a match at the first character of a paragraph on that paragraph', () => {
+    const custom = structuredClone(pack)
+    custom.lexicon.reader_intrusion = [{ pattern: '你' }]
+    const result = runMachineChecks('第一段。\n\n你是一个读者。', options({ rulepack: custom }))
+    const finding = result.violations.find((violation) => violation.code === 'READER_INTRUSION')
+    expect(finding?.location.paragraph).toBe(2)
   })
 
   it('reports exemptions and the quote ratio', () => {
@@ -128,6 +136,21 @@ describe('rule edge cases', () => {
       codesOf('干净的正文。', {
         chapter: 3,
         evidence: { ...options().evidence, timeline },
+      }),
+    ).toContain('TIME_REGRESSION')
+    expect(
+      codesOf('干净的正文。', {
+        chapter: 3,
+        evidence: {
+          ...options().evidence,
+          timeline: {
+            ...timeline,
+            items: [
+              { ...timeline.items[0]!, story_time: '第5天' },
+              { ...timeline.items[1]!, story_time: '第2天' },
+            ],
+          },
+        },
       }),
     ).toContain('TIME_REGRESSION')
   })

@@ -51,6 +51,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
     ),
     createElement('div', { style: muted }, view.subtitle),
     view.revision === '' ? null : createElement('div', { style: muted }, view.revision),
+    view.next === '' ? null : createElement('div', { style: muted }, view.next),
     view.phases.length === 0
       ? null
       : createElement(
@@ -89,7 +90,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
             createElement(
               'tr',
               null,
-              ...['章', '标题', '字数', '评分', '状态'].map((label) =>
+              ...['章', '标题', '字数', '评分', '状态', '摘要'].map((label) =>
                 createElement(
                   'th',
                   { key: label, style: { textAlign: 'left', padding: '6px 8px', ...muted } },
@@ -113,6 +114,18 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
                   'td',
                   { style: { padding: '6px 8px', opacity: row.tone === 'muted' ? 0.6 : 1 } },
                   row.badge,
+                ),
+                createElement(
+                  'td',
+                  { style: { padding: '6px 8px', ...muted } },
+                  row.details === ''
+                    ? '—'
+                    : createElement(
+                        'details',
+                        null,
+                        createElement('summary', { style: { cursor: 'pointer' } }, '展开'),
+                        createElement('span', null, row.details),
+                      ),
                 ),
               ),
             ),

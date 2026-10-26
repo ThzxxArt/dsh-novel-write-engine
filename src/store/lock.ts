@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { LIMITS } from '../constants.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
@@ -30,16 +31,19 @@ export class KeyedMutex {
   }
 }
 
-interface LockRecord {
+export interface LockRecord {
   pid: number
   startedAt: string
+  /** Distinguishes two locks acquired by the same pid in the same millisecond. */
+  nonce?: string
 }
 
 const isLockRecord = (value: unknown): value is LockRecord =>
   typeof value === 'object' &&
   value !== null &&
   typeof (value as LockRecord).pid === 'number' &&
-  typeof (value as LockRecord).startedAt === 'string'
+  typeof (value as LockRecord).startedAt === 'string' &&
+  ((value as LockRecord).nonce === undefined || typeof (value as LockRecord).nonce === 'string')
 
 const processAlive = (pid: number): boolean => {
   if (pid === process.pid) return true
@@ -53,26 +57,36 @@ const processAlive = (pid: number): boolean => {
 
 /** Cross-process write lock: `O_EXCL` create, pid + timestamp, stale reclaim. */
 export class FileLock {
+  private held: LockRecord | null = null
+
   constructor(
     private readonly absolutePath: string,
     private readonly staleMs: number = LIMITS.lockStaleMs,
     private readonly waitMs: number = LIMITS.lockWaitMs,
+    /** Optional audit hook; the engine records `lock_reclaimed` in the journal. */
+    private readonly onReclaim?: (record: LockRecord | null) => Promise<void>,
   ) {}
 
-  /** Try to take the lock; returns the record needed by `release`. */
+  /** Try to take the lock; records the nonce this instance owns. */
   async acquire(): Promise<void> {
     const deadline = Date.now() + this.waitMs
     for (;;) {
       try {
         const handle = await fs.open(this.absolutePath, 'wx')
+        const record: LockRecord = {
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+          nonce: randomUUID(),
+        }
         try {
-          await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+          await handle.writeFile(JSON.stringify(record))
         } catch (error) {
           await handle.close().catch(() => undefined)
           await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
           throw error
         }
         await handle.close()
+        this.held = record
         return
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -89,10 +103,14 @@ export class FileLock {
     }
   }
 
-  /** Release only if we still own the lock. */
+  /** Release only if the bytes on disk are still the lock this instance took. */
   async release(): Promise<void> {
     const record = await this.read()
-    if (record !== null && record.pid === process.pid) await fs.rm(this.absolutePath, { force: true })
+    const held = this.held
+    this.held = null
+    if (record !== null && held !== null && record.pid === held.pid && record.nonce === held.nonce) {
+      await fs.rm(this.absolutePath, { force: true })
+    }
   }
 
   /** Read the current lock record, or null when absent/held by a foreign process. */
@@ -127,12 +145,14 @@ export class FileLock {
     if (record === null) {
       if (Date.now() - mtimeMs <= this.staleMs) return false
       await fs.rm(this.absolutePath, { force: true })
+      await this.onReclaim?.(null)
       return true
     }
     const age = Date.now() - Date.parse(record.startedAt)
     const stale = !Number.isFinite(age) || age > this.staleMs || !processAlive(record.pid)
     if (!stale) return false
     await fs.rm(this.absolutePath, { force: true })
+    await this.onReclaim?.(record)
     return true
   }
 }

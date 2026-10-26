@@ -32,7 +32,6 @@ export interface Rulepack {
     forbid_markdown: boolean
     forbid_semicolon: boolean
     forbid_english_ellipsis: boolean
-    legal_quote: string
     title: { pattern: string; min_chars: number; max_chars: number }
     system_labels: string[]
     scene_separators: string[]
@@ -47,7 +46,6 @@ export interface Rulepack {
     /** Paragraphs at or above this quoted-character share skip rhythm checks. */
     dialogue_dominant_ratio: number
   }
-  rhythm: { min_sentences: number; uniform_ratio: number; short_ratio: number }
   semantics: {
     adjective_density: { max: number; adjectives: string[] }
     pleasure_density: { min: number; keywords: string[]; window: number }
@@ -65,13 +63,13 @@ export interface Rulepack {
     {
       words_per_chapter: [number, number]
       dialogue_ratio: [number, number]
-      pleasure_min: number
     }
   >
-  /** Genre guides injected into the task-book context; no code branches on them. */
-  genres: Record<Genre, { note: string; scene_types?: SceneType[] }>
+  /** Genre guides injected into the task-book context; no threshold branches on them. */
+  genres: Record<Genre, { note: string }>
   crosschapter: {
     duplicate_similarity: number
+    duplicate_advisory: number
     foreshadow_min_dormancy: number
     foreshadow_dormant_after: number
     resource_tolerance: number

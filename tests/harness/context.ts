@@ -31,7 +31,10 @@ export interface FakeHost {
  * Effects run immediately and their disposers are collected, so lifecycle bugs
  * surface without booting Cordis.
  */
-export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'webServer']): FakeHost {
+export function fakeHost(
+  services: string[] = ['tools', 'commands', 'skills', 'webServer'],
+  connectionMode: 'scoped' | 'get' = 'scoped',
+): FakeHost {
   const host: FakeHost = {
     tools: [],
     commands: [],
@@ -42,6 +45,11 @@ export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'w
     provided: {},
     dispose: () => undefined,
     ctx: {},
+  }
+  const connection = {
+    admit: vi.fn((request: { headers?: Record<string, string> }) =>
+      request.headers?.host === 'evil.example' ? { rejection: 403 } : { peer: { id: 'test' } },
+    ),
   }
   const scoped = {
     commands: {
@@ -59,6 +67,7 @@ export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'w
         host.routes.push(route)
       }),
     },
+    ...(connectionMode === 'scoped' ? { connection } : {}),
     effect: vi.fn((body: () => (() => void) | undefined) => {
       const disposer = body()
       if (typeof disposer === 'function') host.effects.push(disposer)
@@ -70,6 +79,9 @@ export function fakeHost(services: string[] = ['tools', 'commands', 'skills', 'w
         host.tools.push(tool)
       }),
     },
+    get: vi.fn((name: string) =>
+      connectionMode === 'get' && name === 'connection' ? connection : undefined,
+    ),
     inject: vi.fn((wanted: string[], body: (scope: unknown) => void) => {
       if (wanted.every((service) => services.includes(service))) body(scoped)
     }),

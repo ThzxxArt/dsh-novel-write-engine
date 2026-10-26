@@ -4,14 +4,15 @@ import { ERROR_CODES, EngineInputError } from '../types.js'
 type Handler = (engine: EngineService, args: Record<string, unknown>) => Promise<unknown>
 
 /**
- * The ten tools hidden when `tools.mode=core`. They stay reachable through
- * `/novel admin <operation> <json>`; the caller supplies the same arguments the
- * tool schema would have accepted.
+ * The ten tools hidden when `tools.mode=core`, plus the explicit
+ * registry/settings-pack operations that are command-only by design (§6.8).
+ * They stay reachable through `/novel admin <operation> <json>`; the caller
+ * supplies the same arguments the tool schema would have accepted.
  */
 const OPERATIONS: Record<string, Handler> = {
-  novel_init: (engine, args) => engine.initProject(args as never),
   novel_plan_world: (engine, args) => engine.submitWorldPlan({ chapter: 0, ...args } as never),
   novel_plan_chapter: (engine, args) => engine.submitChapterPlan({ chapter: 0, ...args } as never),
+  novel_word_count: (engine, args) => engine.countWords(args as never),
   novel_amend: (engine, args) => engine.amend(args as never),
   novel_rollback: (engine, args) =>
     engine.rollback({
@@ -23,17 +24,22 @@ const OPERATIONS: Record<string, Handler> = {
   novel_audit: (engine, args) => engine.auditHistory(args as never),
   novel_pipeline: (engine, args) => engine.advise(args as never),
   novel_state: (engine, args) => engine.queryState(args as never),
+  novel_registry_list: (engine) => engine.listProjects(),
+  novel_registry_register: (engine, args) => engine.registerProject({ root: args.root as string }),
+  novel_registry_activate: (engine, args) => engine.setActiveProject({ root: args.root as string }),
+  novel_registry_forget: (engine, args) => engine.forgetProject({ root: args.root as string }),
+  novel_import: (engine, args) => engine.importPack(args as never),
 }
 
 export const ADMIN_OPERATION_NAMES = Object.keys(OPERATIONS)
 
 export const adminHelp = (): string =>
   [
-    '隐藏操作（tools.mode=core 时通过本命令可达）：',
+    '隐藏操作/运维操作（tools.mode=core 时经本命令可达；registry/import 仅命令入口）：',
     ...ADMIN_OPERATION_NAMES.map((name) => `  ${name}`),
     '',
     '用法：/novel admin <operation> <json>',
-    '示例：/novel admin novel_init {"title":"新书","genre":"都市现代","platform":"fanqie"}',
+    '示例：/novel admin novel_word_count {"text":"一段正文"}',
     '      /novel admin novel_state {"kind":"pipeline"}',
   ].join('\n')
 

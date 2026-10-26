@@ -36,11 +36,17 @@ import { homedir } from 'node:os'
 import { ensureDirAt } from '../assets.js'
 import { runTransaction } from '../store/txn.js'
 import { KeyedMutex, FileLock } from '../store/lock.js'
-import { assertJournalConsistent, readJournal, reconcileJournal } from '../store/journal.js'
+import { appendJournal, assertJournalConsistent, readJournal, reconcileJournal } from '../store/journal.js'
 import { listBackups } from '../store/backup.js'
 import { narrow, type DocKind } from '../store/schema.js'
 import { buildEpub } from '../export/epub.js'
-import { renderCover, renderMarkdown, renderPlainText, type ExportChapter } from '../export/render.js'
+import {
+  renderBlurb,
+  renderCover,
+  renderMarkdown,
+  renderPlainText,
+  type ExportChapter,
+} from '../export/render.js'
 import { BriefLibrary } from './brief.js'
 import { briefContext } from './context.js'
 import { applyStateDelta } from './state-delta.js'
@@ -65,6 +71,9 @@ import {
 } from './state.js'
 import {
   ERROR_CODES,
+  GENRES,
+  PLATFORMS,
+  SCENE_TYPES,
   EngineBlockedError,
   EngineFaultError,
   EngineInputError,
@@ -147,13 +156,14 @@ export interface RevisionSubmission extends Omit<RevisionInput, 'summary'> {
   /** Updated issue statuses/evidence; the review document is patched in place. */
   issues?: ReviewDocument['issues']
   /** Proof that the revised text was read; PG-09 verifies it against the new text. */
-  proof?: ReadingProof
+  proof: ReadingProof
   root?: string
 }
 
 export interface CheckSubmission {
   chapter: number
-  semantic?: SemanticItem[]
+  /** The four P6 semantic items; omission is a failed check, never a pass. */
+  semantic: SemanticItem[]
   scope?: string[]
   root?: string
 }
@@ -305,12 +315,67 @@ export class EngineService {
   async initProject(
     input: InitProjectInput,
   ): Promise<OpResult<{ root: string; title: string; chapter: number; stage: Stage }>> {
+    const title = typeof input.title === 'string' ? input.title.trim() : ''
+    if (title === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'title must not be empty')
+    }
+    if (!(GENRES as readonly string[]).includes(input.genre)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown genre "${String(input.genre)}"`,
+        `allowed: ${GENRES.join(', ')}`,
+      )
+    }
+    if (!(PLATFORMS as readonly string[]).includes(input.platform)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown platform "${String(input.platform)}"`,
+        `allowed: ${PLATFORMS.join(', ')}`,
+      )
+    }
+    if (input.words_per_chapter !== undefined) {
+      const [min, max] = input.words_per_chapter
+      if (
+        input.words_per_chapter.length !== 2 ||
+        !Number.isInteger(min) ||
+        !Number.isInteger(max) ||
+        min <= 0 ||
+        max < min
+      ) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'words_per_chapter must be [min, max] positive integers with min <= max',
+        )
+      }
+    }
+    if (
+      input.total_chapters != null &&
+      (!Number.isInteger(input.total_chapters) || input.total_chapters < 1)
+    ) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'total_chapters must be a positive integer')
+    }
+    if (input.dialogue_ratio !== undefined) {
+      const [min, max] = input.dialogue_ratio
+      if (
+        input.dialogue_ratio.length !== 2 ||
+        !Number.isFinite(min) ||
+        !Number.isFinite(max) ||
+        min < 0 ||
+        max > 1 ||
+        max < min
+      ) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'dialogue_ratio must be [min, max] within 0..1 with min <= max',
+        )
+      }
+    }
     return this.mutate({
       root: input.root,
       op: 'initProject',
       key: () => `init:${resolve(input.root ?? this.config.projectRoot)}`,
-      run: async (snapshot, context) => {
-        if (snapshot.project.title !== '' && (await context.store.exists(PROJECT_FILE))) {
+      run: async (_snapshot, context) => {
+        if (await context.store.exists(PROJECT_FILE)) {
           throw new EngineInputError(
             ERROR_CODES.PROJECT_EXISTS,
             `a project already exists at ${context.store.root}`,
@@ -319,7 +384,7 @@ export class EngineService {
         }
         const project: NovelProject = {
           schema_version: 1,
-          title: input.title,
+          title,
           genre: input.genre,
           platform: input.platform,
           author: input.author ?? '',
@@ -377,11 +442,14 @@ export class EngineService {
   }
 
   async countWords(input: WordCountInput = {}): Promise<OpResult<WordMetrics>> {
+    // The counting rule is pure: callers may count arbitrary text before a
+    // project exists, so do not make this tool require a project file.
+    if (input.text !== undefined) {
+      return { data: countWordMetrics(input.text), revision: 1, warnings: [] }
+    }
     const snapshot = await this.load(input.root)
     const text =
-      input.text ??
-      (input.chapter === undefined ? snapshot.text : await this.readChapter(snapshot, input.chapter)) ??
-      ''
+      (input.chapter === undefined ? snapshot.text : await this.readChapter(snapshot, input.chapter)) ?? ''
     return { data: countWordMetrics(text), revision: snapshot.pipeline.revision, warnings: [] }
   }
 
@@ -490,7 +558,7 @@ export class EngineService {
       scene_types: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'],
       platform_style: this.rulepack.platform[snapshot.project.platform],
       genre_guide: this.rulepack.genres[snapshot.project.genre],
-      next_tool: STAGE_NEXT[snapshot.pipeline.stage].tool,
+      next_tool: NEXT_TOOL_BY_BRIEF[input.stage],
     }
     const existing = snapshot.pipeline.briefs[input.stage]
     if (existing !== undefined && existing.digest === digest) {
@@ -543,6 +611,9 @@ export class EngineService {
   async submitWorldPlan(
     input: WorldPlanSubmission,
   ): Promise<OpResult<{ chapter: number; stage: Stage; plan_file: string }>> {
+    if (typeof input.objective !== 'string' || input.objective.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'world plan objective must not be empty')
+    }
     return this.mutate({
       root: input.root,
       op: 'submitWorldPlan',
@@ -579,6 +650,29 @@ export class EngineService {
   async submitChapterPlan(
     input: ChapterPlanSubmission,
   ): Promise<OpResult<{ chapter: number; stage: Stage; plan_file: string }>> {
+    if (typeof input.title !== 'string' || input.title.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter plan title must not be empty')
+    }
+    if (!(SCENE_TYPES as readonly string[]).includes(input.scene_type)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown scene_type "${String(input.scene_type)}"`,
+        `allowed: ${SCENE_TYPES.join(', ')}`,
+      )
+    }
+    const [min, max] = input.target_words
+    if (
+      input.target_words.length !== 2 ||
+      !Number.isInteger(min) ||
+      !Number.isInteger(max) ||
+      min <= 0 ||
+      max < min
+    ) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'target_words must be [min, max] positive integers with min <= max',
+      )
+    }
     return this.mutate({
       root: input.root,
       op: 'submitChapterPlan',
@@ -610,6 +704,19 @@ export class EngineService {
   async submitDraft(
     input: DraftSubmission,
   ): Promise<OpResult<{ chapter: number; stage: Stage; metrics: WordMetrics; warnings: Warning[] }>> {
+    if (typeof input.content !== 'string' || input.content.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'draft content must not be empty')
+    }
+    if (typeof input.chapter_title !== 'string' || input.chapter_title.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter_title must not be empty')
+    }
+    if (!(SCENE_TYPES as readonly string[]).includes(input.scene_type)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown scene_type "${String(input.scene_type)}"`,
+        `allowed: ${SCENE_TYPES.join(', ')}`,
+      )
+    }
     return this.mutate({
       root: input.root,
       op: 'submitDraft',
@@ -699,6 +806,7 @@ export class EngineService {
           dimensions: excluded.dimensions,
           issues: input.issues,
           total: input.total,
+          proof: input.proof,
         }
         await this.assertGates(snapshot, 'submitReview', {
           briefStage: 'P4',
@@ -774,8 +882,9 @@ export class EngineService {
           briefStage: briefStageFor('submitRevision', snapshot.pipeline.stage),
           text: input.content,
           summary: input.summary,
+          summaryProvided: input.summary !== undefined,
           review: patchedReview,
-          proof: input.proof ?? null,
+          proof: input.proof,
         })
         const machine = this.machine(snapshot, input.content, {
           summary: input.summary ?? snapshot.plan?.summary ?? null,
@@ -820,12 +929,18 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'runCheck',
-      key: (snapshot) => `check:${input.chapter}:${sha256(snapshot.text ?? '')}`,
+      key: (snapshot) =>
+        `check:${input.chapter}:${sha256(snapshot.text ?? '')}:${sha256(stableJson(input.semantic ?? []))}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
-        await this.assertGates(snapshot, 'runCheck', { briefStage: 'P6', text })
-        const semantic = input.semantic ?? []
+        const semantic = Array.isArray(input.semantic) ? input.semantic : []
+        await this.assertGates(snapshot, 'runCheck', {
+          briefStage: 'P6',
+          text,
+          proof: snapshot.review?.proof ?? null,
+          semantic,
+        })
         const machine = this.machine(snapshot, text, { summary: snapshot.plan?.summary ?? null })
         const machineBlocking = machine.violations.filter((violation) => violation.severity === 'blocker')
         const semanticResult = evaluateSemantic(text, semantic)
@@ -906,6 +1021,37 @@ export class EngineService {
         })
         if (text === '')
           throw new EngineInputError(ERROR_CODES.STAGE_ORDER, `chapter ${input.chapter} has no draft`)
+        // The archive is the last line of defence: re-run the full machine pass
+        // rather than trusting a check document that may have been edited
+        // outside the engine.
+        const archiveMachine = this.machine(snapshot, text, { summary })
+        const archiveBlockers = archiveMachine.violations.filter(
+          (violation) => violation.severity === 'blocker',
+        )
+        if (archiveBlockers.length > 0) {
+          throw new EngineBlockedError(
+            ERROR_CODES.GATE_BLOCKED,
+            `archiveChapter blocked by ${archiveBlockers.length} machine finding(s), first: ${archiveBlockers[0]!.code}`,
+            archiveBlockers.map((violation) => ({
+              code: violation.code,
+              scope: 'archive',
+              detail: violation.detail,
+            })),
+            'fix the manuscript before archiving',
+          )
+        }
+        // A check document is a plain YAML file once written. Re-validate the
+        // semantic evidence here as well, so editing checks/*.yaml to a pass
+        // cannot bypass the four P6 checks at the last write boundary.
+        const archivedSemantic = evaluateSemantic(text, snapshot.check?.semantic.items ?? [])
+        if (archivedSemantic.failed) {
+          throw new EngineBlockedError(
+            ERROR_CODES.GATE_BLOCKED,
+            `archiveChapter blocked by ${archivedSemantic.blocking.length} semantic finding(s), first: ${archivedSemantic.blocking[0]!.code}`,
+            archivedSemantic.blocking.map((item) => ({ ...item, scope: 'archive' })),
+            're-run novel_check with the four evidence-backed semantic items',
+          )
+        }
         const metrics = countWordMetrics(text)
         const score = snapshot.review?.total ?? 0
         const chapter = input.chapter
@@ -961,7 +1107,8 @@ export class EngineService {
           volume_name: input.handoff?.volume_name ?? `第${derivedVolume}卷`,
           act: input.handoff?.act ?? `第${Math.max(1, Math.ceil(((chapter - 1) % 20) / 5) + 1)}幕`,
           act_progress:
-            input.handoff?.act_progress ?? `${chapter}/${totalChapters === null ? '待定' : totalChapters}`,
+            input.handoff?.act_progress ??
+            (totalChapters === null ? `进至第${chapter}章` : `${chapter}/${totalChapters}`),
           next_chapter: chapter + 1,
           last_summary: summary.events.join('；').slice(0, 200),
           open_hooks: foreshadows.items
@@ -1144,21 +1291,45 @@ export class EngineService {
         message: `${health.mismatches.length} file(s) changed after the last commit; first: ${health.mismatches[0]!.path}`,
       })
     }
-    const limit = input.limit ?? 50
-    return { data: rows.slice(-limit), revision: snapshot.pipeline.revision, warnings }
+    const requested = input.limit ?? 50
+    const limit = Number.isFinite(requested) ? Math.max(0, Math.min(1000, Math.floor(requested))) : 50
+    return { data: limit === 0 ? [] : rows.slice(-limit), revision: snapshot.pipeline.revision, warnings }
   }
 
   async export(input: ExportInput): Promise<OpResult<{ kind: ExportKind; files: string[] }>> {
+    if (input.kind !== 'md' && input.kind !== 'txt' && input.kind !== 'epub') {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown export kind "${String(input.kind)}"`,
+        'allowed: md, txt, epub',
+      )
+    }
+    if (input.chapter !== undefined && (!Number.isInteger(input.chapter) || input.chapter < 1)) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter must be a positive integer')
+    }
     return this.mutate({
       root: input.root,
       op: 'export',
-      key: () => `export:${input.kind}:${input.chapter ?? 'all'}`,
+      // Export itself advances the revision, so the cache key must bind to the
+      // content that was exported, not to a revision this operation is about to
+      // change. Otherwise a later revision keeps returning the old file.
+      key: (snapshot) =>
+        `export:${input.kind}:${input.chapter ?? 'all'}:${sha256(
+          stableJson({
+            text: sha256(snapshot.text ?? ''),
+            chapters: snapshot.chapters.chapters.map((chapter) => chapter.content_hash),
+            title: snapshot.project.title,
+          }),
+        )}`,
       run: async (snapshot, context) => {
         const chapters = await this.chaptersForExport(snapshot, input.chapter)
         const suffix = input.chapter === undefined ? '' : `-ch${String(input.chapter).padStart(3, '0')}`
         const base = joinRel(EXPORT_DIR, `book${suffix}.${input.kind}`)
+        const cover = joinRel(EXPORT_DIR, 'cover.svg')
+        const blurb = joinRel(EXPORT_DIR, 'blurb.txt')
         const files: StagedFile[] = [
-          { path: joinRel(EXPORT_DIR, 'cover.svg'), text: renderCover(snapshot.project) },
+          { path: cover, text: renderCover(snapshot.project) },
+          { path: blurb, text: renderBlurb(snapshot.project) },
         ]
         if (input.kind === 'md') files.push({ path: base, text: renderMarkdown(snapshot.project, chapters) })
         else if (input.kind === 'txt')
@@ -1171,7 +1342,7 @@ export class EngineService {
         return {
           files,
           backup: false,
-          data: { kind: input.kind, files: files.map((file) => file.path) },
+          data: { kind: input.kind, files: [base, cover, blurb] },
         }
       },
     })
@@ -1318,6 +1489,22 @@ export class EngineService {
 
   private async panelSnapshot(root?: string): Promise<PanelSnapshot> {
     const snapshot = await this.load(root)
+    const archived = snapshot.chapters.chapters
+    const archivedCurrent = archived.some((chapter) => chapter.num === snapshot.pipeline.chapter)
+    const draftWords = snapshot.text === null ? 0 : countWordMetrics(snapshot.text).total_word_count
+    const draft =
+      archivedCurrent || snapshot.pipeline.stage === 'done'
+        ? null
+        : {
+            num: snapshot.pipeline.chapter,
+            title:
+              (snapshot.plan?.title ?? '').replace(/^第\s*\d+\s*章\s*/, '').trim() ||
+              `第${snapshot.pipeline.chapter}章`,
+            wordCount: draftWords,
+            score: snapshot.review?.total ?? 0,
+            status: (snapshot.pipeline.blocking.length > 0 ? 'blocked' : 'draft') as 'blocked' | 'draft',
+            details: (snapshot.plan?.summary?.events ?? []).join('；').slice(0, 240),
+          }
     return {
       root: snapshot.root,
       title: snapshot.project.title,
@@ -1328,8 +1515,12 @@ export class EngineService {
       revision: snapshot.pipeline.revision,
       rounds: snapshot.pipeline.rounds,
       blocking: snapshot.pipeline.blocking,
-      chapters: snapshot.chapters.chapters,
-      totalWords: snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0),
+      next: this.nextStep(snapshot),
+      chapters: archived,
+      draft,
+      totalWords:
+        archived.reduce((total, chapter) => total + chapter.word_count, 0) +
+        (draft === null ? 0 : draft.wordCount),
       phases: phaseStrip(snapshot.pipeline.stage),
     }
   }
@@ -1429,6 +1620,10 @@ export class EngineService {
   }
 
   private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
+    const machine =
+      (stage === 'P4' || stage === 'P5') && snapshot.text !== null
+        ? this.machine(snapshot, snapshot.text, { summary: snapshot.plan?.summary ?? null })
+        : undefined
     return briefContext({
       stage,
       chapter,
@@ -1444,15 +1639,24 @@ export class EngineService {
       plan: snapshot.plan,
       review: snapshot.review,
       check: snapshot.check,
+      text: snapshot.text,
+      machine,
       previousText: snapshot.previousText,
       handoff: snapshot.handoff,
     })
   }
 
   private briefDigest(stage: string, snapshot: Snapshot, context: Record<string, unknown>): string {
+    // The rendered file is part of the contract: editing briefs/P5.md must
+    // invalidate a digest issued against the old text.
+    const briefHash = this.briefs.render(
+      stage as import('../types.js').BriefStage,
+      this.briefVariables(snapshot, snapshot.pipeline.chapter),
+    ).contentHash
     return shortDigest(
       stableJson({
         stage,
+        briefHash,
         chapter: snapshot.pipeline.chapter,
         pipelineStage: snapshot.pipeline.stage,
         rounds: snapshot.pipeline.rounds,
@@ -1485,6 +1689,7 @@ export class EngineService {
         | 'briefDigest'
         | 'text'
         | 'summary'
+        | 'summaryProvided'
         | 'draftTitle'
         | 'sceneType'
         | 'review'
@@ -1536,6 +1741,7 @@ export class EngineService {
       draftTitle: composeTitle(snapshot.pipeline.chapter, extras.draftTitle ?? snapshot.plan?.title ?? null),
       sceneType: extras.sceneType ?? snapshot.plan?.scene_type ?? null,
       summary: extras.summary ?? snapshot.plan?.summary ?? null,
+      summaryProvided: extras.summaryProvided,
       review: extras.review ?? snapshot.review,
       check: extras.check ?? snapshot.check,
       semantic: extras.semantic ?? [],
@@ -1566,8 +1772,9 @@ export class EngineService {
           blocking: result.blocking.length,
         },
       })
+      const onlyProof = result.blocking.every((item) => item.code === 'PG-09')
       throw new EngineBlockedError(
-        ERROR_CODES.GATE_BLOCKED,
+        onlyProof ? ERROR_CODES.READING_PROOF_INVALID : ERROR_CODES.GATE_BLOCKED,
         `${operation} blocked by ${result.blocking.length} gate(s), first: ${first.code} ${first.detail}`,
         result.blocking,
         result.blocking.map((item) => `${item.code}: ${item.hint ?? item.detail}`).join(' | '),
@@ -1691,10 +1898,24 @@ export class EngineService {
     const root = resolve(options.root ?? this.config.projectRoot)
     return this.mutex.run(root, async () => {
       if (options.emptyAllowed === true) ensureDirAt(root)
-      const lock = new FileLock(join(root, LOCK_FILE))
+      const store = this.storeFor(root)
+      const lock = new FileLock(join(root, LOCK_FILE), undefined, undefined, async (record) => {
+        await appendJournal(store, {
+          txid: randomUUID(),
+          at: new Date().toISOString(),
+          op: 'lock_reclaimed',
+          chapter: 0,
+          revision: 0,
+          files: [LOCK_FILE],
+          status: 'committed',
+          reason:
+            record === null
+              ? 'reclaimed a partially written lock file'
+              : `reclaimed lock from pid ${record.pid}`,
+        })
+      })
       await lock.acquire()
       try {
-        const store = this.storeFor(root)
         if (options.emptyAllowed === true) {
           const exists = await store.exists(PROJECT_FILE)
           if (!exists) {
@@ -1784,6 +2005,16 @@ export class EngineService {
 }
 
 /* ------------------------------------------------------------------ helpers */
+
+const NEXT_TOOL_BY_BRIEF: Record<import('../types.js').BriefStage, string> = {
+  P1: 'novel_plan_world',
+  P2: 'novel_plan_chapter',
+  P3: 'novel_write_draft',
+  P4: 'novel_review',
+  P5: 'novel_revise',
+  P6: 'novel_check',
+  P8: 'novel_archive',
+}
 
 const yaml = (value: unknown): string => stringify(value, { lineWidth: 0 })
 

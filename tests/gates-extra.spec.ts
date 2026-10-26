@@ -6,6 +6,7 @@ import {
   harness,
   readyToArchive,
   sampleReview,
+  sampleSemantic,
   sampleSummary,
   writeDraft,
 } from './helpers.js'
@@ -76,7 +77,7 @@ describe('archive consistency', () => {
       await engine.getBrief({ stage: 'P4', root })
       await engine.submitReview({ chapter: 1, ...sampleReview(1, cleanText()), root })
       await engine.getBrief({ stage: 'P6', root })
-      await engine.runCheck({ chapter: 1, root })
+      await engine.runCheck({ chapter: 1, semantic: sampleSemantic(cleanText()), root })
       await engine.getBrief({ stage: 'P8', root })
       await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
       const chapters = await engine.panelChapters({ root })

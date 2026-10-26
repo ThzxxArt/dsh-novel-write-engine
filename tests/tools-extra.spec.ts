@@ -136,7 +136,7 @@ describe('every tool executes one operation', () => {
     await map.get('novel_init')!.execute(
       {
         title: '书',
-        genre: '玄幻仙侠',
+        genre: '玄幻修仙',
         platform: 'qidian',
         author: 'a',
         description: 'd',

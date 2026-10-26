@@ -2,6 +2,15 @@ import { PANEL_ID, PHASE_STRIP, REMOTE_VERSION } from '../constants.js'
 import type { BlockingItem, ChapterRecord, Stage, StatusReport } from '../types.js'
 
 /** The shared read model: everything the panel, status and commands render. */
+export interface PanelDraft {
+  num: number
+  title: string
+  wordCount: number
+  score: number
+  status: 'draft' | 'blocked'
+  details: string
+}
+
 export interface PanelSnapshot {
   root: string
   title: string
@@ -12,7 +21,11 @@ export interface PanelSnapshot {
   revision: number
   rounds: { review: number; revise: number; check: number }
   blocking: BlockingItem[]
+  /** Recommended next action; lets the panel explain a stage with no blockers. */
+  next?: StatusReport['next']
   chapters: ChapterRecord[]
+  /** The active, not-yet-archived chapter; archived rows come from `chapters`. */
+  draft?: PanelDraft | null
   /** Total words across the index, for the header. */
   totalWords: number
   /** The nine-phase strip state, derived from the pipeline stage. */
@@ -32,6 +45,7 @@ export interface PanelSummaryDto {
   totalChapters: number
   phases: Array<{ id: string; done: boolean; active: boolean }>
   blocking: BlockingItem[]
+  next?: { tool: string; reason: string }
 }
 
 export interface PanelChapterRow {
@@ -41,6 +55,8 @@ export interface PanelChapterRow {
   score: number
   stage: Stage
   status: 'passed' | 'blocked' | 'draft'
+  /** One-line summary shown when the row is expanded. */
+  details: string
 }
 
 export interface PanelChaptersDto {
@@ -89,6 +105,7 @@ export function projectChapter(record: ChapterRecord): PanelChapterRow {
     score: record.score,
     stage: record.status === 'reviewed' ? 'done' : 'P3',
     status: record.status === 'reviewed' ? 'passed' : 'draft',
+    details: record.summary.events.join('；').slice(0, 240),
   }
 }
 
@@ -124,15 +141,27 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     totalChapters: snapshot.chapters.length,
     phases: snapshot.phases,
     blocking: snapshot.blocking,
+    ...(snapshot.next === undefined
+      ? {}
+      : { next: { tool: snapshot.next.tool, reason: snapshot.next.reason } }),
   }
 }
 
 export function projectChapters(snapshot: PanelSnapshot): PanelChaptersDto {
-  return {
-    schemaVersion: REMOTE_VERSION,
-    panelId: PANEL_ID,
-    rows: snapshot.chapters.map(projectChapter),
+  const rows = snapshot.chapters.map(projectChapter)
+  const draft = snapshot.draft
+  if (draft !== undefined && draft !== null && !rows.some((row) => row.num === draft.num)) {
+    rows.push({
+      num: draft.num,
+      title: draft.title,
+      wordCount: draft.wordCount,
+      score: draft.score,
+      stage: snapshot.stage,
+      status: draft.status,
+      details: draft.details,
+    })
   }
+  return { schemaVersion: REMOTE_VERSION, panelId: PANEL_ID, rows }
 }
 
 export function projectGates(snapshot: PanelSnapshot): PanelGatesDto {

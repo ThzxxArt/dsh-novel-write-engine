@@ -42,6 +42,7 @@ npm install dsh-novel-write-engine
 | `backupRetention` | `5` | 保留的归档备份目录数 |
 | `stateDir` | `~/.dsh/novel-write-engine` | 多项目注册表位置 |
 
+`toolsMode`、`minScore`、`backupRetention` 超出范围时插件会拒绝启动，而不是静默改写。
 0.1.0 仅提供中文界面与任务书；不随包发布 `locale/`。规则包固定从包内加载，不接受运行期外部路径。
 
 ## 内置预设

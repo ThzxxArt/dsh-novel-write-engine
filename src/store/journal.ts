@@ -12,9 +12,9 @@ export interface JournalRecord {
   chapter: number
   revision: number
   files: string[]
-  status: 'committed' | 'aborted'
+  status: 'pending' | 'committed' | 'aborted'
   reason?: string
-  /** Content hash per target, written on commit for startup reconciliation. */
+  /** Content hash per target, written before rename and again on commit. */
   hashes?: Record<string, string>
 }
 
@@ -50,7 +50,7 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
         chapter: Number(raw.chapter ?? 0),
         revision: Number(raw.revision ?? 0),
         files: Array.isArray(raw.files) ? raw.files.map(String) : [],
-        status: raw.status === 'aborted' ? 'aborted' : 'committed',
+        status: raw.status === 'pending' ? 'pending' : raw.status === 'aborted' ? 'aborted' : 'committed',
       }
       if (typeof raw.reason === 'string') record.reason = raw.reason
       if (typeof raw.hashes === 'object' && raw.hashes !== null && !Array.isArray(raw.hashes)) {
@@ -61,15 +61,18 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
         )
       }
       records.push(record)
-      rows.push({
-        at: record.at,
-        op: record.op,
-        chapter: record.chapter,
-        revision: record.revision,
-        txid: record.txid,
-        status: record.status,
-        files: record.files,
-      })
+      // Pending rows are recovery metadata, not user-visible audit entries.
+      if (record.status !== 'pending') {
+        rows.push({
+          at: record.at,
+          op: record.op,
+          chapter: record.chapter,
+          revision: record.revision,
+          txid: record.txid,
+          status: record.status,
+          files: record.files,
+        })
+      }
     } catch {
       malformed += 1
     }
@@ -117,8 +120,50 @@ export async function reconcileJournal(store: FsStore): Promise<{
   return { malformed, mismatches }
 }
 
+/**
+ * Resolve a pending transaction left by a crash. The pending row is written
+ * after the pre-images are captured and before the first rename, so it is the
+ * only record that can distinguish "renamed but not journaled" from "crashed
+ * before touching a target". A fully matching pending transaction is promoted
+ * to committed; otherwise the previous committed row is checked and the
+ * pending row is closed as aborted when the old bytes are still intact.
+ */
+export async function recoverPending(store: FsStore): Promise<void> {
+  const { records } = await readJournal(store)
+  const last = records[records.length - 1]
+  if (last?.status !== 'pending') return
+  const matches = async (record: JournalRecord): Promise<boolean> => {
+    if (record.hashes === undefined) return false
+    for (const [path, expected] of Object.entries(record.hashes)) {
+      if ((await store.hashBytes(path)) !== expected) return false
+    }
+    return true
+  }
+  if (await matches(last)) {
+    await appendJournal(store, { ...last, status: 'committed' })
+    return
+  }
+  const previous = [...records]
+    .reverse()
+    .find((record) => record.status === 'committed' && record.hashes !== undefined)
+  if (previous !== undefined && (await matches(previous))) {
+    await appendJournal(store, {
+      ...last,
+      status: 'aborted',
+      reason: 'recovered: the process stopped before the transaction renamed its targets',
+    })
+    return
+  }
+  throw new EngineFaultError(
+    ERROR_CODES.TXN_ABORTED,
+    `pending transaction ${last.txid} partially changed the project; automatic recovery is unsafe`,
+    'restore the project from backups/ or state/journal.jsonl before retrying',
+  )
+}
+
 /** Throw before a write when the journal or the last commit is inconsistent. */
 export async function assertJournalConsistent(store: FsStore): Promise<void> {
+  await recoverPending(store)
   const { malformed, mismatches } = await reconcileJournal(store)
   assertJournalHealthy(malformed)
   if (mismatches.length > 0) {

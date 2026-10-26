@@ -28,6 +28,66 @@ describe('plugin assembly', () => {
     expect(host.provided.novelEngine).toBeDefined()
   })
 
+  it('resolves the connection service through ctx.get without property access', async () => {
+    const host = fakeHost(undefined, 'get')
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    let status = 0
+    let body = ''
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: '127.0.0.1:3080' } },
+      {
+        set statusCode(value: number) {
+          status = value
+        },
+        setHeader: () => undefined,
+        end: (value: string) => {
+          body = value
+        },
+      },
+    )
+    expect(status).toBe(200)
+    expect(JSON.parse(body)).toMatchObject({ empty: true })
+  })
+
+  it('guards the exact panel route through the connection service', async () => {
+    const host = fakeHost()
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    const response = () => {
+      const record = { statusCode: 0, body: '' }
+      const res = {
+        statusCode: 0,
+        setHeader: () => undefined,
+        end: (body: string) => {
+          record.body = body
+        },
+      }
+      Object.defineProperty(res, 'statusCode', {
+        get: () => record.statusCode,
+        set: (value: number) => {
+          record.statusCode = value
+        },
+      })
+      Object.defineProperty(res, 'body', { get: () => record.body })
+      return res
+    }
+    const denied = response()
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: 'evil.example' } },
+      denied,
+    )
+    expect(denied.statusCode).toBe(403)
+
+    const admitted = response()
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: '127.0.0.1:3080' } },
+      admitted,
+    )
+    expect(admitted.statusCode).toBe(200)
+    expect(JSON.parse((admitted as unknown as { body: string }).body)).toMatchObject({ empty: true })
+  })
+
   it('registers only eight tools in core mode', () => {
     const host = fakeHost()
     apply(
@@ -47,16 +107,18 @@ describe('plugin assembly', () => {
     expect(() => host.dispose()).not.toThrow()
   })
 
-  it('clamps an out-of-range score and tolerates blank configuration', () => {
+  it('rejects invalid configuration instead of silently clamping it', () => {
+    const invalid = (value: Record<string, unknown>): void => {
+      const host = fakeHost()
+      apply(host.ctx as never, (Config as unknown as (init: Record<string, unknown>) => never)(value))
+    }
+    expect(() => invalid({ minScore: 999 })).toThrowError(/minScore/)
+    expect(() => invalid({ toolsMode: 'weird' })).toThrowError(/toolsMode/)
+    expect(() => invalid({ backupRetention: 0 })).toThrowError(/backupRetention/)
     const host = fakeHost()
     apply(
       host.ctx as never,
-      (Config as unknown as (init: Record<string, unknown>) => never)({
-        minScore: 999,
-        projectRoot: '',
-        toolsMode: 'weird',
-        briefsLocale: 'en',
-      }),
+      (Config as unknown as (init: Record<string, unknown>) => never)({ projectRoot: '' }),
     )
     expect(host.tools).toHaveLength(18)
   })

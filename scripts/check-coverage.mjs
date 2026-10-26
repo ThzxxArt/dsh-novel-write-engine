@@ -2,12 +2,14 @@ import { readFileSync } from 'node:fs'
 
 /**
  * The per-file gate that vitest's aggregate thresholds cannot express:
- * every pure domain file must be fully covered, and the adapter/client layers
- * must clear their floor file by file. Also prints the five weakest files so a
+ * every pure domain file must be fully covered. Other layers use the aggregate
+ * thresholds in vitest.config.ts. Also prints the five weakest files so a
  * global average cannot hide a dead module.
  */
 const summary = JSON.parse(readFileSync('coverage/coverage-summary.json', 'utf8'))
 const keys = ['lines', 'branches', 'functions', 'statements']
+// Design §13.3 requires a per-file 100% gate only for the pure domain layer;
+// every other layer is judged by the aggregate thresholds in vitest.config.ts.
 const groups = [['/src/domain/', 100]]
 
 const files = Object.entries(summary).filter(([file]) => file !== 'total')

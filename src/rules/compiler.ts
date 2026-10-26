@@ -3,10 +3,9 @@ import { ALL_RULE_CODES } from '../codes.js'
 import { ERROR_CODES, GENRES, PLATFORMS, SCHEMA_VERSION, EngineFaultError } from '../types.js'
 import type { Rulepack } from './types.js'
 
-const platformDefaults = (words: [number, number], dialogue: [number, number], pleasure: number) => ({
+const platformDefaults = (words: [number, number], dialogue: [number, number]) => ({
   words_per_chapter: words,
   dialogue_ratio: dialogue,
-  pleasure_min: pleasure,
 })
 
 /** Minimal pack used to fill optional blocks; every value is overridable in YAML. */
@@ -28,7 +27,6 @@ export const DEFAULT_RULEPACK: Rulepack = {
     forbid_markdown: true,
     forbid_semicolon: true,
     forbid_english_ellipsis: true,
-    legal_quote: '"',
     title: { pattern: '^第\\d+章\\s', min_chars: 4, max_chars: 8 },
     system_labels: [],
     scene_separators: ['———', '***', '…………'],
@@ -46,7 +44,6 @@ export const DEFAULT_RULEPACK: Rulepack = {
     consecutive_le: { max: 3, char: '了' },
     dialogue_dominant_ratio: 0.6,
   },
-  rhythm: { min_sentences: 8, uniform_ratio: 0.6, short_ratio: 0.25 },
   semantics: {
     adjective_density: { max: 4, adjectives: [] },
     pleasure_density: { min: 1, keywords: [], window: 600 },
@@ -59,14 +56,15 @@ export const DEFAULT_RULEPACK: Rulepack = {
     },
   },
   platform: {
-    fanqie: platformDefaults([2000, 3000], [0.4, 0.6], 1),
-    qidian: platformDefaults([2000, 3500], [0.3, 0.5], 1),
-    qimao: platformDefaults([1500, 2500], [0.45, 0.65], 1),
-    jinjiang: platformDefaults([2500, 4000], [0.35, 0.55], 1),
+    fanqie: platformDefaults([2000, 3000], [0.4, 0.6]),
+    qidian: platformDefaults([2000, 3500], [0.3, 0.5]),
+    qimao: platformDefaults([1500, 2500], [0.45, 0.65]),
+    jinjiang: platformDefaults([2500, 4000], [0.35, 0.55]),
   },
   genres: Object.fromEntries(GENRES.map((genre) => [genre, { note: '' }])) as Rulepack['genres'],
   crosschapter: {
     duplicate_similarity: 0.9,
+    duplicate_advisory: 0.75,
     foreshadow_min_dormancy: 2,
     foreshadow_dormant_after: 20,
     resource_tolerance: 0,
@@ -133,7 +131,6 @@ export function compileRulepack(raw: unknown): Rulepack {
       'lexicon',
       'format',
       'punctuation',
-      'rhythm',
       'semantics',
       'platform',
       'genres',
@@ -211,6 +208,12 @@ export function compileRulepack(raw: unknown): Rulepack {
   if (pack.crosschapter.duplicate_similarity < 0 || pack.crosschapter.duplicate_similarity > 1) {
     invalid('crosschapter.duplicate_similarity must be within 0..1')
   }
+  if (pack.crosschapter.duplicate_advisory < 0 || pack.crosschapter.duplicate_advisory > 1) {
+    invalid('crosschapter.duplicate_advisory must be within 0..1')
+  }
+  if (pack.crosschapter.duplicate_advisory > pack.crosschapter.duplicate_similarity) {
+    invalid('crosschapter.duplicate_advisory must not exceed duplicate_similarity')
+  }
   for (const [scene, budget] of Object.entries(pack.punctuation.dash.base)) {
     if (budget < 0) invalid(`dash budget for ${scene} is negative`)
   }
@@ -272,6 +275,10 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
   merged.crosschapter.duplicate_similarity = num(
     merged.crosschapter.duplicate_similarity,
     'crosschapter.duplicate_similarity',
+  )
+  merged.crosschapter.duplicate_advisory = num(
+    merged.crosschapter.duplicate_advisory,
+    'crosschapter.duplicate_advisory',
   )
   merged.crosschapter.foreshadow_min_dormancy = num(
     merged.crosschapter.foreshadow_min_dormancy,

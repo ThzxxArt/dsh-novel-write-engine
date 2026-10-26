@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { bootstrapToDraft, harness } from './helpers.js'
+import { bootstrapToDraft, cleanText, harness, sampleSummary } from './helpers.js'
 
 const characters = (identity: string): Record<string, unknown> => ({
   schema_version: 1,
@@ -73,6 +76,33 @@ describe('brief context packs', () => {
     }
   })
 
+  it('delivers the live manuscript to P4 and P5 so review and revision read the real text', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      const text = cleanText()
+      await engine.getBrief({ stage: 'P3', root })
+      await engine.submitDraft({
+        chapter: 1,
+        content: text,
+        chapter_title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: sampleSummary(),
+        root,
+      })
+      await engine.getBrief({ stage: 'P4', root })
+      const p4 = await engine.getBrief({ stage: 'P4', root })
+      expect((p4.data.context as { text: string }).text).toBe(text)
+      expect(
+        (p4.data.context as { machine: { metrics: { total_word_count: number } } }).machine.metrics
+          .total_word_count,
+      ).toBeGreaterThan(0)
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('delivers the full ledger set at P6', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -91,6 +121,27 @@ describe('brief context packs', () => {
       )
     } finally {
       await cleanup()
+    }
+  })
+
+  it('falls back to the bundled brief when an override directory is partial', async () => {
+    const overrides = await mkdtemp(join(tmpdir(), 'novel-briefs-'))
+    const { root, engine, cleanup } = await harness({ briefs: { overrides } })
+    try {
+      await engine.initProject({ title: '回退之书', genre: '都市现代', platform: 'fanqie', root })
+      const bundled = await engine.getBrief({ stage: 'P1', root })
+      expect(bundled.data.content).toContain('P1')
+      const beforeOverride = await engine.getBrief({ stage: 'P3', root })
+
+      await writeFile(join(overrides, 'P3.md'), '# 自定义 P3\n\n只覆盖 P3。', 'utf8')
+      const custom = await engine.getBrief({ stage: 'P3', root })
+      expect(custom.data.content).toContain('自定义 P3')
+      expect(custom.data.digest).not.toBe(beforeOverride.data.digest)
+      const stillBundled = await engine.getBrief({ stage: 'P2', root })
+      expect(stillBundled.data.content).toContain('P2')
+    } finally {
+      await cleanup()
+      await rm(overrides, { recursive: true, force: true })
     }
   })
 

@@ -1,4 +1,6 @@
+import { parse as parseYaml, stringify } from 'yaml'
 import { SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
+import type { FsStore } from './fs.js'
 
 /** One migration step: take a v(n) document and return the v(n+1) document. */
 export interface MigrationStep {
@@ -49,4 +51,32 @@ export function migrateDocument(
     current = { ...current, schema_version: version }
   }
   return current
+}
+
+/**
+ * Migrate one YAML document in place with a pre-image rollback. A failing step
+ * restores the exact bytes, so a project never remains half-migrated. The
+ * engine has no v1 predecessor yet, but the contract is ready for the first
+ * real chain and is exercised by T-09.
+ */
+export async function migrateProjectFile(
+  store: FsStore,
+  path: string,
+  chain: readonly MigrationStep[] = MIGRATIONS,
+  target: number = SCHEMA_VERSION,
+): Promise<boolean> {
+  const before = await store.readBytes(path)
+  if (before === null) {
+    throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `cannot migrate missing ${path}`)
+  }
+  try {
+    const document = parseYaml(before.toString('utf8')) as Record<string, unknown>
+    const migrated = migrateDocument(document, chain, target)
+    const next = stringify(migrated, { lineWidth: 0 })
+    await store.writeText(path, next)
+    return next !== before.toString('utf8')
+  } catch (error) {
+    await store.writeBytes(path, before)
+    throw error
+  }
 }

@@ -1,10 +1,19 @@
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { EngineService } from '../src/engine/service.js'
 import type { EngineConfig } from '../src/engine/state.js'
 import { loadRulepack } from '../src/rulepack.js'
-import type { ChapterSummary, ReviewDocument, SceneType, ScoreDimension, StateDelta } from '../src/types.js'
+import { SEMANTIC_CHECK_IDS } from '../src/engine/semantic.js'
+import type {
+  ChapterSummary,
+  ReviewDocument,
+  SceneType,
+  ScoreDimension,
+  SemanticItem,
+  StateDelta,
+} from '../src/types.js'
 
 export const FIXED_NOW = (): Date => new Date('2026-10-26T10:00:00.000Z')
 
@@ -128,8 +137,11 @@ export async function snapshotTree(root: string): Promise<Map<string, string>> {
         await walk(absolute)
         continue
       }
-      const info = await stat(absolute)
-      result.set(relative(root, absolute).replace(/\\/g, '/'), `${info.size}:${info.mtimeMs}`)
+      const content = await readFile(absolute)
+      result.set(
+        relative(root, absolute).replace(/\\/g, '/'),
+        `${content.byteLength}:${createHash('sha256').update(content).digest('hex')}`,
+      )
     }
   }
   await walk(root)
@@ -194,6 +206,26 @@ export async function writeDraft(input: {
   })
 }
 
+/** The four P6 semantic items, all passing against a quote from the text. */
+export function sampleSemantic(
+  text: string,
+  patch: Partial<Record<(typeof SEMANTIC_CHECK_IDS)[number], Partial<SemanticItem>>> = {},
+): SemanticItem[] {
+  const quote =
+    text
+      .split(/\n+/)
+      .find((line) => line.trim() !== '')
+      ?.trim()
+      .slice(0, 14) ?? '正文'
+  return SEMANTIC_CHECK_IDS.map((id) => ({
+    id,
+    verdict: 'pass',
+    evidence: quote,
+    note: '已核对',
+    ...(patch[id] ?? {}),
+  }))
+}
+
 /** Take chapter one all the way to `ready_to_archive`. */
 export async function readyToArchive(input: {
   root: string
@@ -207,7 +239,7 @@ export async function readyToArchive(input: {
   await input.engine.getBrief({ stage: 'P4', root: input.root })
   await input.engine.submitReview({ chapter: 1, ...sampleReview(1, text), root: input.root })
   await input.engine.getBrief({ stage: 'P6', root: input.root })
-  await input.engine.runCheck({ chapter: 1, root: input.root })
+  await input.engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root: input.root })
   await input.engine.getBrief({ stage: 'P8', root: input.root })
   return text
 }

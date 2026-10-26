@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { bootstrapToDraft, harness, readProjectFile, sampleReview, writeDraft } from './helpers.js'
+import {
+  bootstrapToDraft,
+  harness,
+  readProjectFile,
+  sampleReview,
+  sampleSemantic,
+  writeDraft,
+} from './helpers.js'
 
 const atP6 = async (): Promise<{
   root: string
@@ -27,16 +34,16 @@ describe('semantic check evidence', () => {
   it('fails the check when an evidence quote is not in the manuscript', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
       const result = await engine.runCheck({
         chapter: 1,
-        semantic: [
-          {
-            id: 'L2-SCENE',
+        semantic: sampleSemantic(text, {
+          'L2-SCENE-ANCHOR': {
             verdict: 'pass',
             evidence: '第 2 段：这句话根本不在正文里',
             note: '伪造引用',
           },
-        ],
+        }),
         root,
       })
       expect(result.data.verdict).toBe('fail')
@@ -52,16 +59,16 @@ describe('semantic check evidence', () => {
   it('fails the check when a semantic item reports a failure, even with valid evidence', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
       const result = await engine.runCheck({
         chapter: 1,
-        semantic: [
-          {
-            id: 'L2-VOICE',
+        semantic: sampleSemantic(text, {
+          'L2-VOICE': {
             verdict: 'fail',
             evidence: '风从窗缝里挤进来',
             note: '叙述视角漂移',
           },
-        ],
+        }),
         root,
       })
       expect(result.data.verdict).toBe('fail')
@@ -75,21 +82,41 @@ describe('semantic check evidence', () => {
   it('accepts a labelled quote that really appears in the manuscript', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
       const result = await engine.runCheck({
         chapter: 1,
-        semantic: [
-          {
-            id: 'L2-SCENE',
-            verdict: 'pass',
-            evidence: '第 1 段：风从窗缝里挤进来',
-            note: '已核对原文',
-          },
-        ],
+        semantic: sampleSemantic(text),
         root,
       })
       expect(result.data.verdict).toBe('pass')
       expect(result.data.stage).toBe('ready_to_archive')
       expect((await pipeline(root)).blocking).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('does not replay a failed check after the semantic evidence is corrected', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const failed = await engine.runCheck({
+        chapter: 1,
+        semantic: sampleSemantic(text, {
+          'L2-VOICE': { verdict: 'fail', evidence: '风从窗缝里挤进来', note: '声音无区分' },
+        }),
+        root,
+      })
+      expect(failed.data.verdict).toBe('fail')
+      await engine.getBrief({ stage: 'P6', root })
+      const corrected = await engine.runCheck({
+        chapter: 1,
+        semantic: sampleSemantic(text),
+        root,
+      })
+      expect(corrected.replayed).not.toBe(true)
+      expect(corrected.data.verdict).toBe('pass')
+      expect(corrected.data.stage).toBe('ready_to_archive')
     } finally {
       await cleanup()
     }

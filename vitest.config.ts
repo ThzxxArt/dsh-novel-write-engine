@@ -12,10 +12,10 @@ export default defineConfig({
     hookTimeout: 20_000,
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json-summary'],
+      reporter: ['text', 'text-summary', 'json-summary', 'json', 'html'],
       reportsDirectory: 'coverage',
       include: ['src/**/*.ts'],
-      exclude: ['src/types.ts', 'src/client/dto.ts'],
+      exclude: ['src/types.ts', 'src/client/dto.ts', 'src/rules/types.ts'],
       thresholds: {
         lines: 85,
         branches: 85,

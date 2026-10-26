@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { archiveDelta, harness, sampleReview, sampleSummary } from './helpers.js'
+import { archiveDelta, harness, sampleReview, sampleSemantic, sampleSummary } from './helpers.js'
 import type { ChapterSummary, SceneType } from '../src/types.js'
 
 const TEXTS: Record<number, string> = {
@@ -167,7 +167,7 @@ describe('three-chapter end to end', () => {
         await engine.getBrief({ stage: 'P4', root })
         await engine.submitReview({ chapter, ...sampleReview(chapter, text), root })
         await engine.getBrief({ stage: 'P6', root })
-        await engine.runCheck({ chapter, root })
+        await engine.runCheck({ chapter, semantic: sampleSemantic(text), root })
         await engine.getBrief({ stage: 'P8', root })
         const archived = await engine.archiveChapter({
           chapter,

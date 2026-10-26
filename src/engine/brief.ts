@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { bundledDir, readTextAt } from '../assets.js'
+import { bundledDir, readTextAt, readTextIfExists } from '../assets.js'
 import { ERROR_CODES, EngineFaultError, type BriefStage } from '../types.js'
 
 /** One rendered task book. */
@@ -26,26 +26,32 @@ const TITLES: Record<BriefStage, string> = {
  * guidance must not require a release.
  */
 export class BriefLibrary {
-  private readonly directory: string
+  private readonly overrideDirectory: string | null
+  private readonly bundledDirectory: string
 
   constructor(directory?: string) {
-    this.directory = directory ?? bundledDir('briefs')
+    this.overrideDirectory = directory === undefined || directory === '' ? null : directory
+    this.bundledDirectory = bundledDir('briefs')
   }
 
-  /** Absolute path of the task book for a stage. */
+  /** Absolute path of the override when configured, otherwise the bundled one. */
   pathFor(stage: BriefStage): string {
-    return join(this.directory, `${stage}.md`)
+    return this.overrideDirectory === null
+      ? join(this.bundledDirectory, `${stage}.md`)
+      : join(this.overrideDirectory, `${stage}.md`)
   }
 
   load(stage: BriefStage): BriefDocument {
-    const path = this.pathFor(stage)
+    const override = this.overrideDirectory === null ? null : this.pathFor(stage)
+    const fromOverride = override === null ? null : readTextIfExists(override)
+    const path = join(this.bundledDirectory, `${stage}.md`)
     let content: string
     try {
-      content = readTextAt(path)
+      content = fromOverride ?? readTextAt(path)
     } catch (error) {
       throw new EngineFaultError(
         ERROR_CODES.CONFIG_INVALID,
-        `brief ${stage} is missing at ${path}`,
+        `brief ${stage} is missing at ${override ?? path}`,
         'reinstall the plugin; briefs ship with the package',
         { cause: error },
       )

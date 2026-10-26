@@ -1,0 +1,34 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parse as parseYaml } from 'yaml'
+import { expect, it } from 'vitest'
+import { entryListProblem } from '@deepseek-ai/dsh-agent-preset-registry'
+
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
+
+interface Entry {
+  id?: string
+  name: string
+  group?: boolean
+  isolate?: Record<string, boolean>
+  config?: unknown
+}
+
+/** T-11 / §11.6: the preset entry list must be structurally valid. */
+it('T-11 the preset patch passes the registry entry-list contract', () => {
+  const operations = parseYaml(
+    readFileSync(join(repoRoot, 'presets/novel-write-engine.patch.yml'), 'utf8'),
+  ) as Array<{ insert: Entry[] }>
+  const entries = operations.flatMap((operation) => operation.insert)
+  expect(entries).toHaveLength(1)
+  const config = entries[0]!.config as { plugins: Entry[] }
+  expect(entryListProblem(config.plugins)).toBeUndefined()
+  const ids = config.plugins.map((entry) => entry.id)
+  expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true)
+  expect(new Set(ids).size).toBe(ids.length)
+  for (const group of config.plugins.filter((entry) => entry.group === true)) {
+    expect(group.name).toBe('cordis:group')
+    expect(group.isolate).toBeDefined()
+  }
+})

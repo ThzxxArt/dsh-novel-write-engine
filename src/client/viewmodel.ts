@@ -7,9 +7,18 @@ export interface PanelView {
   subtitle: string
   revision: string
   phases: Array<{ id: string; done: boolean; active: boolean }>
-  rows: Array<{ num: string; title: string; words: string; score: string; badge: string; tone: string }>
+  rows: Array<{
+    num: string
+    title: string
+    words: string
+    score: string
+    badge: string
+    tone: string
+    details: string
+  }>
   blocking: Array<{ code: string; detail: string; hint: string }>
   blockingTitle: string
+  next: string
 }
 
 export const PANEL_SCHEMA_VERSION = 1
@@ -23,6 +32,7 @@ const loading = (): PanelView => ({
   rows: [],
   blocking: [],
   blockingTitle: '阻塞',
+  next: '',
 })
 
 const errorView = (message: string): PanelView => ({
@@ -68,9 +78,11 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       score: `${row.score}/150`,
       badge: row.status === 'passed' ? '已归档' : row.status === 'blocked' ? '阻塞' : '草稿',
       tone: row.status === 'passed' ? 'ok' : row.status === 'blocked' ? 'bad' : 'muted',
+      details: row.details ?? '',
     })),
     blocking,
     blockingTitle: blocking.length === 0 ? '没有阻塞项' : `阻塞 ${blocking.length} 项`,
+    next: summary.next === undefined ? '' : `下一步：${summary.next.tool} — ${summary.next.reason}`,
   }
 }
 
