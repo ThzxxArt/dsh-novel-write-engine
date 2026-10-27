@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import {
@@ -120,6 +122,82 @@ describe('semantic check evidence', () => {
       expect(corrected.replayed).not.toBe(true)
       expect(corrected.data.verdict).toBe('pass')
       expect(corrected.data.stage).toBe('ready_to_archive')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('repairs a corrupt check before a stale revision blocker', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      await engine.runCheck({
+        chapter: 1,
+        semantic: sampleSemantic(text, {
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
+        }),
+        root,
+      })
+      expect((await engine.getStatus({ root })).data.stage).toBe('P6')
+      await writeFile(join(root, 'checks/ch001.check.yaml'), 'verdict: [unclosed\n', 'utf8')
+      const damaged = await engine.getStatus({ root })
+      expect(damaged.data.state_errors).toEqual([expect.objectContaining({ code: 'CHECK_UNREADABLE' })])
+      expect(damaged.data.next).toMatchObject({
+        tool: 'novel_brief',
+        args: { stage: 'P6', chapter: 1 },
+      })
+      await engine.getBrief({ stage: 'P6', root })
+      expect((await engine.getStatus({ root })).data.next).toMatchObject({
+        tool: 'novel_check',
+        args: { chapter: 1 },
+      })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('applies content and integrity scopes separately and records the actual scope', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const original = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const semantic = sampleSemantic(original)
+      await expect(engine.runCheck({ chapter: 1, scope: [], semantic, root })).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+      await expect(engine.runCheck({ chapter: 1, scope: ['unknown'], semantic, root })).rejects.toMatchObject(
+        { code: 'ENGINE_SCHEMA_INVALID' },
+      )
+
+      const polluted = `${original} # 这是 Markdown 污染`
+      await writeFile(join(root, 'chapters/chapter-001.md'), polluted, 'utf8')
+      await engine.getBrief({ stage: 'P6', root })
+      const integrityOnly = await engine.runCheck({
+        chapter: 1,
+        scope: ['integrity'],
+        semantic: sampleSemantic(polluted),
+        root,
+      })
+      expect(integrityOnly.data.verdict).toBe('pass')
+      expect((await pipeline(root)).stage).toBe('ready_to_archive')
+      const check = parseYaml((await readProjectFile(root, 'checks/ch001.check.yaml'))!) as {
+        scope: string[]
+      }
+      expect(check.scope).toEqual(['integrity'])
+
+      await engine.rollback({ chapter: 1, toStage: 'P6', reason: '重新跑全量检查', root })
+      await writeFile(join(root, 'chapters/chapter-001.md'), original, 'utf8')
+      await engine.getBrief({ stage: 'P6', root })
+      const allScopes = await engine.runCheck({
+        chapter: 1,
+        scope: ['integrity', 'content'],
+        semantic: sampleSemantic(original),
+        root,
+      })
+      expect(allScopes.data.verdict).toBe('pass')
+      const fullCheck = parseYaml((await readProjectFile(root, 'checks/ch001.check.yaml'))!) as {
+        scope: string[]
+      }
+      expect(fullCheck.scope).toEqual(['content', 'integrity'])
     } finally {
       await cleanup()
     }

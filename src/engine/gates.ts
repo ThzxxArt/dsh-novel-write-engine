@@ -79,6 +79,7 @@ const wordCount: Gate = (input) => {
 
 /** PG-04: format blockers must be zero before length is judged. */
 const format: Gate = (input, options) => {
+  if (input.scope !== undefined && !input.scope.includes('content')) return []
   const violations = runRules(
     [
       'MD_CONTAMINATION',
@@ -437,6 +438,7 @@ const readingProof: Gate = (input) => {
 
 /** PG-10: cross-chapter reconciliation must be clean. */
 const consistency: Gate = (input, options) => {
+  if (input.scope !== undefined && !input.scope.includes('integrity')) return []
   const violations = runRules(
     [
       'DUPLICATE_PARAGRAPH',

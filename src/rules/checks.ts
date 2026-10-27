@@ -391,11 +391,19 @@ const adjectiveDensity: Rule = (ctx) => {
   ]
 }
 
-const slidingWindows = (text: string, size: number): string[] => {
-  if (text.length <= size) return [text]
+export const slidingWindows = (text: string, size: number): string[] => {
+  const positions: number[] = []
+  for (let index = 0; index < text.length; index += 1) {
+    if (/\S/.test(text[index]!)) positions.push(index)
+  }
+  if (positions.length <= size) return [text]
   const windows: string[] = []
-  for (let start = 0; start + size <= text.length; start += 1) windows.push(text.slice(start, start + size))
-  const tail = text.slice(text.length - size)
+  for (let startIndex = 0; startIndex + size <= positions.length; startIndex += 1) {
+    const start = positions[startIndex]!
+    const end = startIndex + size < positions.length ? positions[startIndex + size]! : text.length
+    windows.push(text.slice(start, end))
+  }
+  const tail = text.slice(positions[positions.length - size]!)
   if (windows[windows.length - 1] !== tail) windows.push(tail)
   return windows
 }
@@ -554,18 +562,35 @@ const revisitedTooSoon: Rule = (ctx) => {
 
 const resourceMismatch: Rule = (ctx) => {
   const changes = ctx.summary?.resource_changes ?? []
+  const positive = /(增加|多了|得到|获得|赚|加|上升|增|\+)/
+  const negative = /(减少|少了|失去|消耗|花|损失|下降|减|-|−)/
   return changes.flatMap((change) => {
     if (change.delta === 0) return []
-    const magnitude = String(Math.abs(change.delta))
-    const mentioned = ctx.text.includes(change.character) && ctx.text.includes(magnitude)
-    return mentioned
+    const magnitude = Math.abs(change.delta)
+    // Match a sign and a resource only in the same local statement as the
+    // amount. A global "text contains '-' somewhere" would accept an opposite
+    // change in a different paragraph.
+    const stated = [...ctx.text.matchAll(/\d+/g)].some((match) => {
+      if (Number(match[0]) !== magnitude) return false
+      const index = match.index ?? 0
+      const window = ctx.text.slice(
+        Math.max(0, index - 80),
+        Math.min(ctx.text.length, index + match[0].length + 80),
+      )
+      return (
+        window.includes(change.character) &&
+        window.includes(change.resource) &&
+        (change.delta > 0 ? positive : negative).test(window)
+      )
+    })
+    return stated
       ? []
       : [
           v(
             CROSS_RULES.RESOURCE_MISMATCH,
             'advisory',
             1,
-            `${change.character}'s ${change.resource} change (${change.delta}) is not stated in the text`,
+            `${change.character}'s ${change.resource} change (${change.delta}) is not stated with the right sign in the text`,
           ),
         ]
   })

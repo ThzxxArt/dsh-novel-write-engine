@@ -1,6 +1,6 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "keywords": [
     "dsh-plugin",

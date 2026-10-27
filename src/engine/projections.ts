@@ -85,7 +85,7 @@ const STAGE_TO_PHASE: Record<Stage, string> = {
   P4: 'P4',
   P5: 'P5',
   P6: 'P6',
-  ready_to_archive: 'P8',
+  ready_to_archive: 'P7',
   done: 'P9',
 }
 

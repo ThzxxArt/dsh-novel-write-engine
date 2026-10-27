@@ -151,7 +151,7 @@ describe('context stages and panel draft projection', () => {
         title: '开端之雨',
         scene_type: '日常过渡章',
         narrator: '他',
-        beats: ['起'],
+        beats: ['起', '承', '转', '合', '收'],
         opening: '开场',
         ending: '断章',
         target_words: [80, 400],

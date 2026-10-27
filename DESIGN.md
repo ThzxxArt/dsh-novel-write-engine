@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 插件版本 | `0.1.1` |
+| 插件版本 | `0.1.2` |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine` |
 | 协议 | MIT |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0` |
@@ -866,7 +866,7 @@ dialogue_ratio = dialogue_lines / nonEmptyLines     // 小数字面量，禁百�
 ### 5.5 词表与规则包结构
 
 ```yaml
-# rulepacks/default.yaml（节选；0.1.1 真实 schema）
+# rulepacks/default.yaml（节选；0.1.2 真实 schema）
 schema_version: 1
 name: default
 version: "1.0.0"
@@ -1034,7 +1034,7 @@ rhythm:
 
 ### 5.10 十二种类型的关键差异
 
-类型不是「风格标签」，但 0.1.1 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
+类型不是「风格标签」，但 0.1.2 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
 
 | 类型 | 首个卖点位置 | 专项约束 |
 |---|---|---|
@@ -1269,6 +1269,8 @@ PG-01 任务书 → PG-02 阶段 → PG-04 格式 → PG-03 字数
   → PG-11 轮次 → PG-12 归档事务
 ```
 
+`runCheck` 的 `scope` 默认 `['content','integrity']`；只给 `content` 时 PG-04 执行、PG-10 跳过，只给 `integrity` 时相反。collect 的机检结果也按同一 scope 过滤，`scope` 写入 check 文档并参与幂等 key。
+
 **为什么格式必须排在字数前**：见 §5.3 的口径陷阱——弯引号与破折号既计入字数又被判违规；若先判字数，会出现「写错引号所以够 2000 字，改对之后反而不够」的倒挂。
 
 ### 7.5 门控求值器（纯函数）
@@ -1463,7 +1465,7 @@ ctx.skills.register({
 | 阶段 | 任务书内容 | 上下文包 |
 |---|---|---|
 | P1 | 世界观约束清单的字段与判据 | 近 5 章摘要、伏笔台账、卷幕位置、类型约束 |
-| P2 | 八部分预检表的填写规则 | 本章大纲、前章结尾、待推进伏笔、场景类型分布 |
+| P2 | 八部分预检表的填写规则 | 本章大纲、前章结尾、待推进伏笔、场景类型分布；计划本身必须 4–8 字标题、5–8 个节拍、narrator/opening/ending 非空 |
 | P3 | 写作铁律（字数/引号/直引号/摘要 10 字段） | 角色全文、锁定描写、前章结尾、本章预检表 |
 | P4 | 15 维评分标准 + 扣分项写法 + proof 要求 | 机检报告、全量角色、前章、历史评分 |
 | P5 | 按 issue 逐条修复的规则 + 证据要求 | 评审报告、issue 清单、当前正文 |
@@ -1537,6 +1539,7 @@ output.schema: {
     stage:          { type: 'string', required: true },
     rounds:         { type: 'object', required: true, additionalProperties: true },
     blocking:       { type: 'array', required: true, items: { type: 'object' } },
+    state_errors:   { type: 'array', required: true, items: { type: 'object' } },
     metrics:        { type: ['object', 'null'], required: true },
     next: { type: 'object', required: true, additionalProperties: false,
       properties: {
@@ -1550,6 +1553,8 @@ output.schema: {
 
 `chapter` 只影响字数查询，`active_chapter` 才是管线正在写的章。`next.tool` 必须是当前阶段合法、且参数可用的下一步：任何阶段只要该阶段 brief 缺失或 digest 过期，先返回 `novel_brief`（`args` 带 `stage` 与 `chapter`）；brief 当前后才返回实际写操作。P5/P6 有阻塞时返回 `novel_revise`；`ready_to_archive` 在 P8 brief 当前后返回 `novel_archive`；`done` 未完成时先取 P1。不能返回只读的 `novel_status`，也不能用已过期的 brief 硬推下一步。
 
+`state_errors` 是 `{path, code, message}` 数组。plan/review/check 文件存在但无法读取时，status 仍可建立快照；当前阶段晚于重建点时 `next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时直接指向 `novel_brief` 与对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。`STATE_UNREADABLE` 同时进入 `blocking`，需要该文档的写操作会在落盘前拒绝。
+
 #### `novel_brief`
 
 ```ts
@@ -1557,7 +1562,7 @@ parameters: { stage: { type: 'string', required: true, enum: ['P1','P2','P3','P4
 output: { stage, chapter, digest, title, content, content_hash, fields, context }
 ```
 
-`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。
+`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。`fields` 同时暴露 `plan_error`/`review_error`/`check_error`。`context.context_meta` 是 `{version, stage, budget, used, over_budget, protected, truncated, omitted, strategy}`；正文、当前 plan/review/check、摘要等受保护键不裁剪，裁剪项参与 digest。
 
 **这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「角色全文 + 前章结尾 + 待推进伏笔」；P6 拿「全量台账 + 机检报告」；不相关的一律不给。
 
@@ -1668,7 +1673,7 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 1. **Hero**：书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数；右侧刷新。
 2. **统计**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`。
-3. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。
+3. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
 4. **下一步卡**：工具的中文动作 + 可读理由；原始工具名只作为次要技术标识。
 5. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
 6. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
@@ -1838,7 +1843,7 @@ export interface Config {
 }
 ```
 
-**0.1.1 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
+**0.1.2 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
 
 **阈值优先级（同一键只保留一个最终值，不叠乘、不取交集）**：
 
@@ -1861,7 +1866,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 12.3 国际化
 
-- 0.1.1 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
+- 0.1.2 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
 - 任务书可用 `briefsOverrides` 指向用户目录覆盖；缺阶段文件时回退随包版本。
 - 英文覆盖与 `ctx.locale` 集成延后到 0.2.0，届时再引入键表与缺失键报告。
 
@@ -1941,7 +1946,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 13.5 必须存在的证伪测试（12 条）
 
-这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.1.1 不发。
+这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.1.2 不发。
 
 | # | 证伪目标 | 测试方式 | 对应 |
 |---|---|---|---|
@@ -2079,22 +2084,23 @@ CI 不伪造这个解析结果。
 
 封面 SVG 由纯字符串模板生成（书名 + 类型 + 作者），不引 canvas；平台简介按模板 + 变量填充，文案可自定义。
 
-### 14.3 发布判据（0.1.1 Release Gate）
+### 14.3 发布判据（0.1.2 Release Gate）
 
-1. §14.1 十四个切片全部完成，且每片有对应测试。
+1. `docs/0.1.2-plan.md` 的六个切片（S1–S6）全部完成，且每片有对应测试。
 2. **覆盖率四项全部 ≥ 门槛**（§13.3），CI 绿。
 3. **12 条证伪测试全绿**（§13.5）。
 4. 架构测试全绿（R1~R6 + 规则码唯一 + 面板只读）。
 5. 单章端到端样例：`init → plan → draft → review → revise → check → archive → export`，零手工改文件。
-6. 面板在真实宿主可用：三个数据断言（项目名、章节数、门控状态）+ 一张截图。
+6. 面板在真实宿主可用：`check:host` 验证未认证 401、认证后 200、预设可见；截图作为人工验收材料，不纳入自动门。
 7. 预设验收六条全过（§11.6）。
 8. 卸载无残留；`--dump-config` 能看到我们那一层。
-9. CHANGELOG 只列能力，不列「后续待办」。
-10. **自包含**：在未安装任何其他创作工具的干净 profile 里，`pnpm pack` 产物直接安装并跑通第 5 条端到端；构建期规则包完整性校验通过；运行时无包外路径读取（§8.4）。
+9. `check:host` 在真实 headless profile 中通过本地 Messages peer 触发一次 `novel_init`，断言工具声明、工具结果、项目落盘与最终回答；不能只用面板 200 冒充工具可用。
+10. CHANGELOG 只列能力，不列「后续待办」。
+11. **自包含**：在未安装任何其他创作工具的干净 profile 里，`pnpm pack` 产物直接安装并跑通第 5 条端到端；构建期规则包完整性校验通过；运行时无包外路径读取（§8.4）。
 
 ### 14.4 发布动作纪律
 
-**发布纪律**：0.1.1 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
+**发布纪律**：0.1.2 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
 
 ---
 

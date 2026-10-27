@@ -36,4 +36,14 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 - 评审/修订/校验各上限 3 轮，由引擎自增，模型不能传轮次。
 - 超限 → `PG-11` 阻塞，提示 `novel_rollback`。
+- 回退只允许退到当前阶段或更早阶段（`P2 → P3 → P4 → P5 → P6 → ready_to_archive → done`；`P1` 目标落到 P2）；`P3 → P6` 这类前进跳过返回 `ENGINE_STAGE_ORDER`。
 - 回退保留正文，清空任务书签收与轮次。
+
+## 0.1.2 状态恢复
+
+- `load` 对 plan/review/check 采用可恢复读取：文件存在但 YAML/窄化失败时，快照仍可建立，错误进入 `planError/reviewError/checkError`。
+- `novel_status` / `novel_pipeline` 返回 `state_errors`，并把 `STATE_UNREADABLE` 加入 blocking；当前阶段晚于重建点时 `next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时直接指向 brief 与阶段修复工具。
+- 恢复目标：plan → P2；review → P4；check → P6。目标不会晚于当前阶段；多个错误按 plan 优先。
+- 需要该文档的写操作会被提前拒绝：plan 阻断 draft/review/revision/check/archive；review 阻断 revision/check/archive；check 阻断 archive。`novel_plan_chapter`、`novel_review`、`novel_check` 可覆盖对应文件。
+- review 存在但 `pipeline.review_digest` 缺失或被改动时归档 fail-closed；status 返回 `REVIEW_DIGEST_MISSING`/`REVIEW_DIGEST_MISMATCH`，`next` 回退 P4，重新 `novel_review` 后再归档；不要手改 `state/pipeline.yaml`。
+- plan/review/check 的 `schema_version` 高于引擎支持版本时返回 `ENGINE_SCHEMA_TOO_NEW`，不会被当作可覆盖的损坏状态。

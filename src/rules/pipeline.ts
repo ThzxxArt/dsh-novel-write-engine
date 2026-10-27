@@ -1,4 +1,4 @@
-import { ALL_RULE_CODES } from '../codes.js'
+import { ALL_RULE_CODES, CROSS_RULES } from '../codes.js'
 import type { Violation, WordMetrics } from '../types.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { sentenceRhythm, splitParagraphs, type SentenceRhythm } from '../domain/text.js'
@@ -38,6 +38,15 @@ const lexiconCodes = new Set([
   'GOD_VIEW',
   'CONCLUSION_FIRST',
 ])
+
+const integrityCodes = new Set<string>(Object.values(CROSS_RULES))
+
+/** Which runCheck scope owns one machine finding. */
+export function scopeOfRule(code: string): 'content' | 'integrity' {
+  return integrityCodes.has(code) ? 'integrity' : 'content'
+}
+
+export { slidingWindows } from './checks.js'
 
 /**
  * Run the deterministic pass. Format and punctuation run before the lexicon so

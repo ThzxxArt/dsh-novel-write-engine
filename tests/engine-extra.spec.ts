@@ -847,7 +847,7 @@ async function archiveOne(input: {
     title,
     scene_type: scene,
     narrator: '他',
-    beats: ['起', '承'],
+    beats: ['起', '承', '转', '合', '收'],
     opening: '开场',
     ending: '断章',
     target_words: [80, 400],

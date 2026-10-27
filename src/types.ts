@@ -237,6 +237,13 @@ export interface CheckDocument {
   verdict: 'pass' | 'fail'
 }
 
+/** A state document that exists but cannot be read safely. */
+export interface StateError {
+  path: string
+  code: 'PLAN_UNREADABLE' | 'REVIEW_UNREADABLE' | 'CHECK_UNREADABLE'
+  message: string
+}
+
 /** Word statistics with the single engine-wide counting rule. */
 export interface WordMetrics {
   total_word_count: number
@@ -585,6 +592,8 @@ export interface GateInput {
   summaryProvided?: boolean
   review: ReviewDocument | null
   check: CheckDocument | null
+  /** When set, result-bearing gates run only the named check scopes. */
+  scope?: string[]
   semantic: SemanticItem[]
   proof: ReadingProof | null
   rounds: RoundCounters
@@ -630,6 +639,8 @@ export interface StatusReport {
   stage: Stage
   rounds: RoundCounters
   blocking: BlockingItem[]
+  /** plan/review/check files that exist but cannot be read safely. */
+  state_errors: StateError[]
   metrics: WordMetrics | null
   next: { tool: string; args: Record<string, unknown>; reason: string }
 }
@@ -642,6 +653,7 @@ export interface AdviceReport {
   args: Record<string, unknown>
   reason: string
   blocking: BlockingItem[]
+  state_errors: StateError[]
 }
 
 /** One history row derived from the journal. */

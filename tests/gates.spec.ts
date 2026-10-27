@@ -125,6 +125,24 @@ describe('gate evaluation', () => {
     expect(briefStageFor('getStatus', 'idle')).toBeNull()
   })
 
+  it('PG-10 is skipped when runCheck excludes integrity', () => {
+    const checkInput = input({
+      operation: 'runCheck',
+      stage: 'P6',
+      pipeline: {
+        ...input().pipeline,
+        stage: 'P6',
+        briefs: { P6: { issued_at: '2026-01-01', digest: 'D' } },
+      },
+      briefStage: 'P6',
+      proof: proof(),
+      previousTexts: [text],
+      scope: ['content'],
+    })
+    expect(codes({ ...checkInput, scope: undefined })).toContain('PG-10')
+    expect(codes(checkInput)).not.toContain('PG-10')
+  })
+
   it('runs PG-04 before PG-03 and collects every failure', () => {
     const gateInput = input({ text: '他推开门，“你敢”。\n\n短。', summary: null, sceneType: null })
     const blocking = evaluateGates(gateInput, options).blocking

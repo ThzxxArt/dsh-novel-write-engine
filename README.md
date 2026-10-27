@@ -4,7 +4,7 @@
 
 它不是一个提示词合集，也不是独立的写作软件。它把「这一章处于什么阶段、下一步只能做什么、正文是否达标、归档要核销哪些实体」变成可执行、可回滚、可审计的引擎；模型负责写，引擎负责裁决和记账。
 
-> **当前版本：0.1.1** · 中文界面 · MIT
+> **当前版本：0.1.2** · 中文界面 · MIT
 >
 > **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 
@@ -70,7 +70,7 @@
 - 不是「装完就自动写完整本书」的生成器；它管流程、门禁和状态，正文仍由模型写。
 - 不是独立 CLI；必须作为 DSH 插件安装到某个 profile 才能使用。
 - 不提供云端同步、账号体系、在线书城或多人协作。
-- 0.1.1 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
+- 0.1.2 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
 
 ---
 
@@ -165,7 +165,7 @@ P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `d
 | 宿主形态 | Web（面板 + 预设）、Desktop（面板 + 预设，插件由桌面壳管理）、headless（只有工具/命令，无面板/预设） |
 | 磁盘 | 项目根目录可写；默认 `stateDir` 可写 |
 | 网络 | 安装时需要访问 npm / Git 托管；运行插件本身不联网 |
-| 语言 | 0.1.1 仅中文 |
+| 语言 | 0.1.2 仅中文 |
 
 检查命令：
 
@@ -269,7 +269,7 @@ dsh plugin --profile web add dsh-novel-write-engine
 固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.1
+dsh plugin --profile web add dsh-novel-write-engine@0.1.2
 ```
 
 `dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
@@ -324,13 +324,13 @@ corepack pnpm pack
 会得到类似：
 
 ```text
-dsh-novel-write-engine-0.1.1.tgz
+dsh-novel-write-engine-0.1.2.tgz
 ```
 
 把这个 tarball 复制到目标机器，放在一个**稳定、不会随手删除**的路径，然后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.2.tgz
 ```
 
 tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内已经包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch。它是最接近「发布产物」的安装方式。
@@ -345,9 +345,9 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 2. 点 **添加插件**（或旁边的箭头 → **安装第三方插件**）。
 3. 在包名字段填入以下任一形式：
    - npm 包名：`dsh-novel-write-engine`
-   - 精确版本：`dsh-novel-write-engine@0.1.1`
+   - 精确版本：`dsh-novel-write-engine@0.1.2`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
-   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.1.tgz`
+   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.2.tgz`
 4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
@@ -461,10 +461,13 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 关键点：
 
 - **每一步提交前都要先领任务书**，PG-01 会检查 digest。`novel_status` / `novel_pipeline` 在任务书缺失或过期时会先返回 `novel_brief`，不会让你直接撞 PG-01。
+- **plan/review/check 损坏时不是死锁**：status 返回 `state_errors` 与 `STATE_UNREADABLE`；当前阶段晚于重建点时，`next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时则直接指向 `novel_brief` → 对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。不会让模型在同一条 rollback 上循环。P6 的 check 损坏优先于旧 revision 阻塞；归档前 `review_digest` 缺失/不匹配会显示 `REVIEW_DIGEST_MISSING`/`REVIEW_DIGEST_MISMATCH` 并回退 P4。
+- **计划先校验再落盘**：P1 的 `constraints`/`characters`/`locations`/`continuity_notes` 有形状校验；P2 的标题 4–8 字、5–8 个非空节拍、narrator、opening/ending 都会在服务边界拒绝。
+- **上下文有预算**：每个 brief 的 `context.context_meta` 给出 `budget`/`used`/`truncated`/`omitted`；正文、当前 plan/review/check 与摘要受保护，不会被静默截断。裁剪会参与 digest，升级后旧 brief 需要重新领取。
 - `ready_to_archive` 在 P8 任务书当前后，`next.tool` 才返回 `novel_archive`；P5/P6 有阻塞时返回 `novel_revise`。
-- `novel_review` 的 `total` 是必填的，必须等于 `150 - Σdelta`；三段阅读证明必须逐字来自正文，开头/结尾按**实际段落**判定。
-- `novel_check` 的 `semantic` 恰好四个语义项，每项带至少 8 字、四条互不相同的正文引用。
-- `novel_archive` 的 `state_delta` 要逐实体核销角色、伏笔、时间线、世界、关系；新伏笔标题必须出现在正文，`no_change` 也要写原因。
+- `novel_review` 的 `total` 是必填的，必须等于 `150 - Σdelta`；三段阅读证明必须逐字来自正文，开头/结尾按**实际段落**判定；issue 的 `dimension` 必须是当前十五维之一，`location` 必须是本章实际段落。
+- `novel_check` 的 `semantic` 恰好四个语义项，每项带至少 8 字、四条互不相同的正文引用；`scope` 默认 `content + integrity`，只跑一类时另一类不参与本次 check。
+- `novel_archive` 的 `state_delta` 要逐实体核销角色、伏笔、时间线、世界、关系；新伏笔标题必须出现在正文，`no_change` 也要写原因；review 存在但 `review_digest` 缺失时拒绝归档，需重新 `novel_review`。
 - 正文改动后，旧的评审分数和 check 会失效；不要试图手工改 `state/` 绕过。
 
 ### 5. 看面板
@@ -500,19 +503,19 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 | 工具 | 阶段 | 做什么 | 写盘 |
 |---|---|---|---|
 | `novel_init` | — | 建项目：`novel.yaml` + `state/` + 目录 | 是 |
-| `novel_status` | 任意 | 当前活跃章、阶段、轮次、阻塞项、下一步；`chapter` 只用于字数查询 | 否 |
-| `novel_brief` | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields` 并记录 digest | 仅任务书签收 |
-| `novel_plan_world` | P1 | 提交世界观约束 | 是 |
-| `novel_plan_chapter` | P2 | 提交章节计划 | 是 |
+| `novel_status` | 任意 | 当前活跃章、阶段、轮次、阻塞项、`state_errors`、下一步；`chapter` 只用于字数查询 | 否 |
+| `novel_brief` | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields`、`context` 与 `context_meta` 并记录 digest | 仅任务书签收 |
+| `novel_plan_world` | P1 | 提交世界观约束；数组/对象形状在服务边界校验 | 是 |
+| `novel_plan_chapter` | P2 | 提交章节计划；标题 4–8 字、5–8 个节拍、opening/ending 非空 | 是 |
 | `novel_write_draft` | P3 | 提交初稿；格式/字数/摘要不过整体拒绝 | 是 |
-| `novel_review` | P4 | 十五维评分、问题清单、三段阅读证明 | 是 |
-| `novel_revise` | P5/P6 | 提交修订；blocker 必须有正文证据 | 是 |
-| `novel_check` | P6 | 机检 + 四个语义一致性项 | 是 |
-| `novel_archive` | P7–P9 | 事务归档；必须带 `state_delta` | 事务 |
+| `novel_review` | P4 | 十五维评分、问题清单、三段阅读证明；issue 维度/段落和 blocker waived 会被拒绝 | 是 |
+| `novel_revise` | P5/P6 | 提交修订；blocker 必须有正文证据，不能降级或 waived；issue 只能改 status/evidence | 是 |
+| `novel_check` | P6 | 机检 + 四个语义一致性项；`scope` 可只跑 `content` 或 `integrity` | 是 |
+| `novel_archive` | P7–P9 | 事务归档；必须带 `state_delta`；旧 review 无 digest 时拒绝 | 事务 |
 | `novel_word_count` | 任意 | 按引擎唯一口径数字数 | 否 |
 | `novel_state` | 任意 | 读账本、计划、评审、检查、handoff；`review`/`check` 可按历史章读取 | 否 |
 | `novel_amend` | 任意 | 带原因修订一个状态文档 | 是，入 journal |
-| `novel_rollback` | 任意 | 回退到 P1–P6，保留正文供参考 | 是 |
+| `novel_rollback` | 任意 | 只退回当前阶段或更早，保留正文供参考 | 是 |
 | `novel_diff` | 任意 | 与上次归档备份或两段文本比较 | 否 |
 | `novel_export` | 任意 | 导出 `md` / `txt` / `epub` | 导出目录 |
 | `novel_audit` | 任意 | 读追加式 journal 审计记录 | 否 |
@@ -728,7 +731,7 @@ P8.md
 
 ### 9.4 规则包不能运行期切换
 
-`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.1 **不接受**运行期外部规则包路径。
+`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.2 **不接受**运行期外部规则包路径。
 
 要改规则，只有两条路：
 
@@ -796,7 +799,8 @@ corepack pnpm test
 
 - 正文可以读，但不建议手改；正文一改，评审分数、check、content hash 都会失效。
 - `state/` 不要手改；要改就用 `novel_amend`，它要求 `reason` 并写入 journal。
-- 要回退阶段用 `novel_rollback`；它会保留正文为参考，清空任务书签收与轮次。
+- 要回退阶段用 `novel_rollback`；它只允许退回当前阶段或更早，会保留正文为参考，清空任务书签收与轮次。
+- plan/review/check 损坏时，status 的 `state_errors` 会指出文件；不要手改。当前阶段晚于重建点时先 `novel_rollback`；已经处在 P2/P4/P6 时直接重新取 brief，再用对应阶段工具重建。
 - 不要在引擎运行时删 `.engine.lock`；锁由引擎回收，手删可能让两个写者同时进入。
 
 ### 10.4 备份与恢复
@@ -809,6 +813,14 @@ corepack pnpm test
 ---
 
 ## 十一、升级
+
+### 11.0 从 0.1.1 升级到 0.1.2
+
+0.1.2 不 bump schema，也不改工具名/参数；但它会主动让三类旧状态暴露出来：
+
+1. **旧 brief 失效**：`context_meta` 进入 digest，升级后第一次调用会要求重新 `novel_brief`；这是预期行为，不是状态损坏。
+2. **旧 review 无 digest**：0.1.1 之前生成、没有 `pipeline.review_digest` 的 review 会被归档拒绝；重新 `novel_review` 后再归档。
+3. **损坏的 plan/review/check 不再静默**：status 会显示 `state_errors`；当前阶段晚于 P2/P4/P6 时 `next` 指向 `novel_rollback`，已经到达重建点时直接给出 brief 与阶段修复工具，不需要手改文件。
 
 ### 11.1 升级前
 
@@ -828,7 +840,7 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.1
+dsh plugin --profile web add dsh-novel-write-engine@0.1.2
 ```
 
 升级后核对：
@@ -870,7 +882,7 @@ corepack pnpm pack
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.2.tgz
 ```
 
 ### 11.5 在 Web / Desktop 里升级
@@ -1050,7 +1062,7 @@ DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制�
 
 ## 十五、已知限制
 
-- **0.1.1 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
+- **0.1.2 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
 - **通过 npm 分发**：安装与升级统一使用 `dsh plugin add`；源码目录和 tarball 用于开发或离线环境。
 - **面板与预设只在 Web/Desktop**：headless / acp / sdk 没有 `agentPresets` 服务，也没有浏览器面板；18 个工具仍可用。
 - **规则包不可运行期替换**：要改词表/阈值，必须改源码、重新构建、重新安装。
@@ -1133,12 +1145,12 @@ tests/            # 单测、集成、falsify、e2e
 
 ### 16.5 当前验证基线
 
-0.1.1 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
+0.1.2 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
 
-- `corepack pnpm test` 全绿（当前树 348 项）；
+- `corepack pnpm test` 全绿（当前树 379 项）；
 - 覆盖率语句/分支/函数/行均达到门槛；
 - `typecheck`、`lint`、`check:hygiene`、`test:isolated`、`build`、`validate:rulepack`、`check:pack`、`check:artifacts`、`check:install` 全绿；
-- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、`remove` 后层消失。
+- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、headless 真实触发 `novel_init` 工具并落盘、`remove` 后层消失。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把上面的历史数字当保证。
 
@@ -1150,7 +1162,8 @@ tests/            # 单测、集成、falsify、e2e
 |---|---|
 | [DESIGN.md](DESIGN.md) | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
 | [PLAN.md](PLAN.md) | 0.1.0 实施计划（历史） |
-| [docs/0.1.1-plan.md](docs/0.1.1-plan.md) | 0.1.1 契约收口与证据加固方案 |
+| [docs/0.1.2-plan.md](docs/0.1.2-plan.md) | 0.1.2 长书可运行性与证据闭环方案 |
+| [docs/0.1.1-plan.md](docs/0.1.1-plan.md) | 0.1.1 契约收口与证据加固方案（历史） |
 | [docs/tools.md](docs/tools.md) | 18 个工具与命令面速查 |
 | [docs/states.md](docs/states.md) | 状态机、迁移表、轮次与回退 |
 | [docs/rulepack.md](docs/rulepack.md) | 规则包结构、编译器断言、改词表流程 |

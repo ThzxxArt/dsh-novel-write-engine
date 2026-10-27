@@ -43,6 +43,15 @@ describe('brief context packs', () => {
       })
       await engine.amend({ path: 'state/locks.yaml', content: locks(), reason: 'seed', root })
       const brief = await engine.getBrief({ stage: 'P3', root })
+      expect(brief.data.context).toMatchObject({
+        context_meta: {
+          version: 1,
+          stage: 'P3',
+          budget: 16_000,
+          over_budget: false,
+          strategy: 'stage-v1',
+        },
+      })
       const context = brief.data.context as {
         characters: Array<{ name: string; profile: { identity: string } }>
         locks: { characters: Record<string, { appearance: string }> }

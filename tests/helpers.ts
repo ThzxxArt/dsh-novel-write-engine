@@ -187,7 +187,7 @@ export async function bootstrapToDraft(input: {
     title: '开端之雨',
     scene_type: input.scene ?? '日常过渡章',
     narrator: '他',
-    beats: ['风起', '信到'],
+    beats: ['风起', '信到', '拆封', '读信', '决定'],
     opening: '风从窗缝里挤进来',
     ending: '蜡印',
     target_words: [80, 400],
