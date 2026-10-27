@@ -4,6 +4,7 @@
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "type": "module",
   "license": "MIT",
+  "packageManager": "pnpm@11.28.9",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
@@ -67,6 +68,7 @@
     "check:preset": "node scripts/check-preset.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
+    "check:install": "node scripts/check-install.mjs",
     "check:hygiene": "node scripts/check-hygiene.mjs"
   },
   "dependencies": {

@@ -2022,16 +2022,27 @@ tests/fixtures/
 
 ```yaml
 # .github/workflows/ci.yml（要点）
+# 固定 pnpm 11.28.9；Node 24.9（engines 下限）与 24.x；Ubuntu + macOS 测试，
+# macOS + Windows 构建；所有 job 只读仓库，PR 取消同分支旧运行。
 - run: pnpm install --frozen-lockfile
 - run: pnpm typecheck          # tsc --noEmit（host + client）
 - run: pnpm lint               # eslint + prettier --check
-- run: pnpm build              # tsdown host → client → tsc client
+- run: pnpm test               # Linux 最低版本 / 当前版本 + macOS
 - run: pnpm test:coverage      # vitest run --coverage（门槛在此生效）
+- run: pnpm build              # tsdown host → client → tsc client
 - run: pnpm test:isolated      # 每个源文件单独 tsc（指南 §11.5）
-- run: pnpm pack --dry-run
+- run: pnpm validate:rulepack
+- run: pnpm check:pack
+- run: pnpm check:artifacts
+- run: pnpm check:install      # 打包 → 空项目安装 → 加载 host/client
 - uses: actions/upload-artifact@v4
   with: { name: coverage, path: coverage/ }
+- uses: actions/upload-artifact@v4
+  with: { name: npm-package, path: dist/*.tgz }
 ```
+
+`check:preset` 依赖真实 DSH bundle root，仍只在有宿主 checkout 时本地执行；
+CI 不伪造这个解析结果。
 
 **为什么把 `test:isolated` 放进 CI**：类型合并缺失在聚合编译下看不出来，只有在空工程里单文件编译才暴露（指南的实测教训）。
 

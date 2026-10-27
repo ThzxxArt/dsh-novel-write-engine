@@ -52,6 +52,7 @@ npm install dsh-novel-write-engine
 ## 开发
 
 ```bash
+corepack enable && corepack prepare pnpm@11.28.9 --activate
 pnpm install
 pnpm typecheck          # host + client
 pnpm test               # 单元 + 集成 + e2e
@@ -63,6 +64,7 @@ pnpm check:artifacts    # 真正 import 构建后的 host / client
 pnpm check:hygiene      # v8 ignore 预算 + 假断言扫描
 DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app pnpm check:preset  # 需宿主 checkout；preset 外层与嵌套包名可解析
 pnpm check:pack         # 需先 build
+pnpm check:install      # 需先 build；打包后在空项目安装并加载
 ```
 
 设计文档：[DESIGN.md](DESIGN.md)；实施计划：[PLAN.md](PLAN.md)。

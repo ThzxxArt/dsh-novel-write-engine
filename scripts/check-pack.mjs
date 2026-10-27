@@ -2,7 +2,9 @@
 /** Verify the published tarball contains the data files and none of the sources. */
 import { execFileSync } from 'node:child_process'
 
-const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8' })
+const shell = process.platform === 'win32'
+const npm = shell ? 'npm.cmd' : 'npm'
+const raw = execFileSync(npm, ['pack', '--dry-run', '--json'], { encoding: 'utf8', shell })
 const parsed = JSON.parse(raw)
 // npm <= 11 emits an array of pack results; npm 12 emits an object keyed by name.
 const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
