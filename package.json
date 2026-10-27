@@ -2,6 +2,20 @@
   "name": "dsh-novel-write-engine",
   "version": "0.1.0",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "novel",
+    "writing"
+  ],
+  "homepage": "https://github.com/ThzxxArt/dsh-novel-write-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ThzxxArt/dsh-novel-write-engine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ThzxxArt/dsh-novel-write-engine/issues"
+  },
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@11.28.9",

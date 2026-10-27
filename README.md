@@ -6,10 +6,6 @@
 
 > **当前版本：0.1.0** · 中文界面 · MIT
 >
-> **分发方式**：本插件以 npm 包 `dsh-novel-write-engine` 分发。正式安装命令是 `dsh plugin --profile web add dsh-novel-write-engine`；`npm install` 只负责取包，`dsh plugin add` 才会把 bundle 写入 DSH profile 并激活。
->
-> 本 README 按正式 npm 发布形态预先编写。若 `npm view dsh-novel-write-engine version` 暂时返回 404，说明 registry 尚未同步；这不改变安装方式，源码目录与 tarball 是发布前的等价安装路径。
->
 > **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0`；Node `>=24.9.0`。
 
 ---
@@ -72,7 +68,7 @@
 
 - 不是独立的桌面写作应用，不能脱离 DSH 运行。
 - 不是「装完就自动写完整本书」的生成器；它管流程、门禁和状态，正文仍由模型写。
-- 不是 `npm install` 后就能独立运行的 CLI；它是 DSH bundle，必须用 `dsh plugin add` 装进某个 profile 才会激活。
+- 不是独立 CLI；必须作为 DSH 插件安装到某个 profile 才能使用。
 - 不提供云端同步、账号体系、在线书城或多人协作。
 - 0.1.0 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
 
@@ -181,9 +177,7 @@ pnpm --version       # CLI 安装插件时需要
 
 如果 `dsh` 不在 PATH 里，可以用 `npx @deepseek-ai/dsh` 代替下文的 `dsh`。但 `dsh plugin` 仍然需要本机有 `pnpm`。
 
-> **本仓库的 pnpm 版本**：`package.json` 固定 `packageManager: pnpm@11.28.9`。如果 `pnpm --version` 显示别的版本（常见于 PATH 里其他项目的 `node_modules/.bin/pnpm` 抢先），pnpm 会拒绝执行。下文统一写 `corepack pnpm`；如果你的 `pnpm` 已经是 11.28.9，可以简写回 `pnpm`。
->
-> DSH 源码仓库自己固定了它的 pnpm 版本（当前 checkout 为 11.28.5），所以在 DSH 仓库里也用 `corepack pnpm`，让 corepack 按那个仓库的 `packageManager` 选择版本，避免两边互相打架。
+> 本仓库固定 pnpm 11.28.9。若本机版本不符，先执行 `corepack prepare pnpm@11.28.9 --activate`，或直接把下文的 `pnpm` 换成 `corepack pnpm`。
 
 ---
 
@@ -260,81 +254,33 @@ Windows 为 `%USERPROFILE%\.dsh\profiles\<profile>\`。如果设置了 `DSH_HOME
 
 ## 五、安装本插件
 
-### 5.0 安装模型：npm 取包 + profile 激活
+前置条件：DSH 已安装并满足版本要求，本机有 pnpm。
 
-DSH 插件不是全局 CLI，而是某个 profile 里的 bundle。完整安装分两步：
-
-1. **取包**：从 npm registry 下载 `dsh-novel-write-engine` 及其依赖；
-2. **激活**：把包写入目标 profile 的 `dependencies` 与 `dsh.profile.bundles`，让 Host 行、client 面板和内置预设参与合成。
-
-`dsh plugin add` 会一次完成两步。单独执行 `npm install` 只完成第一步：包会出现在当前 Node 工程或 profile 的 `node_modules` 里，但**不会自动写入 `dsh.profile.bundles`**，所以 DSH 不会激活它。
-
-因此本插件的正式安装命令是：
-
-```bash
-dsh plugin --profile web add dsh-novel-write-engine
-```
-
-`npm install dsh-novel-write-engine` 不是错的，它只是“取包”，还必须再做 profile 激活；README 下面把两者都写清楚，避免把“下载成功”误当成“插件已启用”。
-
-### 5.1 方式一：从 npm 安装（正式分发，推荐）
-
-前置条件：DSH 已安装、`dsh --version` 满足 `engines.dsh`、本机有 pnpm。
+### 5.1 从 npm 安装（推荐）
 
 ```bash
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-# 安装最新稳定版到 web profile
+# 安装最新版到 web profile
 dsh plugin --profile web add dsh-novel-write-engine
 ```
 
-固定版本、便于复现：
+固定版本：
 
 ```bash
 dsh plugin --profile web add dsh-novel-write-engine@0.1.0
 ```
 
-安装前可以先确认 registry 上的版本：
+`dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
 
-```bash
-npm view dsh-novel-write-engine version
-```
+安装命令会下载 npm 包、写入 `~/.dsh/profiles/web` 的依赖，并把插件加入该 profile 的 `dsh.profile.bundles`。不要用 `npm install` 代替：它只会下载包，不会把插件加入 profile。
 
-安装后核对：
+`web` 是 `dsh web` 使用的默认 profile。自定义 profile 把 `web` 换成实际名字；Desktop 使用自己的 `desktop` profile，请在桌面端插件页安装。
 
-```bash
-dsh --profile web --dump-config | grep -A6 '# == dsh-novel-write-engine'
-```
+安装后重启 DSH，或刷新 Web 页面。
 
-Windows PowerShell：
-
-```powershell
-dsh --profile web --dump-config | Select-String -Pattern 'dsh-novel-write-engine' -Context 2,6
-```
-
-应该能看到：
-
-```yaml
-# == dsh-novel-write-engine
-- id: novel-write-engine
-  name: dsh-novel-write-engine
-  config:
-    toolsMode: all
-    minScore: 120
-```
-
-这会做三件事：
-
-- 在 `~/.dsh/profiles/web/package.json` 的 `dependencies` 里加入 `dsh-novel-write-engine`；
-- 把 `dsh-novel-write-engine` 追加到 `dsh.profile.bundles`；
-- 运行 pnpm 安装依赖并刷新 profile 的锁文件。
-
-> **只取包、不激活**的写法是 `npm install dsh-novel-write-engine`。它适合查看包内容或在普通 Node 工程里做二次开发；要让 DSH 真正加载插件，仍然必须执行 `dsh plugin add`。
->
-> **发布状态**：如果 `npm view` 或 `dsh plugin add` 返回 404，说明 registry 还没有同步 0.1.0。这是发布时序，不是安装方式问题；README 保持正式 npm 命令不变，发布前可改用 5.2 的源码目录或 5.3 的 tarball 安装同一份产物。
-
-### 5.2 方式二：从源码目录安装（开发、调试）
+### 5.2 从源码目录安装（开发）
 
 ```bash
 git clone https://github.com/ThzxxArt/dsh-novel-write-engine.git
@@ -363,7 +309,7 @@ dsh plugin --profile web add (Get-Location).Path
 
 源码目录安装是 **link** 关系，不是拷贝：profile 的 `dependencies` 里出现的是 `link:/你的/源码目录`。之后修改 `src/` 必须重新 `corepack pnpm build` 并重启 DSH；否则 DSH 仍加载旧的 `lib/`。
 
-### 5.3 方式三：从 tarball 安装（离线、可复制）
+### 5.3 从 tarball 安装（离线）
 
 在能构建的机器上：
 
@@ -391,7 +337,7 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 
 升级时用新的 tarball 重装；旧的 tarball 可以留档，便于回滚。
 
-### 5.4 方式四：用 DSH Web / Desktop 的插件页安装
+### 5.4 从 DSH 插件页安装
 
 适用于你不想在终端里操作，或者 DSH 跑在另一台机器上。插件页既能装 npm 包名，也能装本地目录或 tarball；路径必须是 **DSH 宿主** 能访问的路径。
 
@@ -402,50 +348,12 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
    - 精确版本：`dsh-novel-write-engine@0.1.0`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
    - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.0.tgz`
-4. 选择安装源。npm 包名会自动探测 npm 官方源与 npmmirror；本地路径不需要访问 registry 上的本包，但 pnpm 仍可能需要下载 `yaml` 依赖。
+4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
 7. 刷新页面；新开一个会话。
 
 > Desktop 的插件页管理的是 `desktop` profile，和 CLI 的 `web` profile 是两套依赖、两套锁文件。不要混用。
-
-### 5.5 为什么 npm 包还要 `dsh plugin add`
-
-一句话：**npm 是分发层，profile 是激活层。**
-
-- `npm install` 解决“把包下载到磁盘”；
-- `dsh plugin add` 解决“让这个 profile 知道它、并按 `dsh.bundle.patch` 合成层”；
-- 只做前者，DSH 启动时不会扫描任意 `node_modules` 去自动激活 bundle，面板、预设、工具都不会出现。
-
-同理，**从 GitHub 地址直接 `dsh plugin add github:ThzxxArt/dsh-novel-write-engine` 目前仍不可用**：仓库不提交 `lib/` 构建产物，`package.json` 也没有 `prepare` 脚本，git 安装拿到的是源码而不是可加载产物。GitHub 直装要等仓库补上自包含构建脚本或改为提交构建产物；npm 正式包、源码目录与 tarball 都不受这个限制。
-
-### 5.6 安装到哪个 profile
-
-把命令里的 `web` 换成你实际启动的 profile。npm 包名与本地路径可以互换：
-
-```bash
-# 默认 Web（npm）
-dsh plugin --profile web add dsh-novel-write-engine
-
-# 默认 Web（源码目录）
-dsh plugin --profile web add "$PWD"
-
-# 自定义 profile（例如 myweb）
-dsh plugin --profile myweb add dsh-novel-write-engine
-dsh --profile myweb web
-
-# headless：只有工具/命令，没有面板和预设
-dsh plugin --profile headless add dsh-novel-write-engine
-dsh --profile headless "查看当前小说状态"
-```
-
-不要在一个 profile 里装、用另一个 profile 启动。判断方法：
-
-```bash
-dsh --profile <你的profile> --dump-config | grep dsh-novel-write-engine
-```
-
-有输出才说明这个 profile 认识插件。
 
 ---
 
@@ -911,18 +819,15 @@ corepack pnpm test
 ### 11.2 从 npm 升级（正式分发，推荐）
 
 ```bash
-# 1. 看 registry 上的最新版本
-npm view dsh-novel-write-engine version
-
-# 2. 在目标 profile 里升级到最新稳定版
+# 在目标 profile 里升级到最新版
 dsh plugin --profile web remove dsh-novel-write-engine
 dsh plugin --profile web add dsh-novel-write-engine@latest
 ```
 
-也可以锁定版本：
+也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.2.0
+dsh plugin --profile web add dsh-novel-write-engine@0.1.0
 ```
 
 升级后核对：
@@ -1026,7 +931,7 @@ dsh plugin --profile web remove dsh-novel-write-engine
 
 如果 DSH 正在运行且 profile 支持 HMR，也可以在运行时移除；以插件页/CLI 的提示为准。若提示当前 profile 正在使用该包，停止 DSH 后重试。
 
-> `dsh plugin remove` 卸载的是 **profile 里的 bundle**。如果你之前只在某个普通 Node 工程里执行过 `npm install dsh-novel-write-engine`，那份副本要用 `npm uninstall dsh-novel-write-engine` 清掉；它本来就不在 DSH profile 里，删不删都不影响 DSH 的插件状态。
+> `dsh plugin remove` 只从 profile 移除插件层，不会删除你的小说项目、`stateDir` 注册表或备份。
 
 卸载会：
 
@@ -1083,8 +988,8 @@ dsh --profile web --dump-config | grep dsh-novel-write-engine
 
 | 现象 | 最可能的原因 | 处理 |
 |---|---|---|
-| `npm view` / `dsh plugin add` 404 | registry 尚未同步 0.1.0，或包名拼错 | 先确认包名；发布前用源码目录或 tarball，见 5.2/5.3 |
-| `npm install` 成功但 DSH 没有插件 | `npm install` 只取包，没有写入 profile | 执行 `dsh plugin --profile web add dsh-novel-write-engine`，见 5.1 |
+| `dsh plugin add` 404 / 找不到包 | 包名拼错、registry 不可达，或镜像尚未同步 | 确认 `npm view dsh-novel-write-engine version`；必要时切回官方 registry |
+| `npm install` 成功但 DSH 没有插件 | `npm install` 不会把插件加入 profile | 执行 `dsh plugin --profile web add dsh-novel-write-engine`，见 5.1 |
 | `dsh: command not found` | CLI 未全局安装 | 用 `npx @deepseek-ai/dsh ...`，或先 `npm i -g @deepseek-ai/dsh` |
 | `dsh plugin` 报找不到 pnpm | 只装了 DSH，没装 pnpm | `corepack enable && corepack prepare pnpm@11.28.9 --activate` |
 | `--dump-config` 没有插件层 | 装到了别的 profile | 用实际启动的 profile 重装；`dsh --profile <name> ...` |
@@ -1145,7 +1050,7 @@ DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制�
 ## 十五、已知限制
 
 - **0.1.0 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
-- **npm 是正式分发路径**：`dsh plugin add dsh-novel-write-engine` 会从 registry 取包并激活；在 0.1.0 同步到 registry 之前，源码目录与 tarball 是等价的预发布安装方式。GitHub 直装仍不可用（无 `lib/`、无 `prepare`）。
+- **通过 npm 分发**：安装与升级统一使用 `dsh plugin add`；源码目录和 tarball 用于开发或离线环境。
 - **面板与预设只在 Web/Desktop**：headless / acp / sdk 没有 `agentPresets` 服务，也没有浏览器面板；18 个工具仍可用。
 - **规则包不可运行期替换**：要改词表/阈值，必须改源码、重新构建、重新安装。
 - **普通会话可能绕过引擎**：只有「网文工坊」预设不挂 bash/fs 写工具；在普通会话里手动改文件，事务与门控保证不再完整。
