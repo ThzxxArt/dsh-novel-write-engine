@@ -29,7 +29,7 @@ npm install dsh-novel-write-engine
 7. `novel_brief P8` → `novel_archive`（必须带 `state_delta`，逐实体核销）
 8. `novel_export md|txt|epub`（单章导出为 `exports/book-chNNN.<kind>`）
 
-面板在左侧栏「网文工坊」，只读：项目头、章节表、阻塞区。
+面板在左侧栏「网文工坊」，只读：Hero + 统计、九阶段轨、下一步卡、章节卡与门控区；每 15 秒自动同步，也可手动刷新。
 
 ## 配置
 

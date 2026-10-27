@@ -57,7 +57,7 @@ describe('panel projections', () => {
     expect(strip.filter((phase) => phase.active)).toHaveLength(1)
     expect(strip.find((phase) => phase.active)?.id).toBe('P6')
     expect(strip.filter((phase) => phase.done).length).toBeGreaterThan(0)
-    expect(phaseStrip('done').at(-1)).toMatchObject({ id: 'P9', active: true })
+    expect(phaseStrip('done').every((phase) => phase.done && !phase.active)).toBe(true)
   })
 
   it('distinguishes reviewed from draft chapters', () => {

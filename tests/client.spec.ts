@@ -1,5 +1,8 @@
+/// <reference lib="dom" />
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { buildView, fetchPanel } from '../src/client/viewmodel.js'
 import { apply as applyClient, NovelIcon, NovelPanel } from '../src/client/index.js'
@@ -47,9 +50,38 @@ describe('panel view model', () => {
     expect(view.rows[0]).toMatchObject({ num: '1', badge: '已归档', tone: 'ok' })
     expect(view.rows[1]!.tone).toBe('muted')
     expect(view.rows[2]!.tone).toBe('bad')
-    expect(view.blockingTitle).toBe('阻塞 1 项')
+    expect(view.blockingTitle).toBe('待处理 1 项')
+    expect(view.stats).toMatchObject({ chapters: 2, words: 5000, averageScore: 145, blocking: 1 })
+    expect(view.stageLabel).toBe('评审')
+    expect(view.phases[0]!.label).toBe('世界观')
+    expect(view.rows[0]).toMatchObject({ scoreValue: 145, scorePercent: 97, stageLabel: '已完成' })
+    expect(view.nextTitle).toBe('修订本章')
+    expect(view.nextDetail).toBe('处理评审意见后提交修订。')
     expect(view.blocking[0]!.hint).toBe('再写一点')
     expect(view.next).toContain('novel_revise')
+  })
+
+  it('degrades unknown labels, odd scores and a missing next action', () => {
+    const odd = payload()
+    odd.summary.platform = 'unknown-platform'
+    odd.summary.stage = 'unknown-stage' as never
+    odd.summary.phases = [{ id: 'PX', done: false, active: true }]
+    odd.summary.next = undefined
+    odd.chapters.rows = [
+      { num: 1, title: '异常分', wordCount: 10, score: Number.NaN, stage: 'done', status: 'passed' },
+      { num: 2, title: '越界分', wordCount: 10, score: 200, stage: 'done', status: 'passed' },
+      { num: 3, title: '零分', wordCount: 10, score: 0, stage: 'done', status: 'passed' },
+    ]
+    const view = buildView(odd)
+    expect(view.subtitle).toContain('unknown-platform')
+    expect(view.stageLabel).toBe('unknown-stage')
+    expect(view.phases[0]!.label).toBe('PX')
+    expect(view.rows[1]!.scoreValue).toBe(150)
+    expect(view.rows[0]!.scorePercent).toBe(0)
+    expect(view.stats.averageScore).toBe(150)
+    expect(view.nextTitle).toBe('状态已同步')
+    expect(view.nextDetail).toContain('没有待执行')
+    expect(view.next).toBe('')
   })
 
   it('renders loading, error, outdated and empty states', () => {
@@ -59,7 +91,7 @@ describe('panel view model', () => {
     expect(buildView({ ...payload(), empty: true }).subtitle).toContain('novel_init')
     const noBlockers = payload()
     noBlockers.summary.blocking = []
-    expect(buildView(noBlockers).blockingTitle).toBe('没有阻塞项')
+    expect(buildView(noBlockers).blockingTitle).toBe('门控已通过')
     const noHint = payload()
     noHint.summary.blocking = [{ code: 'X', detail: 'd' }]
     expect(buildView(noHint).blocking[0]!.hint).toBe('')
@@ -110,6 +142,39 @@ describe('client registration and rendering', () => {
     expect((sidebar.options.label as () => string)()).toBe('网文工坊')
   })
 
+  it('mounts, fetches, refreshes and cleans up without a host adapter', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => payload(),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      expect(container.textContent).toContain('测试之书')
+      expect(container.textContent).toContain('待处理 1 项')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const button = container.querySelector('button[aria-label="刷新项目状态"]')
+      expect(button).not.toBeNull()
+      await act(async () => {
+        button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
   it('renders the loading panel and the icon without a DOM', () => {
     expect(typeof NovelPanel).toBe('function')
     const loading = buildView(null)
@@ -121,12 +186,37 @@ describe('client registration and rendering', () => {
     const ready = renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined))
     expect(ready).toContain('《测试之书》')
     expect(ready).toContain('开端之雨')
-    expect(ready).toContain('阻塞 1 项')
+    expect(ready).toContain('待处理 1 项')
+    expect(ready).toContain('nwe-root')
+    expect(ready).toContain('平均评分')
+    expect(ready).toContain('NEXT MOVE')
+    expect(ready).toContain('role="progressbar"')
+    expect(ready).toContain('aria-label="开端之雨 评分"')
+    expect(ready).toContain('@media (max-width: 760px)')
+    expect(ready).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
     expect(ready).toContain('少了 200 字')
     const empty = renderToStaticMarkup(
       panelElement(buildView({ ...payload(), empty: true }), false, () => undefined),
     )
     expect(empty).toContain('novel_init')
+    expect(empty).toContain('还没有开局')
+
+    const failed = renderToStaticMarkup(panelElement(buildView(null, 'host offline'), false, () => undefined))
+    expect(failed).toContain('host offline')
+    expect(failed).toContain('role="alert"')
+
+    const completed = payload()
+    completed.summary.phases = completed.summary.phases.map((phase) => ({
+      ...phase,
+      done: true,
+      active: false,
+    }))
+    completed.summary.blocking = []
+    completed.summary.stage = 'done'
+    const completedMarkup = renderToStaticMarkup(panelElement(buildView(completed), false, () => undefined))
+    expect(completedMarkup).not.toContain('nwe-phase is-active')
+    expect(completedMarkup).toContain('门控已通过')
+    expect(completedMarkup).toContain('nwe-stage is-done')
 
     const icon = renderToStaticMarkup(NovelIcon({ size: 20 }))
     expect(icon).toContain('<svg')

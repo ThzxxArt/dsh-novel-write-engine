@@ -87,6 +87,11 @@ const STAGE_TO_PHASE: Record<Stage, string> = {
 
 /** The nine-phase progress strip: phases before the active one are done. */
 export function phaseStrip(stage: Stage): Array<{ id: string; done: boolean; active: boolean }> {
+  // A completed project has no next phase to highlight. Treating P9 as active
+  // made a finished book look permanently stuck on the last step.
+  if (stage === 'done') {
+    return PHASE_STRIP.map((id) => ({ id, done: true, active: false }))
+  }
   const active = STAGE_TO_PHASE[stage]
   const activeIndex = PHASE_STRIP.indexOf(active as (typeof PHASE_STRIP)[number])
   return PHASE_STRIP.map((id, index) => ({
