@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsStore, joinRel, sha256 } from '../src/store/fs.js'
-import { assertSafeRelative, resolveInside, toProjectPath } from '../src/store/path.js'
+import { assertSafeRelative, isInside, resolveInside, toProjectPath } from '../src/store/path.js'
 import { narrow, DOC_KINDS } from '../src/store/schema.js'
 import { runTransaction } from '../src/store/txn.js'
 import { FileLock, KeyedMutex } from '../src/store/lock.js'
@@ -29,8 +29,12 @@ describe('path guard', () => {
       expect(() => assertSafeRelative(bad), bad).toThrow(/refusing path/)
     }
     expect(() => assertSafeRelative('state/pipeline.yaml')).not.toThrow()
+    expect(() => assertSafeRelative('..foo')).not.toThrow()
     expect(() => resolveInside('/tmp/root', '../x')).toThrow(/refusing path|escapes/)
     expect(resolveInside('/tmp/root', 'a/b.yaml')).toContain('a/b.yaml')
+    expect(resolveInside('/tmp/root', '..foo/a.yaml')).toContain('..foo/a.yaml')
+    expect(isInside('/tmp/root', '/tmp/root/..foo/a.yaml')).toBe(true)
+    expect(isInside('/tmp/root', '/tmp/root/../outside.yaml')).toBe(false)
   })
 
   it('recognises project-relative paths', () => {
@@ -98,6 +102,11 @@ describe('FsStore', () => {
       await expect(store.writeText('../escape', 'x')).rejects.toThrow()
       await store.ensureDir('chapters')
       expect(await store.exists('chapters')).toBe(true)
+      await writeFile(join(root, 'state', 'bad.yaml'), 'a: [')
+      await expect(store.readDoc('state/bad.yaml', 'world')).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+      await expect(store.readDoc('state/bad.yaml', 'world')).rejects.toThrow(/state\/bad\.yaml/)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -160,6 +169,29 @@ describe('transactions', () => {
       expect(await store.exists('state/a.yaml')).toBe(false)
       const journal = await readJournal(store)
       expect(journal.rows.at(-1)).toMatchObject({ status: 'aborted', txid: 'tx-2' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects duplicate staging paths before writing any target', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-duplicate',
+          op: 'submitDraft',
+          chapter: 1,
+          revision: 1,
+          files: [
+            { path: 'state/pipeline.yaml', text: 'first' },
+            { path: 'state/pipeline.yaml', text: 'second' },
+          ],
+          backup: false,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await store.exists('state/pipeline.yaml')).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

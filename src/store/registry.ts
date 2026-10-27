@@ -29,8 +29,18 @@ export class ProjectRegistry {
   async read(): Promise<RegistryDocument> {
     const text = await this.store.readText(REGISTRY_FILE)
     if (text === null) return empty()
-    const raw = parseYaml(text) as unknown
-    if (typeof raw !== 'object' || raw === null) {
+    let raw: unknown
+    try {
+      raw = parseYaml(text) as unknown
+    } catch (error) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${REGISTRY_FILE} is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
+        'fix or delete the registry file; projects on disk are unaffected',
+        { cause: error },
+      )
+    }
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${REGISTRY_FILE} is not an object`)
     }
     const record = raw as Partial<RegistryDocument>

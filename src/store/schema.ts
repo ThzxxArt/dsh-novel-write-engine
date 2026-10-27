@@ -57,6 +57,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     rounds: req('object'),
     briefs: req('object'),
     blocking: req('array'),
+    review_digest: f('string'),
     last_action: f('any'),
   },
   chapters: { chapters: req('array') },
@@ -408,10 +409,11 @@ export function narrow<K extends DocKind>(
   }
   if (version !== SCHEMA_VERSION) invalid(kind, `unsupported schema_version ${version}`)
 
+  if (!Object.hasOwn(SCHEMAS, kind)) invalid(kind, `unknown document kind "${String(kind)}"`)
   const schema = SCHEMAS[kind]
   for (const key of Object.keys(record)) {
     if (key === 'schema_version') continue
-    if (!(key in schema)) invalid(kind, `unknown key "${key}"`)
+    if (!Object.hasOwn(schema, key)) invalid(kind, `unknown key "${key}"`)
   }
   for (const [key, field] of Object.entries(schema)) {
     const fieldValue = record[key]

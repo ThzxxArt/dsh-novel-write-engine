@@ -194,6 +194,195 @@ describe('state_delta world and timeline reconciliation', () => {
     fails(sampleSummary({ characters_appeared: [] }), updated)
   })
 
+  it('refuses a created world entity that is absent from the manuscript or summary', () => {
+    const emptyElements = sampleSummary({
+      characters_appeared: [],
+      new_elements: { locations: [], abilities: [], artifacts: [] },
+    })
+    const ghost = empty()
+    ghost.world['幽灵城'] = { action: 'created', kind: 'location' }
+    expect(() => run(emptyElements, ghost)).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_DELTA_UNVERIFIED' }),
+    )
+    const unannounced = empty()
+    unannounced.world['屋'] = { action: 'created', kind: 'location' }
+    expect(() => run(emptyElements, unannounced)).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_DELTA_UNVERIFIED' }),
+    )
+  })
+
+  it('checks both the summary and declared foreshadow titles', () => {
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: 'fs1', title: '并不存在的旧信', description: '旧信' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const mismatch = empty()
+    mismatch.foreshadows['fs1'] = { action: 'created', title: '风', description: '风' }
+    fails(summary, mismatch)
+
+    const nonString = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: 'fs2', title: '风', description: '风' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const badType = empty()
+    badType.foreshadows['fs2'] = { action: 'created', title: 123, description: '风' }
+    fails(nonString, badType)
+  })
+
+  it('rejects an unknown world kind and protects reserved fields from detail', () => {
+    const unknown = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      new_elements: { locations: [], abilities: [], artifacts: [] },
+    })
+    const badKind = empty()
+    badKind.world['风'] = { action: 'created', kind: 'potion' }
+    fails(unknown, badKind)
+
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      new_elements: { locations: [], abilities: ['术'], artifacts: [] },
+    })
+    const delta = empty()
+    delta.world['术'] = { action: 'created', kind: 'ability', detail: { name: 123 } }
+    const result = run(summary, delta)
+    expect(result.world.abilities[0]).toMatchObject({ name: '术' })
+  })
+
+  it('refuses a next_seq that would reissue an existing id', () => {
+    const docs = base() as {
+      foreshadows: {
+        schema_version: 1
+        next_seq: number
+        items: Array<Record<string, unknown>>
+      }
+    }
+    docs.foreshadows = {
+      schema_version: 1,
+      next_seq: 1,
+      items: [
+        {
+          id: 'FS-001',
+          title: '旧信',
+          planted: 1,
+          last_touched: 1,
+          status: 'planted',
+          resolved_at: null,
+          description: '旧信',
+          advance_log: [],
+        },
+      ],
+    }
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: 'fs2', title: '风', description: '风' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows['fs2'] = { action: 'created', title: '风', description: '风' }
+    fails(summary, delta, docs)
+  })
+
+  it('refuses to advance or resolve a foreshadow twice', () => {
+    const docs = base() as {
+      foreshadows: {
+        schema_version: 1
+        next_seq: number
+        items: Array<Record<string, unknown>>
+      }
+    }
+    docs.foreshadows = {
+      schema_version: 1,
+      next_seq: 2,
+      items: [
+        {
+          id: 'FS-001',
+          title: '旧信',
+          planted: 1,
+          last_touched: 1,
+          status: 'resolved',
+          resolved_at: 1,
+          description: '旧信',
+          advance_log: [],
+        },
+      ],
+    }
+    const advance = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [],
+        advanced: [{ key: 'FS-001', note: '旧线索', new_info: false }],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows['FS-001'] = { action: 'updated', note: '旧线索', new_info: false }
+    fails(advance, delta, docs)
+
+    const resolve = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: { planted: [], advanced: [], resolved: ['FS-001'] },
+    })
+    const resolveDelta = empty()
+    resolveDelta.foreshadows['FS-001'] = { action: 'updated', note: '再次解决', new_info: false }
+    fails(resolve, resolveDelta, docs)
+  })
+
+  it('refuses a planted key that collides with an existing foreshadow id', () => {
+    const docs = base() as {
+      foreshadows: {
+        schema_version: 1
+        next_seq: number
+        items: Array<Record<string, unknown>>
+      }
+    }
+    docs.foreshadows = {
+      schema_version: 1,
+      next_seq: 2,
+      items: [
+        {
+          id: 'FS-001',
+          title: '旧信',
+          planted: 1,
+          last_touched: 1,
+          status: 'planted',
+          resolved_at: null,
+          description: '旧信',
+          advance_log: [],
+        },
+      ],
+    }
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: 'FS-001', title: '风', description: '风' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows['FS-001'] = { action: 'created', title: '风', description: '风' }
+    fails(summary, delta, docs)
+  })
+
   it('declares every event and refuses unknown timeline keys', () => {
     const summary = sampleSummary({ characters_appeared: [], events: ['一', '二'] })
     fails(summary, empty())
@@ -243,6 +432,26 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const extra = empty()
     extra.foreshadows['FS-999'] = { action: 'updated' }
     fails(sampleSummary({ characters_appeared: [] }), extra)
+  })
+
+  it('requires a newly planted foreshadow title to appear in the manuscript', () => {
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: 'fs1', title: '并不存在的旧信', description: 'd' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows['fs1'] = {
+      action: 'created',
+      title: '并不存在的旧信',
+      description: 'd',
+    }
+    fails(summary, delta)
+    expect(() => run(summary, delta)).toThrowError(/foreshadow.*旧信|旧信.*manuscript/)
   })
 
   it('appends an explicit note update and refuses creating an existing key', () => {

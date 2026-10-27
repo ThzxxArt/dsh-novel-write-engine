@@ -174,6 +174,7 @@ describe('gate evaluation', () => {
       'PG-05',
     )
     expect(codes(input({ summary: { ...sampleSummary(), opening: ' ' } }))).toContain('PG-05')
+    expect(codes(input({ summary: { ...sampleSummary(), opening: '风' } }))).toContain('PG-05')
   })
 
   it('PG-06 rejects monotony and back-to-back action chapters', () => {
@@ -367,6 +368,58 @@ describe('gate evaluation', () => {
     expect(verifyReference(text, proof().opening)).toBeNull()
   })
 
+  it('PG-09 checks the actual paragraph, not the submitted paragraph, for opening and ending', () => {
+    const longText = cleanText(6)
+    const paragraphs = longText.split('\n\n')
+    const base = input({
+      operation: 'submitReview',
+      stage: 'P4',
+      text: longText,
+      pipeline: { ...input().pipeline, stage: 'P4', briefs: { P4: { issued_at: 'x', digest: 'D' } } },
+      briefStage: 'P4',
+      review: review(),
+    })
+    const valid = {
+      opening: { paragraph: 1, quote: paragraphs[0]!.slice(0, 14) },
+      middle: { paragraph: 3, quote: paragraphs[2]!.slice(0, 14) },
+      ending: { paragraph: 6, quote: paragraphs[5]!.slice(0, 14) },
+    }
+    expect(codes({ ...base, proof: valid })).not.toContain('PG-09')
+    expect(
+      codes({
+        ...base,
+        proof: {
+          ...valid,
+          // The quote is really in paragraph 3; claiming paragraph 2 passes the
+          // ±1 locator tolerance and must still fail the opening boundary.
+          opening: { paragraph: 2, quote: paragraphs[2]!.slice(0, 14) },
+        },
+      }),
+    ).toContain('PG-09')
+    expect(
+      codes({
+        ...base,
+        proof: {
+          ...valid,
+          // The quote is really in paragraph 4; claiming paragraph 5 passes the
+          // locator tolerance and must still fail the ending boundary.
+          ending: { paragraph: 5, quote: paragraphs[3]!.slice(0, 14) },
+        },
+      }),
+    ).toContain('PG-09')
+    expect(
+      codes({
+        ...base,
+        proof: {
+          ...valid,
+          // Paragraph 2 is an edge paragraph in a six-paragraph chapter, not
+          // the body; a distinct paragraph alone is not enough for "middle".
+          middle: { paragraph: 2, quote: paragraphs[1]!.slice(0, 14) },
+        },
+      }),
+    ).toContain('PG-09')
+  })
+
   it('PG-10 flags repeated cross-chapter content', () => {
     const gateInput = input({
       operation: 'runCheck',
@@ -389,6 +442,48 @@ describe('gate evaluation', () => {
       rounds: { review: 3, revise: 0, check: 0 },
     })
     expect(codes(gateInput)).toContain('PG-11')
+  })
+
+  it('PG-11 checks only the counter used by the operation', () => {
+    const base = {
+      ...input(),
+      stage: 'P6' as const,
+      pipeline: {
+        ...input().pipeline,
+        stage: 'P6' as const,
+        briefs: { P6: { issued_at: 'x', digest: 'D' } },
+      },
+      briefStage: 'P6' as const,
+      rounds: { review: 3, revise: 2, check: 2 },
+    }
+    expect(codes({ ...base, operation: 'runCheck' } as GateInput)).not.toContain('PG-11')
+    expect(codes({ ...base, operation: 'submitRevision' } as GateInput)).not.toContain('PG-11')
+    expect(codes({ ...base, operation: 'submitReview' } as GateInput)).toContain('PG-11')
+  })
+
+  it('PG-09 is applied at the archive boundary, not only at review', () => {
+    const base = input({
+      operation: 'archiveChapter',
+      stage: 'ready_to_archive',
+      pipeline: {
+        ...input().pipeline,
+        stage: 'ready_to_archive',
+        briefs: { P8: { issued_at: 'x', digest: 'D' } },
+      },
+      briefStage: 'P8',
+      proof: proof(),
+      review: review(),
+    })
+    expect(codes(base)).not.toContain('PG-09')
+    expect(
+      codes({
+        ...base,
+        proof: {
+          ...proof(),
+          opening: { paragraph: 1, quote: '这是一段完全伪造的阅读证明引用' },
+        },
+      }),
+    ).toContain('PG-09')
   })
 
   it('PG-12 checks archive preconditions', () => {

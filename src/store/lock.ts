@@ -38,6 +38,9 @@ export interface LockRecord {
   nonce?: string
 }
 
+/** Nonces this process currently holds; same-pid locks not in this set are stale. */
+const liveNonces = new Set<string>()
+
 const isLockRecord = (value: unknown): value is LockRecord =>
   typeof value === 'object' &&
   value !== null &&
@@ -87,6 +90,7 @@ export class FileLock {
         }
         await handle.close()
         this.held = record
+        if (record.nonce !== undefined) liveNonces.add(record.nonce)
         return
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -108,8 +112,12 @@ export class FileLock {
     const record = await this.read()
     const held = this.held
     this.held = null
+    if (held?.nonce !== undefined) liveNonces.delete(held.nonce)
     if (record !== null && held !== null && record.pid === held.pid && record.nonce === held.nonce) {
-      await fs.rm(this.absolutePath, { force: true })
+      // A failed unlink (Windows AV/EPERM) must not turn into a permanent
+      // same-pid lock: the nonce is no longer live, so the next acquire can
+      // reclaim the file instead of waiting forever.
+      await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
     }
   }
 
@@ -149,24 +157,30 @@ export class FileLock {
     if (record === null) {
       if (Date.now() - mtimeMs <= this.staleMs) return false
     } else {
-      const age = Date.now() - Date.parse(record.startedAt)
-      // A live pid keeps the lock even if the transaction is long. Stealing by
-      // age alone lets two live writers overlap after a slow fsync / suspend.
-      const stale = !Number.isFinite(age) || !processAlive(record.pid)
-      if (!stale) return false
+      // A foreign live pid keeps the lock even if the transaction is long or
+      // its timestamp is corrupt. A lock owned by this pid is live only while
+      // its nonce is in the process-local set; otherwise it is a leftover from
+      // a crashed/restarted instance (pid reuse, container PID 1, or a release
+      // that failed to unlink).
+      if (record.pid === process.pid) {
+        if (record.nonce !== undefined && liveNonces.has(record.nonce)) return false
+      } else if (processAlive(record.pid)) {
+        return false
+      }
     }
 
-    // Claim by rename, not by remove-then-create. Two processes that observed
-    // the same stale record must not both delete a freshly created lock.
+    // Claim with a hard link instead of rename: the live lock is never moved
+    // away from its owner. Compare the linked record before unlinking, and
+    // only unlink if the original path still carries the same record; a newer
+    // lock created in the meantime is left alone.
     const claimPath = `${this.absolutePath}.reclaim-${randomUUID()}`
     try {
-      await fs.rename(this.absolutePath, claimPath)
+      await fs.link(this.absolutePath, claimPath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
       throw error
     }
-    let moved: LockRecord | null = null
-    moved = await this.readAt(claimPath)
+    const moved = await this.readAt(claimPath)
     const claimMtime = await fs
       .stat(claimPath)
       .then((info) => info.mtimeMs)
@@ -179,17 +193,19 @@ export class FileLock {
           moved.startedAt === record.startedAt &&
           moved.nonce === record.nonce
     if (!same) {
-      // We moved a newer lock created after our observation. Put it back
-      // without overwriting a lock another process may have created meanwhile.
-      try {
-        await fs.link(claimPath, this.absolutePath)
-        await fs.rm(claimPath, { force: true })
-      } catch {
-        await fs.rm(claimPath, { force: true }).catch(() => undefined)
-      }
+      await fs.rm(claimPath, { force: true }).catch(() => undefined)
       return false
     }
-    await fs.rm(claimPath, { force: true })
+    const current = await this.readAt(this.absolutePath)
+    const currentMatches =
+      record === null
+        ? current === null
+        : current !== null &&
+          current.pid === record.pid &&
+          current.startedAt === record.startedAt &&
+          current.nonce === record.nonce
+    if (currentMatches) await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
+    await fs.rm(claimPath, { force: true }).catch(() => undefined)
     await this.onReclaim?.(record)
     return true
   }

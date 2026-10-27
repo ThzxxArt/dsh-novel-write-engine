@@ -124,24 +124,6 @@ export function projectChapter(record: ChapterRecord): PanelChapterRow {
   }
 }
 
-/** Status report used by the tool and by commands; one function, three callers. */
-export function projectStatus(snapshot: PanelSnapshot, next: StatusReport['next']): StatusReport {
-  return {
-    project: {
-      title: snapshot.title,
-      genre: snapshot.genre as StatusReport['project']['genre'],
-      platform: snapshot.platform as StatusReport['project']['platform'],
-      root: snapshot.root,
-    },
-    chapter: snapshot.chapter,
-    stage: snapshot.stage,
-    rounds: { ...snapshot.rounds },
-    blocking: snapshot.blocking,
-    metrics: null,
-    next,
-  }
-}
-
 export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
   return {
     schemaVersion: REMOTE_VERSION,

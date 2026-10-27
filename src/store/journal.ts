@@ -201,6 +201,20 @@ export async function recoverPending(store: FsStore): Promise<void> {
 /** Throw before a write when the journal or the last commit is inconsistent. */
 export async function assertJournalConsistent(store: FsStore): Promise<void> {
   await recoverPending(store)
+  // A crash after the committed row but before staging cleanup leaves an
+  // orphan. The transaction is terminal, so its before-images are no longer a
+  // recovery source; aborted/partial staging is deliberately kept.
+  const { records } = await readJournal(store)
+  const committed = new Set(
+    records
+      .filter((record) => record.status === 'committed' && record.op !== 'lock_reclaimed')
+      .map((record) => record.txid),
+  )
+  for (const entry of await store.list(STAGING_DIR)) {
+    if (committed.has(entry)) {
+      await store.removeTree(joinRel(STAGING_DIR, entry)).catch(() => undefined)
+    }
+  }
   const { malformed, mismatches } = await reconcileJournal(store)
   assertJournalHealthy(malformed)
   if (mismatches.length > 0) {

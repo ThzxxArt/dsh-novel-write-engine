@@ -89,8 +89,12 @@ export function availableOps(stage: Stage): Operation[] {
   return TRANSITIONS.filter((transition) => transition.from === stage).map((transition) => transition.op)
 }
 
-/** Whether the review/revise retry budget is spent. */
-export function roundsExhausted(rounds: { review: number; revise: number; check: number }): boolean {
+/** Whether one retry budget (or, without a counter, any budget) is spent. */
+export function roundsExhausted(
+  rounds: { review: number; revise: number; check: number },
+  counter?: 'review' | 'revise' | 'check',
+): boolean {
+  if (counter !== undefined) return rounds[counter] >= LIMITS.maxRounds
   return (
     rounds.review >= LIMITS.maxRounds || rounds.revise >= LIMITS.maxRounds || rounds.check >= LIMITS.maxRounds
   )
@@ -98,15 +102,15 @@ export function roundsExhausted(rounds: { review: number; revise: number; check:
 
 /** The operation a stage expects next, used by `advise` and the status `next` block. */
 export const STAGE_NEXT: Readonly<Record<Stage, { tool: string; reason: string }>> = {
-  idle: { tool: 'novel_plan_world', reason: 'call novel_brief P1, then submit the world plan' },
-  P2: { tool: 'novel_plan_chapter', reason: 'call novel_brief P2, then submit the chapter plan' },
-  P3: { tool: 'novel_write_draft', reason: 'call novel_brief P3, then submit the draft' },
-  P4: { tool: 'novel_review', reason: 'call novel_brief P4, then submit the scored review' },
+  idle: { tool: 'novel_plan_world', reason: 'submit the world plan' },
+  P2: { tool: 'novel_plan_chapter', reason: 'submit the chapter plan' },
+  P3: { tool: 'novel_write_draft', reason: 'submit the draft' },
+  P4: { tool: 'novel_review', reason: 'submit the scored review' },
   P5: { tool: 'novel_revise', reason: 'fix every blocker issue, then submit the revision' },
-  P6: { tool: 'novel_check', reason: 'run the consistency check, then archive' },
+  P6: { tool: 'novel_check', reason: 'run the consistency check' },
   ready_to_archive: {
-    tool: 'novel_brief',
-    reason: 'all gates pass; call novel_brief P8, then archive the chapter',
+    tool: 'novel_archive',
+    reason: 'all gates pass; archive the chapter with its state_delta',
   },
   done: { tool: 'novel_plan_world', reason: 'chapter archived; start the next chapter with a world plan' },
 }

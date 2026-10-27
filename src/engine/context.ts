@@ -29,6 +29,8 @@ export interface BriefContextInput {
   timeline: TimelineDocument
   relationships: RelationshipsDocument
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
+  /** Set when the plan file exists but cannot be parsed; exposed for repair. */
+  plan_error?: string | null
   review: ReviewDocument | null
   check: CheckDocument | null
   /** The active chapter manuscript; P4/P5 need it to judge and revise the real text. */
@@ -79,6 +81,7 @@ export function briefContext(input: BriefContextInput): Record<string, unknown> 
     stage: input.pipeline.stage,
     scene_distribution: sceneDistribution(input.chapters),
     previous_ending: previousEnding,
+    ...(input.plan_error === undefined || input.plan_error === null ? {} : { plan_error: input.plan_error }),
   }
 
   switch (input.stage) {

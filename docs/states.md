@@ -24,6 +24,8 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 唯一的数据依赖迁移是 P4 评审按 blocker 数量决定去向。
 
+`novel_status` 的 `chapter` 只用于字数查询；`active_chapter` 是管线当前章。任何阶段只要该阶段任务书缺失或 digest 过期，`next.tool` 都先指 `novel_brief`；任务书当前后才指向实际写操作。P5/P6 有阻塞时指向 `novel_revise`；`ready_to_archive` 在 P8 任务书当前后指向 `novel_archive`；`done` 未完成时先取 P1。绝不指向只读的 `novel_status`，也不使用过期任务书硬推下一步。
+
 ## 门控顺序
 
 `PG-01 → PG-02 → PG-04 → PG-03 → PG-05 → PG-06 → PG-09 → PG-07 → PG-08 → PG-10 → PG-11 → PG-12`

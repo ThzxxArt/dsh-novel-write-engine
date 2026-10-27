@@ -2,6 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
 import {
   ERROR_CODES,
+  EngineBlockedError,
   EngineError,
   EngineInputError,
   GENRES,
@@ -33,7 +34,13 @@ const asJson = <T>(value: unknown, field: string): T => {
 /** Turn an engine failure into the message shape tools surface. */
 const fail = (error: unknown): never => {
   if (error instanceof EngineError) {
-    throw new Error(`[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}`)
+    const blocking =
+      error instanceof EngineBlockedError && error.blocking.length > 0
+        ? `\nblocking: ${JSON.stringify(error.blocking)}`
+        : ''
+    throw new Error(
+      `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}`,
+    )
   }
   throw error
 }
@@ -105,7 +112,11 @@ const jsonOutput = {
 }
 
 const stringArray = { type: 'array' as const, items: { type: 'string' as const } }
-const root = { type: 'string' as const, description: 'Project root; defaults to the configured root.' }
+const root = {
+  type: 'string' as const,
+  description:
+    'Project root. When omitted, resolves to the last active project, then the registry active root, then the configured projectRoot; pass it explicitly when several projects exist.',
+}
 
 /**
  * The eighteen tools are thin adapters: narrow parameters, call one service
@@ -154,13 +165,25 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           const value = payload(raw) as {
             project: { title: string }
             chapter: number
+            active_chapter?: number
             stage: string
+            rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
           }
+          const active = value.active_chapter ?? value.chapter
+          const where =
+            active === value.chapter
+              ? `第 ${value.chapter} 章`
+              : `当前第 ${active} 章 · 查询第 ${value.chapter} 章字数`
           return text(
             [
-              `《${value.project.title}》 第 ${value.chapter} 章 · ${value.stage}`,
+              `《${value.project.title}》 ${where} · ${value.stage}`,
+              ...(value.rounds === undefined
+                ? []
+                : [
+                    `轮次：评审 ${value.rounds.review} / 修订 ${value.rounds.revise} / 校验 ${value.rounds.check}`,
+                  ]),
               value.blocking.length === 0 ? '门控：全部通过' : `门控：${value.blocking.length} 条阻塞`,
               ...value.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
               `下一步：${value.next.tool} — ${value.next.reason}`,
@@ -184,12 +207,13 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           const value = payload(raw) as {
             content: string
             digest: string
+            fields?: Record<string, unknown>
             context?: Record<string, unknown>
           }
           return text(
             `${value.content}\n\n---\nbrief digest: ${value.digest}${
-              value.context === undefined ? '' : `\ncontext:\n${JSON.stringify(value.context, null, 2)}`
-            }`,
+              value.fields === undefined ? '' : `\nfields:\n${JSON.stringify(value.fields)}`
+            }${value.context === undefined ? '' : `\ncontext:\n${JSON.stringify(value.context)}`}`,
           )
         },
       },

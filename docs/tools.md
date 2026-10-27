@@ -5,14 +5,14 @@
 | 工具 | 阶段 | 操作 | 写盘 |
 |---|---|---|---|
 | `novel_init` | — | `initProject` | 是 |
-| `novel_status` | 任意 | `getStatus` | 否 |
-| `novel_brief` | P1~P6/P8 | `getBrief` | 仅 `briefs` |
+| `novel_status` | 任意 | `getStatus`；`chapter` 仅用于字数查询，`active_chapter` 才是当前章 | 否 |
+| `novel_brief` | P1~P6/P8 | `getBrief`；只签当前活跃章，返回 `fields`（含 `score_exclusions`） | 仅 `briefs` |
 | `novel_plan_world` | P1 | `submitWorldPlan` | 是 |
 | `novel_plan_chapter` | P2 | `submitChapterPlan` | 是 |
 | `novel_write_draft` | P3 | `submitDraft` | 是 |
 | `novel_review` | P4 | `submitReview` | 是（`total` 必填） |
 | `novel_revise` | P5/P6 | `submitRevision` | 是 |
-| `novel_check` | P6 | `runCheck` | 是（四个语义项必填） |
+| `novel_check` | P6 | `runCheck` | 是（四个语义项必填；四条引用互不相同、每条 ≥8 字） |
 | `novel_archive` | 归档 | `archiveChapter` | 事务（必须带 `state_delta`） |
 | `novel_word_count` | 任意 | `countWords` | 否 |
 | `novel_state` | 任意 | `queryState` | 否 |

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { bundledDir, readTextAt, readTextIfExists } from '../assets.js'
 import { ERROR_CODES, EngineFaultError, type BriefStage } from '../types.js'
@@ -69,9 +70,4 @@ export class BriefLibrary {
   }
 }
 
-const hash = (text: string): string => {
-  let value = 0
-  for (let index = 0; index < text.length; index += 1)
-    value = (Math.imul(31, value) + text.charCodeAt(index)) | 0
-  return `fnv:${(value >>> 0).toString(16)}`
-}
+const hash = (text: string): string => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`

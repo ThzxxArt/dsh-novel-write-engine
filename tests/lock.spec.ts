@@ -65,7 +65,7 @@ describe('file lock reclaim', () => {
     const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
     const path = join(dir, '.engine.lock')
     try {
-      await writeFile(path, JSON.stringify({ pid: process.pid, startedAt: '1999-01-01T00:00:00.000Z' }))
+      await writeFile(path, JSON.stringify({ pid: process.ppid, startedAt: '1999-01-01T00:00:00.000Z' }))
       const lock = new FileLock(path, 10, 80)
       await expect(lock.acquire()).rejects.toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
     } finally {
@@ -73,11 +73,41 @@ describe('file lock reclaim', () => {
     }
   })
 
-  it('reclaims a lock whose startedAt cannot be parsed', async () => {
+  it('reclaims a same-pid lock whose nonce is not live', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
     const path = join(dir, '.engine.lock')
     try {
-      await writeFile(path, JSON.stringify({ pid: process.pid, startedAt: 'not-a-date' }))
+      await writeFile(
+        path,
+        JSON.stringify({ pid: process.pid, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'dead' }),
+      )
+      const lock = new FileLock(path, 1_000, 500)
+      await lock.acquire()
+      await lock.release()
+      expect(await readFile(path, 'utf8').catch(() => null)).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not reclaim a live process lock just because startedAt is unparsable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(path, JSON.stringify({ pid: process.ppid, startedAt: 'not-a-date' }))
+      await expect(new FileLock(path, 1_000, 200).acquire()).rejects.toMatchObject({
+        code: 'ENGINE_LOCK_TIMEOUT',
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reclaims an unparsable timestamp only after the owner is dead', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(path, JSON.stringify({ pid: 999_999, startedAt: 'not-a-date' }))
       const lock = new FileLock(path, 1_000, 200)
       await lock.acquire()
       await lock.release()
@@ -86,17 +116,17 @@ describe('file lock reclaim', () => {
     }
   })
 
-  it('notifies the audit hook when a stale lock is reclaimed', async () => {
+  it('notifies the audit hook when a dead owner lock is reclaimed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
     const path = join(dir, '.engine.lock')
     try {
-      await writeFile(path, JSON.stringify({ pid: process.pid, startedAt: 'not-a-date' }))
+      await writeFile(path, JSON.stringify({ pid: 999_999, startedAt: 'not-a-date' }))
       let reclaimed: { pid: number } | null = null
       const lock = new FileLock(path, 1_000, 200, async (record) => {
         reclaimed = record
       })
       await lock.acquire()
-      expect(reclaimed).toMatchObject({ pid: process.pid })
+      expect(reclaimed).toMatchObject({ pid: 999_999 })
       await lock.release()
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -107,10 +137,7 @@ describe('file lock reclaim', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await engine.initProject({ title: '锁审计', genre: '都市现代', platform: 'fanqie', root })
-      await writeFile(
-        join(root, '.engine.lock'),
-        JSON.stringify({ pid: process.pid, startedAt: 'not-a-date' }),
-      )
+      await writeFile(join(root, '.engine.lock'), JSON.stringify({ pid: 999_999, startedAt: 'not-a-date' }))
       await engine.amend({
         path: 'state/world.yaml',
         content: { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] },

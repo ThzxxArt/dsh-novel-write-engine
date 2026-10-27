@@ -56,10 +56,13 @@ describe('query operations', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
+      expect((await engine.getStatus({ root })).data.next.tool).toBe('novel_brief')
+      await engine.getBrief({ stage: 'P3', root })
       const plain = await engine.getStatus({ root })
       const markdown = await engine.getStatus({ root, chapter: 99 })
       expect(markdown.data.metrics).toBeNull()
       expect(markdown.data.chapter).toBe(99)
+      expect(markdown.data.active_chapter).toBe(1)
       expect(plain.data.next.tool).toBe('novel_write_draft')
       const blocked = await engine.getStatus({ root })
       expect(blocked.data.blocking).toEqual([])
@@ -145,6 +148,8 @@ describe('maintenance operations', () => {
       expect(result.data.stage).toBe('P3')
       const status = await engine.getStatus({ root })
       expect(status.data.rounds).toEqual({ review: 0, revise: 0, check: 0 })
+      expect((await engine.advise({ root })).data.tool).toBe('novel_brief')
+      await engine.getBrief({ stage: 'P3', root })
       expect((await engine.advise({ root })).data.tool).toBe('novel_write_draft')
       expect(await readProjectFile(root, 'chapters/chapter-001.deprecated.md')).toBe(cleanText())
     } finally {
@@ -306,12 +311,17 @@ describe('revision paths', () => {
       await engine.getBrief({ stage: 'P6', root })
       const checked = await engine.runCheck({
         chapter: 1,
-        semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '他没有抬头', note: '声音无区分' }],
+        semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' }],
         root,
       })
       expect(checked.data.verdict).toBe('fail')
       expect(checked.data.stage).toBe('P6')
+      expect((await engine.getStatus({ root })).data.next).toMatchObject({
+        tool: 'novel_brief',
+        args: { stage: 'P6', chapter: 1 },
+      })
       await engine.getBrief({ stage: 'P6', root })
+      expect((await engine.getStatus({ root })).data.next.tool).toBe('novel_revise')
       const revised = await engine.submitRevision({
         chapter: 1,
         content: text,
@@ -763,10 +773,21 @@ describe('branch coverage exercises', () => {
       })
       const status = await engine.getStatus({ root })
       expect(status.data.blocking).toHaveLength(1)
-      expect(status.data.next.tool).toBe('novel_status')
+      expect(status.data.next).toMatchObject({
+        tool: 'novel_brief',
+        args: { stage: 'P5', chapter: 1 },
+      })
       const advice = await engine.advise({ root })
-      expect(advice.data.tool).toBe('novel_status')
+      expect(advice.data.tool).toBe('novel_brief')
       expect(advice.data.reason).toContain('ISSUE-REV-9')
+
+      await engine.getBrief({ stage: 'P5', root })
+      const ready = await engine.getStatus({ root })
+      expect(ready.data.next).toMatchObject({
+        tool: 'novel_revise',
+        args: { chapter: 1 },
+      })
+      expect((await engine.advise({ root })).data.tool).toBe('novel_revise')
     } finally {
       await cleanup()
     }

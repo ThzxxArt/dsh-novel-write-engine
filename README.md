@@ -4,9 +4,9 @@
 
 它不是一个提示词合集，也不是独立的写作软件。它把「这一章处于什么阶段、下一步只能做什么、正文是否达标、归档要核销哪些实体」变成可执行、可回滚、可审计的引擎；模型负责写，引擎负责裁决和记账。
 
-> **当前版本：0.1.0** · 中文界面 · MIT
+> **当前版本：0.1.1** · 中文界面 · MIT
 >
-> **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0`；Node `>=24.9.0`。
+> **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 
 ---
 
@@ -70,7 +70,7 @@
 - 不是「装完就自动写完整本书」的生成器；它管流程、门禁和状态，正文仍由模型写。
 - 不是独立 CLI；必须作为 DSH 插件安装到某个 profile 才能使用。
 - 不提供云端同步、账号体系、在线书城或多人协作。
-- 0.1.0 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
+- 0.1.1 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
 
 ---
 
@@ -96,7 +96,7 @@
 - **状态机而不是自由对话**：阶段只能按合法迁移前进；不合法操作返回 `ENGINE_STAGE_ORDER` 并告诉你当前可用操作。
 - **门控先于写盘**：写初稿、修订、归档都是先校验、后落盘；坏稿不会进入项目。
 - **评分是算术，不是感觉**：`total = 150 - Σdelta`，每个维度 `score = max - Σdelta`，不闭合就拒绝。
-- **阅读证明**：P4/P5 要提交三段逐字引用，P6 会重新核验这份证明；防「没读就评」。
+- **阅读证明**：P4/P5 要提交三段逐字引用，P6 会重新核验这份证明；开头/结尾按实际段落判定，防「没读就评」。
 - **归档是一次事务**：P7 状态同步、P8 终审、P9 索引与交接不是三个可以半途而废的步骤。
 - **模型不分配 ID**：只写 `key`，引擎分配 `FS-*` / `TE-*` / `RL-*` 等编号并回执映射。
 - **可控修订**：`novel_amend` 是唯一的状态手工修改入口，必须带原因并写入 journal；`novel_rollback` 保留正文供参考。
@@ -129,7 +129,7 @@ P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `d
 | PG-06 | `SCENE_TYPE` | 场景类型合法，节奏约束满足 |
 | PG-07 | `SCORE` | 十五维齐全、算术闭合、总分达到 `minScore` |
 | PG-08 | `ISSUES_CLEARED` | 所有 blocker issue 已修复并带正文证据 |
-| PG-09 | `READING_PROOF` | 三段逐字引用能在正文对应位置找到 |
+| PG-09 | `READING_PROOF` | 三段逐字引用能在正文对应位置找到；开头/结尾按实际段落判定 |
 | PG-10 | `CONSISTENCY` | 伏笔、时间线、资源、关系、重复段落等跨章对账 |
 | PG-11 | `ROUNDS` | 评审/修订、校验/修订均不超过 3 轮 |
 | PG-12 | `ARCHIVE_ATOMIC` | 归档事务三端一致且读回验证通过 |
@@ -159,19 +159,19 @@ P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `d
 
 | 项目 | 要求 |
 |---|---|
-| DSH | `>=0.2.1-rc.2 <0.3.0`；由 `package.json` 的 `engines.dsh` 声明，安装与启动都会检查 |
+| DSH | `>=0.2.1-rc.2 <0.3.0-0`；由 `package.json` 的 `engines.dsh` 声明，安装与启动都会检查 |
 | Node.js | `>=24.9.0` |
 | pnpm | CLI 安装/卸载插件需要；建议 11.x（本仓库开发基线为 11.28.9） |
 | 宿主形态 | Web（面板 + 预设）、Desktop（面板 + 预设，插件由桌面壳管理）、headless（只有工具/命令，无面板/预设） |
 | 磁盘 | 项目根目录可写；默认 `stateDir` 可写 |
 | 网络 | 安装时需要访问 npm / Git 托管；运行插件本身不联网 |
-| 语言 | 0.1.0 仅中文 |
+| 语言 | 0.1.1 仅中文 |
 
 检查命令：
 
 ```bash
 node --version       # 应 >= 24.9.0
-dsh --version        # 应 >= 0.2.1-rc.2，且 < 0.3.0
+dsh --version        # 应 >= 0.2.1-rc.2，且 < 0.3.0-0
 pnpm --version       # CLI 安装插件时需要
 ```
 
@@ -269,7 +269,7 @@ dsh plugin --profile web add dsh-novel-write-engine
 固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.0
+dsh plugin --profile web add dsh-novel-write-engine@0.1.1
 ```
 
 `dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
@@ -324,13 +324,13 @@ corepack pnpm pack
 会得到类似：
 
 ```text
-dsh-novel-write-engine-0.1.0.tgz
+dsh-novel-write-engine-0.1.1.tgz
 ```
 
 把这个 tarball 复制到目标机器，放在一个**稳定、不会随手删除**的路径，然后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.0.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.1.tgz
 ```
 
 tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内已经包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch。它是最接近「发布产物」的安装方式。
@@ -345,9 +345,9 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 2. 点 **添加插件**（或旁边的箭头 → **安装第三方插件**）。
 3. 在包名字段填入以下任一形式：
    - npm 包名：`dsh-novel-write-engine`
-   - 精确版本：`dsh-novel-write-engine@0.1.0`
+   - 精确版本：`dsh-novel-write-engine@0.1.1`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
-   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.0.tgz`
+   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.1.tgz`
 4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
@@ -438,7 +438,7 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 }
 ```
 
-`genre` 必须是 12 类之一，`platform` 必须是 `fanqie` / `qidian` / `qimao` / `jinjiang` 之一。`project_root` 省略时使用配置里的 `projectRoot`（默认 `./novel`，相对于 DSH 进程工作目录）。
+`genre` 必须是 12 类之一，`platform` 必须是 `fanqie` / `qidian` / `qimao` / `jinjiang` 之一。`project_root` 省略时按「最近活跃项目 → 注册表 active → 配置里的 `projectRoot`（默认 `./novel`，相对于 DSH 进程工作目录）」解析；有多个项目时请显式传 `project_root`，避免写错书。
 
 ### 4. 一章的标准调用顺序
 
@@ -460,10 +460,11 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 关键点：
 
-- **每一步提交前都要先领任务书**，PG-01 会检查 digest。
-- `novel_review` 的 `total` 是必填的，必须等于 `150 - Σdelta`；三段阅读证明必须逐字来自正文。
-- `novel_check` 的 `semantic` 恰好四个语义项，每项带正文证据。
-- `novel_archive` 的 `state_delta` 要逐实体核销角色、伏笔、时间线、世界、关系；`no_change` 也要写原因。
+- **每一步提交前都要先领任务书**，PG-01 会检查 digest。`novel_status` / `novel_pipeline` 在任务书缺失或过期时会先返回 `novel_brief`，不会让你直接撞 PG-01。
+- `ready_to_archive` 在 P8 任务书当前后，`next.tool` 才返回 `novel_archive`；P5/P6 有阻塞时返回 `novel_revise`。
+- `novel_review` 的 `total` 是必填的，必须等于 `150 - Σdelta`；三段阅读证明必须逐字来自正文，开头/结尾按**实际段落**判定。
+- `novel_check` 的 `semantic` 恰好四个语义项，每项带至少 8 字、四条互不相同的正文引用。
+- `novel_archive` 的 `state_delta` 要逐实体核销角色、伏笔、时间线、世界、关系；新伏笔标题必须出现在正文，`no_change` 也要写原因。
 - 正文改动后，旧的评审分数和 check 会失效；不要试图手工改 `state/` 绕过。
 
 ### 5. 看面板
@@ -499,8 +500,8 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 | 工具 | 阶段 | 做什么 | 写盘 |
 |---|---|---|---|
 | `novel_init` | — | 建项目：`novel.yaml` + `state/` + 目录 | 是 |
-| `novel_status` | 任意 | 当前章、阶段、轮次、阻塞项、下一步 | 否 |
-| `novel_brief` | P1–P6 / P8 | 领取阶段任务书，记录 digest | 仅任务书签收 |
+| `novel_status` | 任意 | 当前活跃章、阶段、轮次、阻塞项、下一步；`chapter` 只用于字数查询 | 否 |
+| `novel_brief` | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields` 并记录 digest | 仅任务书签收 |
 | `novel_plan_world` | P1 | 提交世界观约束 | 是 |
 | `novel_plan_chapter` | P2 | 提交章节计划 | 是 |
 | `novel_write_draft` | P3 | 提交初稿；格式/字数/摘要不过整体拒绝 | 是 |
@@ -509,7 +510,7 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 | `novel_check` | P6 | 机检 + 四个语义一致性项 | 是 |
 | `novel_archive` | P7–P9 | 事务归档；必须带 `state_delta` | 事务 |
 | `novel_word_count` | 任意 | 按引擎唯一口径数字数 | 否 |
-| `novel_state` | 任意 | 读账本、计划、评审、检查、handoff | 否 |
+| `novel_state` | 任意 | 读账本、计划、评审、检查、handoff；`review`/`check` 可按历史章读取 | 否 |
 | `novel_amend` | 任意 | 带原因修订一个状态文档 | 是，入 journal |
 | `novel_rollback` | 任意 | 回退到 P1–P6，保留正文供参考 | 是 |
 | `novel_diff` | 任意 | 与上次归档备份或两段文本比较 | 否 |
@@ -525,9 +526,9 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 三类错误：
 
-- **改参数**：`ENGINE_INPUT_INVALID`、`ENGINE_STAGE_ORDER`、`ENGINE_PROJECT_NOT_FOUND`；
-- **改正文**：`ENGINE_GATE_BLOCKED`、`ENGINE_SCORE_MISMATCH`、`ENGINE_READING_PROOF_INVALID`；
-- **查环境**：IO、schema 过新、锁超时、事务中止。
+- **改参数**：`ENGINE_SCHEMA_INVALID`、`ENGINE_STAGE_ORDER`、`ENGINE_PROJECT_NOT_FOUND`、`ENGINE_PROJECT_EXISTS`；
+- **改正文**：`ENGINE_GATE_BLOCKED`、`ENGINE_SCORE_MISMATCH`、`ENGINE_READING_PROOF_INVALID`、`ENGINE_DELTA_UNVERIFIED`；
+- **查环境**：`ENGINE_SCHEMA_TOO_NEW`、`ENGINE_PATH_ESCAPE`、`ENGINE_LOCK_TIMEOUT`、`ENGINE_TXN_ABORTED`、`ENGINE_RULEPACK_INVALID`。
 
 ### 8.3 五条命令
 
@@ -727,7 +728,7 @@ P8.md
 
 ### 9.4 规则包不能运行期切换
 
-`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.0 **不接受**运行期外部规则包路径。
+`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.1 **不接受**运行期外部规则包路径。
 
 要改规则，只有两条路：
 
@@ -827,7 +828,7 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.0
+dsh plugin --profile web add dsh-novel-write-engine@0.1.1
 ```
 
 升级后核对：
@@ -1049,7 +1050,7 @@ DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制�
 
 ## 十五、已知限制
 
-- **0.1.0 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
+- **0.1.1 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
 - **通过 npm 分发**：安装与升级统一使用 `dsh plugin add`；源码目录和 tarball 用于开发或离线环境。
 - **面板与预设只在 Web/Desktop**：headless / acp / sdk 没有 `agentPresets` 服务，也没有浏览器面板；18 个工具仍可用。
 - **规则包不可运行期替换**：要改词表/阈值，必须改源码、重新构建、重新安装。
@@ -1085,6 +1086,7 @@ corepack pnpm check:artifacts    # 真正 import 构建后的 host / client
 corepack pnpm check:hygiene      # v8 ignore 预算 + 假断言扫描
 corepack pnpm check:pack         # 需先 build；检查 tarball 内容
 corepack pnpm check:install      # 需先 build；空项目安装并加载
+corepack pnpm check:host         # 需本机 dsh；真实 Web 宿主安装/面板/卸载
 ```
 
 预设层需要真实 DSH checkout：
@@ -1095,6 +1097,8 @@ DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app corepack pnpm 
 
 `check:preset` 不伪造 bundle root；没有宿主 checkout 时它不会假装通过。
 
+`check:host` 使用临时 `DSH_HOME` 与临时 profile：`npm pack → dsh plugin add → --dump-config → 启动 Web → 面板 401/200 → 卸载 → 确认层消失`。它需要 PATH 里有 `dsh`（或设置 `DSH_BIN`），不会碰你的真实 profile；没有 DSH 时以退出码 2 明确失败，不伪造通过。
+
 ### 16.3 发布前手动验证
 
 1. `corepack pnpm build && corepack pnpm pack`；
@@ -1104,6 +1108,8 @@ DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app corepack pnpm 
 5. 跑一遍 `novel_init → P1 → … → archive → export`；
 6. `dsh plugin remove`，确认层与面板消失；
 7. 确认项目数据未被卸载动作删除。
+
+`pnpm check:host` 覆盖第 1–4 与第 6 步的自动断言；第 5 步仍是人工全流程（需要可用模型）。
 
 ### 16.4 项目结构
 
@@ -1127,12 +1133,12 @@ tests/            # 单测、集成、falsify、e2e
 
 ### 16.5 当前验证基线
 
-0.1.0 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
+0.1.1 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
 
-- `corepack pnpm test` 全绿（当前树 315 项）；
+- `corepack pnpm test` 全绿（当前树 348 项）；
 - 覆盖率语句/分支/函数/行均达到门槛；
 - `typecheck`、`lint`、`check:hygiene`、`test:isolated`、`build`、`validate:rulepack`、`check:pack`、`check:artifacts`、`check:install` 全绿；
-- 本地 tarball 安装、`--dump-config` 层出现、`remove` 后层消失均已实测。
+- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、`remove` 后层消失。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把上面的历史数字当保证。
 
@@ -1143,7 +1149,8 @@ tests/            # 单测、集成、falsify、e2e
 | 文档 | 内容 |
 |---|---|
 | [DESIGN.md](DESIGN.md) | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
-| [PLAN.md](PLAN.md) | 0.1.0 实施计划、切片、覆盖率门禁、验收 |
+| [PLAN.md](PLAN.md) | 0.1.0 实施计划（历史） |
+| [docs/0.1.1-plan.md](docs/0.1.1-plan.md) | 0.1.1 契约收口与证据加固方案 |
 | [docs/tools.md](docs/tools.md) | 18 个工具与命令面速查 |
 | [docs/states.md](docs/states.md) | 状态机、迁移表、轮次与回退 |
 | [docs/rulepack.md](docs/rulepack.md) | 规则包结构、编译器断言、改词表流程 |

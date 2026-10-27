@@ -31,7 +31,9 @@ export function resolveInside(root: string, relativePath: string): string {
   const absoluteRoot = resolve(root)
   const absolute = resolve(absoluteRoot, relativePath)
   const inside = relative(absoluteRoot, absolute)
-  if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
+  // `..foo` is a legal file name, not parent traversal. Only the exact `..`
+  // segment (or a path starting with `../`) escapes the root.
+  if (inside === '' || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
     throw new EngineFaultError(
       ERROR_CODES.PATH_ESCAPE,
       `refusing path "${relativePath}": escapes project root`,
@@ -43,7 +45,12 @@ export function resolveInside(root: string, relativePath: string): string {
 /** Whether a resolved absolute path remains under the project root. */
 export function isInside(root: string, absolutePath: string): boolean {
   const relativePath = relative(resolve(root), resolve(absolutePath))
-  return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath)
+  return (
+    relativePath !== '' &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  )
 }
 
 /** Project-relative form used in journal entries and tool output. */

@@ -3,6 +3,18 @@ import { ERROR_CODES, EngineInputError } from '../types.js'
 
 type Handler = (engine: EngineService, args: Record<string, unknown>) => Promise<unknown>
 
+/** Registry commands need an explicit root; do not pass undefined into path.resolve. */
+const rootArg = (args: Record<string, unknown>): string => {
+  if (typeof args.root !== 'string' || args.root.trim() === '') {
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      'registry operation requires a non-empty root',
+      'pass {"root":"/absolute/project/path"}',
+    )
+  }
+  return args.root
+}
+
 /**
  * The ten tools hidden when `tools.mode=core`, plus the explicit
  * registry/settings-pack operations that are command-only by design (§6.8).
@@ -33,9 +45,9 @@ const OPERATIONS: Record<string, Handler> = {
   novel_pipeline: (engine, args) => engine.advise(args as never),
   novel_state: (engine, args) => engine.queryState(args as never),
   novel_registry_list: (engine) => engine.listProjects(),
-  novel_registry_register: (engine, args) => engine.registerProject({ root: args.root as string }),
-  novel_registry_activate: (engine, args) => engine.setActiveProject({ root: args.root as string }),
-  novel_registry_forget: (engine, args) => engine.forgetProject({ root: args.root as string }),
+  novel_registry_register: (engine, args) => engine.registerProject({ root: rootArg(args) }),
+  novel_registry_activate: (engine, args) => engine.setActiveProject({ root: rootArg(args) }),
+  novel_registry_forget: (engine, args) => engine.forgetProject({ root: rootArg(args) }),
   novel_import: (engine, args) => engine.importPack(args as never),
 }
 
@@ -80,7 +92,7 @@ export async function runAdminOperation(
   operation: string,
   rawArguments: string,
 ): Promise<string> {
-  const handler = OPERATIONS[operation]
+  const handler = Object.hasOwn(OPERATIONS, operation) ? OPERATIONS[operation] : undefined
   if (handler === undefined) {
     throw new EngineInputError(
       ERROR_CODES.CONFIG_INVALID,

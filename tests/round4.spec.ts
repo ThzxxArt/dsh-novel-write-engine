@@ -146,7 +146,7 @@ it('refuses to erase or downgrade a blocker through novel_revise', async () => {
   }
 })
 
-it('allows the documented P6-to-revise edge without refetching the P6 brief', async () => {
+it('requires a fresh P6 brief after a failed check, then allows the revision', async () => {
   const { root, engine, cleanup } = await harness()
   try {
     await bootstrapToDraft({ root, engine })
@@ -157,10 +157,27 @@ it('allows the documented P6-to-revise edge without refetching the P6 brief', as
     await engine.getBrief({ stage: 'P6', root })
     const check = await engine.runCheck({
       chapter: 1,
-      semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '他没有抬头', note: '声音无区分' }],
+      semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' }],
       root,
     })
     expect(check.data.verdict).toBe('fail')
+    // The check changed the P6 context. Reusing the pre-check digest must not
+    // be enough to revise; the model must actually receive the updated brief.
+    await expect(
+      engine.submitRevision({
+        chapter: 1,
+        content: text,
+        proof: sampleReview(1, text).proof,
+        root,
+      }),
+    ).rejects.toMatchObject({ code: 'ENGINE_GATE_BLOCKED' })
+    const status = await engine.getStatus({ root })
+    expect(status.data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P6', chapter: 1 },
+    })
+    expect(status.data.next.reason).toContain('novel_revise')
+    await engine.getBrief({ stage: 'P6', root })
     const revised = await engine.submitRevision({
       chapter: 1,
       content: text,

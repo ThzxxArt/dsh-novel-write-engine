@@ -474,10 +474,27 @@ const duplicateParagraph: Rule = (ctx) => {
         : [ctx.evidence.previousText]
   if (previous.length === 0) return []
   const minChars = ctx.rulepack.crosschapter.duplicate_min_chars
-  const longParagraphs = (text: string): string =>
-    splitParagraphs(text)
-      .filter((paragraph) => Array.from(paragraph.replace(/\s+/g, '')).length >= minChars)
-      .join('\n\n')
+  // Do not let a writer hide a repeated paragraph by inserting newlines: merge
+  // consecutive short paragraphs until each comparison unit reaches minChars.
+  const longParagraphs = (text: string): string => {
+    const units: string[] = []
+    let buffer = ''
+    for (const paragraph of splitParagraphs(text)) {
+      buffer += paragraph
+      if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) {
+        units.push(buffer)
+        buffer = ''
+      }
+    }
+    if (buffer !== '') {
+      if (units.length === 0) {
+        if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) units.push(buffer)
+      } else {
+        units[units.length - 1] += buffer
+      }
+    }
+    return units.join('\n\n')
+  }
   const best = maxParagraphSimilarity(
     longParagraphs(ctx.text),
     previous.map((text) => longParagraphs(text)).filter((text) => text !== ''),

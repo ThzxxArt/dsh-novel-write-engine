@@ -27,7 +27,8 @@ describe('task books', () => {
       })
       expect(brief.content.length, stage).toBeGreaterThan(200)
       expect(brief.content).not.toContain('{{chapter}}')
-      expect(brief.contentHash.startsWith('fnv:')).toBe(true)
+      expect(brief.contentHash.startsWith('sha256:')).toBe(true)
+      expect(brief.contentHash).toHaveLength('sha256:'.length + 64)
       expect(brief.title.length).toBeGreaterThan(0)
     }
   })

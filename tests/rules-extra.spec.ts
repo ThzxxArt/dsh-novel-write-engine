@@ -125,6 +125,23 @@ describe('rule edge cases', () => {
     expect(violation?.severity).toBe('blocker')
   })
 
+  it('still blocks a repeated paragraph split into short lines', () => {
+    const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
+    const split = repeated.match(/.{1,10}/gu)!.join('\n')
+    const result = runMachineChecks(
+      split,
+      options({
+        chapter: 4,
+        evidence: {
+          ...options().evidence,
+          previousText: repeated,
+          previousTexts: [repeated],
+        },
+      }),
+    )
+    expect(result.violations.some((entry) => entry.code === 'DUPLICATE_PARAGRAPH')).toBe(true)
+  })
+
   it('marks an unresolved foreshadow dormant after the configured window', () => {
     const foreshadows = {
       schema_version: 1 as const,

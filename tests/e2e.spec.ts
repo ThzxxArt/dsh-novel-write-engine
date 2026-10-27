@@ -106,7 +106,7 @@ describe('three-chapter end to end', () => {
         chapter: 1,
         content: revised,
         issues: [{ ...blocker, status: 'fixed', evidence: '风从窗缝里挤进来' }],
-        proof: review.proof,
+        proof: sampleReview(1, revised).proof,
         root,
       })
       const status = await engine.getStatus({ root })

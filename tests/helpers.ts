@@ -73,7 +73,7 @@ export function sampleSummary(patch: Partial<ChapterSummary> = {}): ChapterSumma
     foreshadows: { planted: [], advanced: [], resolved: [] },
     new_elements: { locations: [], abilities: [], artifacts: [] },
     resource_changes: [],
-    opening: '风从窗缝里挤进来',
+    opening: '风从窗缝里挤进来，把桌上',
     continuity: { opens_from: '上一章结尾', ends_with: '信封' },
     hook_strength: 4,
     pleasure_points: ['新线索'],
@@ -124,9 +124,10 @@ export function sampleReview(
         ? [{ rule: 'NO_MOTIVE', location: '第 2 段', delta: deduction, note: '动作缺少动机' }]
         : [],
   }))
+  const middleIndex = Math.max(1, Math.min(paragraphs.length - 2, Math.floor((paragraphs.length - 1) / 2)))
   const proof = {
     opening: { paragraph: 1, quote: paragraphs[0]!.slice(0, 14) },
-    middle: { paragraph: 2, quote: paragraphs[1]!.slice(0, 14) },
+    middle: { paragraph: middleIndex + 1, quote: paragraphs[middleIndex]!.slice(0, 14) },
     ending: { paragraph: paragraphs.length, quote: paragraphs[paragraphs.length - 1]!.slice(0, 14) },
   }
   return { dimensions, issues: options.issues ?? [], total: 150 - deduction, proof }
@@ -213,21 +214,43 @@ export async function writeDraft(input: {
   })
 }
 
-/** The four P6 semantic items, all passing against a quote from the text. */
+/** Four disjoint 8-character quotes from the manuscript, one per semantic item. */
+export function semanticQuotes(text: string): string[] {
+  const found: string[] = []
+  const seen = new Set<string>()
+  const add = (quote: string): void => {
+    if (Array.from(quote).length < 8 || seen.has(quote)) return
+    seen.add(quote)
+    found.push(quote)
+  }
+  for (const paragraph of text.split(/\n+/)) {
+    const chars = Array.from(paragraph.trim())
+    add(chars.slice(0, 8).join(''))
+  }
+  if (found.length < 4) {
+    for (const paragraph of text.split(/\n+/)) {
+      const chars = Array.from(paragraph.trim())
+      for (let start = 0; start + 8 <= chars.length && found.length < 4; start += 8) {
+        add(chars.slice(start, start + 8).join(''))
+      }
+    }
+  }
+  if (found.length < 4) {
+    throw new Error(`sampleSemantic needs four distinct 8-character quotes, found ${found.length}`)
+  }
+  return found.slice(0, 4)
+}
+
+/** The four P6 semantic items, all passing against distinct quotes from the text. */
 export function sampleSemantic(
   text: string,
   patch: Partial<Record<(typeof SEMANTIC_CHECK_IDS)[number], Partial<SemanticItem>>> = {},
 ): SemanticItem[] {
-  const quote =
-    text
-      .split(/\n+/)
-      .find((line) => line.trim() !== '')
-      ?.trim()
-      .slice(0, 14) ?? '正文'
-  return SEMANTIC_CHECK_IDS.map((id) => ({
+  const quotes = semanticQuotes(text)
+  return SEMANTIC_CHECK_IDS.map((id, index) => ({
     id,
     verdict: 'pass',
-    evidence: quote,
+    evidence: quotes[index]!,
     note: '已核对',
     ...(patch[id] ?? {}),
   }))

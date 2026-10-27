@@ -1,4 +1,4 @@
-import { rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { FsStore, joinRel } from '../src/store/fs.js'
@@ -198,20 +198,216 @@ it('recovers a pending transaction even when a lock-reclaim audit row follows it
   }
 })
 
-it('advises the P8 brief before archive at ready_to_archive', async () => {
+it('advises archive only after the P8 brief is current', async () => {
   const { root, engine, cleanup } = await harness()
   try {
     await readyToArchive({ root, engine })
     const status = await engine.getStatus({ root })
-    expect(status.data.next.tool).toBe('novel_brief')
-    expect(status.data.next.args).toMatchObject({ stage: 'P8' })
-    await engine.getBrief({ stage: 'P8', root })
+    expect(status.data.next).toMatchObject({
+      tool: 'novel_archive',
+      args: { chapter: 1 },
+    })
     const archived = await engine.archiveChapter({
       chapter: 1,
       state_delta: archiveDelta(sampleSummary()),
       root,
     })
     expect(archived.data.chapter).toBe(1)
+  } finally {
+    await cleanup()
+  }
+})
+
+it('points at rollback instead of a permanently rejected operation after the rounds budget', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await bootstrapToDraft({ root, engine })
+    const text = cleanText()
+    await writeDraft({ root, engine, text })
+    await engine.getBrief({ stage: 'P4', root })
+    await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+    for (let round = 1; round <= 3; round += 1) {
+      await engine.getBrief({ stage: 'P6', root })
+      await engine.runCheck({
+        chapter: 1,
+        semantic: sampleSemantic(text, {
+          'L2-VOICE': { verdict: 'fail', note: `round ${round}` },
+        }),
+        root,
+      })
+    }
+    const status = await engine.getStatus({ root })
+    expect(status.data.rounds.check).toBe(3)
+    expect(status.data.blocking.map((item) => item.code)).toContain('PG-11')
+    expect(status.data.next).toMatchObject({
+      tool: 'novel_rollback',
+      args: { chapter: 1, to_stage: 'P4' },
+    })
+    expect((await engine.advise({ root })).data).toMatchObject({
+      tool: 'novel_rollback',
+      blocking: expect.arrayContaining([expect.objectContaining({ code: 'PG-11' })]),
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('recommends the P8 brief before archive when the check just passed', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await bootstrapToDraft({ root, engine })
+    const text = cleanText()
+    await writeDraft({ root, engine, text })
+    await engine.getBrief({ stage: 'P4', root })
+    await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+    await engine.getBrief({ stage: 'P6', root })
+    await engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P8', chapter: 1 },
+    })
+    await engine.getBrief({ stage: 'P8', root })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_archive',
+      args: { chapter: 1 },
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('recommends the missing brief before every stage write, with valid tool args', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await engine.initProject({ title: '任务书优先', genre: '都市现代', platform: 'fanqie', root })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P1', chapter: 1 },
+    })
+    await engine.getBrief({ stage: 'P1', root })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_plan_world',
+      args: {},
+    })
+
+    await engine.submitWorldPlan({
+      chapter: 0,
+      objective: '让主角收到一封信',
+      constraints: [],
+      characters: [],
+      locations: [],
+      continuity_notes: [],
+      root,
+    })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P2', chapter: 1 },
+    })
+    await engine.getBrief({ stage: 'P2', root })
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_plan_chapter',
+      args: {},
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('lets novel_plan_chapter repair a corrupted plan after the error is reported', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await engine.initProject({
+      title: '可修复计划',
+      genre: '都市现代',
+      platform: 'fanqie',
+      words_per_chapter: [80, 400],
+      root,
+    })
+    await engine.getBrief({ stage: 'P1', root })
+    await engine.submitWorldPlan({
+      chapter: 0,
+      objective: '先修复再写',
+      constraints: [],
+      characters: [],
+      locations: [],
+      continuity_notes: [],
+      root,
+    })
+    await mkdir(join(root, 'plans'), { recursive: true })
+    await writeFile(join(root, 'plans/ch001.chapter.yaml'), 'title: [unclosed\n', 'utf8')
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P2', chapter: 1 },
+    })
+    await engine.getBrief({ stage: 'P2', root })
+    await engine.submitChapterPlan({
+      chapter: 0,
+      title: '修复后的计划',
+      scene_type: '日常过渡章',
+      narrator: '他',
+      beats: ['修复'],
+      opening: '风从窗缝里挤进来',
+      ending: '蜡印',
+      target_words: [80, 400],
+      root,
+    })
+    expect((await engine.queryState({ kind: 'planChapter', root })).data).toMatchObject({
+      title: '修复后的计划',
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('rejects invalid chapter query parameters instead of treating them as zero words', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await engine.initProject({ title: '参数校验', genre: '都市现代', platform: 'fanqie', root })
+    await expect(engine.getStatus({ chapter: 0, root })).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+    })
+    await expect(engine.countWords({ chapter: -1, root })).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+    })
+    await expect(engine.queryState({ kind: 'pipeline', chapter: '1' as never, root })).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('reports a corrupted chapter plan instead of wedging every read', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await engine.initProject({ title: '坏计划', genre: '都市现代', platform: 'fanqie', root })
+    await mkdir(join(root, 'plans'), { recursive: true })
+    await writeFile(join(root, 'plans/ch001.chapter.yaml'), 'title: [unclosed\n', 'utf8')
+    expect((await engine.getStatus({ root })).data.next).toMatchObject({
+      tool: 'novel_brief',
+      args: { stage: 'P1' },
+    })
+    const brief = await engine.getBrief({ stage: 'P1', root })
+    expect(brief.data.fields.plan_error).toMatch(/plans\/ch001\.chapter\.yaml/)
+    await expect(engine.queryState({ kind: 'planChapter', root })).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+      message: /plans\/ch001\.chapter\.yaml/,
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('reads a historical review and check by chapter after the next chapter starts', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
+    const review = await engine.queryState({ kind: 'review', chapter: 1, root })
+    const check = await engine.queryState({ kind: 'check', chapter: 1, root })
+    expect(review.data).toMatchObject({ chapter: 1, total: 145 })
+    expect(check.data).toMatchObject({ chapter: 1, verdict: 'pass' })
+    expect(await engine.queryState({ kind: 'review', chapter: 2, root })).toMatchObject({ data: null })
   } finally {
     await cleanup()
   }

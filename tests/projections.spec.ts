@@ -3,7 +3,6 @@ import {
   phaseStrip,
   projectChapters,
   projectGates,
-  projectStatus,
   projectSummary,
   type PanelSnapshot,
 } from '../src/engine/projections.js'
@@ -75,13 +74,13 @@ describe('panel projections', () => {
         { code: 'PG-07', scope: 'score', detail: 'low' },
         { code: 'PG-10', detail: 'drift' },
       ],
+      next: { tool: 'novel_check', args: {}, reason: 'next' },
     })
     const gates = projectGates(input)
     expect(gates.explanations[0]).toContain('PG-07 (score): low')
     expect(gates.explanations[1]).toBe('PG-10: drift')
     const summarised = projectSummary(input)
     expect(summarised).toMatchObject({ totalChapters: 2, totalWords: 200, revision: 7 })
-    const status = projectStatus(input, { tool: 'novel_check', args: {}, reason: 'next' })
-    expect(status).toMatchObject({ chapter: 2, stage: 'P6', metrics: null })
+    expect(summarised.next).toEqual({ tool: 'novel_check', reason: 'next' })
   })
 })

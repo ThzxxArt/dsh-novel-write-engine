@@ -231,7 +231,9 @@ describe('context stages and panel draft projection', () => {
       expect(rows[0]!.details).toContain('收到无名信封')
       const summary = await engine.panelSummary({ root })
       expect(summary.totalWords).toBeGreaterThan(0)
-      expect(summary.next).toMatchObject({ tool: 'novel_review' })
+      expect(summary.next).toMatchObject({ tool: 'novel_brief' })
+      await engine.getBrief({ stage: 'P4', root })
+      expect((await engine.panelSummary({ root })).next).toMatchObject({ tool: 'novel_review' })
     } finally {
       await cleanup()
     }

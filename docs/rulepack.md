@@ -11,7 +11,7 @@
 | `punctuation` | 破折号预算（按场景）、句号密度、省略号连用、匀速句、连续「了」 |
 | `semantics` | 形容词密度、爽点密度、感官密度、水词滑动窗口 |
 | `crosschapter` | 重复相似度与最小段长、伏笔休眠、时间倒退、锁定描写 token 覆盖率 |
-| `quality` | 十五维满分（必须合计 150）与过关线 |
+| `quality` | 十五维满分（必须合计 150）；过关线由插件配置 `minScore` 提供，不写在规则包 |
 | `exclusions` | 跨维度互斥对 |
 | `exemptions` | 明确豁免的规则码 |
 
@@ -36,6 +36,6 @@
 
 1. 编辑 `rulepacks/default.yaml`。
 2. `pnpm build && pnpm validate:rulepack`。
-3. 跑 `pnpm test`（golden 用例会指出行为变化）。
+3. 跑 `pnpm test`（规则表驱动用例会指出行为变化）。
 
 不要在代码里加 if：规则码与实现一对一，注册表拒绝重复注册。

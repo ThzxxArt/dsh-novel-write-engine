@@ -114,7 +114,17 @@ export class FsStore {
   ): Promise<ReturnType<typeof narrow<K>> | null> {
     const text = await this.readText(relativePath)
     if (text === null) return null
-    const parsed = parseYaml(text) as unknown
+    let parsed: unknown
+    try {
+      parsed = parseYaml(text) as unknown
+    } catch (error) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${relativePath} is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
+        'fix the YAML syntax; the engine will not rewrite a document it cannot parse',
+        { cause: error },
+      )
+    }
     const version =
       typeof parsed === 'object' &&
       parsed !== null &&

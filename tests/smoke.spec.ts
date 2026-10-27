@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, Config } from '../src/index.js'
@@ -128,6 +128,17 @@ describe('plugin assembly', () => {
       (Config as unknown as (init: Record<string, unknown>) => never)({ toolsMode: 'core' }),
     )
     expect(host.tools.map((tool) => tool.name).sort()).toEqual([...CORE_TOOLS].sort())
+  })
+
+  it('disposes the engine through ctx.effect and is idempotent', () => {
+    const host = fakeHost()
+    apply(host.ctx as never, config)
+    const engine = host.provided.novelEngine as { dispose: () => void }
+    const dispose = vi.spyOn(engine, 'dispose')
+    host.dispose()
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(() => engine.dispose()).not.toThrow()
+    expect(() => engine.dispose()).not.toThrow()
   })
 
   it('registers nothing when optional services are absent, and disposes cleanly', () => {

@@ -105,19 +105,18 @@ describe('engine lifecycle', () => {
     try {
       await bootstrapToDraft({ root, engine })
       await writeDraft({ root, engine })
-      const first = await engine
-        .submitDraft({
-          chapter: 1,
-          content: cleanText(),
-          chapter_title: '开端之雨',
-          scene_type: '日常过渡章',
-          narrator: '他',
-          summary: sampleSummary(),
-          root,
-        })
-        .catch((error: unknown) => error)
-      // The stage is already P4, so a second identical submission is answered from the replay cache.
-      expect(first).toBeDefined()
+      const first = await engine.submitDraft({
+        chapter: 1,
+        content: cleanText(),
+        chapter_title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: sampleSummary(),
+        root,
+      })
+      // The stage is already P4, so the identical submission is answered from
+      // the replay cache; it must not be a thrown stage-order error.
+      expect(first.replayed).toBe(true)
       await engine.getBrief({ stage: 'P4', root })
       const review = sampleReview(1, cleanText())
       await engine.submitReview({ chapter: 1, ...review, root })
@@ -193,6 +192,8 @@ describe('engine lifecycle', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
+      expect((await engine.advise({ root })).data.tool).toBe('novel_brief')
+      await engine.getBrief({ stage: 'P3', root })
       const advice = await engine.advise({ root })
       expect(advice.data.tool).toBe('novel_write_draft')
       const summary = await engine.panelSummary({ root })

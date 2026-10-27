@@ -4,7 +4,6 @@ import {
   bootstrapToDraft,
   cleanText,
   harness,
-  readyToArchive,
   sampleReview,
   sampleSemantic,
   sampleSummary,
@@ -85,22 +84,6 @@ describe('archive consistency', () => {
       const handoff = await engine.queryState({ kind: 'handoff', root })
       expect((handoff.data as { act_progress: string }).act_progress).not.toContain('?')
       expect((handoff.data as { last_summary: string }).last_summary).toBe('收到无名信封')
-    } finally {
-      await cleanup()
-    }
-  })
-
-  it('applies PG-06 at archive time', async () => {
-    const { root, engine, cleanup } = await harness()
-    try {
-      await readyToArchive({ root, engine })
-      const { applicableGates } = await import('../src/engine/gates.js')
-      expect(
-        applicableGates({
-          operation: 'archiveChapter',
-          stage: 'ready_to_archive',
-        } as never),
-      ).toContain('PG-06')
     } finally {
       await cleanup()
     }

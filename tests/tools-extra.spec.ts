@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createNovelTools, emptySummary, toolNames } from '../src/tools/index.js'
 import type { EngineService } from '../src/engine/service.js'
+import { EngineBlockedError } from '../src/types.js'
 
 const result = <T>(data: T): { data: T; revision: number; warnings: never[] } => ({
   data,
@@ -154,9 +155,14 @@ describe('every tool executes one operation', () => {
 
   it('renders the brief and archive cards', () => {
     const map = tools(engine())
-    const brief = map.get('novel_brief')!.output.render({}, { content: '任务书', digest: 'D' } as never)
+    const brief = map.get('novel_brief')!.output.render({}, {
+      content: '任务书',
+      digest: 'D',
+      fields: { score_exclusions: [{ pair: ['A', 'B'], family: 'x' }] },
+    } as never)
     expect(brief[0]!.text).toContain('任务书')
     expect(brief[0]!.text).toContain('brief digest: D')
+    expect(brief[0]!.text).toContain('score_exclusions')
     const archive = map.get('novel_archive')!.output.render({}, {
       chapter: 1,
       score: 145,
@@ -171,6 +177,37 @@ describe('every tool executes one operation', () => {
       replayed: true,
     } as never)
     expect(replay[0]!.text).toContain('replayed')
+    const status = map.get('novel_status')!.output.render({}, {
+      data: {
+        project: { title: '状态书', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        active_chapter: 1,
+        stage: 'P6',
+        rounds: { review: 2, revise: 1, check: 3 },
+        blocking: [{ code: 'PG-11', detail: 'round limit' }],
+        next: { tool: 'novel_rollback', reason: 'restart' },
+      },
+      revision: 3,
+      warnings: [],
+    } as never)
+    expect(status[0]!.text).toContain('轮次：评审 2 / 修订 1 / 校验 3')
+    expect(status[0]!.text).toContain('PG-11')
+  })
+
+  it('keeps structured blocking items in the tool error', async () => {
+    const fake = engine()
+    fake.archiveChapter = vi.fn(async () => {
+      throw new EngineBlockedError(
+        'ENGINE_GATE_BLOCKED',
+        'archive blocked',
+        [{ code: 'PG-04', detail: 'bad format', hint: 'fix it' }],
+        'fix the blockers',
+      )
+    }) as never
+    const map = tools(fake)
+    await expect(map.get('novel_archive')!.execute({ chapter: 1, state_delta: {} }, {})).rejects.toThrowError(
+      /blocking: .*PG-04/,
+    )
   })
 
   it('renders engine warnings for json tools', () => {

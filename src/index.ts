@@ -79,6 +79,7 @@ export function apply(ctx: Context, config: Config): void {
   const engine = new EngineService(engineConfig, () => loadRulepack(), {
     onEvent: emit,
   })
+  ctx.effect(() => () => engine.dispose(), `${name}: engine dispose`)
 
   const provider = ctx as unknown as { provide?: (name: string, value: unknown) => void }
   provider.provide?.('novelEngine', engine)

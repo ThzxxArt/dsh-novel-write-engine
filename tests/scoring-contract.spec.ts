@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { applyExclusions } from '../src/domain/scoring.js'
 import { bootstrapToDraft, harness, readProjectFile, sampleReview, writeDraft } from './helpers.js'
 
 const atP4 = async (): Promise<{
@@ -16,6 +17,26 @@ const atP4 = async (): Promise<{
 }
 
 describe('review score contract', () => {
+  it('canonicalizes zero-padded paragraph numbers before applying exclusions', () => {
+    const dimensions = [
+      {
+        id: 'R-W-11',
+        max: 10,
+        deductions: [{ rule: 'META_NARRATION', location: '第 01 段', delta: 6, note: '元叙述' }],
+      },
+      {
+        id: 'R-W-07',
+        max: 4,
+        deductions: [{ rule: 'LEX_ZERO_TOLERANCE', location: '第 1 段', delta: 2, note: '套话' }],
+      },
+    ]
+    const result = applyExclusions(dimensions, [
+      { pair: ['META_NARRATION', 'LEX_ZERO_TOLERANCE'], family: 'meta' },
+    ])
+    expect(result.dropped).toBe(1)
+    expect(result.dimensions[1]!.deductions).toHaveLength(0)
+  })
+
   it('rejects a claimed total that does not equal 150 - Σdelta', async () => {
     const { root, engine, cleanup, text } = await atP4()
     try {

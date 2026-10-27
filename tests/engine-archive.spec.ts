@@ -208,6 +208,105 @@ describe('archive state_delta reconciliation', () => {
     }
   })
 
+  it('refuses a hand-written chapter entry without an archive digest', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      const text = ledgerText()
+      await readyToArchive({ root, engine, summary, text })
+      const review = parseYaml((await readProjectFile(root, 'reviews/ch001.review.yaml'))!) as {
+        content_hash: string
+      }
+      const chapters = (await readYaml(root, 'state/chapters.yaml')) as {
+        chapters: Array<Record<string, unknown>>
+      }
+      chapters.chapters.push({
+        num: 1,
+        title: '伪造章',
+        file: 'chapters/chapter-001.md',
+        word_count: 999,
+        dialogue_lines: 0,
+        dialogue_ratio: 0,
+        scene_type: '日常过渡章',
+        narrator: '他',
+        score: 150,
+        status: 'reviewed',
+        content_hash: review.content_hash,
+        summary,
+      })
+      await engine.amend({
+        path: 'state/chapters.yaml',
+        content: chapters as never,
+        reason: '构造伪造索引以验证归档边界',
+        root,
+      })
+      await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: /archive_digest/,
+      })
+      const pipeline = (await readYaml(root, 'state/pipeline.yaml')) as { stage: string }
+      expect(pipeline.stage).toBe('ready_to_archive')
+      expect((await readYaml(root, 'state/characters.yaml')).characters).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects a review whose reading proof was edited after submission', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      await readyToArchive({ root, engine, summary, text: ledgerText() })
+      const reviewPath = join(root, 'reviews', 'ch001.review.yaml')
+      const review = parseYaml((await readProjectFile(root, 'reviews/ch001.review.yaml'))!) as {
+        proof: { opening: { paragraph: number; quote: string } }
+      }
+      review.proof.opening = {
+        paragraph: 1,
+        quote: '这是一段完全伪造的阅读证明引用',
+      }
+      await writeFile(reviewPath, `${JSON.stringify(review)}\n`, 'utf8')
+      // P8 digest covers the review, so refresh it before retrying.
+      await engine.getBrief({ stage: 'P8', root })
+      await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: /digest/,
+      })
+      expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects a stored review whose deductions were edited after submission', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      await readyToArchive({ root, engine, summary, text: ledgerText() })
+      const reviewPath = join(root, 'reviews', 'ch001.review.yaml')
+      const review = parseYaml((await readProjectFile(root, 'reviews/ch001.review.yaml'))!) as {
+        dimensions: Array<{ id: string; deductions: unknown[] }>
+        total: number
+      }
+      const target = review.dimensions.find((dimension) => dimension.id === 'R-W-02')!
+      target.deductions.push(
+        { rule: 'META_NARRATION', location: '第 2 段', delta: 1, note: '元叙述' },
+        { rule: 'LEX_ZERO_TOLERANCE', location: '第 2 段', delta: 1, note: '套话' },
+      )
+      review.total -= 2
+      await writeFile(reviewPath, `${JSON.stringify(review)}\n`, 'utf8')
+      // P8 digest covers the review, so refresh it before retrying.
+      await engine.getBrief({ stage: 'P8', root })
+      await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: /digest/,
+      })
+      expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('refuses a review edited after submission even when its arithmetic still closes', async () => {
     const { root, engine, cleanup } = await harness()
     try {
@@ -226,7 +325,8 @@ describe('archive state_delta reconciliation', () => {
       // The P8 digest covers the review, so refresh it before retrying.
       await engine.getBrief({ stage: 'P8', root })
       await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
-        code: 'ENGINE_GATE_BLOCKED',
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: /digest/,
       })
       expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
     } finally {

@@ -2,7 +2,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { bootstrapToDraft, cleanText, harness, sampleSummary } from './helpers.js'
+import { EngineService } from '../src/engine/service.js'
+import { loadRulepack } from '../src/rulepack.js'
+import { bootstrapToDraft, cleanText, harness, sampleSummary, TEST_CONFIG, writeDraft } from './helpers.js'
 
 const characters = (identity: string): Record<string, unknown> => ({
   schema_version: 1,
@@ -144,6 +146,47 @@ describe('brief context packs', () => {
     } finally {
       await cleanup()
       await rm(overrides, { recursive: true, force: true })
+    }
+  })
+
+  it('exposes the P4 score exclusions and refuses a non-active chapter', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      await writeDraft({ root, engine })
+      await engine.getBrief({ stage: 'P4', root })
+      const brief = await engine.getBrief({ stage: 'P4', root })
+      expect(brief.data.fields).toMatchObject({
+        stage: 'P4',
+        chapter: 1,
+        next_tool: 'novel_review',
+        score_exclusions: expect.arrayContaining([
+          expect.objectContaining({ pair: ['META_NARRATION', 'LEX_ZERO_TOLERANCE'] }),
+        ]),
+      })
+      await expect(engine.getBrief({ stage: 'P4', chapter: 2, root })).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('invalidates a brief when the configured minimum score changes', async () => {
+    const { root, engine, cleanup } = await harness({ quality: { minScore: 120 } })
+    try {
+      await bootstrapToDraft({ root, engine })
+      await writeDraft({ root, engine })
+      const first = await engine.getBrief({ stage: 'P4', root })
+      const higher = new EngineService(
+        { ...TEST_CONFIG, projectRoot: root, stateDir: '', quality: { minScore: 149 } },
+        () => loadRulepack(),
+      )
+      const second = await higher.getBrief({ stage: 'P4', root })
+      expect(second.data.digest).not.toBe(first.data.digest)
+      expect(second.replayed).not.toBe(true)
+    } finally {
+      await cleanup()
     }
   })
 

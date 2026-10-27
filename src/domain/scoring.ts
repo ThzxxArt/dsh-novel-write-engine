@@ -146,7 +146,7 @@ export function applyExclusions(
   const canonical = (location: unknown): string => {
     if (typeof location !== 'string') return ''
     const paragraph = /第\s*(\d+)\s*段/.exec(location)
-    return paragraph === null ? location.trim() : `paragraph:${paragraph[1]}`
+    return paragraph === null ? location.trim() : `paragraph:${Number(paragraph[1])}`
   }
   const deductionsOf = (dimension: unknown): readonly unknown[] => {
     if (typeof dimension !== 'object' || dimension === null) return []

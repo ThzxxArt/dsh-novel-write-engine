@@ -2,10 +2,10 @@
 
 | 项 | 值 |
 |---|---|
-| 插件版本 | `0.1.0` |
+| 插件版本 | `0.1.1` |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine` |
 | 协议 | MIT |
-| 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`，Node `>=24.9.0` |
+| 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0` |
 | 验证基线 | DSH `0.2.1-rc.3`、Cordis `4.0.5`、Schemastery `3.18.5` |
 | 硬约束 | 不依赖 Python、不做数据库、除正文外全部 YAML/JSON、**运行时不依赖任何外部技能文件**、**测试覆盖率 ≥85%** |
 
@@ -238,18 +238,16 @@ Agent 预设  1 个（「网文工坊」）
 
 ```ts
 export function apply(ctx: Context, config: Config) {
-  const store    = new FsStore(config)                    // 懒连接，不读盘
-  const pack     = compileRulePack(config.rules)          // 编译 + 冻结 + 自校验
-  const clock    = systemClock                            // 可注入，测试用假时钟
-  const events   = new EventBus()                         // 3 个事件
-  const engine   = new EngineService({ store, pack, config, clock, events, logger: ctx.logger })
+  validateConfig(config)                                  // 只在配置非法时抛错
+  const engine = new EngineService(engineConfig, () => loadRulepack(), {
+    onEvent: (event) => ctx.emit?.(event.name, event.payload),
+  })
+  ctx.effect(() => () => engine.dispose(), `${name}: engine dispose`)
 
-  ctx.effect(() => () => engine.dispose())                // 卸载：刷 journal、释放锁
-
-  registerTools(ctx, engine)                              // 18
-  registerCommands(ctx, engine)                           // 4
-  registerRemote(ctx, engine)                             // 3
-  ctx.skills.register(ENTRY_SKILL)                        // 1
+  for (const tool of createNovelTools(engine)) ctx.tools.register(tool) // 18
+  ctx.inject(['commands'], (c) => registerCommands(c, engine))          // 5
+  ctx.inject(['skills'], (s) => s.skills.register(createSkill()))       // 1
+  ctx.inject(['webServer'], (w) => registerPanel(w, engine))            // 1 条精确路由
 
   // 发布门禁（不依赖宿主）：DSH_BUNDLE_ROOT=... pnpm check:preset
   // 运行时只注册工具/命令/skill/panel；不读取宿主预设内部结构。
@@ -262,8 +260,8 @@ export function apply(ctx: Context, config: Config) {
 |---|---|
 | 配置 | 只经 `apply(ctx, config)` 闭包传入，不读 `process.env` |
 | 状态 | 全部在 `EngineService` 实例内；**禁止模块级 `new Map()`** |
-| 预热 | `apply` 不做 IO：不建目录、不读项目文件、不联网 |
-| 清理 | 锁与监听器经 `ctx.effect` 托管，卸载自动释放 |
+| 预热 | `apply` 不做 IO：不建目录、不读项目文件、不联网；规则包与 store 都懒加载 |
+| 清理 | `ctx.effect` 调用 `EngineService.dispose()` 清空内存缓存；文件锁在每个 `mutate` 的 `finally` 释放，引擎不持有文件句柄 |
 | 失败 | `apply` 只在**配置非法**时抛错；项目不存在是「操作错误」，不是装配错误 |
 
 ### 2.5 服务操作契约（22 个）
@@ -350,7 +348,7 @@ interface OpResult<T> { data: T; revision: number; warnings: Warning[] }
 |---|---|---|
 | 同进程、同项目、多个写操作 | `KeyedMutex`（按 `projectRoot` 分键） | 串行；第二个排队等待，不失败 |
 | 同进程、不同项目 | 不同 key | 真并行 |
-| 跨进程（两个 DSH 实例） | `.engine.lock` 文件锁（O_EXCL + pid + 时间戳） | 后来者等锁，超时抛 `ENGINE_LOCK_TIMEOUT` |
+| 跨进程（两个 DSH 实例） | `.engine.lock` 文件锁（O_EXCL + pid + nonce + 时间戳） | 后来者等锁，超时抛 `ENGINE_LOCK_TIMEOUT` |
 | 只读操作 | 无锁 | 读 `revision`，写操作递增；读到中途变更则重试一次 |
 | 工具被并发调用 | 同上 | 写串行、读无锁 |
 
@@ -458,7 +456,7 @@ dsh-novel-write-engine/
     "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-layout"], "external": ["react", "react/jsx-runtime"] },
     "bundle": { "patch": ["./cordis.patch.yml", "./presets/novel-write-engine.patch.yml"] }
   },
-  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0", "node": ">=24.9.0" },
+  "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0-0", "node": ">=24.9.0" },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
@@ -592,6 +590,7 @@ briefs:                       # 任务书签收（PG-01 依据）
   P4: { issued_at: "...", digest: "sha256:..." }
 blocking:                     # 当前阻塞项（空数组 = 可推进）
   - { code: PG-07, scope: review, detail: "score 118 < 120" }
+review_digest: "sha256:..."   # 最近一次 submitReview/submitRevision 写入的 review 内容摘要
 last_action: { op: "novel_review", at: "...", digest: "sha256:..." }
 ```
 
@@ -728,7 +727,7 @@ semantic:
 verdict: pass
 ```
 
-**语义项必须带证据**：`evidence` 里的引用，引擎回正文查找；找不到 = 证据无效 = 该 check 不成立。
+**语义项必须带证据**：`evidence` 至少 8 字、必须逐字出现在正文里，且四个语义项必须使用四条互不相同的引用；找不到、过短或重复 = 证据无效 = 该 check 不成立。
 
 #### `state/handoff.yaml`
 
@@ -745,7 +744,7 @@ open_hooks: [{ id: FS-007, title: "泛黄诊断书" }]
 updated_at: "..."
 ```
 
-需要给人看时由 `getStatus { format: markdown }` 渲染——**渲染结果不落盘**，避免第二个真相来源。
+需要给人看时由工具 renderer 渲染——**渲染结果不落盘**，避免第二个真相来源。
 
 ### 4.3 ID 分配：引擎是唯一权威
 
@@ -867,7 +866,7 @@ dialogue_ratio = dialogue_lines / nonEmptyLines     // 小数字面量，禁百�
 ### 5.5 词表与规则包结构
 
 ```yaml
-# rulepacks/default.yaml（节选）
+# rulepacks/default.yaml（节选；0.1.1 真实 schema）
 schema_version: 1
 name: default
 version: "1.0.0"
@@ -876,17 +875,17 @@ lexicon:
   zero_tolerance:                 # 命中即 blocker
     - { term: "总而言之", note: "AI 套话" }
     - { term: "不可否认", note: "AI 套话" }
-    - { term: "不禁",     note: "AI 套话" }
   soft:                           # 每章 ≤ N 次，超出降为 advisory
     - { term: "犹如", limit: 1 }
   contextual:                     # 按类型放宽
     - { term: "赋能", limit: 2, genres: [都市现代, 游戏系统] }
   meta_narration:                 # 元叙述标记，-4 分且必须改
     - { term: "值得一提的是" }
-    - { term: "众所周知" }
-  reader_intrusion: [{ pattern: "我们(?:可以)?看(?:到)?(?:这里|下面|接下来|这一幕|这个|这场|这段)" }]
-  god_view: [{ pattern: "这注定是" }, { pattern: "当时的.{0,4}还不知道" }]
-  conclusion_first: { verbs: [感到, 觉得, 知道, 明白, 意识到], causals: [因为, 所以, 于是] }
+  reader_intrusion:
+    - { pattern: "我们(?:可以)?看(?:到)?(?:这里|下面|接下来)" }
+  god_view:
+    - { pattern: "这注定是" }
+  conclusion_first: { verbs: [感到, 觉得, 知道], causals: [因为, 所以, 于是] }
 
 format:
   paragraph_max_words: 90
@@ -894,64 +893,53 @@ format:
   forbid_semicolon: true
   forbid_english_ellipsis: true
   title: { pattern: "^第\\d+章\\s", min_chars: 4, max_chars: 8 }
+  system_labels: ["Day\\s*\\d+", "第[0-9一二三四五六七八九十百]+卷"]
+  scene_separators: ["———", "***", "…………"]
+  markdown_markers: ["#", "**", "---", ">", "|"]
 
 punctuation:
-  dash:
-    base: { 战斗/动作章: 3, 日常过渡章: 4, 情感爆发章: 6, 纯叙事章: 3 }
-    scale_words: 3000                       # 预算 × max(1, ceil(字数/3000))
-    dialogue_multiplier: 2
-  period_density:                           # 每 100 字句号上限
-    - { max_words: 19,  limit: null }
-    - { max_words: 50,  limit: 6 }
-    - { max_words: 90,  limit: 4 }
-    - { max_words: null, limit: 3 }
-  dialogue_dominant_exempt: true
-  ellipsis_runs_max: 10
-  uniform_sentence: { run: 3, tolerance: 2, window: [6, 40] }
-  consecutive_le_max: 2
-  exclamation: { per_chapter: [5, 10], per_paragraph: [1, 2] }
+  dash: { base: { 战斗/动作章: 3, 日常过渡章: 4, 情感爆发章: 6, 纯叙事章: 3 }, scale_words: 3000, token: "——" }
+  period_density: { min: 1.5, max: 8 }
+  ellipsis_run: { max: 1, token: "……" }
+  uniform_sentence: { min_sentences: 8, ratio: 0.6 }
+  consecutive_le: { max: 3, char: "了" }
+  dialogue_dominant_ratio: 0.60
 
 semantics:
-  adjective_density_per_500: 5
-  adjective_exclude: [快, 慢, 重, 轻]
-  pleasure_density_per_500: 1
-  plot_nodes_min: 3
-  sensory: { min_hits: 3, min_paragraphs: 3, max_words_per_hit: 50 }
-  water:
-    scene_limits:
-      战斗/动作章: { no_progress: 200, psychology: 150, environment: 100, flashback: 300 }
-      日常过渡章: { no_progress: 300, psychology: 200, environment: 100, flashback: 300 }
-      情感爆发章: { no_progress: 200, psychology: 200, environment: 100, flashback: 300 }
-      纯叙事章:   { no_progress: 400, psychology: 300, environment: 150, flashback: 400 }
-  opening:
-    legal: [O-1, O-2, O-3, O-4, O-5, O-7]
-    banned: [WAKE_UP, PURE_ENVIRONMENT, TIME_LABEL, O-6]
-    max_words: { O-3: 50, O-4: 200 }
+  adjective_density: { max: 4, adjectives: [美丽, 巨大, 愤怒] }
+  pleasure_density: { min: 1, keywords: [打脸, 逆袭, 反转], window: 600 }
+  sensory_density: { min: 2, senses: [看, 听, 冷, 热], window: 800 }
+  water_words:
+    window: 150
+    threshold: 0.35
+    scene_thresholds: { 战斗/动作章: 0.25, 日常过渡章: 0.35 }
+    terms: [的就是, 的时候, 一个, 其实]
 
-cross_chapter:
-  repeat:     { lookback: 3, blocker: 0.90, advisory: 0.75 }  # 实现：duplicate_similarity / duplicate_advisory
-  foreshadow: { min_dormancy: 2, max_dormancy: 40, max_mentions_per_chapter: 2 }
-  resource:   { min_balance: 0 }
-  scene_type: { max_consecutive_same: 2, combat_max_consecutive: 1 }
-  narrator:   { protagonist_ratio_min: 0.80, max_switches_per_chapter: 2, supporting_monologue_max: 200 }
-
-exclusions:                       # 同一片段只计最重一项
-  - { when: [PURE_ATMOSPHERE, NO_PROGRESSION], keep: PURE_ATMOSPHERE }
-  - { when: [STATIC_PSYCHOLOGY, EXCESSIVE_PSYCHOLOGY], keep: STATIC_PSYCHOLOGY }
-  - { when: [ENVIRONMENT_OVERLIMIT, PURE_ATMOSPHERE], keep: PURE_ATMOSPHERE }
-  - { when: [WAKE_UP_OPENING, WEAK_OPENING_HOOK], keep: WAKE_UP_OPENING }
-  - { when: [NO_ENDING_HOOK, WEAK_ENDING_HOOK], keep: NO_ENDING_HOOK }
-  - { when: [LITERARY_CLASSICAL, LITERARY_DISEASE], keep: LITERARY_DISEASE }
+crosschapter:
+  duplicate_similarity: 0.9
+  duplicate_advisory: 0.75
+  duplicate_min_chars: 20
+  foreshadow_min_dormancy: 2
+  foreshadow_dormant_after: 20
+  check_time: true
+  lock_similarity: 0.75
 
 platform:
-  fanqie:   { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60] }
-  qidian:   { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50] }
-  qimao:    { words_per_chapter: [1500, 2500], dialogue_ratio: [0.45, 0.65] }
-  jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55] }
+  fanqie: { words_per_chapter: [2000, 3000], dialogue_ratio: [0.40, 0.60] }
+  qidian: { words_per_chapter: [2000, 3500], dialogue_ratio: [0.30, 0.50] }
 
 genres:
   都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
   # …其余 11 个类型同样必填，编译器缺一即拒绝
+
+quality:
+  dimensions: [{ id: R-W-01, max: 15 }]  # 实际 15 维见 §7.8
+
+exclusions:                       # 同一片段只计最重一项
+  - { pair: [META_NARRATION, LEX_ZERO_TOLERANCE], family: meta }
+  - { pair: [GOD_VIEW, CONCLUSION_FIRST], family: perspective }
+
+exemptions: []
 ```
 
 > **平台覆盖的是参数，不是规则**：`platform` 只改「字数区间 / 对话占比」，不改「有没有这条规则」。`novel_init` 在调用方未显式给出 `words_per_chapter` / `dialogue_ratio` 时读取它；`genres` 由任务书上下文注入当前类型，不注入全表。
@@ -1042,11 +1030,11 @@ rhythm:
 
 **这张表的意义**：11 维不该全压给模型。引擎直接判 3 维（●），给出事实层让模型判 4 维（◐），模型只需对剩下的 4 维（○）做判断并附原文证据。**机检度不是装饰，它决定哪一层负责**。
 
-> **0.1.0 实现边界**：已落地时间回溯、资源余额、关系未声明、锁定地点描写、重复段落、伏笔休眠/过早回收；POV、章间桥接、姓名来源、空间布局、势力人数与物品流转仍由 P6 的四个语义项覆盖，尚未各自升级为独立规则码。这里明确写出，避免把“设计目标”误读成“已交付”。
+> **0.1.x 实现边界**：已落地时间回溯、资源余额、关系未声明、锁定地点描写、重复段落、伏笔休眠/过早回收；POV、章间桥接、姓名来源、空间布局、势力人数与物品流转仍由 P6 的四个语义项覆盖，尚未各自升级为独立规则码。这里明确写出，避免把“设计目标”误读成“已交付”。
 
 ### 5.10 十二种类型的关键差异
 
-类型不是「风格标签」，但 0.1.0 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
+类型不是「风格标签」，但 0.1.1 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
 
 | 类型 | 首个卖点位置 | 专项约束 |
 |---|---|---|
@@ -1063,7 +1051,7 @@ rhythm:
 | 末世流 | 前 300 字内爆发 | 句号密度收紧至 2.5；生存资源计入 `resource_changes` |
 | 言情 | ≤500 字首次接触 | 亲密关系阶梯 7 级；单次独白 ≤3 段；情感爆发章心理阈值 200 |
 
-**引擎怎么用**：`genre` 决定 `rulepack.genres` 的键，并把该条 `note` 注入任务书上下文；`contextual` 词表可按 `genre` 放宽。表本身是**配置**，不是代码常量。0.1.0 不实现按类型切换数值阈值，避免规则包与代码各存一套口径。
+**引擎怎么用**：`genre` 决定 `rulepack.genres` 的键，并把该条 `note` 注入任务书上下文；`contextual` 词表可按 `genre` 放宽。表本身是**配置**，不是代码常量。0.1.x 不实现按类型切换数值阈值，避免规则包与代码各存一套口径。
 
 ### 5.11 违规输出结构
 
@@ -1149,15 +1137,15 @@ interface Store {
 | 层 | 机制 | 粒度 |
 |---|---|---|
 | 进程内 | `KeyedMutex`（Map<projectRoot, Promise chain>） | 项目 |
-| 跨进程 | `.engine.lock`（O_EXCL 创建，内容 `{pid, startedAt, host}`） | 项目 |
+| 跨进程 | `.engine.lock`（O_EXCL 创建，内容 `{pid, startedAt, nonce}`） | 项目 |
 
-陈旧锁判定：`pid` 不存在（`process.kill(pid, 0)` 抛 ESRCH）或 `startedAt` 早于 90 秒 → 回收。回收前写 journal `lock_reclaimed`。
+陈旧锁判定：外部 pid 已不存在；或锁属于当前 pid 但 `nonce` 不在本进程 `liveNonces` 中（上一实例崩溃、pid 复用、release 失败）；或锁文件尚未写完且 mtime 早于 `staleMs`。外部活 pid 与本进程当前持有的 nonce 都不回收。回收用 hard-link 取得副本、比较记录后再删除原锁，避免三进程窗口误删；回收前写 journal `lock_reclaimed`。超时提示会说明可确认无其他实例后手工删除 `.engine.lock`。
 
 ### 6.6 快照与只读投影
 
-- `loadSnapshot()` 一次性读 `pipeline + chapters + characters + world + foreshadows + timeline + relationships`，返回不可变对象 + `revision`。
-- 只读操作（status / 面板 / 命令）用快照，不加锁；若读到的 `revision` 在读取期间变化 → 重读一次，仍变则返回「正在写入」。
-- **投影统一在 `engine/projections/`**：`summary` / `chapters` / `gates` / `stats` 四个函数，入参快照，出参 DTO。命令、面板、`getStatus` 全部复用（A4 修正）。
+- `EngineService.load()` 逐文件读 `novel.yaml + pipeline + 六本台账 + 当前正文/plan/review/check`，末尾再读一次 `pipeline`；若 `revision` 在读取期间变化，重试一次，仍变则报 `ENGINE_TXN_ABORTED`，不会交付混合快照。
+- 只读操作（status / 面板 / 命令）用快照，不取写锁；锁只保护写入。
+- 面板与命令的章节表、门控、摘要走 `engine/projections/` 的 `projectChapters` / `projectGates` / `projectSummary`；`getStatus` 自己组装 `StatusReport`（字段与快照一致），不再维护一个平行的 `projectStatus`。历史 `projectStatus` 已删除，避免测试只覆盖死代码。
 
 ### 6.7 备份与 GC
 
@@ -1248,11 +1236,12 @@ const TRANSITIONS: readonly Transition[] = [
 
 | 循环 | 上限 | 超限行为 |
 |---|---|---|
-| P4 ⇄ P5（评审-修订） | 3 轮 | `ENGINE_GATE_BLOCKED`（PG-11），强制 `rollback` 到 P1（保留正文供参考，标记废弃） |
-| P6 → P4（校验-修订-重评） | 3 轮 | 同上 |
+| P4 评审 | 3 次 | `ENGINE_GATE_BLOCKED`（PG-11），`next=novel_rollback` 到 P4（保留正文供参考） |
+| P5 修订 | 3 次 | 同上，按 revise 计数 |
+| P6 校验 | 3 次 | 同上，按 check 计数；不会因 review 预算已满而误伤 |
 | 单章总耗时 | 无上限 | 不做时间门控（创作不是批处理） |
 
-轮次记在 `pipeline.rounds`，由引擎自增，**模型不能传轮次参数**（防自报「这是第 1 轮」）。
+轮次记在 `pipeline.rounds`，由引擎自增，**模型不能传轮次参数**（防自报「这是第 1 轮」）。三个计数器彼此独立；`next`/status/panel 只对下一步真正要消耗的计数器报 PG-11。
 
 ### 7.4 十二条门控
 
@@ -1264,9 +1253,9 @@ const TRANSITIONS: readonly Transition[] = [
 | PG-04 | `FORMAT` | 格式类规则 0 个 blocker | P3 / P5 / P6 / P9 |
 | PG-05 | `SUMMARY_SCHEMA` | 10 必填字段齐全 + 类型正确 | P3 / P6 / P9 |
 | PG-06 | `SCENE_TYPE` | 四选一 + 节奏约束（不连续 3 章同型；战斗不连续 2 章） | P3 / P9 |
-| PG-07 | `SCORE` | 15 维齐全、算术闭合、`total >= minScore` | P4 / P9 |
+| PG-07 | `SCORE` | 15 维齐全、算术闭合；P4 允许低分如实进入修订，`total >= minScore` 在 P9 归档前执行 | P4 / P9 |
 | PG-08 | `ISSUES_CLEARED` | 所有 `blocker` issue 状态 `fixed` 且有证据 | P5 / P6 / P8 / P9 |
-| PG-09 | `READING_PROOF` | 三处原文引用可在指定位置验证 | P4 / P5 / P6 |
+| PG-09 | `READING_PROOF` | 三处原文引用按实际段落验证；开头/结尾边界不可用提交段落号绕过 | P4 / P5 / P6 |
 | PG-10 | `CONSISTENCY` | 跨章对账（伏笔/时间线/资源/关系/重复） | P6 / P8 / P9 |
 | PG-11 | `ROUNDS` | 轮次未超限 | P4 / P6 |
 | PG-12 | `ARCHIVE_ATOMIC` | 事务三端一致 + 读回验证通过 | P9 |
@@ -1319,18 +1308,16 @@ function evaluateGates(input: GateInput): GateResult
 
 本引擎改为 **reading proof**：
 
-1. 引擎对当前正文计算段落数与内容 hash；
-2. 用 `(chapter, hash)` 派生的确定性种子，挑 3 个段落位置（约 15% / 55% / 90%）；
-3. 要求提交方给出这 3 段的**逐字原文片段**（每段 ≥12 字，且必须是该段真实子串）；
-4. 引擎回正文核对：片段必须存在于对应段落（允许 ±1 段容差）。
-
-不通过时报错**指出位置与长度要求，但不回显原文**（防照抄报错蒙混）：
+1. 要求提交方给出三段**逐字原文片段**（每段 ≥12 字）：`opening` 来自前两段，`middle` 来自正文中部，`ending` 来自最后两段；
+2. 引擎按引文在正文中的**实际段落**校验边界；提交的 `paragraph` 只允许 ±1 段定位误差，不能用它改变边界判断；
+3. 三段引用必须来自三个不同段落；
+4. 不通过时报错指出位置与长度要求，但不回显原文（防照抄报错蒙混）。
 
 ```
 PG-09 READING_PROOF failed:
   - 需要 3 段引用；已提供 2 段
-  - 位置 0.55 的引用未在第 47±1 段找到（引用长度 9 < 12）
-  - 提示：请重读 chapters/chapter-001.md 的第 40-60 段
+  - opening 引用实际在第 3 段，不在前两段
+  - 提示：重读 chapters/chapter-001.md 的前两段与最后两段
 ```
 
 **能防**：跳过重读、只读摘要、凭上一版记忆评审。
@@ -1480,7 +1467,7 @@ ctx.skills.register({
 | P3 | 写作铁律（字数/引号/直引号/摘要 10 字段） | 角色全文、锁定描写、前章结尾、本章预检表 |
 | P4 | 15 维评分标准 + 扣分项写法 + proof 要求 | 机检报告、全量角色、前章、历史评分 |
 | P5 | 按 issue 逐条修复的规则 + 证据要求 | 评审报告、issue 清单、当前正文 |
-| P6 | 一致性 11 维 + 语义项证据要求 | 全量台账、当前机检、评审与 summary（历史 check 不在 0.1.0 上下文包内） |
+| P6 | 一致性 11 维 + 语义项证据要求 | 全量台账、当前机检、当前 check、评审与 summary；历史 check 通过 `novel_state` 按章读取，不进入当前 brief |
 | P8 | 终审清单（三端一致性的模型侧部分） | 当前 check、评审、summary、近 5 章摘要（delta 由 `novel_archive.state_delta` 提交） |
 
 任务书是**外置文件**：改写作指导不改代码；升级时与引擎版本一起发布，用户可覆盖（`briefs.overrides`）。
@@ -1516,12 +1503,12 @@ ctx.skills.register({
 |---|---|---|---|---|
 | 1 | `novel_init` | — | `initProject` | 是 |
 | 2 | `novel_status` | — | `getStatus` | 否 |
-| 3 | `novel_brief` | P1~P6 | `getBrief` | 是（仅 `briefs`） |
+| 3 | `novel_brief` | P1~P6/P8 | `getBrief` | 是（仅 `briefs`） |
 | 4 | `novel_plan_world` | P1 | `submitWorldPlan` | 是 |
 | 5 | `novel_plan_chapter` | P2 | `submitChapterPlan` | 是 |
 | 6 | `novel_write_draft` | P3 | `submitDraft` | 是 |
 | 7 | `novel_review` | P4 | `submitReview` | 是 |
-| 8 | `novel_revise` | P5 | `submitRevision` | 是 |
+| 8 | `novel_revise` | P5/P6 | `submitRevision` | 是 |
 | 9 | `novel_check` | P6 | `runCheck` | 是 |
 | 10 | `novel_archive` | P7+P8+P9 | `archiveChapter` | 是（事务） |
 | 11 | `novel_word_count` | 任意 | `countWords` | 否 |
@@ -1539,17 +1526,18 @@ ctx.skills.register({
 
 ```ts
 parameters: {
-  chapter: { type: 'number' },
-  format:  { type: 'string', enum: ['json', 'markdown'] },
+  chapter: { type: 'number' }, // 仅用于查询指定章的字数；省略时查活跃章
 }
 output.schema: {
   type: 'object', additionalProperties: false,
   properties: {
-    project:  { type: 'object', required: true, additionalProperties: true },
-    chapter:  { type: 'integer', required: true },
-    stage:    { type: 'string', required: true },
-    rounds:   { type: 'object', required: true, additionalProperties: true },
-    blocking: { type: 'array', required: true, items: { type: 'object' } },
+    project:        { type: 'object', required: true, additionalProperties: true },
+    chapter:        { type: 'integer', required: true }, // 请求章
+    active_chapter: { type: 'integer', required: true }, // pipeline.chapter
+    stage:          { type: 'string', required: true },
+    rounds:         { type: 'object', required: true, additionalProperties: true },
+    blocking:       { type: 'array', required: true, items: { type: 'object' } },
+    metrics:        { type: ['object', 'null'], required: true },
     next: { type: 'object', required: true, additionalProperties: false,
       properties: {
         tool:   { type: 'string', required: true },
@@ -1560,7 +1548,7 @@ output.schema: {
 }
 ```
 
-`next` 是核心价值：**把「下一步做什么」从模型记忆搬进返回值**。
+`chapter` 只影响字数查询，`active_chapter` 才是管线正在写的章。`next.tool` 必须是当前阶段合法、且参数可用的下一步：任何阶段只要该阶段 brief 缺失或 digest 过期，先返回 `novel_brief`（`args` 带 `stage` 与 `chapter`）；brief 当前后才返回实际写操作。P5/P6 有阻塞时返回 `novel_revise`；`ready_to_archive` 在 P8 brief 当前后返回 `novel_archive`；`done` 未完成时先取 P1。不能返回只读的 `novel_status`，也不能用已过期的 brief 硬推下一步。
 
 #### `novel_brief`
 
@@ -1568,6 +1556,8 @@ output.schema: {
 parameters: { stage: { type: 'string', required: true, enum: ['P1','P2','P3','P4','P5','P6','P8'] }, chapter: { type: 'number' } }
 output: { stage, chapter, digest, title, content, content_hash, fields, context }
 ```
+
+`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。
 
 **这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「角色全文 + 前章结尾 + 待推进伏笔」；P6 拿「全量台账 + 机检报告」；不相关的一律不给。
 
@@ -1848,7 +1838,7 @@ export interface Config {
 }
 ```
 
-**0.1.0 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
+**0.1.1 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
 
 **阈值优先级（同一键只保留一个最终值，不叠乘、不取交集）**：
 
@@ -1871,7 +1861,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 12.3 国际化
 
-- 0.1.0 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
+- 0.1.1 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
 - 任务书可用 `briefsOverrides` 指向用户目录覆盖；缺阶段文件时回退随包版本。
 - 英文覆盖与 `ctx.locale` 集成延后到 0.2.0，届时再引入键表与缺失键报告。
 
@@ -1951,7 +1941,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 13.5 必须存在的证伪测试（12 条）
 
-这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.1.0 不发。
+这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.1.1 不发。
 
 | # | 证伪目标 | 测试方式 | 对应 |
 |---|---|---|---|
@@ -1981,21 +1971,19 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 13.7 测试数据
 
+本仓库没有保留 `tests/fixtures/` 目录；测试数据由 helper 与临时目录在运行时构造，避免静态 fixture 与规则包版本漂移：
+
 ```
-tests/fixtures/
-├── empty/            # 只有 novel.yaml
-├── single/           # 1 章已完成
-├── three/            # 3 章，含 1 个未回收伏笔、1 个负余额尝试
-├── dirty/            # 经典脏章节：弯引号、分号、Markdown、超长段、零容忍词
-├── rulepacks/
-│   ├── valid.yaml
-│   ├── sum-not-150.yaml
-│   ├── dup-code.yaml
-│   └── cycle-exclusion.yaml
-└── briefs/           # 任务书快照
+tests/
+├── helpers.ts          # harness、cleanText、sampleReview、semanticQuotes、archiveDelta
+├── harness/context.ts  # 12 个原语的假 Context
+├── falsify/T-01..12    # 12 条证伪测试
+├── e2e.spec.ts         # 三章端到端
+├── rules*.spec.ts      # 规则表驱动
+└── store*.spec.ts      # 真实 tmpdir 上的 IO/事务/锁
 ```
 
-`dirty/` 是规则回归的核心：每条规则至少一个命中样例，断言 `code + severity + paragraph` 三元组。
+需要固定样例时，在测试内用 `cleanText(n)` / `sampleSummary()` 明确构造；不把项目目录或宿主目录当 fixture。
 
 ### 13.8 确定性与隔离
 
@@ -2091,7 +2079,7 @@ CI 不伪造这个解析结果。
 
 封面 SVG 由纯字符串模板生成（书名 + 类型 + 作者），不引 canvas；平台简介按模板 + 变量填充，文案可自定义。
 
-### 14.3 发布判据（0.1.0 Release Gate）
+### 14.3 发布判据（0.1.1 Release Gate）
 
 1. §14.1 十四个切片全部完成，且每片有对应测试。
 2. **覆盖率四项全部 ≥ 门槛**（§13.3），CI 绿。
@@ -2106,7 +2094,7 @@ CI 不伪造这个解析结果。
 
 ### 14.4 发布动作纪律
 
-**发布纪律**：0.1.0 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
+**发布纪律**：0.1.1 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
 
 ---
 

@@ -65,7 +65,7 @@ describe('semantic check evidence', () => {
         semantic: sampleSemantic(text, {
           'L2-VOICE': {
             verdict: 'fail',
-            evidence: '风从窗缝里挤进来',
+            evidence: '没有抬头，只把笔',
             note: '叙述视角漂移',
           },
         }),
@@ -85,7 +85,10 @@ describe('semantic check evidence', () => {
       const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
       const result = await engine.runCheck({
         chapter: 1,
-        semantic: sampleSemantic(text),
+        semantic: sampleSemantic(text).map((item, index) => ({
+          ...item,
+          evidence: `第 ${index + 1} 段：${item.evidence}`,
+        })),
         root,
       })
       expect(result.data.verdict).toBe('pass')
@@ -103,7 +106,7 @@ describe('semantic check evidence', () => {
       const failed = await engine.runCheck({
         chapter: 1,
         semantic: sampleSemantic(text, {
-          'L2-VOICE': { verdict: 'fail', evidence: '风从窗缝里挤进来', note: '声音无区分' },
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
         }),
         root,
       })

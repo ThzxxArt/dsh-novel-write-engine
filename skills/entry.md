@@ -29,7 +29,7 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 | ready_to_archive | `novel_brief P8` | `novel_archive`      |
 | done             | —                | 下一章从 P1 开始     |
 
-拿不准就走 `novel_pipeline`，它直接告诉你调什么、传什么。
+拿不准就走 `novel_pipeline`，它直接告诉你调什么、传什么。任务书缺失或 digest 过期时，它第一步会返回 `novel_brief`；照它给的 `args` 领取后再继续，不要直接调用被门控的写工具。
 
 ## 工具速查
 

@@ -25,6 +25,11 @@ const ACTIONS: readonly DeltaAction[] = ['created', 'updated', 'no_change']
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+/** Define an own property even for names such as `__proto__` or `constructor`. */
+const setOwn = <T>(record: Record<string, T>, key: string, value: T): void => {
+  Object.defineProperty(record, key, { value, enumerable: true, configurable: true, writable: true })
+}
+
 function fail(detail: string): never {
   throw new EngineInputError(
     ERROR_CODES.DELTA_UNVERIFIED,
@@ -129,7 +134,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const foreshadows = structuredClone(input.foreshadows)
   const timeline = structuredClone(input.timeline)
   const relationships = structuredClone(input.relationships)
-  const assigned: Record<string, string> = {}
+  const assigned: Record<string, string> = Object.create(null) as Record<string, string>
 
   const appeared = [...new Set(summary.characters_appeared)]
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
@@ -151,7 +156,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (!appearsInManuscript(name)) {
       fail(`character "${name}" is listed in characters_appeared but does not appear in the manuscript`)
     }
-    if (delta.characters[name] === undefined) {
+    if (!Object.hasOwn(delta.characters, name)) {
       fail(`character "${name}" appeared in the chapter but is not declared in characters`)
     }
   }
@@ -210,7 +215,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     ) {
       fail('every resource_changes entry must declare character/resource/delta/reason')
     }
-    if (delta.characters[change.character] === undefined) {
+    if (!Object.hasOwn(delta.characters, change.character)) {
       fail(`resource change for "${change.character}" has no character declaration`)
     }
     if (delta.characters[change.character]!.action === 'no_change') {
@@ -273,10 +278,10 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       if (!input.text.includes(name)) {
         fail(`summary lists new ${kind} "${name}" but the manuscript never mentions it`)
       }
-      const declared = delta.world[name]
-      if (declared === undefined) {
+      if (!Object.hasOwn(delta.world, name)) {
         fail(`summary lists new ${kind} "${name}" but world.${name} is not declared`)
       }
+      const declared = delta.world[name]!
       if (declared.action !== 'created') {
         fail(`world.${name} is new in this chapter; its action must be created`)
       }
@@ -312,9 +317,19 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     const existing = findWorld(name)
     if (declared.action === 'created') {
+      if (name.trim() === '') fail('a created world entity has an empty name')
       if (existing !== null) fail(`world entity "${name}" already exists; use updated or no_change`)
+      if (!input.text.includes(name)) {
+        fail(`world entity "${name}" is created but does not appear in the manuscript`)
+      }
       const kind = declared.kind ?? expected
       if (kind === null) fail(`world.${name} must declare kind (location|ability|artifact|faction|rule)`)
+      if (!['location', 'ability', 'artifact', 'faction', 'rule'].includes(kind)) {
+        fail(`world.${name} has unknown kind "${String(kind)}"`)
+      }
+      if (expected === null && (kind === 'location' || kind === 'ability' || kind === 'artifact')) {
+        fail(`world.${name} is created but is not listed in summary.new_elements`)
+      }
       if (kind === 'location') {
         world.locations.push({
           name,
@@ -337,10 +352,10 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
                   : 'rules'
           ]
         target.push({
+          ...(declared.detail ?? {}),
           name,
           first_appearance: chapter,
           description: declared.description ?? '',
-          ...(declared.detail ?? {}),
         })
       }
       continue
@@ -367,23 +382,23 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   }
 
   for (const name of appeared) {
-    if (locks.characters[name] === undefined) {
+    if (!Object.hasOwn(locks.characters, name)) {
       const character = byName.get(name)!
-      locks.characters[name] = {
+      setOwn(locks.characters, name, {
         first_appearance: character.first_appearance,
         locked_at: chapter,
         appearance: appearanceOf(input.text, name, name === narratorName ? narratorAliases : []),
-      }
+      })
     }
   }
   for (const location of world.locations) {
-    if (locks.locations[location.name] === undefined) {
-      locks.locations[location.name] = {
+    if (!Object.hasOwn(locks.locations, location.name)) {
+      setOwn(locks.locations, location.name, {
         first_appearance: location.first_appearance,
         locked_at: chapter,
         layout: location.layout,
         capacity: location.capacity,
-      }
+      })
     }
   }
   locks.locked_at_chapter = Math.max(locks.locked_at_chapter, chapter)
@@ -392,16 +407,36 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const plantedKeys = new Set<string>()
   for (const plant of summary.foreshadows.planted) {
     if (plant.key.trim() === '') fail('a planted foreshadow has an empty key')
+    if (byId.has(plant.key)) fail(`foreshadow key "${plant.key}" collides with an existing id`)
     if (plantedKeys.has(plant.key)) fail(`foreshadow key "${plant.key}" is planted twice`)
     plantedKeys.add(plant.key)
+    if (!Object.hasOwn(delta.foreshadows, plant.key)) {
+      fail(`foreshadows.${plant.key} is not declared`)
+    }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[plant.key], `foreshadows.${plant.key}`)
     requireReason(declared, `foreshadows.${plant.key}`)
     if (declared.action !== 'created') fail(`foreshadows.${plant.key} is planted; its action must be created`)
+    if (typeof plant.title !== 'string' || plant.title.trim() === '') {
+      fail(`foreshadow "${plant.key}" has an empty summary title`)
+    }
+    if (!input.text.includes(plant.title)) {
+      fail(`planted foreshadow summary title "${plant.title}" does not appear in the manuscript`)
+    }
+    if (declared.title !== undefined && typeof declared.title !== 'string') {
+      fail(`foreshadows.${plant.key}.title must be a string`)
+    }
+    const title = declared.title ?? plant.title
+    if (title.trim() === '') fail(`foreshadow "${plant.key}" has an empty title`)
+    if (!input.text.includes(title)) {
+      fail(`planted foreshadow "${title}" does not appear in the manuscript`)
+    }
     const allocated = allocateIds('FS', foreshadows.next_seq, 1)
+    const id = allocated.ids[0]!
+    if (byId.has(id)) fail(`foreshadows.next_seq is behind the ledger; ${id} already exists`)
     foreshadows.next_seq = allocated.nextSeq
     const item = {
-      id: allocated.ids[0]!,
-      title: declared.title ?? plant.title,
+      id,
+      title,
       planted: chapter,
       last_touched: chapter,
       status: 'planted' as const,
@@ -415,6 +450,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   }
 
   for (const advance of summary.foreshadows.advanced) {
+    if (!Object.hasOwn(delta.foreshadows, advance.key)) {
+      fail(`foreshadows.${advance.key} is not declared`)
+    }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[advance.key], `foreshadows.${advance.key}`)
     requireReason(declared, `foreshadows.${advance.key}`)
     if (declared.action !== 'updated') {
@@ -423,6 +461,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const id = assigned[advance.key] ?? advance.key
     const item = byId.get(id)
     if (item === undefined) fail(`foreshadow "${advance.key}" does not exist; no fallback is allowed`)
+    if (item.status === 'resolved') fail(`foreshadow "${advance.key}" is already resolved`)
     item.last_touched = chapter
     item.status = 'advanced'
     item.advance_log.push({
@@ -434,6 +473,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   }
 
   for (const key of summary.foreshadows.resolved) {
+    if (!Object.hasOwn(delta.foreshadows, key)) {
+      fail(`foreshadows.${key} is not declared`)
+    }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[key], `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
     if (declared.action !== 'updated') {
@@ -442,6 +484,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const id = assigned[key] ?? key
     const item = byId.get(id)
     if (item === undefined) fail(`foreshadow "${key}" does not exist; no fallback is allowed`)
+    if (item.status === 'resolved') fail(`foreshadow "${key}" is already resolved`)
     item.status = 'resolved'
     item.last_touched = chapter
     item.resolved_at = chapter
@@ -475,8 +518,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       fail(`timeline.${key} is a new event; its action must be created`)
     }
     const allocated = allocateIds('TE', timeline.next_seq, 1)
-    timeline.next_seq = allocated.nextSeq
     const id = allocated.ids[0]!
+    if (timeline.items.some((item) => item.id === id)) {
+      fail(`timeline.next_seq is behind the ledger; ${id} already exists`)
+    }
+    timeline.next_seq = allocated.nextSeq
     timeline.items.push({
       id,
       chapter,
@@ -515,8 +561,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         fail(`relationships.${key} is created but has no type`)
       }
       const allocated = allocateIds('RL', relationships.next_seq, 1)
-      relationships.next_seq = allocated.nextSeq
       const id = allocated.ids[0]!
+      if (relationships.items.some((item) => item.id === id)) {
+        fail(`relationships.next_seq is behind the ledger; ${id} already exists`)
+      }
+      relationships.next_seq = allocated.nextSeq
       relationships.items.push({
         id,
         a,

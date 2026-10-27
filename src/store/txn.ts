@@ -72,6 +72,24 @@ async function restoreTargets(
  * that terminal row).
  */
 export async function runTransaction(store: FsStore, input: TransactionInput): Promise<void> {
+  const staged = new Set<string>()
+  for (const file of input.files) {
+    if (staged.has(file.path)) {
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_ABORTED,
+        `transaction ${input.txid} stages ${file.path} more than once`,
+        'each target may appear once per transaction; merge the writes before staging',
+      )
+    }
+    if (file.text !== undefined && file.bytes !== undefined) {
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_ABORTED,
+        `transaction ${input.txid} stages both text and bytes for ${file.path}`,
+        'choose one representation per staged file',
+      )
+    }
+    staged.add(file.path)
+  }
   const staging = stagingDir(input.txid)
   const expected = new Map<string, string>()
   const before = new Map<string, Uint8Array | null>()

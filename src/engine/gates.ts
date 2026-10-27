@@ -1,7 +1,7 @@
 import { GATE_ORDER, GATES, type GateId } from '../codes.js'
 import { LIMITS } from '../constants.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
-import { reviewArithmeticProblems } from '../domain/scoring.js'
+import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
 import { splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { runRules } from '../rules/pipeline.js'
@@ -231,6 +231,9 @@ const summarySchema: Gate = (input) => {
     problems.push('opening must be text')
   } else {
     const opening = summary.opening
+    if (Array.from(opening).length < LIMITS.minQuoteChars) {
+      problems.push(`opening must be at least ${LIMITS.minQuoteChars} characters`)
+    }
     const firstTwo = splitParagraphs(input.text).slice(0, 2)
     if (!firstTwo.some((paragraph) => paragraph.includes(opening))) {
       problems.push('opening must be quoted from the first two paragraphs')
@@ -284,6 +287,15 @@ const score: Gate = (input, options) => {
   if (review === null) return [block('PG-07', 'no review document supplied')]
   if (!Array.isArray(review.dimensions)) return [block('PG-07', 'review dimensions must be an array')]
   const problems = reviewArithmeticProblems(review.dimensions, review.total)
+  // `submitReview` stores the normalized dimensions. A later edit that adds
+  // both sides of an exclusion pair (and adjusts the total to match) is not a
+  // valid review even though its arithmetic closes.
+  const normalized = applyExclusions(review.dimensions, options.rulepack.exclusions)
+  if (normalized.dropped > 0) {
+    problems.push(
+      'review contains mutually exclusive or duplicate deductions; resubmit it through novel_review',
+    )
+  }
   if (review.content_hash !== sha256(input.text)) {
     problems.push('review content_hash does not match the current manuscript')
   }
@@ -397,14 +409,24 @@ const readingProof: Gate = (input) => {
   const ending = verifyReference(input.text, input.proof.ending)
   for (const problem of [opening, middle, ending]) if (problem !== null) problems.push(problem)
   const paragraphs = splitParagraphs(input.text).length
-  if (input.proof.opening.paragraph > 2)
-    problems.push('the opening quote must come from the first two paragraphs')
-  if (input.proof.ending.paragraph < Math.max(1, paragraphs - 1)) {
-    problems.push('the ending quote must come from the last two paragraphs')
-  }
   const actuals = [input.proof.opening, input.proof.middle, input.proof.ending].map((reference) =>
     actualParagraph(input.text, reference),
   )
+  // The submitted paragraph is a locator hint with ±1 tolerance. The boundary
+  // claim itself must use where the quote actually is, or three paragraphs can
+  // be shifted by one to turn a middle quote into an "opening" quote.
+  if (actuals[0]! > 2) problems.push('the opening quote must come from the first two paragraphs')
+  // "Middle" must be an interior paragraph, not merely a third distinct one.
+  // Short chapters need a relaxation: with four paragraphs, 2/3 are both
+  // interior; with five or more, the first two and last two are excluded.
+  const middleMin = paragraphs <= 4 ? 2 : 3
+  const middleMax = paragraphs <= 4 ? Math.max(2, paragraphs - 1) : paragraphs - 2
+  if (actuals[1]! > 0 && (actuals[1]! < middleMin || actuals[1]! > middleMax)) {
+    problems.push('the middle quote must come from the body of the chapter, not its first or last edges')
+  }
+  if (actuals[2]! > 0 && actuals[2]! < Math.max(1, paragraphs - 1)) {
+    problems.push('the ending quote must come from the last two paragraphs')
+  }
   if (new Set(actuals.filter((index) => index > 0)).size < 3) {
     problems.push('the three quotes must come from three distinct paragraphs')
   }
@@ -464,11 +486,13 @@ const rounds: Gate = (input) => {
     input.operation === 'submitRevision' ||
     input.operation === 'runCheck'
   if (!relevant) return []
-  if (!roundsExhausted(input.rounds)) return []
+  const counter =
+    input.operation === 'submitReview' ? 'review' : input.operation === 'submitRevision' ? 'revise' : 'check'
+  if (!roundsExhausted(input.rounds, counter)) return []
   return [
     block(
       'PG-11',
-      `round limits reached (review ${input.rounds.review}, revise ${input.rounds.revise}, check ${input.rounds.check})`,
+      `round limits reached for ${counter} (review ${input.rounds.review}, revise ${input.rounds.revise}, check ${input.rounds.check})`,
       'call novel_rollback to restart the chapter; the manuscript is kept for reference',
     ),
   ]
@@ -531,7 +555,19 @@ export function applicableGates(input: GateInput): GateId[] {
     case 'runCheck':
       return [...always, 'PG-04', 'PG-05', 'PG-08', 'PG-09', 'PG-10', 'PG-11']
     case 'archiveChapter':
-      return ['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-10', 'PG-12']
+      return [
+        'PG-01',
+        'PG-02',
+        'PG-04',
+        'PG-03',
+        'PG-05',
+        'PG-06',
+        'PG-07',
+        'PG-08',
+        'PG-09',
+        'PG-10',
+        'PG-12',
+      ]
     default:
       return always
   }

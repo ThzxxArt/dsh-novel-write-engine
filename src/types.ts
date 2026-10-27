@@ -384,6 +384,8 @@ export interface PipelineState {
   rounds: RoundCounters
   briefs: Record<string, { issued_at: string; digest: string }>
   blocking: BlockingItem[]
+  /** Hash of the review document last written by submitReview/submitRevision. */
+  review_digest?: string
   last_action: { op: string; at: string; digest: string } | null
 }
 
@@ -621,7 +623,10 @@ export interface ChapterStatusRow {
 /** The `getStatus` payload. */
 export interface StatusReport {
   project: { title: string; genre: Genre; platform: Platform; root: string }
+  /** The chapter requested for metrics; may be historical. */
   chapter: number
+  /** The chapter the pipeline is currently working on. */
+  active_chapter: number
   stage: Stage
   rounds: RoundCounters
   blocking: BlockingItem[]
