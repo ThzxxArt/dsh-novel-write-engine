@@ -65,7 +65,9 @@
     "test:isolated": "node scripts/check-isolated.mjs",
     "validate:rulepack": "node scripts/validate-rulepack.mjs",
     "check:preset": "node scripts/check-preset.mjs",
-    "check:pack": "node scripts/check-pack.mjs"
+    "check:pack": "node scripts/check-pack.mjs",
+    "check:artifacts": "node scripts/check-artifacts.mjs",
+    "check:hygiene": "node scripts/check-hygiene.mjs"
   },
   "dependencies": {
     "yaml": "^2.6.0"

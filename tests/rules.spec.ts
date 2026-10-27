@@ -46,6 +46,31 @@ describe('rule pack compiler', () => {
     expect(bundledRulepackPath()).toContain('rulepacks')
   })
 
+  it('rejects thresholds that would silently disable a check', () => {
+    const cases: Array<(draft: Record<string, any>) => void> = [
+      (draft) => {
+        draft.punctuation.dialogue_dominant_ratio = 0
+      },
+      (draft) => {
+        draft.punctuation.period_density.max = 1000
+      },
+      (draft) => {
+        draft.semantics.pleasure_density.min = 0
+      },
+      (draft) => {
+        draft.crosschapter.foreshadow_min_dormancy = 0
+      },
+      (draft) => {
+        draft.format.system_labels = ['[']
+      },
+    ]
+    for (const mutate of cases) {
+      const draft = structuredClone(rawPack) as Record<string, any>
+      mutate(draft)
+      expect(() => compileRulepack(draft)).toThrow(/rule pack rejected/)
+    }
+  })
+
   it('rejects the six classes of defect', () => {
     const cases: Array<[string, (draft: Record<string, any>) => void, RegExp]> = [
       [
@@ -379,7 +404,7 @@ describe('machine pipeline', () => {
 
   it('flags readers, dash budget, ellipsis runs and uniform sentences', () => {
     const uniform = Array.from({ length: 12 }, () => '今天天气很好啊').join('。') + '。'
-    const text = `${uniform}\n\n我们可以看到，这一切——都是——假的——吧——啊——呀……`
+    const text = `${uniform}\n\n我们可以看到这里的这一切——都是——假的——吧——啊——呀……`
     const result = runMachineChecks(text, options())
     const codes = result.violations.map((violation) => violation.code)
     expect(codes).toContain('READER_INTRUSION')

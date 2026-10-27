@@ -41,7 +41,7 @@ it('only one concurrent lock holder reclaims the same stale record', async () =>
   try {
     await writeFile(
       path,
-      JSON.stringify({ pid: process.pid, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'stale' }),
+      JSON.stringify({ pid: 999_999, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'stale' }),
     )
     const first = new FileLock(path, 500, 300)
     const second = new FileLock(path, 500, 300)

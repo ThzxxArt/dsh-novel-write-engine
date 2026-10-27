@@ -320,6 +320,21 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.title, `${path}.title`)
       })
       return
+    case 'check': {
+      const machine = objectAt(kind, record.machine, 'machine')
+      listAt(kind, machine.violations, 'machine.violations')
+      const semantic = objectAt(kind, record.semantic, 'semantic')
+      validateRecords(kind, semantic.items, 'semantic.items', (row, path) => {
+        stringAt(kind, row.id, `${path}.id`)
+        const verdict = stringAt(kind, row.verdict, `${path}.verdict`)
+        if (verdict !== 'pass' && verdict !== 'fail') {
+          invalid(kind, `${path}.verdict must be pass|fail`)
+        }
+        stringAt(kind, row.evidence, `${path}.evidence`)
+        if (row.note !== undefined) stringAt(kind, row.note, `${path}.note`)
+      })
+      return
+    }
     case 'review':
       validateRecords(kind, record.dimensions, 'dimensions', (row, path) => {
         stringAt(kind, row.id, `${path}.id`)
@@ -328,8 +343,18 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
       })
       validateRecords(kind, record.issues, 'issues', (row, path) => {
         stringAt(kind, row.id, `${path}.id`)
-        stringAt(kind, row.severity, `${path}.severity`)
-        stringAt(kind, row.status, `${path}.status`)
+        const severity = stringAt(kind, row.severity, `${path}.severity`)
+        if (severity !== 'blocker' && severity !== 'advisory') {
+          invalid(kind, `${path}.severity must be blocker|advisory`)
+        }
+        const status = stringAt(kind, row.status, `${path}.status`)
+        if (status !== 'open' && status !== 'fixed' && status !== 'waived') {
+          invalid(kind, `${path}.status must be open|fixed|waived`)
+        }
+        for (const field of ['dimension', 'location', 'problem', 'fix'] as const) {
+          stringAt(kind, row[field], `${path}.${field}`)
+        }
+        optionalString(kind, row.evidence, `${path}.evidence`)
       })
       return
     default:

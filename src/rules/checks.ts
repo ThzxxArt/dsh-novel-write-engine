@@ -1,6 +1,6 @@
 import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
 import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
-import { maxParagraphSimilarity, textSimilarity } from '../domain/simhash.js'
+import { maxParagraphSimilarity } from '../domain/simhash.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import type { Severity, Violation } from '../types.js'
 import type { Rule } from './types.js'
@@ -134,9 +134,10 @@ const systemLabel: Rule = (ctx) => {
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
     for (const label of labels) {
-      if (paragraph.includes(label))
+      const match = paragraph.match(new RegExp(label))
+      if (match !== null)
         results.push(
-          v(FORMAT_RULES.SYSTEM_LABEL, 'blocker', index + 1, `contains out-of-story label "${label}"`),
+          v(FORMAT_RULES.SYSTEM_LABEL, 'blocker', index + 1, `contains out-of-story label "${match[0]}"`),
         )
     }
   })
@@ -237,7 +238,9 @@ const conclusionFirst: Rule = (ctx) => {
     for (const verb of verbs) {
       const position = paragraph.indexOf(verb)
       if (position === -1) continue
-      const window = paragraph.slice(Math.max(0, position - 8), position + 20)
+      // Only a cause after the conclusion is a conclusion-first violation.
+      // A causal marker before the verb is the correct cause-first order.
+      const window = paragraph.slice(position, Math.min(paragraph.length, position + 20))
       if (causals.some((causal) => window.includes(causal))) {
         results.push(
           v(
@@ -288,14 +291,17 @@ const periodDensity: Rule = (ctx) => {
     if (dialogueCharacterRatio(paragraph) >= dominant) return
     const metrics = countWordMetrics(paragraph)
     if (metrics.non_ws_chars < 40) return
-    const density = (countOccurrences(paragraph, '。') / metrics.non_ws_chars) * 100
+    // Count every sentence terminator, not only the full stop. A normal
+    // exclamation-only paragraph otherwise reports a density of zero.
+    const marks = paragraph.match(/[。！？!?]|…+/g)?.length ?? 0
+    const density = (marks / metrics.non_ws_chars) * 100
     if (density >= min && density <= max) return
     results.push(
       v(
         PUNCTUATION_RULES.PERIOD_DENSITY,
         'advisory',
         index + 1,
-        `period density ${density.toFixed(2)}/100 chars is outside ${min}..${max}`,
+        `sentence-terminator density ${density.toFixed(2)}/100 chars is outside ${min}..${max}`,
       ),
     )
   })
@@ -636,7 +642,7 @@ const lockedDetailDrift: Rule = (ctx) => {
     if (lock.layout.trim() === '') continue
     const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
     if (paragraph === undefined) continue
-    const similarity = textSimilarity(paragraph, lock.layout)
+    const similarity = lockedDetailCoverage(paragraph, lock.layout)
     if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
         v(
@@ -653,7 +659,7 @@ const lockedDetailDrift: Rule = (ctx) => {
     if (lock.appearance.trim() === '') continue
     const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
     if (paragraph === undefined) continue
-    const similarity = textSimilarity(paragraph, lock.appearance)
+    const similarity = lockedDetailCoverage(paragraph, lock.appearance)
     if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
         v(
@@ -666,6 +672,26 @@ const lockedDetailDrift: Rule = (ctx) => {
     }
   }
   return results
+}
+
+/**
+ * How much of a short locked description survives in a whole paragraph.
+ * Symmetric SimHash on a 40-80 character paragraph vs a 10-20 character lock
+ * scores normal prose as drift; bigram coverage asks the question the rule
+ * actually means: are the locked details still present?
+ */
+function lockedDetailCoverage(paragraph: string, locked: string): number {
+  const clean = (value: string): string => value.replace(/[\s\p{P}]+/gu, '')
+  const reference = Array.from(clean(locked))
+  const source = clean(paragraph)
+  if (reference.length === 0) return 1
+  if (reference.length === 1) return source.includes(reference[0]!) ? 1 : 0
+  const grams: string[] = []
+  for (let index = 0; index + 1 < reference.length; index += 1) {
+    grams.push(`${reference[index]}${reference[index + 1]}`)
+  }
+  const present = grams.filter((gram) => source.includes(gram)).length
+  return present / grams.length
 }
 
 /* ----------------------------------------------------------------- helpers */

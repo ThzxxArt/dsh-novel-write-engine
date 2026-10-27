@@ -104,6 +104,9 @@ export const STAGE_NEXT: Readonly<Record<Stage, { tool: string; reason: string }
   P4: { tool: 'novel_review', reason: 'call novel_brief P4, then submit the scored review' },
   P5: { tool: 'novel_revise', reason: 'fix every blocker issue, then submit the revision' },
   P6: { tool: 'novel_check', reason: 'run the consistency check, then archive' },
-  ready_to_archive: { tool: 'novel_archive', reason: 'all gates pass; archive the chapter' },
+  ready_to_archive: {
+    tool: 'novel_brief',
+    reason: 'all gates pass; call novel_brief P8, then archive the chapter',
+  },
   done: { tool: 'novel_plan_world', reason: 'chapter archived; start the next chapter with a world plan' },
 }

@@ -57,7 +57,10 @@ describe('panel projections', () => {
     expect(strip.filter((phase) => phase.active)).toHaveLength(1)
     expect(strip.find((phase) => phase.active)?.id).toBe('P6')
     expect(strip.filter((phase) => phase.done).length).toBeGreaterThan(0)
-    expect(phaseStrip('done').every((phase) => phase.done && !phase.active)).toBe(true)
+    expect(phaseStrip('done', true).every((phase) => phase.done && !phase.active)).toBe(true)
+    const nextCycle = phaseStrip('done')
+    expect(nextCycle.find((phase) => phase.active)?.id).toBe('P1')
+    expect(nextCycle.every((phase) => !phase.done)).toBe(true)
   })
 
   it('distinguishes reviewed from draft chapters', () => {

@@ -11,20 +11,41 @@ const keys = ['lines', 'branches', 'functions', 'statements']
 // Design §13.3 requires a per-file 100% gate only for the pure domain layer;
 // every other layer is judged by the aggregate thresholds in vitest.config.ts.
 const groups = [
-  ['/src/domain/', 100],
-  ['/src/client/viewmodel.ts', 95],
+  {
+    prefix: '/src/domain/',
+    floor: 100,
+    expected: [
+      '/src/domain/ids.ts',
+      '/src/domain/index.ts',
+      '/src/domain/scoring.ts',
+      '/src/domain/simhash.ts',
+      '/src/domain/text.ts',
+      '/src/domain/transitions.ts',
+      '/src/domain/wordcount.ts',
+    ],
+  },
+  { prefix: '/src/client/viewmodel.ts', floor: 95, expected: ['/src/client/viewmodel.ts'] },
 ]
 
 const files = Object.entries(summary).filter(([file]) => file !== 'total')
 const failures = []
-for (const [prefix, floor] of groups) {
-  for (const [file, data] of files) {
+for (const { prefix, floor, expected } of groups) {
+  const matched = files.filter(([file]) => file.replaceAll('\\', '/').includes(prefix))
+  if (matched.length === 0) {
+    failures.push(`coverage group ${prefix} matched no files; the gate is not running`)
+    continue
+  }
+  for (const wanted of expected) {
+    if (!matched.some(([file]) => file.replaceAll('\\', '/').endsWith(wanted))) {
+      failures.push(`coverage group ${prefix} is missing expected file ${wanted}`)
+    }
+  }
+  for (const [file, data] of matched) {
     const normalized = file.replaceAll('\\', '/')
-    if (!normalized.includes(prefix)) continue
     for (const key of keys) {
       const pct = data[key]?.pct
-      if (typeof pct === 'number' && pct < floor) {
-        failures.push(`${normalized}: ${key} ${pct}% < ${floor}%`)
+      if (typeof pct !== 'number' || pct < floor) {
+        failures.push(`${normalized}: ${key} ${String(pct)}% < ${floor}%`)
       }
     }
   }

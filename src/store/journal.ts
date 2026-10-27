@@ -120,14 +120,28 @@ export async function reconcileJournal(store: FsStore): Promise<{
   mismatches: JournalMismatch[]
 }> {
   const { records, malformed } = await readJournal(store)
-  const last = [...records]
-    .reverse()
-    .find((record) => record.status === 'committed' && record.hashes !== undefined)
-  if (last?.hashes === undefined) return { malformed, mismatches: [] }
+  // Track the latest committed hash for every path, not just the last
+  // transaction. A pipeline-only brief transaction would otherwise reset the
+  // external-edit detector for every ledger written earlier.
+  const expected = new Map<string, { txid: string; hash: string }>()
+  // The authoritative ledgers are checked here. Manuscripts, plans, reviews and
+  // checks have their own content-hash gates (PG-07/PG-09/PG-12); exports are
+  // derived artifacts, so an external edit there must not wedge project writes.
+  const tracked = (path: string): boolean => path === 'novel.yaml' || path.startsWith('state/')
+  for (const record of records) {
+    if (record.status !== 'committed' || record.hashes === undefined) continue
+    for (const [path, hash] of Object.entries(record.hashes)) {
+      if (!tracked(path)) continue
+      expected.set(path, { txid: record.txid, hash })
+    }
+  }
+  if (expected.size === 0) return { malformed, mismatches: [] }
   const mismatches: JournalMismatch[] = []
-  for (const [path, expected] of Object.entries(last.hashes)) {
+  for (const [path, entry] of expected) {
     const actual = await store.hashBytes(path)
-    if (actual !== expected) mismatches.push({ txid: last.txid, path, expected, actual })
+    if (actual !== entry.hash) {
+      mismatches.push({ txid: entry.txid, path, expected: entry.hash, actual })
+    }
   }
   return { malformed, mismatches }
 }
@@ -142,7 +156,11 @@ export async function reconcileJournal(store: FsStore): Promise<{
  */
 export async function recoverPending(store: FsStore): Promise<void> {
   const { records } = await readJournal(store)
-  const last = records[records.length - 1]
+  // Lock reclaim is an audit row, not a transaction. A crashed writer leaves
+  // its pending row behind, then the next writer appends lock_reclaimed; looking
+  // only at the physical last row would hide the pending transaction and make
+  // reconciliation compare the wrong committed hashes.
+  const last = [...records].reverse().find((record) => record.op !== 'lock_reclaimed')
   if (last?.status !== 'pending') return
   const matchesExpected = async (): Promise<boolean> => {
     if (last.hashes === undefined) return false
@@ -161,6 +179,7 @@ export async function recoverPending(store: FsStore): Promise<void> {
   }
   if (await matchesExpected()) {
     await appendJournal(store, { ...last, status: 'committed' })
+    await store.removeTree(joinRel(STAGING_DIR, last.txid)).catch(() => undefined)
     return
   }
   if (await matchesBefore()) {
@@ -169,6 +188,7 @@ export async function recoverPending(store: FsStore): Promise<void> {
       status: 'aborted',
       reason: 'recovered: the process stopped before the transaction renamed a target',
     })
+    await store.removeTree(joinRel(STAGING_DIR, last.txid)).catch(() => undefined)
     return
   }
   throw new EngineFaultError(

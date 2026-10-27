@@ -108,7 +108,7 @@ lexicon:
     - { term: "却说" }
 
   reader_intrusion:
-    - { pattern: "我们(可以)?看" }
+    - { pattern: "我们(?:可以)?看(?:到)?(?:这里|下面|接下来|这一幕|这个|这场|这段)" }
     - { pattern: "各位读者" }
     - { pattern: "屏幕前的" }
 
@@ -131,7 +131,12 @@ format:
     pattern: "^第\\d+章\\s"
     min_chars: 4
     max_chars: 8
-  system_labels: ["Day 1", "Day 2", "Day 3", "第1卷", "第2卷", "第3卷", "作者按", "读者", "书友"]
+  system_labels:
+    - "Day\\s*\\d+"
+    - "第[0-9一二三四五六七八九十百]+卷"
+    - "作者(?:按|说)?"
+    - "读者"
+    - "书友"
   scene_separators: ["———", "***", "…………"]
   markdown_markers: ["#", "**", "---", ">", "|"]
 

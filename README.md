@@ -59,7 +59,9 @@ pnpm test:coverage      # 四项 ≥85%，分层门槛见计划
 pnpm build              # host → client → client d.ts
 pnpm test:isolated      # 每个源文件独立编译
 pnpm validate:rulepack  # 需先 build
-DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app pnpm check:preset  # preset 包名可解析
+pnpm check:artifacts    # 真正 import 构建后的 host / client
+pnpm check:hygiene      # v8 ignore 预算 + 假断言扫描
+DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app pnpm check:preset  # 需宿主 checkout；preset 外层与嵌套包名可解析
 pnpm check:pack         # 需先 build
 ```
 

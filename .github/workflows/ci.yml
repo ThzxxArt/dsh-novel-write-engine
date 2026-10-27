@@ -25,4 +25,6 @@ jobs:
       - run: pnpm test:isolated
       - run: pnpm validate:rulepack
       - run: pnpm check:pack
+      - run: pnpm check:artifacts
+      - run: pnpm check:hygiene
       - run: node --check lib/client.js

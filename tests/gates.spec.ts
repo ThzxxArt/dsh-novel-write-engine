@@ -278,7 +278,7 @@ describe('gate evaluation', () => {
               problem: 'p',
               fix: 'f',
               status: 'fixed',
-              evidence: '不存在的句子',
+              evidence: '这句话根本不在正文里面',
             },
           ],
         }),

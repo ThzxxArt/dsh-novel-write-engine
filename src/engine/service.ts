@@ -316,20 +316,14 @@ export class EngineService {
    * configured root instead of making every call fail.
    */
   private async resolveRoot(root?: string): Promise<string> {
-    if (root !== undefined) {
-      this.lastRoot = resolve(root)
-      return this.lastRoot
-    }
+    if (root !== undefined) return resolve(root)
     // A live tool call is the strongest signal for the panel: it runs in the
     // same engine process as the read route. The registry is the cold-start
     // fallback, then the configured root.
     if (this.lastRoot !== null) return this.lastRoot
     try {
       const document = await this.registry().read()
-      if (document.active !== null) {
-        this.lastRoot = resolve(document.active)
-        return this.lastRoot
-      }
+      if (document.active !== null) return resolve(document.active)
     } catch {
       // Convenience metadata must not take the project down with it.
     }
@@ -802,6 +796,7 @@ export class EngineService {
             { path: planPath, text: yaml(mergedPlan) },
             { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
           ],
+          backup: true,
           data: {
             chapter,
             stage: 'P4' as Stage,
@@ -851,11 +846,13 @@ export class EngineService {
           )
         }
         const issues = Array.isArray(input.issues) ? input.issues : []
+        const seenIssues = new Set<string>()
         for (const [index, issue] of issues.entries()) {
           if (
             typeof issue !== 'object' ||
             issue === null ||
             typeof issue.id !== 'string' ||
+            issue.id.trim() === '' ||
             !['blocker', 'advisory'].includes(issue.severity) ||
             !['open', 'fixed', 'waived'].includes(issue.status)
           ) {
@@ -863,6 +860,30 @@ export class EngineService {
               ERROR_CODES.SCHEMA_INVALID,
               `issue ${index} is malformed`,
               'every issue needs id, severity, status, dimension, location, problem and fix',
+            )
+          }
+          if (seenIssues.has(issue.id)) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `issue ${issue.id} is declared more than once`,
+              'issue ids must be unique within one review',
+            )
+          }
+          seenIssues.add(issue.id)
+          for (const field of ['dimension', 'location', 'problem', 'fix'] as const) {
+            if (typeof issue[field] !== 'string' || issue[field].trim() === '') {
+              throw new EngineInputError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `issue ${issue.id} has no ${field}`,
+                'every issue needs id, severity, status, dimension, location, problem and fix',
+              )
+            }
+          }
+          if (issue.evidence !== undefined && typeof issue.evidence !== 'string') {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `issue ${issue.id} evidence must be a string`,
+              'quote the revised text as evidence, or omit the field',
             )
           }
         }
@@ -971,6 +992,33 @@ export class EngineService {
                   'every issue in a revision must be an object with an id',
                 )
               }
+              if (
+                typeof submitted.status !== 'string' ||
+                !['open', 'fixed', 'waived'].includes(submitted.status)
+              ) {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `issue ${submitted.id} has an invalid status`,
+                  'status must be open, fixed, or waived',
+                )
+              }
+              if (submitted.evidence !== undefined && typeof submitted.evidence !== 'string') {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `issue ${submitted.id} evidence must be a string`,
+                )
+              }
+              for (const field of ['dimension', 'location', 'problem', 'fix'] as const) {
+                if (
+                  submitted[field] !== undefined &&
+                  (typeof submitted[field] !== 'string' || submitted[field].trim() === '')
+                ) {
+                  throw new EngineInputError(
+                    ERROR_CODES.SCHEMA_INVALID,
+                    `issue ${submitted.id} has an invalid ${field}`,
+                  )
+                }
+              }
               if (seen.has(submitted.id)) {
                 throw new EngineInputError(
                   ERROR_CODES.SCHEMA_INVALID,
@@ -1001,6 +1049,19 @@ export class EngineService {
           // reviewed; rewriting it would let an old score satisfy PG-07 after
           // a revision without a new P4 review.
           patchedReview = { ...snapshot.review, issues }
+        }
+        if (patchedReview !== null) {
+          try {
+            narrow('review', patchedReview)
+          } catch (error) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `revision would write an invalid review document: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              'only update issue status/evidence fields from the current review',
+            )
+          }
         }
         await this.assertGates(snapshot, 'submitRevision', {
           briefStage: briefStageFor('submitRevision', snapshot.pipeline.stage),
@@ -1048,6 +1109,7 @@ export class EngineService {
         }
         return {
           files,
+          backup: true,
           data: { chapter: input.chapter, stage: nextStage, metrics: machine.metrics },
           warnings: machineWarnings(machine),
         }
@@ -1236,7 +1298,10 @@ export class EngineService {
         // A check document is a plain YAML file once written. Re-validate the
         // semantic evidence here as well, so editing checks/*.yaml to a pass
         // cannot bypass the four P6 checks at the last write boundary.
-        const archivedSemantic = evaluateSemantic(text, snapshot.check?.semantic.items ?? [])
+        const archivedSemantic = evaluateSemantic(
+          text,
+          Array.isArray(snapshot.check?.semantic.items) ? snapshot.check.semantic.items : [],
+        )
         if (archivedSemantic.failed) {
           throw new EngineBlockedError(
             ERROR_CODES.GATE_BLOCKED,
@@ -1322,6 +1387,20 @@ export class EngineService {
           blocking: [],
           last_action: action('novel_archive', this.now(), sha256(text)),
         })
+
+        // The ledgers are assembled from model-supplied delta fields. Validate
+        // the exact documents that will be staged; otherwise an accepted archive
+        // can write a scalar of the wrong type and make every later load fail.
+        assertArchiveDocuments([
+          ['chapters', chapters],
+          ['characters', ledger.characters],
+          ['world', ledger.world],
+          ['locks', ledger.locks],
+          ['foreshadows', foreshadows],
+          ['timeline', timeline],
+          ['relationships', ledger.relationships],
+          ['handoff', handoff],
+        ])
 
         const files: StagedFile[] = [
           // Re-staging the manuscript makes the archive backup a true snapshot of
@@ -1467,7 +1546,11 @@ export class EngineService {
     }
     const store = this.storeFor(snapshot.root)
     const after = input.after ?? (await this.readChapter(snapshot, input.chapter)) ?? ''
-    const before = input.before ?? (await this.latestBackup(store, chapterFile(input.chapter))) ?? ''
+    const before =
+      input.before ??
+      (await this.latestBackup(store, chapterFile(input.chapter))) ??
+      (await store.readText(deprecatedChapterFile(input.chapter))) ??
+      ''
     const report = diffLines(before, after)
     return {
       data: {
@@ -1703,6 +1786,8 @@ export class EngineService {
     const snapshot = await this.load(root)
     const archived = snapshot.chapters.chapters
     const archivedCurrent = archived.some((chapter) => chapter.num === snapshot.pipeline.chapter)
+    const target = snapshot.project.targets.total_chapters
+    const finished = snapshot.pipeline.stage === 'done' && target !== null && archived.length >= target
     const draftWords = snapshot.text === null ? 0 : countWordMetrics(snapshot.text).total_word_count
     const draft =
       archivedCurrent || snapshot.pipeline.stage === 'done'
@@ -1727,13 +1812,14 @@ export class EngineService {
       revision: snapshot.pipeline.revision,
       rounds: snapshot.pipeline.rounds,
       blocking: snapshot.pipeline.blocking,
-      next: this.nextStep(snapshot),
+      next: finished ? undefined : this.nextStep(snapshot),
+      finished,
       chapters: archived,
       draft,
       totalWords:
         archived.reduce((total, chapter) => total + chapter.word_count, 0) +
         (draft === null ? 0 : draft.wordCount),
-      phases: phaseStrip(snapshot.pipeline.stage),
+      phases: phaseStrip(snapshot.pipeline.stage, finished),
     }
   }
 
@@ -1746,8 +1832,22 @@ export class EngineService {
         reason: `${first.code}: ${first.detail}${first.hint === undefined ? '' : ` (${first.hint})`}`,
       }
     }
+    const target = snapshot.project.targets.total_chapters
+    const finished =
+      snapshot.pipeline.stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
+    if (finished) {
+      return {
+        tool: 'novel_export',
+        args: { kind: 'epub' },
+        reason: '全书已完成；可导出成书，或结束本书',
+      }
+    }
     const step = STAGE_NEXT[snapshot.pipeline.stage]
-    return { tool: step.tool, args: { chapter: snapshot.pipeline.chapter }, reason: step.reason }
+    const args =
+      snapshot.pipeline.stage === 'ready_to_archive'
+        ? { stage: 'P8', chapter: snapshot.pipeline.chapter }
+        : { chapter: snapshot.pipeline.chapter }
+    return { tool: step.tool, args, reason: step.reason }
   }
 
   private async metricsFor(snapshot: Snapshot, chapter: number): Promise<WordMetrics | null> {
@@ -2093,6 +2193,9 @@ export class EngineService {
         'retry the read; if it keeps moving, wait for the writer to finish',
       )
     }
+    // Only a confirmed snapshot may become the panel's remembered root. A typo
+    // in project_root must not make every later rootless call point at it.
+    this.lastRoot = store.root
     return {
       root: store.root,
       project: project as unknown as NovelProject,
@@ -2167,6 +2270,31 @@ export class EngineService {
         if (options.emptyAllowed === true) {
           const exists = await store.exists(PROJECT_FILE)
           if (!exists) {
+            await assertJournalConsistent(store)
+            const stateFiles = [
+              STATE_FILES.pipeline,
+              STATE_FILES.chapters,
+              STATE_FILES.characters,
+              STATE_FILES.world,
+              STATE_FILES.locks,
+              STATE_FILES.timeline,
+              STATE_FILES.foreshadows,
+              STATE_FILES.relationships,
+              STATE_FILES.handoff,
+            ].map((file) => joinRel(STATE_DIR, file))
+            const hasState =
+              (await Promise.all(stateFiles.map((file) => store.exists(file)))).some(Boolean) ||
+              (await store.list('chapters')).length > 0 ||
+              (await store.list('plans')).length > 0 ||
+              (await store.list('reviews')).length > 0 ||
+              (await store.list('checks')).length > 0
+            if (hasState) {
+              throw new EngineInputError(
+                ERROR_CODES.PROJECT_EXISTS,
+                'state documents exist but novel.yaml is missing; refusing to overwrite the project',
+                'restore novel.yaml, or initialize a new empty directory',
+              )
+            }
             const created = await options.run(this.emptySnapshot(root), { store, revision: 1 })
             await runTransaction(store, {
               txid: randomUUID(),
@@ -2178,6 +2306,7 @@ export class EngineService {
               signal,
             })
             this.replay.clear()
+            this.lastRoot = root
             return { data: created.data, revision: 1, warnings: created.warnings ?? [] }
           }
         }
@@ -2304,6 +2433,27 @@ const pipelineWith = (
   last_action: snapshot.pipeline.last_action,
   ...patch,
 })
+
+/**
+ * Validate every document an archive is about to stage. The delta is
+ * model-supplied, so checking only its action fields is not enough: a scalar
+ * such as `timeline.story_time: 42` would otherwise be committed and make the
+ * project unreadable for every later tool and panel request.
+ */
+function assertArchiveDocuments(documents: ReadonlyArray<readonly [DocKind, unknown]>): void {
+  for (const [kind, document] of documents) {
+    try {
+      narrow(kind, document)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `archive would write an invalid ${kind} document: ${detail}`,
+        'fix the state_delta or handoff field types and retry; nothing was written',
+      )
+    }
+  }
+}
 
 const action = (op: string, at: Date, digest: string): PipelineState['last_action'] => ({
   op,

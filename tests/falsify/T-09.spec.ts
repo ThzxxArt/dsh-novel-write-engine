@@ -8,7 +8,9 @@ import { migrateProjectFile, migrateProjectFiles, type MigrationStep } from '../
 /**
  * T-09 / §6.9: a migration failure restores the exact file bytes. This is the
  * file-level rollback the project migration will use once a v1 predecessor
- * exists; the runner's in-memory contract is pinned separately.
+ * exists; the runner's in-memory contract is pinned separately. The production
+ * loader migrates in memory until a released v1 predecessor gives it a file
+ * migration to run.
  */
 it('T-09 a successful file migration writes the target version', async () => {
   const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))

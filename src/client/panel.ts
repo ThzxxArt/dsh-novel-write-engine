@@ -445,11 +445,17 @@ const statePanel = (
             type: 'button',
             className: 'nwe-refresh',
             style: { marginTop: 16 },
-            onClick: onRefresh,
-            disabled: loading,
+            onClick:
+              state === 'outdated'
+                ? (): void => {
+                    const location = (globalThis as { location?: { reload?: () => void } }).location
+                    location?.reload?.()
+                  }
+                : onRefresh,
+            disabled: loading && state !== 'outdated',
           },
           refreshIcon(),
-          loading ? '刷新中…' : '重新读取',
+          state === 'outdated' ? '刷新页面' : loading ? '刷新中…' : '重新读取',
         ),
   )
 }
@@ -482,7 +488,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
           { className: 'nwe-meta' },
           createElement(
             'span',
-            { className: `nwe-stage${view.stageLabel === '已完成' ? ' is-done' : ''}` },
+            { className: `nwe-stage${view.finished ? ' is-done' : ''}` },
             view.stageLabel,
           ),
           ready ? createElement('span', null, view.subtitle) : null,
@@ -506,10 +512,10 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
     ready
       ? createElement(
           'div',
-          { className: 'nwe-stats', 'aria-label': '项目统计' },
+          { className: 'nwe-stats', role: 'group', 'aria-label': '项目统计' },
           stat('已归档', String(view.stats.chapters), '章'),
           stat('总字数', view.stats.words.toLocaleString('zh-CN'), '字'),
-          stat('平均评分', view.stats.averageScore === 0 ? '—' : String(view.stats.averageScore), '/150'),
+          stat('平均评分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
           stat('待处理', String(view.stats.blocking), '项'),
         )
       : null,
@@ -541,7 +547,11 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
             'div',
             { className: 'nwe-section-head' },
             createElement('h2', { className: 'nwe-section-title' }, '章节'),
-            createElement('span', { className: 'nwe-section-note' }, `${view.rows.length} 条记录`),
+            createElement(
+              'span',
+              { className: 'nwe-section-note' },
+              `${view.rows.length} 条记录${view.rows.length > 30 ? ' · 显示最近 30 条' : ''}`,
+            ),
           ),
           view.rows.length === 0
             ? createElement(
@@ -551,7 +561,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
                 createElement('div', { className: 'nwe-state-title' }, '书架还是空的'),
                 createElement('div', { className: 'nwe-state-text' }, '完成第一次归档后，章节会出现在这里。'),
               )
-            : createElement('ul', { className: 'nwe-chapters' }, ...view.rows.map(chapterCard)),
+            : createElement('ul', { className: 'nwe-chapters' }, ...view.rows.slice(-30).map(chapterCard)),
         )
       : null,
     ready
@@ -577,7 +587,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
                 ...view.blocking.map((item) =>
                   createElement(
                     'li',
-                    { className: 'nwe-block', key: `${item.code}-${item.detail}` },
+                    { className: 'nwe-block', key: `${item.code}-${item.scope}-${item.detail}` },
                     createElement('span', { className: 'nwe-block-icon', 'aria-hidden': 'true' }, '!'),
                     createElement(
                       'div',
@@ -608,13 +618,26 @@ export function NovelPanel(): ReactElement {
     if (inFlight.current) return
     inFlight.current = true
     if (!silent) setLoading(true)
-    // The host serves the panel under the document root; a leading slash would
-    // bypass a documented --public-url prefix mount.
-    const result = await fetchPanel(fetch, PANEL_ROUTE.replace(/^\/+/, ''))
-    if (!alive.current) return
-    setView(buildView(result.payload as PanelPayloadDto | null, result.error))
-    if (!silent) setLoading(false)
-    inFlight.current = false
+    try {
+      // The host serves the panel under the document root; a leading slash would
+      // bypass a documented --public-url prefix mount. A hung panel request must
+      // not wedge the refresh button and every poll forever.
+      const timeout =
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(10_000)
+          : undefined
+      const result = await fetchPanel(fetch, PANEL_ROUTE.replace(/^\/+/, ''), timeout)
+      if (!alive.current) return
+      setView((previous) => {
+        const next = buildView(result.payload as PanelPayloadDto | null, result.error)
+        // A brief background failure must not wipe a readable panel.
+        if (silent && result.error !== null && previous.state === 'ready') return previous
+        return next
+      })
+    } finally {
+      inFlight.current = false
+      if (!silent && alive.current) setLoading(false)
+    }
   }, [])
 
   useEffect(() => {

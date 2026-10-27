@@ -23,6 +23,8 @@ export interface PanelSnapshot {
   blocking: BlockingItem[]
   /** Recommended next action; lets the panel explain a stage with no blockers. */
   next?: StatusReport['next']
+  /** True only when the configured total chapter target has been reached. */
+  finished?: boolean
   chapters: ChapterRecord[]
   /** The active, not-yet-archived chapter; archived rows come from `chapters`. */
   draft?: PanelDraft | null
@@ -46,6 +48,8 @@ export interface PanelSummaryDto {
   phases: Array<{ id: string; done: boolean; active: boolean }>
   blocking: BlockingItem[]
   next?: { tool: string; reason: string }
+  /** Absent for older payloads; false means the current chapter cycle is done. */
+  finished?: boolean
 }
 
 export interface PanelChapterRow {
@@ -86,11 +90,17 @@ const STAGE_TO_PHASE: Record<Stage, string> = {
 }
 
 /** The nine-phase progress strip: phases before the active one are done. */
-export function phaseStrip(stage: Stage): Array<{ id: string; done: boolean; active: boolean }> {
-  // A completed project has no next phase to highlight. Treating P9 as active
-  // made a finished book look permanently stuck on the last step.
+export function phaseStrip(
+  stage: Stage,
+  finished = false,
+): Array<{ id: string; done: boolean; active: boolean }> {
+  // `done` is the archive state for the current chapter, not proof that the
+  // whole book is finished. A book with a configured target only goes all-green
+  // when that target has been reached; otherwise the next cycle starts at P1.
   if (stage === 'done') {
-    return PHASE_STRIP.map((id) => ({ id, done: true, active: false }))
+    return finished
+      ? PHASE_STRIP.map((id) => ({ id, done: true, active: false }))
+      : PHASE_STRIP.map((id) => ({ id, done: false, active: id === 'P1' }))
   }
   const active = STAGE_TO_PHASE[stage]
   const activeIndex = PHASE_STRIP.indexOf(active as (typeof PHASE_STRIP)[number])
@@ -146,6 +156,7 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     totalChapters: snapshot.chapters.length,
     phases: snapshot.phases,
     blocking: snapshot.blocking,
+    finished: snapshot.finished,
     ...(snapshot.next === undefined
       ? {}
       : { next: { tool: snapshot.next.tool, reason: snapshot.next.reason } }),

@@ -302,4 +302,42 @@ describe('rule edge cases', () => {
     }
     expect(codesOf(text, { rulepack: strict })).toContain('UNIFORM_SENTENCE')
   })
+
+  it('does not treat ordinary first-person narration as reader address', () => {
+    expect(codesOf('我们看着窗外的雨，谁也没有说话。')).not.toContain('READER_INTRUSION')
+    expect(codesOf('我们可以看到这里的雨。')).toContain('READER_INTRUSION')
+  })
+
+  it('allows cause-first order and flags conclusion-first order', () => {
+    expect(codesOf('因为下雨，他感到寒冷。')).not.toContain('CONCLUSION_FIRST')
+    expect(codesOf('他感到寒冷，因为下雨了。')).toContain('CONCLUSION_FIRST')
+  })
+
+  it('counts exclamation terminators in sentence density', () => {
+    const text = '风从窗缝里挤进来，他把桌上的纸压住！走廊里没有人，灯还亮着！他坐下来，翻开那封旧信！'
+    expect(codesOf(text)).not.toContain('PERIOD_DENSITY')
+  })
+
+  it('recognises arbitrary Day and volume labels', () => {
+    expect(codesOf('Day 7，他醒来。')).toContain('SYSTEM_LABEL')
+    expect(codesOf('第4卷开始了。')).toContain('SYSTEM_LABEL')
+  })
+
+  it('accepts locked details that survive inside a longer paragraph', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text = '他推开旧办公室的门，靠窗一张旧办公桌还在，墙角堆满文件箱，桌上的台灯没有开。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
 })

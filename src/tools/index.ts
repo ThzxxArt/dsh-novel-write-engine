@@ -66,6 +66,23 @@ const payload = (raw: unknown): unknown => {
   return (raw as { data: unknown }).data
 }
 
+/** Surface engine warnings (dropped deductions, journal integrity) to the model. */
+const withWarnings = (
+  rendered: Array<{ type: 'text'; text: string }>,
+  raw: unknown,
+): Array<{ type: 'text'; text: string }> => {
+  if (typeof raw !== 'object' || raw === null || !('warnings' in raw)) return rendered
+  const warnings = (raw as { warnings?: unknown }).warnings
+  if (!Array.isArray(warnings) || warnings.length === 0) return rendered
+  const lines = warnings.map((warning) => {
+    if (typeof warning !== 'object' || warning === null) return String(warning)
+    const entry = warning as { code?: unknown; message?: unknown }
+    return `${String(entry.code ?? 'WARNING')}: ${String(entry.message ?? '')}`
+  })
+  rendered[0]!.text += `\n\n引擎警告：\n${lines.map((line) => `- ${line}`).join('\n')}`
+  return rendered
+}
+
 /** Surface host-level idempotency so a retried write is not mistaken for a new commit. */
 const withReplay = (
   rendered: Array<{ type: 'text'; text: string }>,
@@ -79,7 +96,7 @@ const withReplay = (
   ) {
     rendered[0]!.text += '\n\n（replayed: true — 本次未再次写盘）'
   }
-  return rendered
+  return withWarnings(rendered, raw)
 }
 
 const jsonOutput = {

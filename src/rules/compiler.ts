@@ -256,6 +256,13 @@ export function compileRulepack(raw: unknown): Rulepack {
     invalid('format.title.max_chars must be an integer >= min_chars')
   }
   textList(pack.format.system_labels, 'format.system_labels')
+  for (const label of pack.format.system_labels) {
+    try {
+      void new RegExp(label)
+    } catch {
+      invalid(`format.system_labels contains an invalid pattern: ${label}`)
+    }
+  }
   textList(pack.format.scene_separators, 'format.scene_separators')
   textList(pack.format.markdown_markers, 'format.markdown_markers')
   positiveInt(pack.punctuation.dash.scale_words, 'punctuation.dash.scale_words')
@@ -267,6 +274,9 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
   nonNegative(pack.punctuation.period_density.min, 'punctuation.period_density.min')
   nonNegative(pack.punctuation.period_density.max, 'punctuation.period_density.max')
+  if (pack.punctuation.period_density.max > 100) {
+    invalid('punctuation.period_density.max must not exceed 100 per 100 chars')
+  }
   if (pack.punctuation.period_density.min > pack.punctuation.period_density.max) {
     invalid('punctuation.period_density.min must not exceed max')
   }
@@ -291,12 +301,21 @@ export function compileRulepack(raw: unknown): Rulepack {
     invalid('punctuation.consecutive_le.char must be one character')
   }
   ratio(pack.punctuation.dialogue_dominant_ratio, 'punctuation.dialogue_dominant_ratio')
+  if (pack.punctuation.dialogue_dominant_ratio <= 0) {
+    invalid('punctuation.dialogue_dominant_ratio must be > 0; 0 disables every dialogue exemption')
+  }
   nonNegative(pack.semantics.adjective_density.max, 'semantics.adjective_density.max')
   textList(pack.semantics.adjective_density.adjectives, 'semantics.adjective_density.adjectives')
   nonNegative(pack.semantics.pleasure_density.min, 'semantics.pleasure_density.min')
+  if (pack.semantics.pleasure_density.min <= 0) {
+    invalid('semantics.pleasure_density.min must be > 0; 0 disables the check')
+  }
   positiveInt(pack.semantics.pleasure_density.window, 'semantics.pleasure_density.window')
   textList(pack.semantics.pleasure_density.keywords, 'semantics.pleasure_density.keywords')
   nonNegative(pack.semantics.sensory_density.min, 'semantics.sensory_density.min')
+  if (pack.semantics.sensory_density.min <= 0) {
+    invalid('semantics.sensory_density.min must be > 0; 0 disables the check')
+  }
   positiveInt(pack.semantics.sensory_density.window, 'semantics.sensory_density.window')
   textList(pack.semantics.sensory_density.senses, 'semantics.sensory_density.senses')
   positiveInt(pack.semantics.water_words.window, 'semantics.water_words.window')
@@ -328,8 +347,8 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
   positiveInt(pack.crosschapter.duplicate_min_chars, 'crosschapter.duplicate_min_chars')
   for (const key of ['foreshadow_min_dormancy', 'foreshadow_dormant_after'] as const) {
-    if (!Number.isInteger(pack.crosschapter[key]) || pack.crosschapter[key] < 0) {
-      invalid(`crosschapter.${key} must be a non-negative integer`)
+    if (!Number.isInteger(pack.crosschapter[key]) || pack.crosschapter[key] <= 0) {
+      invalid(`crosschapter.${key} must be a positive integer; 0 silently disables the check`)
     }
   }
   ratio(pack.crosschapter.lock_similarity, 'crosschapter.lock_similarity')

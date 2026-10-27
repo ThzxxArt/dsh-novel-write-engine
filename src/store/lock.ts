@@ -150,7 +150,9 @@ export class FileLock {
       if (Date.now() - mtimeMs <= this.staleMs) return false
     } else {
       const age = Date.now() - Date.parse(record.startedAt)
-      const stale = !Number.isFinite(age) || age > this.staleMs || !processAlive(record.pid)
+      // A live pid keeps the lock even if the transaction is long. Stealing by
+      // age alone lets two live writers overlap after a slow fsync / suspend.
+      const stale = !Number.isFinite(age) || !processAlive(record.pid)
       if (!stale) return false
     }
 

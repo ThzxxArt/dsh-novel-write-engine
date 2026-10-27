@@ -77,6 +77,13 @@ describe('preset patch', () => {
     }
   })
 
+  it('keeps the delegation control tools in the preset', () => {
+    const config = rows[0]!.config as { plugins: Entry[] }
+    const delegation = config.plugins.find((entry) => entry.id === 'delegation')!
+    const nested = delegation.config as Entry[]
+    expect(nested.some((entry) => entry.id === 'tool-subagent-control')).toBe(true)
+  })
+
   it('does not hand the novel session any filesystem-like capability', () => {
     const config = rows[0]!.config as { plugins: Entry[] }
     const names = JSON.stringify(config.plugins)

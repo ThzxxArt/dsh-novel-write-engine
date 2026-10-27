@@ -7,7 +7,7 @@
 | 任务书阶段 `novel_brief.stage` | `P1` `P2` `P3` `P4` `P5` `P6` `P8` |
 | 管线状态 `pipeline.stage` | `idle` `P2` `P3` `P4` `P5` `P6` `ready_to_archive` `done` |
 
-P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。
+P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` 表示**当前章已归档**；下一章从 `done` 回到 P1，只有项目配置的 `targets.total_chapters` 已全部归档时面板才显示全书完成。
 
 ## 迁移表
 

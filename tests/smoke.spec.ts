@@ -97,6 +97,30 @@ describe('plugin assembly', () => {
     expect(JSON.parse((admitted as unknown as { body: string }).body)).toMatchObject({ empty: true })
   })
 
+  it('uses the host requestRejection 401 result on the panel route', async () => {
+    const host = fakeHost()
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    const response = { statusCode: 0, setHeader: () => undefined, end: () => undefined }
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: 'unauth.example' } },
+      response,
+    )
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('denies with 503 when the connection service is absent', async () => {
+    const host = fakeHost(undefined, 'none')
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    const denied = { statusCode: 0, setHeader: () => undefined, end: () => undefined }
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: '127.0.0.1:3080' } },
+      denied,
+    )
+    expect(denied.statusCode).toBe(503)
+  })
+
   it('registers only eight tools in core mode', () => {
     const host = fakeHost()
     apply(

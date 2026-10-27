@@ -23,6 +23,16 @@ export function loadRulepack(path?: string): Rulepack {
       { cause: error },
     )
   }
-  const raw: unknown = parse(text)
+  let raw: unknown
+  try {
+    raw = parse(text)
+  } catch (error) {
+    throw new EngineFaultError(
+      ERROR_CODES.RULEPACK_INVALID,
+      `cannot parse rule pack at ${path ?? 'bundled default'}`,
+      undefined,
+      { cause: error },
+    )
+  }
   return compileRulepack(raw)
 }

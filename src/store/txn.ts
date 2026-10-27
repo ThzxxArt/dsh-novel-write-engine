@@ -78,6 +78,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
   const renamed: string[] = []
   const targetDirectories = new Set<string>()
   let journaledCommitted = false
+  let backupMarked = false
 
   try {
     for (const file of input.files) {
@@ -128,6 +129,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
         await store.writeBytes(joinRel(backupDir(input.txid), file.path), existing)
       }
       await store.writeText(joinRel(backupDir(input.txid), BACKUP_MARKER), '1')
+      backupMarked = true
     }
 
     // A crash after this row but before the committed row is recoverable: the
@@ -201,6 +203,11 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     // the only remaining source for manual recovery.
     if (rollbackProblem === null) {
       await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
+    }
+    if (input.backup && !backupMarked) {
+      // A failure while writing backup pre-images leaves an unmarked directory
+      // that pruning will never see; remove our own partial copy.
+      await store.removeTree(backupDir(input.txid)).catch(() => undefined)
     }
     if (!journaledCommitted) {
       await appendJournal(store, {

@@ -30,6 +30,9 @@ if (config === undefined || !Array.isArray(config.plugins)) {
 }
 
 const names = []
+// The outer preset row is a package too; renaming it breaks the preset mount
+// before any nested plugin is touched.
+if (typeof rows[0]?.name === 'string' && rows[0].name !== '') names.push(rows[0].name)
 const walk = (entries) => {
   for (const entry of entries) {
     if (typeof entry.name !== 'string' || entry.name === '') {

@@ -83,6 +83,8 @@ describe('text segmentation', () => {
   it('splits paragraphs on blank lines and trims', () => {
     expect(splitParagraphs('\n\n甲\n\n\n乙  \n')).toEqual(['甲', '乙'])
     expect(splitSentences('甲。乙！丙？')).toEqual(['甲', '乙', '丙'])
+    expect(splitSentences('He stopped. She left. Ok?')).toEqual(['He stopped', 'She left', 'Ok'])
+    expect(splitSentences('他走了……她来了。')).toEqual(['他走了', '她来了'])
   })
 
   it('computes rhythm and paragraph lookup', () => {

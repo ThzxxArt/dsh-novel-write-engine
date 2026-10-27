@@ -44,14 +44,21 @@ it('resolves an omitted root through the active registry project', async () => {
 })
 
 it('makes the panel follow the project a tool call just touched', async () => {
-  const { root, engine, cleanup } = await harness()
+  const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
+  const other = await mkdtemp(join(tmpdir(), 'novel-panel-other-'))
+  const { root, engine, cleanup } = await harness({ stateDir })
   try {
-    await engine.initProject({ title: '面板之书', genre: '都市现代', platform: 'fanqie', root })
-    const bundle = await engine.panelBundle()
-    expect(bundle.summary.title).toBe('面板之书')
-    expect(bundle.chapters.rows).toHaveLength(1)
+    await engine.initProject({ title: '面板甲', genre: '都市现代', platform: 'fanqie', root })
+    await engine.initProject({ title: '面板乙', genre: '都市现代', platform: 'fanqie', root: other })
+    await engine.getStatus({ root: other })
+    expect((await engine.panelBundle({})).summary.title).toBe('面板乙')
+    await engine.getStatus({ root })
+    expect((await engine.panelBundle({})).summary.title).toBe('面板甲')
+    expect((await engine.panelBundle({})).chapters.rows).toHaveLength(1)
   } finally {
     await cleanup()
+    await rm(stateDir, { recursive: true, force: true })
+    await rm(other, { recursive: true, force: true })
   }
 })
 

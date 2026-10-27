@@ -33,7 +33,7 @@ export interface FakeHost {
  */
 export function fakeHost(
   services: string[] = ['tools', 'commands', 'skills', 'webServer'],
-  connectionMode: 'scoped' | 'get' = 'scoped',
+  connectionMode: 'scoped' | 'get' | 'none' = 'scoped',
 ): FakeHost {
   const host: FakeHost = {
     tools: [],
@@ -47,6 +47,13 @@ export function fakeHost(
     ctx: {},
   }
   const connection = {
+    requestRejection: vi.fn((request: { headers?: Record<string, string> }) =>
+      request.headers?.host === 'evil.example'
+        ? 403
+        : request.headers?.host === 'unauth.example'
+          ? 401
+          : undefined,
+    ),
     admit: vi.fn((request: { headers?: Record<string, string> }) =>
       request.headers?.host === 'evil.example' ? { rejection: 403 } : { peer: { id: 'test' } },
     ),

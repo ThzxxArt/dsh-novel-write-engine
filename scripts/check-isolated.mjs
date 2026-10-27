@@ -22,7 +22,13 @@ const readOptions = (configName) => {
       parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'),
     )
   }
-  return { ...parsed.options, noEmit: true, declaration: false, incremental: false }
+  const options = { ...parsed.options, noEmit: true, incremental: false }
+  // The client config emits declarations; a noEmit single-file program cannot
+  // combine those, and the inherited option would become a global TS5069.
+  delete options.declaration
+  delete options.emitDeclarationOnly
+  delete options.declarationDir
+  return options
 }
 const hostOptions = readOptions('tsconfig.json')
 const clientOptions = readOptions('tsconfig.client.json')
@@ -43,18 +49,18 @@ let failures = 0
 for (const file of files) {
   const options = file.startsWith(clientRoot) ? clientOptions : hostOptions
   const program = ts.createProgram({ rootNames: [file], options })
-  const diagnostics = ts
-    .getPreEmitDiagnostics(program)
-    .filter(
-      (diagnostic) => diagnostic.file !== undefined && resolve(diagnostic.file.fileName) === resolve(file),
-    )
-  if (diagnostics.length > 0) {
+  const all = ts.getPreEmitDiagnostics(program)
+  const diagnostics = all.filter(
+    (diagnostic) => diagnostic.file !== undefined && resolve(diagnostic.file.fileName) === resolve(file),
+  )
+  const global = all.filter((diagnostic) => diagnostic.file === undefined)
+  if (diagnostics.length > 0 || global.length > 0) {
     failures += 1
     console.error(`\n${relative(root, file)}`)
-    for (const diagnostic of diagnostics) {
+    for (const diagnostic of [...diagnostics, ...global]) {
       const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
       const position =
-        diagnostic.start === undefined
+        diagnostic.start === undefined || diagnostic.file === undefined
           ? ''
           : `:${diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1}`
       console.error(`  TS${diagnostic.code}${position} ${message}`)

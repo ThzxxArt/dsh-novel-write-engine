@@ -1,3 +1,4 @@
+import { REMOTE_VERSION } from '../constants.js'
 import type { PanelPayloadDto } from './dto.js'
 
 /** One human-facing progress step. */
@@ -29,10 +30,12 @@ export interface PanelView {
   title: string
   subtitle: string
   stageLabel: string
+  /** The whole book reached its configured target; stage `done` alone is only one chapter. */
+  finished: boolean
   revisionLabel: string
   phases: PanelPhase[]
   rows: PanelChapter[]
-  blocking: Array<{ code: string; detail: string; hint: string }>
+  blocking: Array<{ code: string; scope: string; detail: string; hint: string }>
   blockingTitle: string
   stats: { chapters: number; words: number; averageScore: number; blocking: number }
   nextTitle: string
@@ -44,7 +47,7 @@ export interface PanelView {
   next: string
 }
 
-export const PANEL_SCHEMA_VERSION = 1
+export const PANEL_SCHEMA_VERSION = REMOTE_VERSION
 
 const PHASE_LABELS: Record<string, string> = {
   P1: '世界观',
@@ -113,6 +116,7 @@ const loading = (): PanelView => ({
   title: '网文工坊',
   subtitle: '正在整理书稿…',
   stageLabel: '读取中',
+  finished: false,
   revisionLabel: '',
   phases: [],
   rows: [],
@@ -167,6 +171,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
   const summary = payload.summary
   const blocking = summary.blocking.map((item) => ({
     code: item.code,
+    scope: item.scope ?? '',
     detail: item.detail,
     hint: item.hint ?? '',
   }))
@@ -186,15 +191,24 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       stageLabel: stageLabel(row.stage),
     }
   })
-  const scored = rows.filter((row) => row.tone === 'ok' && row.scoreValue > 0)
+  const scored = rows.filter((row) => row.tone === 'ok')
   const average =
     scored.length === 0 ? 0 : scored.reduce((sum, row) => sum + row.scoreValue, 0) / scored.length
   const next = summary.next
+  const finished = summary.finished === true
+  const doneLabel =
+    summary.stage === 'done' ? (finished ? '全书完成' : '本章已归档') : stageLabel(summary.stage)
   return {
     state: 'ready',
     title: `《${summary.title}》`,
-    subtitle: `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章`,
-    stageLabel: stageLabel(summary.stage),
+    subtitle:
+      summary.stage === 'done'
+        ? `${summary.genre} · ${platformLabel(summary.platform)} · ${
+            finished ? `共 ${summary.totalChapters} 章` : `下一章 第 ${summary.chapter} 章`
+          }`
+        : `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章`,
+    stageLabel: doneLabel,
+    finished,
     revisionLabel: `第 ${summary.revision} 次修订`,
     phases: summary.phases.map((phase) => ({ ...phase, label: phaseLabel(phase.id) })),
     rows,
@@ -206,9 +220,10 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       averageScore: Math.round(average * 10) / 10,
       blocking: blocking.length,
     },
-    nextTitle: next === undefined ? '状态已同步' : toolLabel(next.tool),
-    nextDetail:
-      next === undefined
+    nextTitle: finished ? '' : next === undefined ? '状态已同步' : toolLabel(next.tool),
+    nextDetail: finished
+      ? ''
+      : next === undefined
         ? '没有待执行的下一步，刷新查看最新状态。'
         : (NEXT_DETAILS[next.tool] ?? next.reason),
     nextTool: next?.tool ?? '',
@@ -222,9 +237,13 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
 export async function fetchPanel(
   fetcher: typeof fetch,
   path: string,
+  signal?: AbortSignal,
 ): Promise<{ payload: PanelPayloadDto | null; error: string | null }> {
   try {
-    const response = await fetcher(path, { headers: { accept: 'application/json' } })
+    const response = await fetcher(path, {
+      headers: { accept: 'application/json' },
+      ...(signal === undefined ? {} : { signal }),
+    })
     if (!response.ok) {
       let detail = `宿主返回 ${response.status}`
       try {

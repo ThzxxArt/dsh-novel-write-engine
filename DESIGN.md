@@ -884,7 +884,7 @@ lexicon:
   meta_narration:                 # 元叙述标记，-4 分且必须改
     - { term: "值得一提的是" }
     - { term: "众所周知" }
-  reader_intrusion: [{ pattern: "我们(可以)?看" }]
+  reader_intrusion: [{ pattern: "我们(?:可以)?看(?:到)?(?:这里|下面|接下来|这一幕|这个|这场|这段)" }]
   god_view: [{ pattern: "这注定是" }, { pattern: "当时的.{0,4}还不知道" }]
   conclusion_first: { verbs: [感到, 觉得, 知道, 明白, 意识到], causals: [因为, 所以, 于是] }
 
@@ -1184,6 +1184,7 @@ active: "/abs/path/to/novel"
 - 迁移函数签名：`(old: unknown) => new`，纯函数，可单测。
 - 迁移链：`v1→v2→v3`，逐级执行，每级落盘前把原字节备份到 `backups/migrations/`。
 - 迁移失败：先尝试用内存 pre-image 原地回滚，失败则按备份路径恢复，报 `ENGINE_SCHEMA_INVALID` + 具体字段路径。
+- 当前发布没有已发布的 v1 前身，`MIGRATIONS` 为空：读取路径用 `migrateDocument` 做内存迁移，文件级 `migrateProjectFile(s)` 是**下一次真实迁移的单元契约**，尚未被生产打开路径调用；T-09 验证的是该契约，不把它冒充为已存在的生产迁移链。
 
 ---
 
@@ -1677,14 +1678,14 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 1. **Hero**：书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数；右侧刷新。
 2. **统计**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`。
-3. **九阶段轨**：三个阶段态（done / active / pending）；`done` 时九格全绿、没有 active，不能把完成态显示成 P9 进行中。
+3. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。
 4. **下一步卡**：工具的中文动作 + 可读理由；原始工具名只作为次要技术标识。
-5. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠。
+5. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
 6. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
 
-**状态与可达性**：loading 用骨架 + `role=status`；empty 显示 `novel_init` 命令；error 用 `role=alert` + 重试；outdated 用刷新提示；根节点 `aria-busy`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
+**状态与可达性**：loading 用骨架 + `role=status`；empty 显示 `novel_init` 命令；error 用 `role=alert` + 重试；outdated 用 `location.reload()`（客户端 bundle 已陈旧，重新请求同 bundle 无效）；根节点 `aria-busy`，统计区 `role=group`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 
-**刷新**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次，避免工具写入后面板陈旧。
+**刷新**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次，避免工具写入后面板陈旧；静默刷新失败保留上一份可读视图，首次加载失败才显示错误页。请求带 10 秒 `AbortSignal` 超时。
 
 **只读**。所有写操作仍走工具/对话；面板最多给一个「刷新」按钮，不直接改文件。
 
@@ -1708,8 +1709,8 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 3. 面板显示真实数据（≥3 章样例）。
 4. 门控失败时阻塞区列出具体编号与差额。
 5. 卸载后入口消失，无残留。
-6. 深/浅主题可读；窄屏折叠为图标。
-7. `stage=done` 时九阶段全绿且无 active，不得显示 P9 进行中。
+6. 深/浅主题可读；窄屏改为单列卡片，不横向溢出。
+7. 单章 `done` 显示「本章已归档」并从下一章 P1 开始；只有配置的 `total_chapters` 达到后九阶段才全绿且无 active。
 8. loading / empty / error / outdated 四态均有可识别文案与恢复动作；loading 用骨架，error 有重试，empty 显示 `novel_init`。
 9. 390 / 320 宽无横向溢出；章节卡在窄屏改为单行元数据 + 可展开摘要。
 10. 手动刷新与 15 秒静默轮询都更新数据；页面重新可见或 focus 时静默刷新。
@@ -1905,12 +1906,14 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 | 路径 | 理由 |
 |---|---|
-| `src/index.ts` | 纯装配（30 行），由集成冒烟覆盖；计入分母会鼓励写「假装配」凑数 |
-| `src/**/*.d.ts`、`src/types.ts` | 纯类型，零运行时 |
-| `src/client/entry.ts` | lazy-CJS 包装，由 bundle 形状测试覆盖 |
+| `src/types.ts` | 纯类型，零运行时 |
+| `src/client/dto.ts` | 纯 wire DTO 类型，零运行时 |
+| `src/rules/types.ts` | 纯规则包类型，零运行时 |
+| `src/**/*.d.ts` | 声明文件，零运行时 |
 | `rulepacks/*.yaml`、`briefs/*.md`、`skills/entry.md`、`presets/*.yml` | 数据，不执行 |
 | `tests/**` | 测试自身 |
 
+`src/index.ts` **计入**分母（装配也必须有测试）；`src/client/dto.ts`/`src/rules/types.ts` 是当前唯一的类型排除项。`scripts/check-coverage.mjs` 还固定检查 domain 的七个文件与 viewmodel 均被覆盖率摘要匹配，空 group 直接失败，避免 glob 静默失效。
 **不排除的东西**（容易被顺手排除、但不许排）：`store/` 的错误分支、`engine/` 的门控分支、`tools/` 的 render 函数。这三处正是「会撒谎」的地方。
 
 ### 13.3 分层门槛
@@ -1960,9 +1963,9 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | T-06 | 规则码唯一 | 同一 code 注册两次 → `ENGINE_RULEPACK_INVALID` | INV-07 |
 | T-07 | 路径不可逃逸 | `../`、绝对路径、`..\\`、NUL、`CON` → 全部 `ENGINE_PATH_ESCAPE` | INV-09 |
 | T-08 | schema 过新拒绝 | `schema_version: 2` → `ENGINE_SCHEMA_TOO_NEW`，文件不被改写 | INV-12 |
-| T-09 | 迁移可回滚 | 迁移中注入异常 → 项目回到迁移前状态（备份恢复） | §6.9 |
+| T-09 | 迁移可回滚 | 文件级迁移 runner 的单元契约：注入异常 → 原字节恢复；当前没有已发布 v1 前身，`MIGRATIONS` 为空，生产读取路径做内存迁移 | §6.9 |
 | T-10 | 面板只读 | `remote` 导出对象运行时无写方法；类型层 `@ts-expect-error` 钉死 | INV-10 |
-| T-11 | 预设名录合法 | `entryListProblem()` 通过 + 每个 name 可解析 + id 不重复 | §11.6 |
+| T-11 | 预设名录合法 | 结构 + `check:preset` 在真实 bundle root 上解析外层与嵌套 name（需要宿主 checkout） | §11.6 |
 | T-12 | EPUB 可解压 | 用 `node:zlib` 解回 ZIP，断言 `mimetype` 首条且未压缩 | §14.2 |
 
 ### 13.6 架构约束测试

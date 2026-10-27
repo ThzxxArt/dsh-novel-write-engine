@@ -13,10 +13,11 @@ import {
 } from '../helpers.js'
 
 /**
- * T-02 / INV-06: two processes archiving one chapter produce one commit and
- * one idempotent replay (or the documented lock timeout), never two writes.
+ * T-02 / INV-06: two independent engine instances archiving one chapter produce
+ * one commit and one idempotent replay (or the documented lock timeout), never
+ * two writes. A real child-process lock holder is covered in tests/lock.spec.ts.
  */
-it('T-02 cross-process archives produce one commit and one replay', async () => {
+it('T-02 concurrent archives produce one commit and one replay', async () => {
   const { root, engine, cleanup } = await harness()
   const second = new EngineService({ ...TEST_CONFIG, projectRoot: root }, () => loadRulepack(), {
     now: FIXED_NOW,

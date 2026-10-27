@@ -9,7 +9,7 @@ export function splitParagraphs(text: string): string[] {
 /** Sentence splitting uses Chinese and English terminators; empty runs collapse. */
 export function splitSentences(text: string): string[] {
   return text
-    .split(/[。！？!?]+/)
+    .split(/[。！？!?]+|…+|\.(?=\s|$)/)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence !== '')
 }

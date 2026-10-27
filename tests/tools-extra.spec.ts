@@ -173,6 +173,17 @@ describe('every tool executes one operation', () => {
     expect(replay[0]!.text).toContain('replayed')
   })
 
+  it('renders engine warnings for json tools', () => {
+    const map = tools(engine())
+    const rendered = map.get('novel_review')!.output.render({}, {
+      data: { chapter: 1, round: 1, total: 145, open_blockers: 0, next_stage: 'P6' },
+      revision: 2,
+      warnings: [{ code: 'SCORE_EXCLUSIONS', message: '2 deductions were dropped' }],
+    } as never)
+    expect(rendered[0]!.text).toContain('SCORE_EXCLUSIONS')
+    expect(rendered[0]!.text).toContain('2 deductions')
+  })
+
   it('exposes tool names by mode and an empty revision summary', () => {
     expect(toolNames('core')).toHaveLength(8)
     expect(emptySummary()).toMatchObject({ hook_strength: 3, plot_advancement: 'mid', events: [] })

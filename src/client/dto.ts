@@ -26,6 +26,8 @@ export interface SummaryDto {
   phases: PhaseDto[]
   blocking: BlockingDto[]
   next?: { tool: string; reason: string }
+  /** True only when the book target is reached; done alone means the chapter is archived. */
+  finished?: boolean
 }
 
 export interface ChapterRowDto {

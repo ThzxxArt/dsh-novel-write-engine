@@ -61,6 +61,19 @@ describe('panel view model', () => {
     expect(view.next).toContain('novel_revise')
   })
 
+  it('labels stage done as chapter archived unless the book target is finished', () => {
+    const archived = payload()
+    archived.summary.stage = 'done'
+    archived.summary.finished = false
+    const view = buildView(archived)
+    expect(view.stageLabel).toBe('本章已归档')
+    expect(view.finished).toBe(false)
+    archived.summary.finished = true
+    const finishedView = buildView(archived)
+    expect(finishedView.stageLabel).toBe('全书完成')
+    expect(finishedView.nextTitle).toBe('')
+  })
+
   it('degrades unknown labels, odd scores and a missing next action', () => {
     const odd = payload()
     odd.summary.platform = 'unknown-platform'
@@ -78,7 +91,7 @@ describe('panel view model', () => {
     expect(view.phases[0]!.label).toBe('PX')
     expect(view.rows[1]!.scoreValue).toBe(150)
     expect(view.rows[0]!.scorePercent).toBe(0)
-    expect(view.stats.averageScore).toBe(150)
+    expect(view.stats.averageScore).toBe(50)
     expect(view.nextTitle).toBe('状态已同步')
     expect(view.nextDetail).toContain('没有待执行')
     expect(view.next).toBe('')
@@ -175,6 +188,55 @@ describe('client registration and rendering', () => {
     }
   })
 
+  it('refreshes silently on the 15s interval, focus and visible tab', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => payload() }))
+    vi.stubGlobal('fetch', fetchMock)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(container.textContent).toContain('测试之书')
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'))
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => payload() })
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(container.textContent).toContain('测试之书')
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
   it('renders the loading panel and the icon without a DOM', () => {
     expect(typeof NovelPanel).toBe('function')
     const loading = buildView(null)
@@ -206,6 +268,7 @@ describe('client registration and rendering', () => {
     expect(failed).toContain('role="alert"')
 
     const completed = payload()
+    completed.summary.finished = true
     completed.summary.phases = completed.summary.phases.map((phase) => ({
       ...phase,
       done: true,
@@ -213,10 +276,12 @@ describe('client registration and rendering', () => {
     }))
     completed.summary.blocking = []
     completed.summary.stage = 'done'
+    completed.summary.finished = true
     const completedMarkup = renderToStaticMarkup(panelElement(buildView(completed), false, () => undefined))
     expect(completedMarkup).not.toContain('nwe-phase is-active')
     expect(completedMarkup).toContain('门控已通过')
     expect(completedMarkup).toContain('nwe-stage is-done')
+    expect(completedMarkup).toContain('全书完成')
 
     const icon = renderToStaticMarkup(NovelIcon({ size: 20 }))
     expect(icon).toContain('<svg')
