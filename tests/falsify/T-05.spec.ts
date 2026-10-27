@@ -9,7 +9,7 @@ import {
   sampleSummary,
 } from '../helpers.js'
 
-/** T-05 / PG-12: a new character in the summary must be declared in state_delta. */
+/** T-05 / PG-12: a character declared in the summary must be declared in state_delta. */
 it('T-05 an undeclared appeared character aborts the archive with no ledger write', async () => {
   const { root, engine, cleanup } = await harness()
   try {

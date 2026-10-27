@@ -251,8 +251,8 @@ export function apply(ctx: Context, config: Config) {
   registerRemote(ctx, engine)                             // 3
   ctx.skills.register(ENTRY_SKILL)                        // 1
 
-  // 可选：预设自检（宿主有 agentPresets 才执行）
-  ctx.inject(['agentPresets'], (p) => warnIfPresetBroken(p))
+  // 发布门禁（不依赖宿主）：DSH_BUNDLE_ROOT=... pnpm check:preset
+  // 运行时只注册工具/命令/skill/panel；不读取宿主预设内部结构。
 }
 ```
 
@@ -452,10 +452,10 @@ dsh-novel-write-engine/
   "files": ["lib", "rulepacks", "briefs", "skills", "presets", "README.md", "LICENSE"],
   "exports": {
     ".":        { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
-    "./client": { "types": "./lib/client/index.d.ts", "default": "./lib/client.js" }
+    "./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" }
   },
   "dsh": {
-    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime"], "external": ["react", "react/jsx-runtime"] },
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-layout"], "external": ["react", "react/jsx-runtime"] },
     "bundle": { "patch": ["./cordis.patch.yml", "./presets/novel-write-engine.patch.yml"] }
   },
   "engines": { "dsh": ">=0.2.1-rc.2 <0.3.0", "node": ">=24.9.0" },
@@ -507,7 +507,7 @@ dsh-novel-write-engine/
 | `ctx.jobs` | ❌ | 所有操作毫秒级 |
 | `ctx.fs` | ❌ | 见 §3.3 |
 | `ctx.logger` | ✅ 少量 | 只记装配期与事务期（注意指南 §11.2：不一定出现在终端） |
-| `ctx.agentPresets` | ✅ 可选 | 仅做自检，不注册（预设由补丁注册） |
+| `ctx.agentPresets` | ❌ | 不注册、不自检；预设由补丁注册，发布门禁 `check:preset` 验名 |
 | 客户端半边 | ✅ | `sidebar.panellist` + keyed `main` |
 
 ### 3.5 命名与类型合并纪律
@@ -1182,8 +1182,8 @@ active: "/abs/path/to/novel"
 ### 6.9 迁移
 
 - 迁移函数签名：`(old: unknown) => new`，纯函数，可单测。
-- 迁移链：`v1→v2→v3`，逐级执行，每级落盘前先备份。
-- 迁移失败：整体回滚（用迁移前备份），报 `ENGINE_SCHEMA_INVALID` + 具体字段路径。
+- 迁移链：`v1→v2→v3`，逐级执行，每级落盘前把原字节备份到 `backups/migrations/`。
+- 迁移失败：先尝试用内存 pre-image 原地回滚，失败则按备份路径恢复，报 `ENGINE_SCHEMA_INVALID` + 具体字段路径。
 
 ---
 
@@ -1411,16 +1411,16 @@ open ──amend(带原因)───▶ waived   ← 仅 advisory 可 waive
 
 ③ [模型工作] 产出约束清单
 
-④ novel_plan_world { ...brief_digest }      → stage → P2
+④ novel_plan_world { ... }                  → stage → P2（PG-01 校验已签收的 P1 digest）
 ⑤ novel_brief { stage: 'P2' } → ⑥ novel_plan_chapter { 预检表 } → stage → P3
 ⑦ novel_brief { stage: 'P3' }   ← 给「角色全文 + 前章结尾 + 待推进伏笔 + 上次评审遗留」
 ⑧ [模型写作]
-⑨ novel_write_draft { body, summary, brief_digest }
+⑨ novel_write_draft { content, summary }
    → 字数 2480 ✓ / 格式 0 blocker ✓ / summary 齐 ✓ / opening 是前两段原文 ✓ → stage → P4
 
 ⑩ novel_brief { stage: 'P4' }   ← 给机检报告 + 全量角色 + 前章
 ⑪ [模型逐字阅读 + 评分]（建议派独立 subagent）
-⑫ novel_review { dimensions, issues, reading_proof, brief_digest }
+⑫ novel_review { dimensions, issues, total, proof }
    → 算术闭合 ✓ / 15 维齐 ✓ / proof 三处命中 ✓ / total 118 < 120 → stage → P5，rounds.review=1
 
 ⑬ novel_brief { stage: 'P5' } → ⑭ novel_revise { body, resolved: [REV-001...], reading_proof }
@@ -1565,7 +1565,7 @@ output.schema: {
 
 ```ts
 parameters: { stage: { type: 'string', required: true, enum: ['P1','P2','P3','P4','P5','P6','P8'] }, chapter: { type: 'number' } }
-output: { stage, chapter, instructions, context, checklist: string[], digest: string }
+output: { stage, chapter, digest, title, content, content_hash, fields, context }
 ```
 
 **这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「角色全文 + 前章结尾 + 待推进伏笔」；P6 拿「全量台账 + 机检报告」；不相关的一律不给。
@@ -1575,12 +1575,12 @@ output: { stage, chapter, instructions, context, checklist: string[], digest: st
 ```ts
 parameters: {
   chapter:    { type: 'number', required: true },
-  title:      { type: 'string', required: true },   // 4~8 字，不含「第N章」
-  body:       { type: 'string', required: true },   // 纯文本，禁 Markdown
+  chapter_title: { type: 'string', required: true },   // 4~8 字，不含「第N章」
+  content:    { type: 'string', required: true },   // 纯文本，禁 Markdown
   scene_type: { type: 'string', required: true, enum: ['战斗/动作章','日常过渡章','情感爆发章','纯叙事章'] },
   narrator:   { type: 'string', required: true },
   summary:    { type: 'object', required: true, additionalProperties: false, /* 10 字段，见 §4.2 */ },
-  brief_digest: { type: 'string', required: true },
+  project_root: { type: 'string' },
 }
 ```
 
@@ -1601,6 +1601,7 @@ parameters: {
     relationships: { type: 'object', required: true, additionalProperties: true },
   } },
   handoff: { type: 'object', required: false, additionalProperties: true }, // P8 可覆盖卷/幕/进度；缺省由章节数与规划派生
+  project_root: { type: 'string' },
 }
 ```
 
@@ -1682,8 +1683,8 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 ### 10.3 数据通道
 
-- Host 侧 remote 命名空间 `novel`，三个只读方法：`summary()`、`chapters()`、`gates()`（对应 `panelSummary` / `panelChapters` / `panelGates`）。
-- 客户端 `ctx.remote.novel.summary()`；访问控制走 `ctx.remoteAccess.whenAccess('novel/summary', …)`（与 `schedule/catalog` 同构）。
+- 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，返回 `PanelPayloadDto`；连接层缺席时 503。
+- 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
 - DTO 带 `schemaVersion`；版本不匹配时面板降级为「需刷新」提示（浏览器缓存与引擎版本可能不同步）。
 - **退路**：typert 的 Host 侧命名空间声明若比预期重，面板降级为「静态壳 + 刷新按钮」，数据仍由对话内工具卡片呈现——不阻塞 Host 交付。
 
@@ -1769,7 +1770,7 @@ interface PresetDefinition {
           - { id: time-context, name: '@deepseek-ai/dsh-time-context' }
           - { id: tool-skill,   name: '@deepseek-ai/dsh-tool-skill' }
           - { id: tool-ask-user,name: '@deepseek-ai/dsh-tool-ask-user' }
-          - { id: tool-todo,    name: '@deepseek-ai/dsh-tool-todo' }
+          - { id: tool-todo,    name: '@deepseek-ai/dsh-tool-todo', config: { allowParallelInProgress: false } }
           - { id: present,      name: '@deepseek-ai/dsh-tool-present' }
           - { id: tool-web,     name: '@deepseek-ai/dsh-tool-web', config: { fetch: true, searchTimeoutMs: 60000 } }
           - id: compaction
@@ -1814,7 +1815,7 @@ interface PresetDefinition {
 
 ### 11.6 上游漂移与验收
 
-三道防线：组合测试（`entryListProblem()` 校验名录 + 断言每个 name 可解析）、`apply()` 启动自检（预设 `broken` 时 warn + `doctor` 显示）、最小引用面（只引 9 个顶层行）。
+三道防线：组合测试（`entryListProblem()` 校验名录 + 嵌套 id/isolate 断言）、发布门禁 `pnpm check:preset`（在真实 bundle root 上 `require.resolve` 每个非 group name）、最小引用面（只引 9 个顶层行）。`apply()` 不读宿主预设内部结构，也不做启动自检。
 
 验收：预设卡片显示且排序在标准之后；会话头显示名字；对话开始后切换被拒且提示可见；该会话含 18 个 `novel_*` 且**不含** bash/pwsh/fs/fs-search；标准会话里 `novel_*` 仍在但无主笔人格；面板在任何预设下都在；卸载后无残留。
 
@@ -1944,7 +1945,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | T-02 | 两个归档并发只写一次 | `Promise.all([archive, archive])`，断言一次提交 + 一次幂等 replay（或 `ENGINE_LOCK_TIMEOUT`），文件无撕裂 | INV-06 |
 | T-03 | 读证明不可伪造 | 提交不存在的片段 → `ENGINE_READING_PROOF_INVALID`；片段存在但错段 → 同样拒绝 | PG-09 |
 | T-04 | 分数算术必须闭合 | `total` 与 `150 - Σdelta` 差 1 → 拒绝 | PG-07 |
-| T-05 | delta 不能静默跳过 | 正文出现新角色但 delta 未声明 → 拒绝，错误列出未声明实体 | PG-12 |
+| T-05 | delta 不能静默跳过 | 章节摘要声明的新角色但 delta 未声明 → 拒绝，错误列出未声明实体 | PG-12 |
 | T-06 | 规则码唯一 | 同一 code 注册两次 → `ENGINE_RULEPACK_INVALID` | INV-07 |
 | T-07 | 路径不可逃逸 | `../`、绝对路径、`..\\`、NUL、`CON` → 全部 `ENGINE_PATH_ESCAPE` | INV-09 |
 | T-08 | schema 过新拒绝 | `schema_version: 2` → `ENGINE_SCHEMA_TOO_NEW`，文件不被改写 | INV-12 |

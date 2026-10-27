@@ -72,6 +72,8 @@ export interface Rulepack {
   crosschapter: {
     duplicate_similarity: number
     duplicate_advisory: number
+    /** Paragraphs shorter than this many non-whitespace chars are not duplicate candidates. */
+    duplicate_min_chars: number
     foreshadow_min_dormancy: number
     foreshadow_dormant_after: number
     check_time: boolean

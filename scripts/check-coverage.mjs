@@ -10,7 +10,10 @@ const summary = JSON.parse(readFileSync('coverage/coverage-summary.json', 'utf8'
 const keys = ['lines', 'branches', 'functions', 'statements']
 // Design §13.3 requires a per-file 100% gate only for the pure domain layer;
 // every other layer is judged by the aggregate thresholds in vitest.config.ts.
-const groups = [['/src/domain/', 100]]
+const groups = [
+  ['/src/domain/', 100],
+  ['/src/client/viewmodel.ts', 95],
+]
 
 const files = Object.entries(summary).filter(([file]) => file !== 'total')
 const failures = []

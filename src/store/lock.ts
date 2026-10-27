@@ -115,8 +115,12 @@ export class FileLock {
 
   /** Read the current lock record, or null when absent/held by a foreign process. */
   private async read(): Promise<LockRecord | null> {
+    return this.readAt(this.absolutePath)
+  }
+
+  private async readAt(path: string): Promise<LockRecord | null> {
     try {
-      const raw: unknown = JSON.parse(await fs.readFile(this.absolutePath, 'utf8'))
+      const raw: unknown = JSON.parse(await fs.readFile(path, 'utf8'))
       return isLockRecord(raw) ? raw : null
     } catch {
       return null
@@ -144,14 +148,46 @@ export class FileLock {
     // stale lock, or two processes would both believe they hold it.
     if (record === null) {
       if (Date.now() - mtimeMs <= this.staleMs) return false
-      await fs.rm(this.absolutePath, { force: true })
-      await this.onReclaim?.(null)
-      return true
+    } else {
+      const age = Date.now() - Date.parse(record.startedAt)
+      const stale = !Number.isFinite(age) || age > this.staleMs || !processAlive(record.pid)
+      if (!stale) return false
     }
-    const age = Date.now() - Date.parse(record.startedAt)
-    const stale = !Number.isFinite(age) || age > this.staleMs || !processAlive(record.pid)
-    if (!stale) return false
-    await fs.rm(this.absolutePath, { force: true })
+
+    // Claim by rename, not by remove-then-create. Two processes that observed
+    // the same stale record must not both delete a freshly created lock.
+    const claimPath = `${this.absolutePath}.reclaim-${randomUUID()}`
+    try {
+      await fs.rename(this.absolutePath, claimPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+      throw error
+    }
+    let moved: LockRecord | null = null
+    moved = await this.readAt(claimPath)
+    const claimMtime = await fs
+      .stat(claimPath)
+      .then((info) => info.mtimeMs)
+      .catch(() => Date.now())
+    const same =
+      record === null
+        ? moved === null && Date.now() - claimMtime > this.staleMs
+        : moved !== null &&
+          moved.pid === record.pid &&
+          moved.startedAt === record.startedAt &&
+          moved.nonce === record.nonce
+    if (!same) {
+      // We moved a newer lock created after our observation. Put it back
+      // without overwriting a lock another process may have created meanwhile.
+      try {
+        await fs.link(claimPath, this.absolutePath)
+        await fs.rm(claimPath, { force: true })
+      } catch {
+        await fs.rm(claimPath, { force: true }).catch(() => undefined)
+      }
+      return false
+    }
+    await fs.rm(claimPath, { force: true })
     await this.onReclaim?.(record)
     return true
   }

@@ -25,6 +25,17 @@ it('T-03 fabricated, short and misplaced reading proofs are refused', async () =
     ).toContain('does not appear')
     expect(verifyReference(missingText, { paragraph: 1, quote: '风从' })).toContain('shorter than')
 
+    const fabricated = {
+      ...review,
+      proof: {
+        ...review.proof,
+        opening: { paragraph: 1, quote: '这句话根本不在正文里面而且足够长' },
+      },
+    }
+    await expect(engine.submitReview({ chapter: 1, ...fabricated, root })).rejects.toMatchObject({
+      code: 'ENGINE_READING_PROOF_INVALID',
+    })
+
     const wrongParagraph = {
       ...review,
       proof: { ...review.proof, opening: { ...review.proof.opening, paragraph: 99 } },

@@ -53,7 +53,7 @@ describe('rule pack compiler', () => {
         (draft) => {
           draft.quality.dimensions[0].max = 99
         },
-        /dimension maxima sum/,
+        /dimension maxima sum|max must be/,
       ],
       [
         'unknown key',
@@ -231,6 +231,48 @@ describe('rule pack compiler', () => {
           draft.crosschapter.foreshadow_min_dormancy = -1
         },
         /foreshadow_min_dormancy/,
+      ],
+      [
+        'malformed term object',
+        (draft) => {
+          draft.lexicon.zero_tolerance[0] = { term: 42 }
+        },
+        /empty term/,
+      ],
+      [
+        'missing soft limit',
+        (draft) => {
+          draft.lexicon.soft[0] = { term: '词' }
+        },
+        /limit/,
+      ],
+      [
+        'malformed exclusion',
+        (draft) => {
+          draft.exclusions[0] = { pair: [], family: '' }
+        },
+        /pair|family/,
+      ],
+      [
+        'quality max mismatch',
+        (draft) => {
+          draft.quality.dimensions[0].max = 16
+        },
+        /max must be/,
+      ],
+      [
+        'empty ellipsis token',
+        (draft) => {
+          draft.punctuation.ellipsis_run.token = ''
+        },
+        /ellipsis_run.token/,
+      ],
+      [
+        'zero duplicate threshold',
+        (draft) => {
+          draft.crosschapter.duplicate_min_chars = 0
+        },
+        /duplicate_min_chars/,
       ],
       [
         'unknown exemption',
@@ -443,6 +485,8 @@ describe('machine pipeline', () => {
   it('compiles partial packs without freezing shared defaults and rejects dead thresholds', () => {
     expect(() => compileRulepack({ ...DEFAULT_RULEPACK, name: 'partial-a', version: '1' })).not.toThrow()
     expect(() => compileRulepack({ ...DEFAULT_RULEPACK, name: 'partial-b', version: '1' })).not.toThrow()
+    expect(Object.isFrozen(DEFAULT_RULEPACK.lexicon.zero_tolerance)).toBe(false)
+    expect(Object.isFrozen(DEFAULT_RULEPACK.platform.fanqie)).toBe(false)
     const dead = structuredClone(DEFAULT_RULEPACK) as unknown as Record<string, unknown>
     const punctuation = dead.punctuation as Record<string, unknown>
     const dash = punctuation.dash as Record<string, unknown>

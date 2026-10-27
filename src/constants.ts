@@ -54,7 +54,7 @@ export const checkFile = (chapter: number): string =>
 
 /** Limits that are structural, not taste. */
 export const LIMITS = {
-  /** P4 <-> P5 and P6 -> P5 retries before a forced rollback. */
+  /** P4 <-> P5/P6 retries before a forced rollback. */
   maxRounds: 3,
   /** Lock staleness in milliseconds. */
   lockStaleMs: 90_000,

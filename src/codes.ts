@@ -1,20 +1,3 @@
-import { ERROR_CODES, EngineFaultError } from './types.js'
-
-/** Reject a rule registry that assigns one code to two implementations. */
-export function assertUniqueRuleCodes(codes: readonly string[]): void {
-  const seen = new Set<string>()
-  for (const code of codes) {
-    if (seen.has(code)) {
-      throw new EngineFaultError(
-        ERROR_CODES.RULEPACK_INVALID,
-        `rule code "${code}" is registered more than once`,
-        'one code, one implementation',
-      )
-    }
-    seen.add(code)
-  }
-}
-
 /** Stable rule codes. One owner per code: the rules registry refuses duplicates. */
 export const FORMAT_RULES = {
   MD_CONTAMINATION: 'MD_CONTAMINATION',

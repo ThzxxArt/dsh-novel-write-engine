@@ -4,7 +4,7 @@ import { BACKUP_DIR, STAGING_DIR } from '../constants.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
 import { FsStore, joinRel, sha256, syncDirectory } from './fs.js'
 import { appendJournal } from './journal.js'
-import { pruneBackups } from './backup.js'
+import { BACKUP_MARKER, pruneBackups } from './backup.js'
 
 /** One file scheduled inside a transaction: text or binary, exactly one. */
 export interface StagedFile {
@@ -112,12 +112,22 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     // the compensation log; it exists even when the user-facing backup is off.
     for (const file of input.files) before.set(file.path, await store.readBytes(file.path))
 
+    // Persist the recovery images next to the staged payload. A normal failure
+    // can restore from memory and remove staging; a process kill leaves this
+    // directory behind, so the documented refuse-and-restore path has source.
+    for (const file of input.files) {
+      const existing = before.get(file.path)
+      if (existing === null || existing === undefined) continue
+      await store.writeBytes(joinRel(staging, 'before', file.path), existing)
+    }
+
     if (input.backup) {
       for (const file of input.files) {
         const existing = before.get(file.path)
         if (existing === null || existing === undefined) continue
         await store.writeBytes(joinRel(backupDir(input.txid), file.path), existing)
       }
+      await store.writeText(joinRel(backupDir(input.txid), BACKUP_MARKER), '1')
     }
 
     // A crash after this row but before the committed row is recoverable: the
@@ -187,7 +197,11 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
   } catch (error) {
     const rollbackProblem = await restoreTargets(store, renamed, before)
-    await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
+    // If compensation was incomplete, keep the staging before/ images: they are
+    // the only remaining source for manual recovery.
+    if (rollbackProblem === null) {
+      await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
+    }
     if (!journaledCommitted) {
       await appendJournal(store, {
         txid: input.txid,

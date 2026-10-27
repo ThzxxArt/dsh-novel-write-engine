@@ -268,6 +268,10 @@ export interface ChapterRecord {
   status: 'draft' | 'reviewed'
   content_hash: string
   summary: ChapterSummary
+  /** Keys allocated by the archive transaction; lets a cross-process retry replay. */
+  assigned_ids?: Record<string, string>
+  /** Digest of the archive request that produced this row. */
+  archive_digest?: string
 }
 
 /** Summary block the model supplies with a draft and the engine persists. */

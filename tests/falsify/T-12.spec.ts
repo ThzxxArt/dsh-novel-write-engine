@@ -45,4 +45,44 @@ it('T-12 unpacks the EPUB and finds a stored mimetype first', () => {
     offset = start + compressed
   }
   expect(found).toBe(true)
+
+  const crc32 = (buffer: Buffer): number => {
+    let crc = 0xffffffff
+    for (const byte of buffer) {
+      crc ^= byte
+      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+    }
+    return (crc ^ 0xffffffff) >>> 0
+  }
+  const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+  expect(eocd).toBeGreaterThanOrEqual(0)
+  const totalEntries = zip.readUInt16LE(eocd + 10)
+  const centralSize = zip.readUInt32LE(eocd + 12)
+  const centralOffset = zip.readUInt32LE(eocd + 16)
+  expect(centralSize).toBeGreaterThan(0)
+  expect(centralOffset + centralSize).toBeLessThanOrEqual(eocd)
+  let central = centralOffset
+  for (let index = 0; index < totalEntries; index += 1) {
+    expect(zip.readUInt32LE(central)).toBe(0x02014b50)
+    const method = zip.readUInt16LE(central + 10)
+    const expectedCrc = zip.readUInt32LE(central + 16)
+    const compressed = zip.readUInt32LE(central + 20)
+    const nameLength = zip.readUInt16LE(central + 28)
+    const extraLength = zip.readUInt16LE(central + 30)
+    const commentLength = zip.readUInt16LE(central + 32)
+    const localOffset = zip.readUInt32LE(central + 42)
+    const name = zip.subarray(central + 46, central + 46 + nameLength).toString('utf8')
+    expect(zip.readUInt32LE(localOffset)).toBe(0x04034b50)
+    const localName = zip.readUInt16LE(localOffset + 26)
+    const localExtra = zip.readUInt16LE(localOffset + 28)
+    const start = localOffset + 30 + localName + localExtra
+    const body =
+      method === 0
+        ? zip.subarray(start, start + compressed)
+        : inflateRawSync(zip.subarray(start, start + compressed))
+    expect(crc32(body), name).toBe(expectedCrc)
+    central += 46 + nameLength + extraLength + commentLength
+  }
+  expect(central).toBe(centralOffset + centralSize)
+  expect(totalEntries).toBeGreaterThan(4)
 })

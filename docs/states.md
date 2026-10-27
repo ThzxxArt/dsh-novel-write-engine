@@ -17,10 +17,10 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。
 | `P2` | `submitChapterPlan` | `P3` | 01,02 |
 | `P3` | `submitDraft` | `P4` | 01,02,04,03,05,06 |
 | `P4` | `submitReview` | `P5`（有 blocker）/ `P6` | 01,02,09,07,11 |
-| `P5` | `submitRevision` | `P4` | 01,02,04,03,09,08 |
-| `P6` | `submitRevision` | `P4` | 01,02,04,03 |
+| `P5` | `submitRevision` | `P4` | 01,02,04,03,05,09,08 |
+| `P6` | `submitRevision` | `P4` | 01,02,04,03,05,08,09 |
 | `P6` | `runCheck` | `ready_to_archive` | 01,02,04,05,08,09,10,11 |
-| `ready_to_archive` | `archiveChapter` | `done` | 01,02,04,03,05,07,08,10,12 |
+| `ready_to_archive` | `archiveChapter` | `done` | 01,02,04,03,05,06,07,08,10,12 |
 
 唯一的数据依赖迁移是 P4 评审按 blocker 数量决定去向。
 

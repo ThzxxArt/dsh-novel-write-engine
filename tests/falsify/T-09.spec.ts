@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { FsStore } from '../../src/store/fs.js'
-import { migrateProjectFile, type MigrationStep } from '../../src/store/migrate.js'
+import { migrateProjectFile, migrateProjectFiles, type MigrationStep } from '../../src/store/migrate.js'
 
 /**
  * T-09 / §6.9: a migration failure restores the exact file bytes. This is the
@@ -85,7 +85,11 @@ it('T-09 restores the pre-image when the write itself fails', async () => {
   const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))
   try {
     class FailingStore extends FsStore {
-      override async writeText(): Promise<void> {
+      override async writeText(path: string): Promise<void> {
+        // A real partial write can leave garbage behind before failing. The
+        // rollback must observe it and restore the pre-image, not assume the
+        // target is unchanged.
+        await super.writeText(path, 'garbage: true\n')
         throw new Error('disk full')
       }
     }
@@ -97,6 +101,45 @@ it('T-09 restores the pre-image when the write itself fails', async () => {
     ]
     await expect(migrateProjectFile(store, 'novel.yaml', chain, 2)).rejects.toThrow('disk full')
     expect(await readFile(join(root, 'novel.yaml'), 'utf8')).toBe(before)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('T-09 rejects a scalar YAML document without a TypeError', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))
+  try {
+    const store = new FsStore(root)
+    await writeFile(join(root, 'novel.yaml'), 'null\n', 'utf8')
+    await expect(migrateProjectFile(store, 'novel.yaml', [], 2)).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_INVALID',
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('T-09 rolls back every file when a later project migration fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'novel-migrate-'))
+  try {
+    const store = new FsStore(root)
+    await store.writeText('novel.yaml', 'schema_version: 1\ntitle: 甲\n')
+    await store.writeText('state/world.yaml', 'schema_version: 1\ntitle: 乙\n')
+    const chain: MigrationStep[] = [
+      {
+        from: 1,
+        to: 2,
+        migrate: (document) => {
+          if (document.title === '乙') throw new Error('second migration failed')
+          return { ...document, title: '迁移后' }
+        },
+      },
+    ]
+    await expect(migrateProjectFiles(store, ['novel.yaml', 'state/world.yaml'], chain, 2)).rejects.toThrow(
+      'second migration failed',
+    )
+    expect(await store.readText('novel.yaml')).toBe('schema_version: 1\ntitle: 甲\n')
+    expect(await store.readText('state/world.yaml')).toBe('schema_version: 1\ntitle: 乙\n')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

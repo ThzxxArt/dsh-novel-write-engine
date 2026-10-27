@@ -51,9 +51,11 @@ describe('word count', () => {
   })
 
   it('does not double count digits inside an identifier', () => {
-    const metrics = countWordMetrics('ABC123')
-    expect(metrics.numbers).toBe(0)
-    expect(metrics.english_words).toBe(1)
+    for (const text of ['ABC123', '123ABC', '12AB', '10cm']) {
+      const metrics = countWordMetrics(text)
+      expect(metrics.numbers, text).toBe(0)
+    }
+    expect(countWordMetrics('ABC123').english_words).toBe(1)
   })
 
   it('counts curly quotes and dashes as English punctuation (the documented trap)', () => {
@@ -185,6 +187,28 @@ describe('scoring arithmetic', () => {
     expect(sumDeductions(null as never)).toBe(0)
     expect(sumDeductions([{ deductions: [{ delta: Number.NaN }] }] as never)).toBe(0)
     expect(applyExclusions(null as never, [])).toEqual({ dimensions: [], dropped: 0 })
+    expect(() =>
+      applyExclusions(
+        [{ id: 'R-W-01', max: 15, deductions: [{ rule: 'A', delta: 3, note: 'n' }] }] as never,
+        [],
+      ),
+    ).not.toThrow()
+    expect(applyExclusions([null] as never, [])).toEqual({
+      dimensions: [{ deductions: [] }],
+      dropped: 0,
+    })
+    expect(() =>
+      applyExclusions(
+        [
+          {
+            id: 'R-W-01',
+            max: 15,
+            deductions: [null, { rule: 'A', location: '第 1 段', delta: 2, note: 'n' }, {}],
+          },
+        ] as never,
+        [{ pair: ['A', 'B'], family: 'f' }],
+      ),
+    ).not.toThrow()
     expect(
       applyExclusions(
         [

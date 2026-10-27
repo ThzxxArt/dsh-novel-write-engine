@@ -20,8 +20,8 @@ export interface TransitionContext {
  * instead of writing `if (stage === ...)` branches.
  */
 export const TRANSITIONS: readonly Transition[] = [
-  { from: 'idle', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02', 'PG-11'] },
-  { from: 'done', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02', 'PG-11'] },
+  { from: 'idle', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02'] },
+  { from: 'done', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02'] },
   { from: 'P2', op: 'submitChapterPlan', to: () => 'P3', guards: ['PG-01', 'PG-02'] },
   {
     from: 'P3',
@@ -39,9 +39,14 @@ export const TRANSITIONS: readonly Transition[] = [
     from: 'P5',
     op: 'submitRevision',
     to: () => 'P4',
-    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-08', 'PG-09'],
+    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-08', 'PG-09'],
   },
-  { from: 'P6', op: 'submitRevision', to: () => 'P4', guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04'] },
+  {
+    from: 'P6',
+    op: 'submitRevision',
+    to: () => 'P4',
+    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-08', 'PG-09'],
+  },
   {
     from: 'P6',
     op: 'runCheck',
@@ -52,7 +57,7 @@ export const TRANSITIONS: readonly Transition[] = [
     from: 'ready_to_archive',
     op: 'archiveChapter',
     to: () => 'done',
-    guards: ['PG-01', 'PG-02', 'PG-12'],
+    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-10', 'PG-12'],
   },
 ]
 

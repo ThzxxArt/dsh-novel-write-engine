@@ -65,6 +65,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
   crosschapter: {
     duplicate_similarity: 0.9,
     duplicate_advisory: 0.75,
+    duplicate_min_chars: 20,
     foreshadow_min_dormancy: 2,
     foreshadow_dormant_after: 20,
     check_time: true,
@@ -151,31 +152,89 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
 
   // 1. completeness: the fifteen dimensions must sum to exactly 150.
+  if (pack.quality.dimensions.length !== SCORE_DIMENSIONS.length) {
+    invalid(`quality.dimensions must contain exactly ${SCORE_DIMENSIONS.length} dimensions`)
+  }
+  const ids = new Set<string>()
+  for (const dimension of pack.quality.dimensions) {
+    const spec = SCORE_DIMENSIONS.find((candidate) => candidate.id === dimension.id)
+    if (spec === undefined) {
+      invalid(`quality.dimensions contains unknown dimension ${dimension.id}`)
+      continue
+    }
+    if (ids.has(dimension.id)) invalid(`quality.dimensions repeats ${dimension.id}`)
+    ids.add(dimension.id)
+    if (dimension.max !== spec.max) {
+      invalid(`quality.dimensions ${dimension.id} max must be ${spec.max}, got ${dimension.max}`)
+    }
+  }
   const sum = pack.quality.dimensions.reduce((total, dimension) => total + dimension.max, 0)
   if (sum !== FULL_SCORE) invalid(`dimension maxima sum to ${sum}, expected ${FULL_SCORE}`)
-  const ids = new Set(pack.quality.dimensions.map((dimension) => dimension.id))
   for (const dimension of SCORE_DIMENSIONS) {
     if (!ids.has(dimension.id)) invalid(`quality.dimensions is missing ${dimension.id}`)
   }
 
   // 2. shape: lexicon entries and their limits.
-  const terms = [
-    ...pack.lexicon.zero_tolerance,
-    ...pack.lexicon.soft,
-    ...pack.lexicon.contextual,
-    ...pack.lexicon.meta_narration,
-  ]
-  for (const entry of terms) {
-    if (entry.term.trim() === '') invalid('lexicon contains an empty term')
-    if ('limit' in entry && entry.limit !== undefined && entry.limit < 0)
-      invalid(`limit for "${entry.term}" is negative`)
-    if (
-      'dialogueExempt' in entry &&
-      entry.dialogueExempt !== undefined &&
-      typeof entry.dialogueExempt !== 'boolean'
-    ) {
-      invalid(`dialogueExempt for "${entry.term}" must be a boolean`)
+  const textList = (value: readonly string[], path: string): void => {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
+      invalid(`${path} must be a non-empty string array`)
     }
+  }
+  const validateTermList = (list: readonly unknown[], listName: string, kind: 'term' | 'limit'): void => {
+    for (const [index, raw] of list.entries()) {
+      const path = `lexicon.${listName}[${index}]`
+      const entry = object(raw, path)
+      knownKeys(
+        entry,
+        kind === 'limit' ? ['term', 'limit', 'genres'] : ['term', 'note', 'dialogueExempt'],
+        path,
+      )
+      if (typeof entry.term !== 'string' || entry.term.trim() === '') {
+        invalid('lexicon contains an empty term')
+      }
+      if (kind === 'limit') {
+        const limit = num(entry.limit, `${path}.limit`)
+        if (limit < 0) invalid(`${path}.limit must not be negative`)
+        if (entry.genres !== undefined) {
+          const genres = array(entry.genres, `${path}.genres`)
+          for (const genre of genres) {
+            if (typeof genre !== 'string' || !(GENRES as readonly string[]).includes(genre)) {
+              invalid(`${path}.genres contains unknown genre ${String(genre)}`)
+            }
+          }
+        }
+      } else {
+        if (entry.note !== undefined) string(entry.note, `${path}.note`)
+        if (entry.dialogueExempt !== undefined) bool(entry.dialogueExempt, `${path}.dialogueExempt`)
+      }
+    }
+  }
+  validateTermList(pack.lexicon.zero_tolerance, 'zero_tolerance', 'term')
+  validateTermList(pack.lexicon.soft, 'soft', 'limit')
+  validateTermList(pack.lexicon.contextual, 'contextual', 'limit')
+  validateTermList(pack.lexicon.meta_narration, 'meta_narration', 'term')
+  for (const listName of ['reader_intrusion', 'god_view'] as const) {
+    for (const [index, raw] of pack.lexicon[listName].entries()) {
+      const path = `lexicon.${listName}[${index}]`
+      const entry = object(raw, path)
+      knownKeys(entry, ['pattern'], path)
+      string(entry.pattern, `${path}.pattern`)
+    }
+  }
+  const conclusionFirst = object(pack.lexicon.conclusion_first, 'lexicon.conclusion_first')
+  knownKeys(conclusionFirst, ['verbs', 'causals'], 'lexicon.conclusion_first')
+  textList(
+    array(conclusionFirst.verbs, 'lexicon.conclusion_first.verbs') as string[],
+    'lexicon.conclusion_first.verbs',
+  )
+  textList(
+    array(conclusionFirst.causals, 'lexicon.conclusion_first.causals') as string[],
+    'lexicon.conclusion_first.causals',
+  )
+  for (const genre of GENRES) {
+    const guide = object(pack.genres[genre], `genres.${genre}`)
+    knownKeys(guide, ['note'], `genres.${genre}`)
+    if (typeof guide.note !== 'string') invalid(`genres.${genre}.note must be a string`)
   }
 
   const nonNegative = (value: number, path: string): void => {
@@ -186,11 +245,6 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
   const ratio = (value: number, path: string): void => {
     if (!Number.isFinite(value) || value < 0 || value > 1) invalid(`${path} must be within 0..1`)
-  }
-  const textList = (value: readonly string[], path: string): void => {
-    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
-      invalid(`${path} must be a non-empty string array`)
-    }
   }
   if (!Number.isInteger(pack.format.title.min_chars) || pack.format.title.min_chars < 1) {
     invalid('format.title.min_chars must be a positive integer')
@@ -218,6 +272,15 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
   if (!Number.isInteger(pack.punctuation.ellipsis_run.max) || pack.punctuation.ellipsis_run.max < 0) {
     invalid('punctuation.ellipsis_run.max must be a non-negative integer')
+  }
+  if (typeof pack.punctuation.ellipsis_run.token !== 'string' || pack.punctuation.ellipsis_run.token === '') {
+    invalid('punctuation.ellipsis_run.token must be a non-empty string')
+  }
+  try {
+    const escaped = pack.punctuation.ellipsis_run.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    void new RegExp(`(?:${escaped}){${pack.punctuation.ellipsis_run.max + 1},}`)
+  } catch {
+    invalid('punctuation.ellipsis_run.token cannot form a valid repetition pattern')
   }
   positiveInt(pack.punctuation.uniform_sentence.min_sentences, 'punctuation.uniform_sentence.min_sentences')
   ratio(pack.punctuation.uniform_sentence.ratio, 'punctuation.uniform_sentence.ratio')
@@ -263,6 +326,7 @@ export function compileRulepack(raw: unknown): Rulepack {
   if (pack.crosschapter.duplicate_advisory > pack.crosschapter.duplicate_similarity) {
     invalid('crosschapter.duplicate_advisory must not exceed duplicate_similarity')
   }
+  positiveInt(pack.crosschapter.duplicate_min_chars, 'crosschapter.duplicate_min_chars')
   for (const key of ['foreshadow_min_dormancy', 'foreshadow_dormant_after'] as const) {
     if (!Number.isInteger(pack.crosschapter[key]) || pack.crosschapter[key] < 0) {
       invalid(`crosschapter.${key} must be a non-negative integer`)
@@ -286,14 +350,26 @@ export function compileRulepack(raw: unknown): Rulepack {
 
   // 4. dangling references: exclusions and exemptions must name real codes.
   const known = new Set<string>(ALL_RULE_CODES)
-  for (const exclusion of pack.exclusions) {
-    if (exclusion.pair[0] === exclusion.pair[1]) invalid(`exclusion pairs "${exclusion.pair[0]}" with itself`)
-    for (const code of exclusion.pair)
-      if (!known.has(code)) invalid(`exclusion references unknown rule ${code}`)
-    if (exclusion.family.trim() === '') invalid('exclusion family is empty')
+  for (const [index, raw] of pack.exclusions.entries()) {
+    const path = `exclusions[${index}]`
+    const exclusion = object(raw, path)
+    knownKeys(exclusion, ['pair', 'family'], path)
+    const pair = array(exclusion.pair, `${path}.pair`)
+    if (pair.length !== 2) invalid(`${path}.pair must contain exactly two rule codes`)
+    for (const code of pair) {
+      if (typeof code !== 'string' || !known.has(code)) {
+        invalid(`exclusion references unknown rule ${String(code)}`)
+      }
+    }
+    if (pair[0] === pair[1]) invalid(`exclusion pairs "${String(pair[0])}" with itself`)
+    if (typeof exclusion.family !== 'string' || exclusion.family.trim() === '') {
+      invalid('exclusion family is empty')
+    }
   }
-  for (const code of pack.exemptions) {
-    if (!known.has(code)) invalid(`exemption references unknown rule ${code}`)
+  for (const [index, code] of pack.exemptions.entries()) {
+    if (typeof code !== 'string' || !known.has(code)) {
+      invalid(`exemption references unknown rule ${String(code)} at index ${index}`)
+    }
   }
 
   // 5. threshold bounds: values that would silently disable a check are refused.
@@ -325,7 +401,7 @@ const merge = <T extends Unknown>(base: T, override: unknown, path: string): T =
   for (const [key, value] of Object.entries(over)) {
     const current = (base as Unknown)[key]
     if (current === undefined) {
-      result[key] = value
+      result[key] = structuredClone(value)
       continue
     }
     if (
@@ -337,7 +413,7 @@ const merge = <T extends Unknown>(base: T, override: unknown, path: string): T =
       result[key] = merge(current as Unknown, value, `${path}.${key}`)
       continue
     }
-    result[key] = value
+    result[key] = structuredClone(value)
   }
   return result as T
 }
@@ -367,6 +443,10 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
     merged.crosschapter.duplicate_advisory,
     'crosschapter.duplicate_advisory',
   )
+  merged.crosschapter.duplicate_min_chars = num(
+    merged.crosschapter.duplicate_min_chars,
+    'crosschapter.duplicate_min_chars',
+  )
   merged.crosschapter.foreshadow_min_dormancy = num(
     merged.crosschapter.foreshadow_min_dormancy,
     'crosschapter.foreshadow_min_dormancy',
@@ -389,9 +469,10 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
     array(merged.lexicon[key], `lexicon.${key}`)
   }
   array(merged.quality.dimensions, 'quality.dimensions')
-  for (const dimension of merged.quality.dimensions) {
-    num(dimension.max, 'quality.dimensions[].max')
-    string(dimension.id, 'quality.dimensions[].id')
+  for (const [index, raw] of merged.quality.dimensions.entries()) {
+    const dimension = object(raw, `quality.dimensions[${index}]`)
+    num(dimension.max, `quality.dimensions[${index}].max`)
+    string(dimension.id, `quality.dimensions[${index}].id`)
   }
   array(merged.exclusions, 'exclusions')
   array(merged.exemptions, 'exemptions')

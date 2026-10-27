@@ -79,10 +79,10 @@ export class FsStore {
     }
   }
 
-  async stat(relativePath: string): Promise<{ size: number; mtimeMs: number } | null> {
+  async stat(relativePath: string): Promise<{ size: number; mtimeMs: number; isDirectory: boolean } | null> {
     try {
       const stat = await fs.stat(await this.safePath(relativePath))
-      return { size: stat.size, mtimeMs: stat.mtimeMs }
+      return { size: stat.size, mtimeMs: stat.mtimeMs, isDirectory: stat.isDirectory() }
     } catch (error) {
       if (isMissing(error)) return null
       throw error

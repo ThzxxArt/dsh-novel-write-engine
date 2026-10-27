@@ -302,7 +302,12 @@ const score: Gate = (input, options) => {
     }
   }
   const minScore = options.minScore
-  if (review.total < minScore) problems.push(`score ${review.total} is below the minimum ${minScore}`)
+  // A sub-threshold review is still a valid P4 result: it must be able to move
+  // the pipeline to P5 for revision. The floor is enforced at the archive
+  // boundary, not by refusing the honest review that reports it.
+  if (input.operation !== 'submitReview' && review.total < minScore) {
+    problems.push(`score ${review.total} is below the minimum ${minScore}`)
+  }
   return problems.length === 0
     ? []
     : [block('PG-07', problems.join('; '), 'fix the deductions and the total, then resubmit')]

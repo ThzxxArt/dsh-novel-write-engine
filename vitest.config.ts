@@ -29,6 +29,7 @@ export default defineConfig({
         'src/commands/**': { lines: 85, branches: 85, functions: 85, statements: 85 },
         'src/remote/**': { lines: 85, branches: 85, functions: 85, statements: 85 },
         'src/client/**': { lines: 85, branches: 85, functions: 85, statements: 85 },
+        'src/client/viewmodel.ts': { lines: 95, branches: 95, functions: 95, statements: 95 },
       },
     },
   },

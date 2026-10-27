@@ -143,35 +143,49 @@ export function applyExclusions(
 ): { dimensions: ScoreDimension[]; dropped: number } {
   let dropped = 0
   const safeDimensions = Array.isArray(dimensions) ? dimensions : []
-  const canonical = (location: string): string => {
+  const canonical = (location: unknown): string => {
+    if (typeof location !== 'string') return ''
     const paragraph = /第\s*(\d+)\s*段/.exec(location)
     return paragraph === null ? location.trim() : `paragraph:${paragraph[1]}`
   }
+  const deductionsOf = (dimension: unknown): readonly unknown[] => {
+    if (typeof dimension !== 'object' || dimension === null) return []
+    const value = (dimension as { deductions?: unknown }).deductions
+    return Array.isArray(value) ? value : []
+  }
   const best = new Map<string, Deduction>()
   for (const dimension of safeDimensions) {
-    for (const deduction of Array.isArray(dimension?.deductions) ? dimension.deductions : []) {
-      const identity = `${deduction.rule}@${canonical(deduction.location)}`
+    for (const deduction of deductionsOf(dimension)) {
+      if (typeof deduction !== 'object' || deduction === null) continue
+      const entry = deduction as Partial<Deduction>
+      const identity = `${String(entry.rule ?? '')}@${canonical(entry.location)}`
       const previous = best.get(identity)
-      if (previous === undefined || deduction.delta > previous.delta) best.set(identity, deduction)
+      if (previous === undefined || (typeof entry.delta === 'number' && entry.delta > previous.delta)) {
+        best.set(identity, entry as Deduction)
+      }
     }
   }
-  const deduped = safeDimensions.map((dimension) => ({
-    ...dimension,
-    deductions: (Array.isArray(dimension?.deductions) ? dimension.deductions : []).filter(
-      (deduction: Deduction) => {
-        const identity = `${deduction.rule}@${canonical(deduction.location)}`
+  const deduped = safeDimensions.map((dimension) => {
+    const record = typeof dimension === 'object' && dimension !== null ? dimension : ({} as ScoreDimension)
+    return {
+      ...record,
+      deductions: deductionsOf(dimension).filter((deduction) => {
+        if (typeof deduction !== 'object' || deduction === null) return true
+        const entry = deduction as Partial<Deduction>
+        const identity = `${String(entry.rule ?? '')}@${canonical(entry.location)}`
         const winner = best.get(identity) === deduction
         if (!winner) dropped += 1
         return winner
-      },
-    ),
-  }))
+      }) as Deduction[],
+    }
+  })
 
   for (const exclusion of exclusions) {
     const [left, right] = exclusion.pair
     const byLocation = new Map<string, { rule: string; dimension: number; deduction: Deduction }[]>()
     deduped.forEach((dimension, dimensionIndex) => {
       for (const deduction of dimension.deductions) {
+        if (typeof deduction !== 'object' || deduction === null) continue
         if (deduction.rule !== left && deduction.rule !== right) continue
         const key = canonical(deduction.location)
         const list = byLocation.get(key) ?? []

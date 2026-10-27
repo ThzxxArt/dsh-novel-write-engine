@@ -59,16 +59,15 @@ describe('state_delta shape and character reconciliation', () => {
     const summary = sampleSummary({ characters_appeared: ['陈默'], events: [] })
     const delta = empty()
     delta.characters['陈默'] = character('陈默')
-    expect(() =>
-      applyStateDelta({
-        chapter: 1,
-        text: '我站在雨里，手里捏着一封旧信。',
-        summary,
-        delta: delta as never,
-        narrator: '陈默（第一人称「我」）',
-        ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
-      }),
-    ).not.toThrow()
+    const result = applyStateDelta({
+      chapter: 1,
+      text: '我站在雨里，手里捏着一封旧信。',
+      summary,
+      delta: delta as never,
+      narrator: '陈默（第一人称「我」）',
+      ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+    })
+    expect(result.locks.characters['陈默']!.appearance).toContain('我站在雨里')
   })
 
   it('requires all five sections and valid actions', () => {
@@ -309,6 +308,8 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     fails(summary, unknown)
     const missingType = { ...chars, relationships: { '甲|乙': { action: 'created' } } }
     fails(summary, missingType)
+    const nonStringType = { ...chars, relationships: { '甲|乙': { action: 'created', type: 1 } } }
+    fails(summary, nonStringType)
     const delta: Record<string, Record<string, unknown>> = {
       ...chars,
       relationships: { '甲|乙': { action: 'created', type: '同事' } },
@@ -350,6 +351,14 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       description: '一起办案',
       evolution: [{ chapter: 2, note: '关系变化' }],
     })
+
+    const blankType = empty()
+    blankType.relationships['甲|乙'] = { action: 'updated', type: '' }
+    fails(
+      sampleSummary({ events: [], characters_appeared: [] }),
+      blankType,
+      first as unknown as Record<string, unknown>,
+    )
 
     const missing = empty()
     missing.relationships['甲|乙'] = { action: 'updated' }

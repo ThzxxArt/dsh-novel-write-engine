@@ -124,6 +124,15 @@ describe('architecture rules', () => {
     }
   })
 
+  it('R8: all twelve falsification tests exist', async () => {
+    const names = await readdir(join(root, 'tests/falsify'))
+    const expected = Array.from(
+      { length: 12 },
+      (_, index) => `T-${String(index + 1).padStart(2, '0')}.spec.ts`,
+    )
+    expect(names.filter((name) => name.endsWith('.spec.ts')).sort()).toEqual(expected)
+  })
+
   it('INV-10: the remote surface exposes no write method', () => {
     const exported = Object.keys(remote).filter(
       (name) => typeof (remote as Record<string, unknown>)[name] === 'function',

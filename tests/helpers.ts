@@ -35,14 +35,19 @@ export interface Harness {
 /** A fresh project root per test; the engine is wired exactly like the plugin. */
 export async function harness(config: Partial<EngineConfig> = {}): Promise<Harness> {
   const root = await mkdtemp(join(tmpdir(), 'novel-engine-'))
-  const engine = new EngineService({ ...TEST_CONFIG, projectRoot: root, ...config }, () => loadRulepack(), {
-    now: FIXED_NOW,
-  })
+  const defaultStateDir = await mkdtemp(join(tmpdir(), 'novel-state-'))
+  const stateDir = config.stateDir ?? defaultStateDir
+  const engine = new EngineService(
+    { ...TEST_CONFIG, projectRoot: root, stateDir, ...config },
+    () => loadRulepack(),
+    { now: FIXED_NOW },
+  )
   return {
     root,
     engine,
     cleanup: async () => {
       await rm(root, { recursive: true, force: true })
+      await rm(config.stateDir ?? defaultStateDir, { recursive: true, force: true })
     },
   }
 }
@@ -134,6 +139,7 @@ export async function snapshotTree(root: string): Promise<Map<string, string>> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const absolute = join(directory, entry.name)
       if (entry.isDirectory()) {
+        result.set(`${relative(root, absolute).replace(/\\/g, '/')}/`, 'directory')
         await walk(absolute)
         continue
       }

@@ -164,6 +164,13 @@ describe('every tool executes one operation', () => {
       assigned_ids: { k: 'FS-001' },
     } as never)
     expect(archive[0]!.text).toContain('FS-001')
+    const replay = map.get('novel_archive')!.output.render({}, {
+      data: { chapter: 1, score: 145, metrics: { total_word_count: 100 }, assigned_ids: {} },
+      revision: 2,
+      warnings: [],
+      replayed: true,
+    } as never)
+    expect(replay[0]!.text).toContain('replayed')
   })
 
   it('exposes tool names by mode and an empty revision summary', () => {

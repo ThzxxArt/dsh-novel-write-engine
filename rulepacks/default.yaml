@@ -191,6 +191,7 @@ genres:
 crosschapter:
   duplicate_similarity: 0.9
   duplicate_advisory: 0.75
+  duplicate_min_chars: 20
   foreshadow_min_dormancy: 2
   foreshadow_dormant_after: 20
   check_time: true

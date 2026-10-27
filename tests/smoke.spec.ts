@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { apply, Config } from '../src/index.js'
 import { fakeHost } from './harness/context.js'
 import { CORE_TOOLS, TOOL_NAMES } from '../src/constants.js'
 
-const config = (Config as unknown as (init: Record<string, unknown>) => never)({})
+const config = (Config as unknown as (init: Record<string, unknown>) => never)({
+  stateDir: join(tmpdir(), 'dsh-novel-smoke-state'),
+})
 
 describe('plugin assembly', () => {
   it('defaults projectRoot to ./novel', () => {

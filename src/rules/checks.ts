@@ -148,15 +148,17 @@ const systemLabel: Rule = (ctx) => {
 const zeroTolerance: Rule = (ctx) =>
   ctx.rulepack.lexicon.zero_tolerance.flatMap((entry) => {
     const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
-    const source =
+    const paragraphs = splitParagraphs(ctx.text)
+    const eligible =
       entry.dialogueExempt === true
-        ? splitParagraphs(ctx.text)
-            .filter((paragraph) => dialogueCharacterRatio(paragraph) < dominant)
-            .join('\n\n')
-        : ctx.text
+        ? paragraphs
+            .map((paragraph, index) => ({ paragraph, index }))
+            .filter(({ paragraph }) => dialogueCharacterRatio(paragraph) < dominant)
+        : paragraphs.map((paragraph, index) => ({ paragraph, index }))
+    const source = eligible.map(({ paragraph }) => paragraph).join('\n\n')
     const hits = countHits(source, entry.term)
     if (hits === 0) return []
-    const paragraph = firstParagraphContaining(source, entry.term)
+    const paragraph = (eligible.find(({ paragraph }) => paragraph.includes(entry.term))?.index ?? 0) + 1
     return [
       v(
         LEXICON_RULES.ZERO_TOLERANCE,
@@ -303,9 +305,10 @@ const periodDensity: Rule = (ctx) => {
 const ellipsisRun: Rule = (ctx) => {
   const token = ctx.rulepack.punctuation.ellipsis_run.token
   const max = ctx.rulepack.punctuation.ellipsis_run.max
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
-    const runs = paragraph.match(new RegExp(`(?:${token}){${max + 1},}`, 'g'))
+    const runs = paragraph.match(new RegExp(`(?:${escaped}){${max + 1},}`, 'g'))
     if (runs !== null)
       results.push(
         v(
@@ -464,7 +467,15 @@ const duplicateParagraph: Rule = (ctx) => {
         ? []
         : [ctx.evidence.previousText]
   if (previous.length === 0) return []
-  const best = maxParagraphSimilarity(ctx.text, previous)
+  const minChars = ctx.rulepack.crosschapter.duplicate_min_chars
+  const longParagraphs = (text: string): string =>
+    splitParagraphs(text)
+      .filter((paragraph) => Array.from(paragraph.replace(/\s+/g, '')).length >= minChars)
+      .join('\n\n')
+  const best = maxParagraphSimilarity(
+    longParagraphs(ctx.text),
+    previous.map((text) => longParagraphs(text)).filter((text) => text !== ''),
+  )
   const advisory = ctx.rulepack.crosschapter.duplicate_advisory
   if (best < advisory) return []
   const severity = best >= ctx.rulepack.crosschapter.duplicate_similarity ? 'blocker' : 'advisory'

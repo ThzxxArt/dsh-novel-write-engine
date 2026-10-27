@@ -273,6 +273,8 @@ export class EngineService {
   private readonly replay = new Map<string, OpResult<unknown>>()
   private readonly briefs: BriefLibrary
   private readonly now: () => Date
+  /** The project this process last touched; the panel follows it without a workspace hint. */
+  private lastRoot: string | null = null
 
   constructor(
     private readonly config: EngineConfig,
@@ -305,6 +307,32 @@ export class EngineService {
 
   /** The configured default project root. */
   defaultRoot(): string {
+    return resolve(this.config.projectRoot)
+  }
+
+  /**
+   * Resolve an omitted root through the cross-project registry. The registry is
+   * convenience state, so a corrupt or unreadable registry falls back to the
+   * configured root instead of making every call fail.
+   */
+  private async resolveRoot(root?: string): Promise<string> {
+    if (root !== undefined) {
+      this.lastRoot = resolve(root)
+      return this.lastRoot
+    }
+    // A live tool call is the strongest signal for the panel: it runs in the
+    // same engine process as the read route. The registry is the cold-start
+    // fallback, then the configured root.
+    if (this.lastRoot !== null) return this.lastRoot
+    try {
+      const document = await this.registry().read()
+      if (document.active !== null) {
+        this.lastRoot = resolve(document.active)
+        return this.lastRoot
+      }
+    } catch {
+      // Convenience metadata must not take the project down with it.
+    }
     return resolve(this.config.projectRoot)
   }
 
@@ -341,14 +369,14 @@ export class EngineService {
       )
     }
     if (input.words_per_chapter !== undefined) {
+      if (!Array.isArray(input.words_per_chapter) || input.words_per_chapter.length !== 2) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'words_per_chapter must be [min, max] positive integers with min <= max',
+        )
+      }
       const [min, max] = input.words_per_chapter
-      if (
-        input.words_per_chapter.length !== 2 ||
-        !Number.isInteger(min) ||
-        !Number.isInteger(max) ||
-        min <= 0 ||
-        max < min
-      ) {
+      if (!Number.isInteger(min) || !Number.isInteger(max) || min <= 0 || max < min) {
         throw new EngineInputError(
           ERROR_CODES.SCHEMA_INVALID,
           'words_per_chapter must be [min, max] positive integers with min <= max',
@@ -362,15 +390,14 @@ export class EngineService {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'total_chapters must be a positive integer')
     }
     if (input.dialogue_ratio !== undefined) {
+      if (!Array.isArray(input.dialogue_ratio) || input.dialogue_ratio.length !== 2) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'dialogue_ratio must be [min, max] within 0..1 with min <= max',
+        )
+      }
       const [min, max] = input.dialogue_ratio
-      if (
-        input.dialogue_ratio.length !== 2 ||
-        !Number.isFinite(min) ||
-        !Number.isFinite(max) ||
-        min < 0 ||
-        max > 1 ||
-        max < min
-      ) {
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max > 1 || max < min) {
         throw new EngineInputError(
           ERROR_CODES.SCHEMA_INVALID,
           'dialogue_ratio must be [min, max] within 0..1 with min <= max',
@@ -463,7 +490,7 @@ export class EngineService {
   async queryState(input: StateQueryInput): Promise<OpResult<unknown>> {
     const snapshot = await this.load(input.root)
     const chapter = input.chapter ?? snapshot.pipeline.chapter
-    const store = this.storeFor(input.root)
+    const store = this.storeFor(snapshot.root)
     switch (input.kind) {
       case 'pipeline':
         return { data: snapshot.pipeline, revision: snapshot.pipeline.revision, warnings: [] }
@@ -565,6 +592,8 @@ export class EngineService {
       scene_types: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'],
       platform_style: this.rulepack.platform[snapshot.project.platform],
       genre_guide: this.rulepack.genres[snapshot.project.genre],
+      /** P4 must apply exclusions before its arithmetic closes. */
+      score_exclusions: this.rulepack.exclusions,
       next_tool: NEXT_TOOL_BY_BRIEF[input.stage],
     }
     const existing = snapshot.pipeline.briefs[input.stage]
@@ -667,14 +696,14 @@ export class EngineService {
         `allowed: ${SCENE_TYPES.join(', ')}`,
       )
     }
+    if (!Array.isArray(input.target_words) || input.target_words.length !== 2) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'target_words must be [min, max] positive integers with min <= max',
+      )
+    }
     const [min, max] = input.target_words
-    if (
-      input.target_words.length !== 2 ||
-      !Number.isInteger(min) ||
-      !Number.isInteger(max) ||
-      min <= 0 ||
-      max < min
-    ) {
+    if (!Number.isInteger(min) || !Number.isInteger(max) || min <= 0 || max < min) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         'target_words must be [min, max] positive integers with min <= max',
@@ -727,7 +756,16 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'submitDraft',
-      key: () => `draft:${input.chapter}:${sha256(input.content)}`,
+      key: () =>
+        `draft:${input.chapter}:${sha256(
+          stableJson({
+            content: input.content,
+            chapter_title: input.chapter_title,
+            scene_type: input.scene_type,
+            narrator: input.narrator,
+            summary: input.summary,
+          }),
+        )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         await this.assertGates(snapshot, 'submitDraft', {
@@ -812,13 +850,29 @@ export class EngineService {
             `review arithmetic does not close: ${arithmetic.join('; ')}`,
           )
         }
+        const issues = Array.isArray(input.issues) ? input.issues : []
+        for (const [index, issue] of issues.entries()) {
+          if (
+            typeof issue !== 'object' ||
+            issue === null ||
+            typeof issue.id !== 'string' ||
+            !['blocker', 'advisory'].includes(issue.severity) ||
+            !['open', 'fixed', 'waived'].includes(issue.status)
+          ) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `issue ${index} is malformed`,
+              'every issue needs id, severity, status, dimension, location, problem and fix',
+            )
+          }
+        }
         const review: ReviewDocument = {
           schema_version: 1,
           chapter: input.chapter,
           round: snapshot.pipeline.rounds.review + 1,
           content_hash: sha256(text),
           dimensions: excluded.dimensions,
-          issues: input.issues,
+          issues,
           total: input.total,
           proof: input.proof,
         }
@@ -834,11 +888,12 @@ export class EngineService {
             'call novel_write_draft first',
           )
         }
-        const openBlockers = input.issues.filter(
-          (issue) => issue.severity === 'blocker' && issue.status !== 'fixed',
-        ).length
+        const belowMin = input.total < this.config.quality.minScore
+        const openBlockers =
+          issues.filter((issue) => issue.severity === 'blocker' && issue.status !== 'fixed').length +
+          (belowMin ? 1 : 0)
         const next = computeNextStage(snapshot.pipeline.stage, 'submitReview', openBlockers)
-        const blocking: BlockingItem[] = input.issues
+        const blocking: BlockingItem[] = issues
           .filter((issue) => issue.severity === 'blocker' && issue.status !== 'fixed')
           .map((issue) => ({
             code: `ISSUE-${issue.id}`,
@@ -846,6 +901,14 @@ export class EngineService {
             detail: `${issue.problem} → ${issue.fix}`,
             hint: issue.location,
           }))
+        if (belowMin) {
+          blocking.push({
+            code: 'SCORE-BELOW-MIN',
+            scope: 'quality',
+            detail: `score ${input.total} is below the minimum ${this.config.quality.minScore}`,
+            hint: 'revise the chapter and submit a new P4 review',
+          })
+        }
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: next,
           rounds: { ...snapshot.pipeline.rounds, review: snapshot.pipeline.rounds.review + 1 },
@@ -890,14 +953,55 @@ export class EngineService {
         )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
-        const patchedReview =
-          snapshot.review === null
-            ? null
-            : {
-                ...snapshot.review,
-                content_hash: sha256(input.content),
-                issues: input.issues ?? snapshot.review.issues,
+        let patchedReview: ReviewDocument | null = null
+        if (snapshot.review !== null) {
+          const original = snapshot.review.issues
+          let issues = original
+          if (input.issues !== undefined) {
+            if (!Array.isArray(input.issues)) {
+              throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'issues must be an array')
+            }
+            const byId = new Map(original.map((issue) => [issue.id, issue]))
+            const seen = new Set<string>()
+            issues = original.map((issue) => ({ ...issue }))
+            for (const submitted of input.issues) {
+              if (typeof submitted !== 'object' || submitted === null || typeof submitted.id !== 'string') {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  'every issue in a revision must be an object with an id',
+                )
               }
+              if (seen.has(submitted.id)) {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `issue ${submitted.id} appears more than once in the revision`,
+                )
+              }
+              seen.add(submitted.id)
+              const before = byId.get(submitted.id)
+              if (before === undefined) {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `revision references unknown issue ${submitted.id}`,
+                  'only update issues from the current review; new issues belong in the next review',
+                )
+              }
+              if (before.severity === 'blocker' && submitted.severity !== 'blocker') {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `issue ${submitted.id} is a blocker and cannot be downgraded`,
+                  'keep severity blocker and mark it fixed with evidence',
+                )
+              }
+              const index = issues.findIndex((issue) => issue.id === submitted.id)
+              issues[index] = { ...before, ...submitted, severity: before.severity }
+            }
+          }
+          // Never rewrite content_hash here. It binds the version actually
+          // reviewed; rewriting it would let an old score satisfy PG-07 after
+          // a revision without a new P4 review.
+          patchedReview = { ...snapshot.review, issues }
+        }
         await this.assertGates(snapshot, 'submitRevision', {
           briefStage: briefStageFor('submitRevision', snapshot.pipeline.stage),
           text: input.content,
@@ -964,7 +1068,9 @@ export class EngineService {
       root: input.root,
       op: 'runCheck',
       key: (snapshot) =>
-        `check:${input.chapter}:${sha256(snapshot.text ?? '')}:${sha256(stableJson(input.semantic ?? []))}`,
+        `check:${input.chapter}:${sha256(snapshot.text ?? '')}:${sha256(
+          stableJson({ semantic: input.semantic ?? [], scope: input.scope ?? [] }),
+        )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
@@ -1001,12 +1107,27 @@ export class EngineService {
                 ...semanticResult.blocking,
               ]
             : []
-        const nextPipeline = pipelineWith(snapshot, context.revision, {
+        let nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: nextStage,
           rounds: { ...snapshot.pipeline.rounds, check: snapshot.pipeline.rounds.check + 1 },
           blocking: blockingItems,
           last_action: action('novel_check', this.now(), sha256(text)),
         })
+        // A failed check changes rounds and the check document, both of which
+        // are in the P6 brief digest. Re-stamp the already-issued brief so the
+        // documented P6 -> revise edge does not fail PG-01 one step later.
+        if (verdict === 'fail' && nextPipeline.briefs.P6 !== undefined) {
+          const postCheck = { ...snapshot, check, pipeline: nextPipeline }
+          const digest = this.briefDigest(
+            'P6',
+            postCheck,
+            this.briefContextFor('P6', postCheck, input.chapter),
+          )
+          nextPipeline = {
+            ...nextPipeline,
+            briefs: { ...nextPipeline.briefs, P6: { ...nextPipeline.briefs.P6, digest } },
+          }
+        }
         return {
           files: [
             { path: checkFile(input.chapter), text: yaml(check) },
@@ -1032,6 +1153,9 @@ export class EngineService {
   ): Promise<
     OpResult<{ chapter: number; assigned_ids: Record<string, string>; metrics: WordMetrics; score: number }>
   > {
+    const archiveDigest = sha256(
+      stableJson({ chapter: input.chapter, state_delta: input.state_delta, handoff: input.handoff }),
+    )
     return this.mutate({
       root: input.root,
       op: 'archiveChapter',
@@ -1040,9 +1164,38 @@ export class EngineService {
         // manuscript is gone. Bind the replay key to the indexed content hash so
         // a duplicate call is idempotent instead of a stage-order failure.
         const archived = snapshot.chapters.chapters.find((record) => record.num === input.chapter)
-        return `archive:${input.chapter}:${archived?.content_hash ?? sha256(snapshot.text ?? '')}`
+        return `archive:${input.chapter}:${archived?.content_hash ?? sha256(snapshot.text ?? '')}:${archiveDigest}`
       },
       run: async (snapshot, context) => {
+        const already = snapshot.chapters.chapters.find((record) => record.num === input.chapter)
+        if (already !== undefined) {
+          if (already.archive_digest !== undefined && already.archive_digest !== archiveDigest) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `chapter ${input.chapter} is already archived with a different state_delta`,
+              'archive is idempotent by chapter; start the next chapter instead of replaying old data',
+            )
+          }
+          const archivedText = await this.readChapter(snapshot, input.chapter)
+          if (archivedText === null || sha256(archivedText) !== already.content_hash) {
+            throw new EngineFaultError(
+              ERROR_CODES.TXN_ABORTED,
+              `archived chapter ${input.chapter} no longer matches its index`,
+              'restore the chapter from backups/ before retrying',
+            )
+          }
+          return {
+            files: [],
+            data: {
+              chapter: input.chapter,
+              assigned_ids: already.assigned_ids ?? {},
+              metrics: countWordMetrics(archivedText),
+              score: already.score,
+            },
+            warnings: [],
+            replay: true,
+          }
+        }
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
         const summary = snapshot.plan?.summary
@@ -1125,6 +1278,8 @@ export class EngineService {
           relationships: snapshot.relationships,
           narrator: snapshot.plan?.narrator ?? null,
         })
+        record.assigned_ids = ledger.assigned
+        record.archive_digest = archiveDigest
         const foreshadows = ledger.foreshadows
         const timeline = ledger.timeline
         for (const item of foreshadows.items) {
@@ -1204,7 +1359,17 @@ export class EngineService {
   /* ------------------------------------------------------------ maintenance */
 
   async amend(input: AmendSubmission): Promise<OpResult<{ path: string; revision: number }>> {
-    const store = this.storeFor(input.root)
+    if (typeof input.path !== 'string' || input.path.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend path must be a non-empty string')
+    }
+    if (typeof input.reason !== 'string' || input.reason.trim() === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend requires a reason')
+    }
+    if (typeof input.content !== 'object' || input.content === null || Array.isArray(input.content)) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend content must be an object')
+    }
+    const resolvedRoot = await this.resolveRoot(input.root)
+    const store = this.storeFor(resolvedRoot)
     const absolute = store.path(input.path)
     const kind = MUTABLE_STATE[input.path]
     if (kind === undefined || absolute.length === 0) {
@@ -1215,7 +1380,7 @@ export class EngineService {
       )
     }
     return this.mutate({
-      root: input.root,
+      root: resolvedRoot,
       op: 'amend',
       key: (snapshot) => `amend:${input.path}:${snapshot.pipeline.revision}`,
       run: async (snapshot, context) => {
@@ -1300,7 +1465,7 @@ export class EngineService {
         `chapter must be a positive integer (got ${String(input.chapter)})`,
       )
     }
-    const store = this.storeFor(input.root)
+    const store = this.storeFor(snapshot.root)
     const after = input.after ?? (await this.readChapter(snapshot, input.chapter)) ?? ''
     const before = input.before ?? (await this.latestBackup(store, chapterFile(input.chapter))) ?? ''
     const report = diffLines(before, after)
@@ -1320,9 +1485,11 @@ export class EngineService {
 
   async auditHistory(input: AuditInput = {}): Promise<OpResult<AuditRow[]>> {
     const snapshot = await this.load(input.root)
-    const store = this.storeFor(input.root)
+    const store = this.storeFor(snapshot.root)
     const { rows, malformed } = await readJournal(store)
-    const health = await reconcileJournal(store)
+    const health = (await store.exists(LOCK_FILE))
+      ? { mismatches: [] as Array<{ path: string; expected: string | null; actual: string | null }> }
+      : await reconcileJournal(store)
     const warnings: Warning[] = []
     if (malformed > 0)
       warnings.push({ code: 'JOURNAL_MALFORMED', message: `${malformed} malformed journal line(s)` })
@@ -1469,6 +1636,7 @@ export class EngineService {
   /** Choose the default project for future convenience calls. */
   async setActiveProject(input: { root: string }): Promise<{ active: string | null }> {
     const document = await this.registry().setActive(resolve(input.root))
+    this.lastRoot = document.active === null ? null : resolve(document.active)
     return { active: document.active }
   }
 
@@ -1477,6 +1645,9 @@ export class EngineService {
     root: string
   }): Promise<{ active: string | null; projects: RegistryEntry[] }> {
     const document = await this.registry().forget(resolve(input.root))
+    if (this.lastRoot === resolve(input.root)) {
+      this.lastRoot = document.active === null ? null : resolve(document.active)
+    }
     return { active: document.active, projects: document.projects }
   }
 
@@ -1720,10 +1891,14 @@ export class EngineService {
       genre: snapshot.project.genre,
       platform: snapshot.project.platform,
       chapter,
+      chapter_pad: String(chapter).padStart(3, '0'),
       min_words: snapshot.project.targets.words_per_chapter[0],
       max_words: snapshot.project.targets.words_per_chapter[1],
       min_score: this.config.quality.minScore,
-      round: snapshot.pipeline.rounds.review + 1,
+      round:
+        snapshot.pipeline.stage === 'P5'
+          ? snapshot.pipeline.rounds.revise + 1
+          : snapshot.pipeline.rounds.review + 1,
     }
   }
 
@@ -1846,8 +2021,8 @@ export class EngineService {
     }
   }
 
-  private async load(root?: string): Promise<Snapshot> {
-    const store = this.storeFor(root)
+  private async load(root?: string, retries = 1): Promise<Snapshot> {
+    const store = this.storeFor(await this.resolveRoot(root))
     if (!(await store.exists(PROJECT_FILE))) {
       throw new EngineInputError(
         ERROR_CODES.PROJECT_NOT_FOUND,
@@ -1906,6 +2081,18 @@ export class EngineService {
       planRaw === null ? null : (parseYamlLoose(planRaw) as ChapterPlanInput & { summary?: ChapterSummary })
     const review = (await store.readDoc(reviewFile(chapter), 'review')) as unknown as ReviewDocument | null
     const check = (await store.readDoc(checkFile(chapter), 'check')) as unknown as CheckDocument | null
+    const latest = (await store.readDoc(
+      joinRel(STATE_DIR, STATE_FILES.pipeline),
+      'pipeline',
+    )) as unknown as PipelineState | null
+    if (latest === null || latest.revision !== pipeline.revision) {
+      if (retries > 0) return this.load(store.root, retries - 1)
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_ABORTED,
+        'the project changed while its snapshot was being read',
+        'retry the read; if it keeps moving, wait for the writer to finish',
+      )
+    }
     return {
       root: store.root,
       project: project as unknown as NovelProject,
@@ -1941,9 +2128,11 @@ export class EngineService {
       backup?: boolean
       event?: EngineEvent
       warnings?: Warning[]
+      /** A durable idempotent answer: no transaction is committed. */
+      replay?: boolean
     }>
   }): Promise<OpResult<T>> {
-    const root = resolve(options.root ?? this.config.projectRoot)
+    const root = await this.resolveRoot(options.root)
     const signal = this.signalContext.getStore()
     const abortIfNeeded = (): void => {
       if (signal?.aborted === true) {
@@ -2005,6 +2194,14 @@ export class EngineService {
         const revision = snapshot.pipeline.revision + 1
         abortIfNeeded()
         const outcome = await options.run(snapshot, { store, revision })
+        if (outcome.replay === true) {
+          return {
+            data: outcome.data,
+            revision: snapshot.pipeline.revision,
+            warnings: outcome.warnings ?? [],
+            replayed: true,
+          }
+        }
         abortIfNeeded()
         await runTransaction(store, {
           txid: randomUUID(),

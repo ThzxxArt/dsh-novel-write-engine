@@ -1,4 +1,4 @@
-import { STATE_FILES, STATE_DIR } from '../constants.js'
+import { STAGING_DIR, STATE_FILES, STATE_DIR } from '../constants.js'
 import type { AuditRow } from '../types.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
 import type { FsStore } from './fs.js'
@@ -174,7 +174,7 @@ export async function recoverPending(store: FsStore): Promise<void> {
   throw new EngineFaultError(
     ERROR_CODES.TXN_ABORTED,
     `pending transaction ${last.txid} partially changed the project; automatic recovery is unsafe`,
-    'restore the project from backups/ or state/journal.jsonl before retrying',
+    `restore from backups/ or ${STAGING_DIR}/${last.txid}/before/ before retrying`,
   )
 }
 

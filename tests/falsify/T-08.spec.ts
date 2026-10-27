@@ -15,6 +15,9 @@ it('T-08 refuses schema_version 2 without touching the document', async () => {
     )
     await writeFile(path, original, 'utf8')
     await expect(engine.getStatus({ root })).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_TOO_NEW' })
+    await expect(engine.getBrief({ stage: 'P1', root })).rejects.toMatchObject({
+      code: 'ENGINE_SCHEMA_TOO_NEW',
+    })
     expect(await readFile(path, 'utf8')).toBe(original)
   } finally {
     await cleanup()

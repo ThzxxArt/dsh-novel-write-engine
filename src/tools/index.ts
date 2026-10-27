@@ -66,9 +66,25 @@ const payload = (raw: unknown): unknown => {
   return (raw as { data: unknown }).data
 }
 
+/** Surface host-level idempotency so a retried write is not mistaken for a new commit. */
+const withReplay = (
+  rendered: Array<{ type: 'text'; text: string }>,
+  raw: unknown,
+): Array<{ type: 'text'; text: string }> => {
+  if (
+    typeof raw === 'object' &&
+    raw !== null &&
+    'replayed' in raw &&
+    (raw as { replayed?: unknown }).replayed === true
+  ) {
+    rendered[0]!.text += '\n\n（replayed: true — 本次未再次写盘）'
+  }
+  return rendered
+}
+
 const jsonOutput = {
   schema: { type: 'json' as const },
-  render: (_args: unknown, raw: unknown) => text(payload(raw)),
+  render: (_args: unknown, raw: unknown) => withReplay(text(payload(raw)), raw),
 }
 
 const stringArray = { type: 'array' as const, items: { type: 'string' as const } }
@@ -345,16 +361,19 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             metrics: { total_word_count: number }
             assigned_ids: Record<string, string>
           }
-          return text(
-            [
-              `第 ${value.chapter} 章已归档`,
-              `字数 ${value.metrics.total_word_count} · 评分 ${value.score}/150`,
-              Object.keys(value.assigned_ids).length === 0
-                ? '无新 ID'
-                : `分配 ID：${Object.entries(value.assigned_ids)
-                    .map(([key, id]) => `${key}→${id}`)
-                    .join(', ')}`,
-            ].join('\n'),
+          return withReplay(
+            text(
+              [
+                `第 ${value.chapter} 章已归档`,
+                `字数 ${value.metrics.total_word_count} · 评分 ${value.score}/150`,
+                Object.keys(value.assigned_ids).length === 0
+                  ? '无新 ID'
+                  : `分配 ID：${Object.entries(value.assigned_ids)
+                      .map(([key, id]) => `${key}→${id}`)
+                      .join(', ')}`,
+              ].join('\n'),
+            ),
+            raw,
           )
         },
       },

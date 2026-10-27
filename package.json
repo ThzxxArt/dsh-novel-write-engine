@@ -64,6 +64,7 @@
     "test:coverage": "vitest run --coverage && node scripts/check-coverage.mjs",
     "test:isolated": "node scripts/check-isolated.mjs",
     "validate:rulepack": "node scripts/validate-rulepack.mjs",
+    "check:preset": "node scripts/check-preset.mjs",
     "check:pack": "node scripts/check-pack.mjs"
   },
   "dependencies": {

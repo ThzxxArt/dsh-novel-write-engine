@@ -5,14 +5,23 @@
  * a latent publish bug; this script makes that visible.
  */
 import { readdirSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const readOptions = (configName) => {
   const configPath = join(root, configName)
   const configFile = ts.readConfigFile(configPath, ts.sys.readFile)
+  if (configFile.error !== undefined) {
+    throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n'))
+  }
   const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, root)
+  if (parsed.errors.length > 0) {
+    throw new Error(
+      parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'),
+    )
+  }
   return { ...parsed.options, noEmit: true, declaration: false, incremental: false }
 }
 const hostOptions = readOptions('tsconfig.json')
@@ -36,7 +45,9 @@ for (const file of files) {
   const program = ts.createProgram({ rootNames: [file], options })
   const diagnostics = ts
     .getPreEmitDiagnostics(program)
-    .filter((diagnostic) => diagnostic.file !== undefined && diagnostic.file.fileName === file)
+    .filter(
+      (diagnostic) => diagnostic.file !== undefined && resolve(diagnostic.file.fileName) === resolve(file),
+    )
   if (diagnostics.length > 0) {
     failures += 1
     console.error(`\n${relative(root, file)}`)

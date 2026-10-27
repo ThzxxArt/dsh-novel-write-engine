@@ -44,6 +44,12 @@ describe('rule edge cases', () => {
     expect(codesOf('他走了………………')).toContain('ELLIPSIS_RUN')
   })
 
+  it('treats a regex metacharacter ellipsis token literally', () => {
+    const custom = structuredClone(pack)
+    custom.punctuation.ellipsis_run.token = '('
+    expect(() => codesOf('他(((', { rulepack: custom })).not.toThrow()
+  })
+
   it('allows a zero-tolerance term only when the entry is dialogue-exempt', () => {
     const strict = structuredClone(pack)
     strict.lexicon.zero_tolerance = [{ term: '禁词' }]
@@ -84,6 +90,22 @@ describe('rule edge cases', () => {
     expect(result.metrics.total_word_count).toBe(0)
     expect(result.quoteRatio).toBe(1)
     expect(result.paragraphCount).toBe(0)
+  })
+
+  it('does not block short repeated dialogue as a copied paragraph', () => {
+    const short = '“好。”\n\n他点了点头。'
+    const result = runMachineChecks(
+      short,
+      options({
+        chapter: 4,
+        evidence: {
+          ...options().evidence,
+          previousText: short,
+          previousTexts: [short],
+        },
+      }),
+    )
+    expect(result.violations.some((entry) => entry.code === 'DUPLICATE_PARAGRAPH')).toBe(false)
   })
 
   it('blocks a paragraph duplicated from any of the previous three chapters', () => {

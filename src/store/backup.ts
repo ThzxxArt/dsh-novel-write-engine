@@ -6,12 +6,17 @@ export interface BackupEntry {
   mtimeMs: number
 }
 
+/** Marks a directory this engine owns; user files under backups/ are never pruned. */
+export const BACKUP_MARKER = '.engine-backup'
+
 /** Backup transaction directories, newest first by filesystem mtime. */
 export async function listBackups(store: FsStore): Promise<BackupEntry[]> {
   const entries: BackupEntry[] = []
   for (const name of await store.list(BACKUP_DIR)) {
     const info = await store.stat(joinRel(BACKUP_DIR, name))
-    if (info !== null) entries.push({ name, mtimeMs: info.mtimeMs })
+    if (info === null || !info.isDirectory) continue
+    if (!(await store.exists(joinRel(BACKUP_DIR, name, BACKUP_MARKER)))) continue
+    entries.push({ name, mtimeMs: info.mtimeMs })
   }
   return entries.sort((left, right) => right.mtimeMs - left.mtimeMs)
 }

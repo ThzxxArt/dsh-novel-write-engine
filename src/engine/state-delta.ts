@@ -52,9 +52,15 @@ const requireReason = (value: { action: DeltaAction; reason?: string }, where: s
   }
 }
 
-const appearanceOf = (text: string, name: string): string => {
+const appearanceOf = (text: string, name: string, aliases: readonly string[] = []): string => {
   const paragraphs = splitParagraphs(text)
-  const source = paragraphs.find((paragraph) => paragraph.includes(name)) ?? paragraphs[0] ?? ''
+  const source =
+    paragraphs.find(
+      (paragraph) =>
+        paragraph.includes(name) || aliases.some((alias) => alias !== '' && paragraph.includes(alias)),
+    ) ??
+    paragraphs[0] ??
+    ''
   return Array.from(source).slice(0, 120).join('')
 }
 
@@ -366,7 +372,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       locks.characters[name] = {
         first_appearance: character.first_appearance,
         locked_at: chapter,
-        appearance: appearanceOf(input.text, name),
+        appearance: appearanceOf(input.text, name, name === narratorName ? narratorAliases : []),
       }
     }
   }
@@ -505,7 +511,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const existing = findRelationship(a, b)
     if (declared.action === 'created') {
       if (existing !== undefined) fail(`relationship ${pairKey(a, b)} already exists`)
-      if (declared.type === undefined || declared.type.trim() === '') {
+      if (typeof declared.type !== 'string' || declared.type.trim() === '') {
         fail(`relationships.${key} is created but has no type`)
       }
       const allocated = allocateIds('RL', relationships.next_seq, 1)
@@ -525,7 +531,12 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     if (existing === undefined) fail(`relationship ${key} does not exist; created must be used first`)
     if (declared.action === 'updated') {
-      if (declared.type !== undefined) existing.type = declared.type
+      if (declared.type !== undefined) {
+        if (typeof declared.type !== 'string' || declared.type.trim() === '') {
+          fail(`relationships.${key} type must be a non-empty string`)
+        }
+        existing.type = declared.type
+      }
       if (declared.description !== undefined) existing.description = declared.description
       if (declared.note !== undefined) existing.evolution.push({ chapter, note: declared.note })
     }

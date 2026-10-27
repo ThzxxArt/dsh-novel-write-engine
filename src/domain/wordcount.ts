@@ -3,7 +3,7 @@ import type { WordMetrics } from '../types.js'
 
 const CJK = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g
 const ENGLISH_WORD = /[A-Za-z]+/g
-const NUMBER = /(?<![A-Za-z0-9])[0-9]+(?![A-Za-z])/g
+const NUMBER = /(?<![A-Za-z0-9])[0-9]+(?![A-Za-z0-9])/g
 const CHINESE_PUNCT = /[\u3000-\u303f\uff00-\uffef]/g
 const ENGLISH_PUNCT = /[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef]/gu
 

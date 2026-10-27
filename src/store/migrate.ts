@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto'
 import { parse as parseYaml, stringify } from 'yaml'
+import { BACKUP_DIR } from '../constants.js'
 import { SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
-import type { FsStore } from './fs.js'
+import { joinRel, type FsStore } from './fs.js'
 
 /** One migration step: take a v(n) document and return the v(n+1) document. */
 export interface MigrationStep {
@@ -76,12 +78,33 @@ export async function migrateProjectFile(
     throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `cannot migrate missing ${path}`)
   }
   const beforeText = before.toString('utf8')
-  const document = parseYaml(beforeText) as Record<string, unknown>
+  let parsed: unknown
+  try {
+    parsed = parseYaml(beforeText)
+  } catch (error) {
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `cannot migrate ${path}: invalid YAML`,
+      undefined,
+      { cause: error },
+    )
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `cannot migrate ${path}: document is not a mapping`,
+    )
+  }
+  const document = parsed as Record<string, unknown>
   const version = typeof document.schema_version === 'number' ? document.schema_version : 1
   if (version >= target) return false
   const migrated = migrateDocument(document, chain, target)
   const next = stringify(migrated, { lineWidth: 0 })
   if (next === beforeText) return false
+  // Persist the pre-image before touching the document. In-memory rollback is
+  // enough for an ordinary error, but a process kill needs a recovery source.
+  const backupPath = joinRel(BACKUP_DIR, 'migrations', `${randomUUID()}-${path.replace(/[\\/]/g, '__')}`)
+  await store.writeBytes(backupPath, before)
   try {
     await store.writeText(path, next)
     return true
@@ -89,6 +112,31 @@ export async function migrateProjectFile(
     const current = await store.readBytes(path)
     if (current === null || !Buffer.from(current).equals(before)) {
       await store.writeBytes(path, before)
+    }
+    throw error
+  }
+}
+
+/**
+ * Migrate a set of related documents as one unit. A failure on a later file
+ * restores every earlier file, so a project is never left half-migrated.
+ */
+export async function migrateProjectFiles(
+  store: FsStore,
+  paths: readonly string[],
+  chain: readonly MigrationStep[] = MIGRATIONS,
+  target: number = SCHEMA_VERSION,
+): Promise<boolean[]> {
+  const before = new Map<string, Uint8Array | null>()
+  for (const path of paths) before.set(path, await store.readBytes(path))
+  const results: boolean[] = []
+  try {
+    for (const path of paths) results.push(await migrateProjectFile(store, path, chain, target))
+    return results
+  } catch (error) {
+    for (const [path, bytes] of before) {
+      if (bytes === null) await store.remove(path)
+      else await store.writeBytes(path, bytes)
     }
     throw error
   }
