@@ -23,6 +23,12 @@ export interface SummaryDto {
   revision: number
   totalWords: number
   totalChapters: number
+  /** Book-wide archived average; absent on older payloads. */
+  averageScore?: number
+  volume?: number
+  volume_name?: string
+  act?: string
+  act_progress?: string
   phases: PhaseDto[]
   blocking: BlockingDto[]
   next?: { tool: string; reason: string }

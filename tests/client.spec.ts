@@ -97,6 +97,48 @@ describe('panel view model', () => {
     expect(view.next).toBe('')
   })
 
+  it('uses the book-wide average instead of the capped rows', () => {
+    const capped = payload()
+    capped.summary.averageScore = 135
+    capped.chapters.rows = [
+      { num: 271, title: '末章', wordCount: 100, score: 90, stage: 'done', status: 'passed' },
+    ]
+    expect(buildView(capped).stats.averageScore).toBe(135)
+  })
+
+  it('renders act progress in the volume label', () => {
+    const labelled = payload()
+    labelled.summary.volume = 1
+    labelled.summary.volume_name = '第一卷'
+    labelled.summary.act = '第二幕'
+    labelled.summary.act_progress = '3/5'
+    const subtitle = buildView(labelled).subtitle
+    expect(subtitle).toContain('第二幕 3/5')
+  })
+
+  it('shows inherited volume/act labels and falls back for unknown next tools', () => {
+    const labelled = payload()
+    labelled.summary.volume = 1
+    labelled.summary.volume_name = '第一卷'
+    labelled.summary.act = '第一幕'
+    expect(buildView(labelled).subtitle).toContain('第一卷')
+    expect(buildView(labelled).subtitle).toContain('第一幕')
+
+    const volumeOnly = payload()
+    volumeOnly.summary.volume = 2
+    expect(buildView(volumeOnly).subtitle).toContain('第2卷')
+
+    const unknown = payload()
+    unknown.summary.next = { tool: 'weird_tool', reason: '自定义下一步' }
+    const view = buildView(unknown)
+    expect(view.nextTitle).toBe('继续')
+    expect(view.nextDetail).toBe('自定义下一步')
+
+    const noScores = payload()
+    noScores.chapters.rows = noScores.chapters.rows.map((row) => ({ ...row, status: 'draft' }))
+    expect(buildView(noScores).stats.averageScore).toBe(0)
+  })
+
   it('renders loading, error, outdated and empty states', () => {
     expect(buildView(null).state).toBe('loading')
     expect(buildView(null, 'offline').state).toBe('error')

@@ -2,7 +2,7 @@ import { GATE_ORDER, GATES, type GateId } from '../codes.js'
 import { LIMITS } from '../constants.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
-import { splitParagraphs } from '../domain/text.js'
+import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { runRules } from '../rules/pipeline.js'
 import { sha256 } from '../store/fs.js'
@@ -235,8 +235,7 @@ const summarySchema: Gate = (input) => {
     if (Array.from(opening).length < LIMITS.minQuoteChars) {
       problems.push(`opening must be at least ${LIMITS.minQuoteChars} characters`)
     }
-    const firstTwo = splitParagraphs(input.text).slice(0, 2)
-    if (!firstTwo.some((paragraph) => paragraph.includes(opening))) {
+    if (!openingInFirstTwoParagraphs(input.text, opening)) {
       problems.push('opening must be quoted from the first two paragraphs')
     }
   }
@@ -375,9 +374,9 @@ export function verifyReference(text: string, reference: ReadingProofReference):
   if (!Number.isInteger(reference.paragraph) || reference.paragraph < 1) {
     return 'reading proof paragraph must be a positive integer'
   }
-  const quote = reference.quote
-  if (Array.from(quote.trim()).length < LIMITS.minQuoteChars) {
-    return `quote "${quote}" is shorter than ${LIMITS.minQuoteChars} characters`
+  const quote = reference.quote.trim()
+  if (Array.from(quote).length < LIMITS.minQuoteChars) {
+    return `quote "${reference.quote}" is shorter than ${LIMITS.minQuoteChars} characters`
   }
   const paragraphs = splitParagraphs(text)
   const actual = paragraphs.findIndex((paragraph) => paragraph.includes(quote))
@@ -508,9 +507,23 @@ const archiveAtomic: Gate = (input) => {
   if (input.archive.chapterExists) problems.push('this chapter is already in the index')
   if (!input.archive.checkPassed) problems.push('the check document has not passed')
   if (!input.archive.hashMatches) problems.push('the manuscript changed since the check was written')
+  if (
+    input.check === null ||
+    !Array.isArray(input.check.scope) ||
+    !input.check.scope.includes('content') ||
+    !input.check.scope.includes('integrity')
+  ) {
+    problems.push('the check document did not cover content+integrity')
+  }
   return problems.length === 0
     ? []
-    : [block('PG-12', problems.join('; '), 're-run novel_check on the current manuscript')]
+    : [
+        block(
+          'PG-12',
+          problems.join('; '),
+          'call novel_rollback to P6, then re-run novel_check on the current manuscript',
+        ),
+      ]
 }
 
 /** Fixed order; evaluation collects every failure instead of stopping at the first. */
@@ -551,11 +564,14 @@ export function applicableGates(input: GateInput): GateId[] {
     case 'submitDraft':
       return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06']
     case 'submitRevision':
-      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08']
+      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08', 'PG-11']
     case 'submitReview':
       return [...always, 'PG-09', 'PG-07', 'PG-11']
     case 'runCheck':
-      return [...always, 'PG-04', 'PG-05', 'PG-08', 'PG-09', 'PG-10', 'PG-11']
+      // A check is an archive precursor: it must not pass a manuscript that is
+      // below the word floor or no longer matches the review it claims to
+      // validate. Archive still re-runs these gates as the final boundary.
+      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-09', 'PG-10', 'PG-11']
     case 'archiveChapter':
       return [
         'PG-01',

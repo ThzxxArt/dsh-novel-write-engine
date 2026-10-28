@@ -712,7 +712,7 @@ describe('branch coverage exercises', () => {
     }
   })
 
-  it('revises even when the plan file has been removed', async () => {
+  it('refuses a revision when the plan file has been removed', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
@@ -732,16 +732,22 @@ describe('branch coverage exercises', () => {
       })
       await engine.getBrief({ stage: 'P6', root })
       await new FsStore(root).remove('plans/ch001.chapter.yaml')
-      // The plan is part of the P6 context, so removing it invalidates the
-      // previously issued brief; refresh it before revising.
+      // The plan is part of the P6 context and a required state document. The
+      // read surface must report damage; a revision must not silently proceed
+      // with a plan-less state.
       await engine.getBrief({ stage: 'P6', root })
-      const revised = await engine.submitRevision({
-        chapter: 1,
-        content: text,
-        proof: sampleReview(1, text).proof,
-        root,
-      })
-      expect(revised.data.stage).toBe('P4')
+      await expect(
+        engine.submitRevision({
+          chapter: 1,
+          content: text,
+          proof: sampleReview(1, text).proof,
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_GATE_BLOCKED' })
+      const status = await engine.getStatus({ root })
+      expect(status.data.state_errors).toEqual([
+        expect.objectContaining({ code: 'PLAN_UNREADABLE', path: 'plans/ch001.chapter.yaml' }),
+      ])
     } finally {
       await cleanup()
     }

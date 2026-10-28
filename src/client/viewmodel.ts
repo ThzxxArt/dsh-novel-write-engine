@@ -143,6 +143,15 @@ const phaseLabel = (id: string): string => PHASE_LABELS[id] ?? id
 const stageLabel = (stage: string): string => STAGE_LABELS[stage] ?? stage
 const platformLabel = (platform: string): string => PLATFORM_LABELS[platform] ?? platform
 const toolLabel = (tool: string): string => TOOL_LABELS[tool] ?? '继续'
+const volumeLabel = (summary: PanelPayloadDto['summary']): string => {
+  if (summary.volume === undefined) return ''
+  const volume = summary.volume_name === undefined ? `第${summary.volume}卷` : summary.volume_name
+  const act =
+    summary.act === undefined
+      ? ''
+      : ` · ${summary.act}${summary.act_progress === undefined ? '' : ` ${summary.act_progress}`}`
+  return ` · ${volume}${act}`
+}
 
 /**
  * Project the wire payload into strings. Version mismatch wins over everything
@@ -192,8 +201,12 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     }
   })
   const scored = rows.filter((row) => row.tone === 'ok')
-  const average =
+  const rowAverage =
     scored.length === 0 ? 0 : scored.reduce((sum, row) => sum + row.scoreValue, 0) / scored.length
+  const average =
+    summary.averageScore !== undefined && Number.isFinite(summary.averageScore)
+      ? summary.averageScore
+      : rowAverage
   const next = summary.next
   const finished = summary.finished === true
   const doneLabel =
@@ -205,8 +218,8 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       summary.stage === 'done'
         ? `${summary.genre} · ${platformLabel(summary.platform)} · ${
             finished ? `共 ${summary.totalChapters} 章` : `下一章 第 ${summary.chapter} 章`
-          }`
-        : `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章`,
+          }${volumeLabel(summary)}`
+        : `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章${volumeLabel(summary)}`,
     stageLabel: doneLabel,
     finished,
     revisionLabel: `第 ${summary.revision} 次修订`,

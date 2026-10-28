@@ -4,7 +4,9 @@ import { join, resolve } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
 import {
   BACKUP_DIR,
+  CHAPTERS_DIR,
   EXPORT_DIR,
+  LIMITS,
   LOCK_FILE,
   PROJECT_FILE,
   STATE_DIR,
@@ -18,7 +20,8 @@ import {
 } from '../constants.js'
 import { canRun, roundsExhausted, STAGE_NEXT, nextStage as computeNextStage } from '../domain/index.js'
 import { textSimilarity } from '../domain/simhash.js'
-import { splitParagraphs } from '../domain/text.js'
+import { compareText, stableJson } from '../domain/stable.js'
+import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { reviewArithmeticProblems, totalScore } from '../domain/scoring.js'
 import { runMachineChecks, scopeOfRule, type MachineOptions, type MachineResult } from '../rules/pipeline.js'
@@ -53,6 +56,7 @@ import { briefContext } from './context.js'
 import { applyStateDelta } from './state-delta.js'
 import { evaluateSemantic } from './semantic.js'
 import { briefStageFor, evaluateGates, gateName, parseParagraphLocation } from './gates.js'
+import { advanceHandoff, parseActProgress, projectHandoff } from './handoff.js'
 import {
   phaseStrip,
   projectChapters,
@@ -83,6 +87,7 @@ import {
   type ArchiveHandoff,
   type BlockingItem,
   type BriefStage,
+  type ChapterCastMember,
   type ChapterPlanInput,
   type ChapterRecord,
   type ChapterSummary,
@@ -216,6 +221,10 @@ export interface ExportInput {
 export interface StateQueryInput {
   kind: DocKind | 'novel' | 'planWorld' | 'planChapter'
   chapter?: number
+  /** Chapter index defaults to a compact read; opt in to the full summaries. */
+  include_summary?: boolean
+  /** Inclusive chapter range for the `chapters` index. */
+  chapter_range?: [number, number]
   root?: string
 }
 
@@ -228,6 +237,8 @@ export interface WordCountInput {
 interface Snapshot {
   root: string
   project: NovelProject
+  /** Set when novel.yaml exists but cannot be parsed/narrowed. */
+  projectError: string | null
   pipeline: PipelineState
   chapters: ChaptersDocument
   characters: import('../types.js').CharactersDocument
@@ -237,12 +248,16 @@ interface Snapshot {
   foreshadows: import('../types.js').ForeshadowsDocument
   relationships: import('../types.js').RelationshipsDocument
   handoff: import('../types.js').HandoffDocument | null
+  worldPlan: import('../types.js').WorldPlanInput | null
+  /** Unreadable ledgers are reported instead of wedging status/panel. */
+  ledgerErrors: StateError[]
   text: string | null
   previousText: string | null
   previousTexts: string[]
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
   /** An unreadable plan is reported to the model instead of wedging every read. */
   planError: string | null
+  worldPlanError: string | null
   review: ReviewDocument | null
   reviewError: string | null
   check: CheckDocument | null
@@ -270,7 +285,22 @@ const STAGE_RANK: Record<Stage, number> = {
   done: 7,
 }
 
+/** Internal, journal-tracked archive idempotency ledger; not a user state doc. */
+const ARCHIVE_DIGESTS = joinRel(STATE_DIR, 'archive-digests.json')
+
+const LEDGER_PATHS: Readonly<Record<string, string>> = {
+  chapters: joinRel(STATE_DIR, STATE_FILES.chapters),
+  characters: joinRel(STATE_DIR, STATE_FILES.characters),
+  world: joinRel(STATE_DIR, STATE_FILES.world),
+  locks: joinRel(STATE_DIR, STATE_FILES.locks),
+  timeline: joinRel(STATE_DIR, STATE_FILES.timeline),
+  foreshadows: joinRel(STATE_DIR, STATE_FILES.foreshadows),
+  relationships: joinRel(STATE_DIR, STATE_FILES.relationships),
+  handoff: joinRel(STATE_DIR, STATE_FILES.handoff),
+}
+
 const MUTABLE_STATE: Record<string, DocKind> = {
+  [PROJECT_FILE]: 'project',
   [joinRel(STATE_DIR, STATE_FILES.pipeline)]: 'pipeline',
   [joinRel(STATE_DIR, STATE_FILES.chapters)]: 'chapters',
   [joinRel(STATE_DIR, STATE_FILES.characters)]: 'characters',
@@ -290,6 +320,8 @@ export class EngineService {
   private readonly stores = new Map<string, FsStore>()
   private readonly mutex = new KeyedMutex()
   private readonly replay = new Map<string, OpResult<unknown>>()
+  /** Status, panel and gates ask for the same stage context repeatedly. */
+  private readonly briefContextCache = new WeakMap<Snapshot, Map<string, Record<string, unknown>>>()
   private readonly briefs: BriefLibrary
   private readonly now: () => Date
   /** The project this process last touched; the panel follows it without a workspace hint. */
@@ -487,12 +519,60 @@ export class EngineService {
 
   /* --------------------------------------------------------------- queries */
 
+  /**
+   * Read-only paths must surface a committed-journal mismatch. The write path
+   * already fails closed; without this, status recommends the next write and
+   * the model only learns about the mismatch when that write aborts.
+   */
+  private async journalBlocking(snapshot: Snapshot): Promise<BlockingItem[]> {
+    const store = this.storeFor(snapshot.root)
+    if (await store.exists(LOCK_FILE)) return []
+    try {
+      const { malformed, mismatches } = await reconcileJournal(store)
+      const items: BlockingItem[] = []
+      if (malformed > 0) {
+        items.push({
+          code: 'JOURNAL_MALFORMED',
+          scope: 'journal',
+          detail: `${malformed} malformed journal line(s)`,
+          hint: 'inspect the journal with novel_audit; restore a known-good journal before writing',
+        })
+      }
+      for (const mismatch of mismatches) {
+        items.push({
+          code: 'JOURNAL_HASH_MISMATCH',
+          scope: 'journal',
+          detail: `${mismatch.path} changed after commit ${mismatch.txid}`,
+          hint: 'restore the file from backups/ or inspect with novel_audit; writes remain fail-closed',
+        })
+      }
+      return items
+    } catch (error) {
+      return [
+        {
+          code: 'JOURNAL_UNREADABLE',
+          scope: 'journal',
+          detail: errorMessage(error),
+          hint: 'inspect state/journal.jsonl and restore a known-good copy',
+        },
+      ]
+    }
+  }
+
   async getStatus(input: StatusInput = {}): Promise<OpResult<StatusReport>> {
     if (input.chapter !== undefined) this.assertChapterParameter(input.chapter)
     const snapshot = await this.load(input.root)
     const chapter = input.chapter ?? snapshot.pipeline.chapter
     const metrics = await this.metricsFor(snapshot, chapter)
-    const next = this.nextStep(snapshot)
+    const journal = await this.journalBlocking(snapshot)
+    const next =
+      journal.length > 0 && this.stateErrors(snapshot).length === 0
+        ? {
+            tool: 'novel_audit',
+            args: {},
+            reason: `${journal[0]!.code}: ${journal[0]!.detail}; inspect and restore before the next write`,
+          }
+        : this.nextStep(snapshot)
     const report: StatusReport = {
       project: {
         title: snapshot.project.title,
@@ -504,9 +584,20 @@ export class EngineService {
       active_chapter: snapshot.pipeline.chapter,
       stage: snapshot.pipeline.stage,
       rounds: { ...snapshot.pipeline.rounds },
-      blocking: this.effectiveBlocking(snapshot),
+      blocking: [...this.effectiveBlocking(snapshot), ...journal],
       state_errors: this.stateErrors(snapshot),
       metrics,
+      ...(snapshot.handoff === null
+        ? {}
+        : (() => {
+            const position = projectHandoff(snapshot.handoff, snapshot.pipeline.chapter)
+            return {
+              volume: position.volume,
+              volume_name: position.volume_name,
+              act: position.act,
+              act_progress: position.act_progress,
+            }
+          })()),
       next,
     }
     return { data: report, revision: snapshot.pipeline.revision, warnings: [] }
@@ -530,11 +621,61 @@ export class EngineService {
     const snapshot = await this.load(input.root)
     const chapter = input.chapter ?? snapshot.pipeline.chapter
     const store = this.storeFor(snapshot.root)
+    const ledgerPath = LEDGER_PATHS[input.kind]
+    if (ledgerPath !== undefined) {
+      const damage = snapshot.ledgerErrors.find((error) => error.path === ledgerPath)
+      if (damage !== undefined) {
+        return {
+          data: {
+            error: damage.code,
+            message: damage.message,
+            path: damage.path,
+            raw: await store.readText(damage.path),
+          },
+          revision: snapshot.pipeline.revision,
+          warnings: [],
+        }
+      }
+    }
     switch (input.kind) {
       case 'pipeline':
         return { data: snapshot.pipeline, revision: snapshot.pipeline.revision, warnings: [] }
-      case 'chapters':
-        return { data: snapshot.chapters, revision: snapshot.pipeline.revision, warnings: [] }
+      case 'chapters': {
+        const range = input.chapter_range
+        if (range !== undefined) {
+          if (
+            !Array.isArray(range) ||
+            range.length !== 2 ||
+            !Number.isInteger(range[0]) ||
+            !Number.isInteger(range[1]) ||
+            range[0] < 1 ||
+            range[1] < range[0]
+          ) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'chapter_range must be [start, end] positive integers with start <= end',
+            )
+          }
+        }
+        const rows =
+          range === undefined
+            ? snapshot.chapters.chapters
+            : snapshot.chapters.chapters.filter((row) => row.num >= range[0] && row.num <= range[1])
+        const data =
+          input.include_summary === true
+            ? { schema_version: 1 as const, chapters: rows }
+            : {
+                schema_version: 1 as const,
+                chapters: rows.map((row) => ({
+                  num: row.num,
+                  title: row.title,
+                  word_count: row.word_count,
+                  score: row.score,
+                  status: row.status,
+                })),
+              }
+        return { data, revision: snapshot.pipeline.revision, warnings: [] }
+      }
       case 'characters':
         return { data: snapshot.characters, revision: snapshot.pipeline.revision, warnings: [] }
       case 'world':
@@ -550,6 +691,18 @@ export class EngineService {
       case 'handoff':
         return { data: snapshot.handoff, revision: snapshot.pipeline.revision, warnings: [] }
       case 'review': {
+        if (chapter === snapshot.pipeline.chapter && snapshot.reviewError !== null) {
+          return {
+            data: {
+              error: 'REVIEW_UNREADABLE',
+              message: snapshot.reviewError,
+              path: reviewFile(chapter),
+              raw: await store.readText(reviewFile(chapter)),
+            },
+            revision: snapshot.pipeline.revision,
+            warnings: [],
+          }
+        }
         const document =
           chapter === snapshot.pipeline.chapter
             ? snapshot.review
@@ -557,6 +710,18 @@ export class EngineService {
         return { data: document, revision: snapshot.pipeline.revision, warnings: [] }
       }
       case 'check': {
+        if (chapter === snapshot.pipeline.chapter && snapshot.checkError !== null) {
+          return {
+            data: {
+              error: 'CHECK_UNREADABLE',
+              message: snapshot.checkError,
+              path: checkFile(chapter),
+              raw: await store.readText(checkFile(chapter)),
+            },
+            revision: snapshot.pipeline.revision,
+            warnings: [],
+          }
+        }
         const document =
           chapter === snapshot.pipeline.chapter
             ? snapshot.check
@@ -564,16 +729,51 @@ export class EngineService {
         return { data: document, revision: snapshot.pipeline.revision, warnings: [] }
       }
       case 'novel':
+        if (snapshot.projectError !== null) {
+          return {
+            data: {
+              error: 'PROJECT_UNREADABLE',
+              message: snapshot.projectError,
+              path: PROJECT_FILE,
+              raw: await store.readText(PROJECT_FILE),
+            },
+            revision: snapshot.pipeline.revision,
+            warnings: [],
+          }
+        }
         return { data: snapshot.project, revision: snapshot.pipeline.revision, warnings: [] }
       case 'planWorld': {
+        if (chapter === snapshot.pipeline.chapter) {
+          if (snapshot.worldPlanError !== null) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `${planWorldFile(chapter)}: ${snapshot.worldPlanError}`,
+              'run novel_status and repair or re-plan the world plan',
+            )
+          }
+          return { data: snapshot.worldPlan, revision: snapshot.pipeline.revision, warnings: [] }
+        }
         const raw = await store.readText(planWorldFile(chapter))
         return {
-          data: raw === null ? null : parsePlanYaml(raw, planWorldFile(chapter)),
+          data:
+            raw === null
+              ? null
+              : (narrow('worldPlan', parsePlanYaml(raw, planWorldFile(chapter))) as unknown),
           revision: snapshot.pipeline.revision,
           warnings: [],
         }
       }
       case 'planChapter': {
+        if (chapter === snapshot.pipeline.chapter) {
+          if (snapshot.planError !== null) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `${planChapterFile(chapter)}: ${snapshot.planError}`,
+              'run novel_status and repair or re-plan the chapter',
+            )
+          }
+          return { data: snapshot.plan, revision: snapshot.pipeline.revision, warnings: [] }
+        }
         const raw = await store.readText(planChapterFile(chapter))
         return {
           data: raw === null ? null : parsePlanYaml(raw, planChapterFile(chapter)),
@@ -598,7 +798,15 @@ export class EngineService {
     }>
   > {
     const snapshot = await this.load(input.root)
-    const next = this.nextStep(snapshot)
+    const journal = await this.journalBlocking(snapshot)
+    const next =
+      journal.length > 0 && this.stateErrors(snapshot).length === 0
+        ? {
+            tool: 'novel_audit',
+            args: {},
+            reason: `${journal[0]!.code}: ${journal[0]!.detail}; inspect and restore before the next write`,
+          }
+        : this.nextStep(snapshot)
     return {
       data: {
         stage: snapshot.pipeline.stage,
@@ -606,7 +814,7 @@ export class EngineService {
         tool: next.tool,
         args: next.args,
         reason: next.reason,
-        blocking: this.effectiveBlocking(snapshot),
+        blocking: [...this.effectiveBlocking(snapshot), ...journal],
         state_errors: this.stateErrors(snapshot),
       },
       revision: snapshot.pipeline.revision,
@@ -667,6 +875,7 @@ export class EngineService {
           /** P4 must apply exclusions before its arithmetic closes. */
           score_exclusions: this.rulepack.exclusions,
           next_tool: NEXT_TOOL_BY_BRIEF[input.stage],
+          ...(snapshot.worldPlanError === null ? {} : { world_plan_error: snapshot.worldPlanError }),
           ...(snapshot.planError === null ? {} : { plan_error: snapshot.planError }),
           ...(snapshot.reviewError === null ? {} : { review_error: snapshot.reviewError }),
           ...(snapshot.checkError === null ? {} : { check_error: snapshot.checkError }),
@@ -711,6 +920,34 @@ export class EngineService {
     }
     const constraints = stringList(input.constraints, 'constraints')
     const continuity_notes = stringList(input.continuity_notes, 'continuity_notes')
+    const objectiveChars = Array.from(input.objective).length
+    if (objectiveChars > LIMITS.maxWorldPlanObjectiveChars) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `world plan objective is ${objectiveChars} characters; limit is ${LIMITS.maxWorldPlanObjectiveChars}`,
+        'keep the protected objective within the P2 context budget',
+      )
+    }
+    for (const [field, values] of [
+      ['constraints', constraints],
+      ['continuity_notes', continuity_notes],
+    ] as const) {
+      if (values.length > LIMITS.maxWorldPlanItems) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `world plan ${field} has ${values.length} items; limit is ${LIMITS.maxWorldPlanItems}`,
+          'merge related constraints/notes so the protected context stays bounded',
+        )
+      }
+      const chars = values.reduce((total, value) => total + Array.from(value).length, 0)
+      if (chars > LIMITS.maxWorldPlanTextChars) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `world plan ${field} has ${chars} characters; limit is ${LIMITS.maxWorldPlanTextChars}`,
+          'keep constraints/continuity notes concise; the protected context has a fixed budget',
+        )
+      }
+    }
     const characters = objectList(input.characters, 'characters')
     for (const [index, character] of characters.entries()) {
       requireText(character, 'name', `characters[${index}].name`)
@@ -767,13 +1004,21 @@ export class EngineService {
     if (typeof input.title !== 'string' || input.title.trim() === '') {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter plan title must not be empty')
     }
-    const titleBody = input.title.replace(/^第\s*\d+\s*章\s*/, '').trim()
-    const titleLength = Array.from(titleBody).length
-    if (titleLength < 4 || titleLength > 8) {
+    const titleTemplate = this.rulepack.format.title
+    if (LENIENT_TITLE_PREFIX.test(input.title)) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
-        `chapter plan title body must be 4..8 characters, got ${titleLength}`,
-        'use the same 4..8 character body the P3 title rule will judge',
+        'chapter plan title must not include the 第N章 prefix',
+        'submit the title body only; the engine adds the canonical prefix',
+      )
+    }
+    const titleBody = input.title.trim()
+    const titleLength = Array.from(titleBody).length
+    if (titleLength < titleTemplate.min_chars || titleLength > titleTemplate.max_chars) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `chapter plan title body must be ${titleTemplate.min_chars}..${titleTemplate.max_chars} characters, got ${titleLength}`,
+        'use the same title body the P3 title rule will judge',
       )
     }
     if (typeof input.narrator !== 'string' || input.narrator.trim() === '') {
@@ -821,9 +1066,16 @@ export class EngineService {
       key: (snapshot) => `plan:${snapshot.pipeline.chapter}:${sha256(stableJson(input))}`,
       run: async (snapshot, context) => {
         await this.assertGates(snapshot, 'submitChapterPlan', { briefStage: 'P2' })
+        const cast = normalizeCast(input.cast, snapshot)
         const chapter = snapshot.pipeline.chapter
         const path = planChapterFile(chapter)
-        const plan = { ...input, chapter, beats, schema_version: 1 as const }
+        const plan = {
+          ...input,
+          chapter,
+          beats,
+          ...(cast === undefined ? {} : { cast }),
+          schema_version: 1 as const,
+        }
         delete (plan as { root?: string }).root
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: 'P3',
@@ -851,6 +1103,13 @@ export class EngineService {
     }
     if (typeof input.chapter_title !== 'string' || input.chapter_title.trim() === '') {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter_title must not be empty')
+    }
+    if (typeof input.narrator !== 'string' || input.narrator.trim() === '') {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'narrator must not be empty',
+        'use the narration person/name validated at P2; a blank narrator would make the stored plan unreadable',
+      )
     }
     if (!(SCENE_TYPES as readonly string[]).includes(input.scene_type)) {
       throw new EngineInputError(
@@ -887,16 +1146,25 @@ export class EngineService {
           summary: input.summary,
         })
         const chapter = input.chapter
-        const planPath = planChapterFile(chapter)
-        const planText = await context.store.readText(planPath)
-        const plan = planText === null ? null : parsePlanYaml(planText, planPath)
+        // The P3 draft must extend a parsed, validated chapter plan. Reading
+        // the raw file again here used to turn a missing plan into a partial
+        // replacement that made the next load fail.
+        const plan = snapshot.plan
+        if (plan === null) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `chapter ${chapter} has no usable plan`,
+            'rollback to P2 and submit novel_plan_chapter; the draft was not written',
+          )
+        }
         const mergedPlan = {
-          ...(plan ?? { schema_version: 1, chapter }),
+          ...plan,
           title: input.chapter_title,
           scene_type: input.scene_type,
           narrator: input.narrator,
           summary: input.summary,
         }
+        const planPath = planChapterFile(chapter)
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: 'P4',
           blocking: [],
@@ -1244,8 +1512,7 @@ export class EngineService {
         // another revision (and a PG-11 round) to repair.
         if (input.summary === undefined && snapshot.plan?.summary !== undefined) {
           const opening = snapshot.plan.summary.opening
-          const firstTwo = splitParagraphs(input.content).slice(0, 2)
-          if (!firstTwo.some((paragraph) => paragraph.includes(opening))) {
+          if (!openingInFirstTwoParagraphs(input.content, opening)) {
             throw new EngineInputError(
               ERROR_CODES.SCHEMA_INVALID,
               'summary omitted, but the stored opening no longer appears in the revised first two paragraphs',
@@ -1334,7 +1601,14 @@ export class EngineService {
           semantic: { items: semantic },
           verdict,
         }
-        const nextStage: Stage = verdict === 'pass' ? 'ready_to_archive' : 'P6'
+        // A pass over only one scope is not an archive pass. Advancing to
+        // ready_to_archive here made status point at archive even though PG-04
+        // or PG-10 never ran, producing a permanent archive/check loop.
+        const fullScope = scope.includes('content') && scope.includes('integrity')
+        const nextStage: Stage =
+          verdict === 'pass'
+            ? computeNextStage(snapshot.pipeline.stage, 'runCheck', 0, { completeCheck: fullScope })
+            : 'P6'
         const blockingItems: BlockingItem[] =
           verdict === 'fail'
             ? [
@@ -1348,7 +1622,12 @@ export class EngineService {
             : []
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           stage: nextStage,
-          rounds: { ...snapshot.pipeline.rounds, check: snapshot.pipeline.rounds.check + 1 },
+          // A partial pass is informational and stays at P6; it must not burn
+          // the check retry budget before the required full-scope run.
+          rounds: {
+            ...snapshot.pipeline.rounds,
+            check: snapshot.pipeline.rounds.check + (verdict === 'fail' || fullScope ? 1 : 0),
+          },
           blocking: blockingItems,
           last_action: action('novel_check', this.now(), sha256(text)),
         })
@@ -1368,7 +1647,17 @@ export class EngineService {
             metrics: scopedMachine.metrics,
             stage: nextStage,
           },
-          warnings: machineWarnings(scopedMachine),
+          warnings: [
+            ...machineWarnings(scopedMachine),
+            ...(verdict === 'pass' && !fullScope
+              ? [
+                  {
+                    code: 'CHECK_SCOPE_PARTIAL',
+                    message: `scope ${scope.join('+')} passed, but archive requires content+integrity; the pipeline stays at P6`,
+                  },
+                ]
+              : []),
+          ],
         }
       },
     })
@@ -1381,9 +1670,13 @@ export class EngineService {
   ): Promise<
     OpResult<{ chapter: number; assigned_ids: Record<string, string>; metrics: WordMetrics; score: number }>
   > {
-    const archiveDigest = sha256(
-      stableJson({ chapter: input.chapter, state_delta: input.state_delta, handoff: input.handoff }),
-    )
+    const handoffOverride = normalizeHandoffOverride(input.handoff)
+    // v2 marks the locale-independent canonicalization. Legacy unprefixed
+    // digests are accepted only through the explicit compatibility comparison
+    // below, so a new archive can never silently adopt an old different delta.
+    const archiveDigest = `v2:${sha256(
+      stableJson({ chapter: input.chapter, state_delta: input.state_delta, handoff: handoffOverride }),
+    )}`
     return this.mutate({
       root: input.root,
       op: 'archiveChapter',
@@ -1407,7 +1700,10 @@ export class EngineService {
               'restore the chapter index from backups/ or re-archive from the original manuscript',
             )
           }
-          if (already.archive_digest !== archiveDigest) {
+          if (
+            already.archive_digest !== archiveDigest &&
+            already.archive_digest !== legacyArchiveDigest(input)
+          ) {
             throw new EngineInputError(
               ERROR_CODES.SCHEMA_INVALID,
               `chapter ${input.chapter} is already archived with a different state_delta`,
@@ -1508,7 +1804,7 @@ export class EngineService {
         const metrics = countWordMetrics(text)
         const score = snapshot.review?.total ?? 0
         const chapter = input.chapter
-        const storedTitle = (snapshot.plan?.title ?? '').replace(/^第\s*\d+\s*章\s*/, '').trim()
+        const storedTitle = stripTitlePrefix(snapshot.plan?.title ?? '')
         const title = storedTitle === '' ? `第${chapter}章` : storedTitle
         const record: ChapterRecord = {
           num: chapter,
@@ -1554,22 +1850,28 @@ export class EngineService {
         const chapters = structuredClone(snapshot.chapters)
         chapters.chapters.push(record)
 
-        const totalChapters = snapshot.project.targets.total_chapters
-        const derivedVolume = Math.max(1, Math.ceil(chapter / 20))
+        // Volume and volume_name are inherited author boundaries; act and
+        // act_progress advance from the stored handoff so a 21st chapter keeps
+        // the fourth act's rollover instead of restarting at the first act.
+        const position = advanceHandoff(snapshot.handoff, chapter, handoffOverride)
         const handoff = {
           schema_version: 1 as const,
           current_chapter: chapter,
-          volume: input.handoff?.volume ?? derivedVolume,
-          volume_name: input.handoff?.volume_name ?? `第${derivedVolume}卷`,
-          act: input.handoff?.act ?? `第${Math.max(1, Math.ceil(((chapter - 1) % 20) / 5) + 1)}幕`,
-          act_progress:
-            input.handoff?.act_progress ??
-            (totalChapters === null ? `进至第${chapter}章` : `${chapter}/${totalChapters}`),
+          volume: position.volume,
+          volume_name: position.volume_name,
+          act: position.act,
+          act_progress: position.act_progress,
           next_chapter: chapter + 1,
           last_summary: summary.events.join('；').slice(0, 200),
           open_hooks: foreshadows.items
             .filter((item) => item.status !== 'resolved')
-            .slice(-5)
+            .sort((left, right) => {
+              const byAge = left.last_touched - right.last_touched
+              if (byAge !== 0) return byAge
+              const byId = compareText(left.id, right.id)
+              return byId !== 0 ? byId : compareText(left.title, right.title)
+            })
+            .slice(0, 5)
             .map((item) => ({ id: item.id, title: item.title })),
           updated_at: this.now().toISOString(),
         }
@@ -1597,6 +1899,31 @@ export class EngineService {
           ['handoff', handoff],
         ])
 
+        const digestRaw = await context.store.readText(ARCHIVE_DIGESTS)
+        let archiveDigests: Record<string, string> = {}
+        if (digestRaw !== null) {
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(digestRaw)
+          } catch (error) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `${ARCHIVE_DIGESTS} is not valid JSON`,
+              'restore the internal archive ledger before archiving; it protects idempotent replays',
+              { cause: error },
+            )
+          }
+          const record = recordOf(parsed)
+          if (record === null || Object.values(record).some((value) => typeof value !== 'string')) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `${ARCHIVE_DIGESTS} must be a JSON object of chapter -> digest`,
+              'restore the internal archive ledger before archiving',
+            )
+          }
+          archiveDigests = record as Record<string, string>
+        }
+        archiveDigests[String(chapter)] = archiveDigest
         const files: StagedFile[] = [
           // Re-staging the manuscript makes the archive backup a true snapshot of
           // the archived version; the body itself is unchanged by this transaction.
@@ -1610,6 +1937,7 @@ export class EngineService {
           { path: joinRel(STATE_DIR, STATE_FILES.world), text: yaml(ledger.world) },
           { path: joinRel(STATE_DIR, STATE_FILES.locks), text: yaml(ledger.locks) },
           { path: joinRel(STATE_DIR, STATE_FILES.relationships), text: yaml(ledger.relationships) },
+          { path: ARCHIVE_DIGESTS, text: `${JSON.stringify(archiveDigests, null, 2)}\n` },
         ]
         return {
           files,
@@ -1653,9 +1981,18 @@ export class EngineService {
         'edit novel content through the draft/revision tools, not amend',
       )
     }
+    // Repairing one damaged ledger must not be blocked by a second damaged
+    // ledger: every currently unreadable state document is an allowed journal
+    // mismatch, while a valid-but-edited document still fails closed.
+    const repairPaths: string[] = []
+    for (const [path, docKind] of Object.entries(MUTABLE_STATE)) {
+      if (docKind === 'pipeline') continue
+      if (await this.stateDocIsUnreadable(store, path, docKind)) repairPaths.push(path)
+    }
     return this.mutate({
       root: resolvedRoot,
       op: 'amend',
+      ...(repairPaths.length === 0 ? {} : { repairPaths }),
       key: (snapshot) => `amend:${input.path}:${snapshot.pipeline.revision}`,
       run: async (snapshot, context) => {
         if (input.reason.trim() === '') {
@@ -1672,7 +2009,110 @@ export class EngineService {
             'use novel_rollback or the stage operations',
           )
         }
-        const document = narrow(kind, { ...input.content, schema_version: input.content.schema_version ?? 1 })
+        let projectBaseline = snapshot.project
+        let projectDamaged = snapshot.projectError !== null
+        if (kind === 'project' && snapshot.projectError !== null) {
+          const backup = await this.latestBackup(context.store, PROJECT_FILE)
+          if (backup !== null) {
+            try {
+              projectBaseline = narrow('project', parseYaml(backup)) as unknown as NovelProject
+              projectDamaged = false
+            } catch {
+              // A damaged backup cannot weaken the structural checks.
+            }
+          }
+        }
+        const document =
+          kind === 'project'
+            ? snapshot.projectError !== null
+              ? narrow('project', { ...input.content, schema_version: input.content.schema_version ?? 1 })
+              : mergeProjectAmendment(input.content, snapshot.project)
+            : narrow(kind, { ...input.content, schema_version: input.content.schema_version ?? 1 })
+        let oldDocument = (snapshot as unknown as Record<string, unknown>)[kind]
+        // A damaged file has no trustworthy in-memory shape. Recover the last
+        // committed backup so "no archived chapter may disappear" still has
+        // something to compare against; without this, repairing a corrupt index
+        // would trivially pass the monotonicity check.
+        if (kind === 'project') {
+          oldDocument = projectBaseline
+        } else if (snapshot.ledgerErrors.some((error) => error.path === input.path)) {
+          const backup = await this.latestBackup(context.store, input.path)
+          if (backup !== null) {
+            try {
+              oldDocument = narrow(kind, parseYaml(backup))
+            } catch {
+              // A damaged backup cannot weaken the structural checks; keep the
+              // empty fallback and let the new document be validated on its own.
+            }
+          }
+        }
+        const archivedFiles =
+          kind === 'chapters' || kind === 'project'
+            ? (await context.store.list(CHAPTERS_DIR))
+                .map((name) => /^chapter-(\d{3})\.md$/.exec(name))
+                .filter((match): match is RegExpExecArray => match !== null)
+                .map((match) => Number(match[1]))
+                // The active chapter may already have a manuscript file; it is
+                // not an archived row and must not make a repair demand a row
+                // before the chapter is indexed.
+                .filter((num) => num !== snapshot.pipeline.chapter).length
+            : 0
+        let archiveDigests: Record<string, string> = {}
+        if (kind === 'chapters') {
+          const digestRaw = await context.store.readText(ARCHIVE_DIGESTS)
+          if (digestRaw !== null) {
+            let parsed: unknown
+            try {
+              parsed = JSON.parse(digestRaw)
+            } catch (error) {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `${ARCHIVE_DIGESTS} is not valid JSON`,
+                'restore the internal archive ledger before repairing chapters',
+                { cause: error },
+              )
+            }
+            const record = recordOf(parsed)
+            if (record === null || Object.values(record).some((value) => typeof value !== 'string')) {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `${ARCHIVE_DIGESTS} must be a JSON object of chapter -> digest`,
+                'restore the internal archive ledger before repairing chapters',
+              )
+            }
+            archiveDigests = record as Record<string, string>
+          }
+        }
+        const problems = amendProblems(
+          kind,
+          oldDocument,
+          document,
+          snapshot,
+          input.path,
+          archivedFiles,
+          projectBaseline,
+          projectDamaged,
+          archiveDigests,
+        )
+        if (kind === 'chapters') {
+          for (const raw of Array.isArray(document.chapters) ? document.chapters : []) {
+            const row = recordOf(raw)
+            if (row === null || typeof row.file !== 'string' || typeof row.content_hash !== 'string') continue
+            const text = await context.store.readText(row.file)
+            if (text === null) {
+              problems.push(`archived chapter ${String(row.num)} has no manuscript at ${row.file}`)
+            } else if (sha256(text) !== row.content_hash) {
+              problems.push(`archived chapter ${String(row.num)} content_hash does not match ${row.file}`)
+            }
+          }
+        }
+        if (problems.length > 0) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `amend would break a state invariant: ${problems.join('; ')}`,
+            'keep archived chapters, entity references and next_seq monotonic; nothing was written',
+          )
+        }
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           last_action: action('novel_amend', this.now(), shortDigest(input.reason)),
         })
@@ -1809,8 +2249,14 @@ export class EngineService {
       key: (snapshot) =>
         `export:${input.kind}:${input.chapter ?? 'all'}:${sha256(
           stableJson({
+            chapter: snapshot.pipeline.chapter,
             text: sha256(snapshot.text ?? ''),
-            chapters: snapshot.chapters.chapters.map((chapter) => chapter.content_hash),
+            plan_title: stripTitlePrefix(snapshot.plan?.title ?? ''),
+            project: sha256(stableJson(snapshot.project)),
+            chapters: snapshot.chapters.chapters.map((chapter) => ({
+              content_hash: chapter.content_hash,
+              title: chapter.title,
+            })),
             title: snapshot.project.title,
           }),
         )}`,
@@ -1973,6 +2419,21 @@ export class EngineService {
       op: 'amend',
       key: () => `import:${input.kind}:${sha256(stableJson(input.content))}`,
       run: async (fresh, context) => {
+        if (fresh.pipeline.revision !== snapshot.pipeline.revision) {
+          throw new EngineFaultError(
+            ERROR_CODES.TXN_ABORTED,
+            `${input.kind} import was prepared against revision ${snapshot.pipeline.revision}, but the project is now at ${fresh.pipeline.revision}`,
+            're-run the import against the current project; nothing was written',
+          )
+        }
+        const problems = amendProblems(input.kind, fresh[input.kind], document, fresh, path)
+        if (problems.length > 0) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `import would break a state invariant: ${problems.join('; ')}`,
+            'fix the pack or the referencing ledgers; nothing was written',
+          )
+        }
         const nextPipeline = pipelineWith(fresh, context.revision, {
           last_action: action('novel_import', this.now(), shortDigest(input.kind)),
         })
@@ -2003,9 +2464,7 @@ export class EngineService {
         ? null
         : {
             num: snapshot.pipeline.chapter,
-            title:
-              (snapshot.plan?.title ?? '').replace(/^第\s*\d+\s*章\s*/, '').trim() ||
-              `第${snapshot.pipeline.chapter}章`,
+            title: stripTitlePrefix(snapshot.plan?.title ?? '') || `第${snapshot.pipeline.chapter}章`,
             wordCount: draftWords,
             score: snapshot.review?.total ?? 0,
             status: (this.effectiveBlocking(snapshot).length > 0 ? 'blocked' : 'draft') as
@@ -2022,6 +2481,17 @@ export class EngineService {
       revision: snapshot.pipeline.revision,
       rounds: snapshot.pipeline.rounds,
       blocking: this.effectiveBlocking(snapshot),
+      ...(snapshot.handoff === null
+        ? {}
+        : (() => {
+            const position = projectHandoff(snapshot.handoff, snapshot.pipeline.chapter)
+            return {
+              volume: position.volume,
+              volume_name: position.volume_name,
+              act: position.act,
+              act_progress: position.act_progress,
+            }
+          })()),
       next: finished ? undefined : this.nextStep(snapshot),
       finished,
       chapters: archived,
@@ -2029,15 +2499,90 @@ export class EngineService {
       totalWords:
         archived.reduce((total, chapter) => total + chapter.word_count, 0) +
         (draft === null ? 0 : draft.wordCount),
+      averageScore:
+        archived.length === 0
+          ? 0
+          : archived.reduce((total, chapter) => total + chapter.score, 0) / archived.length,
       phases: phaseStrip(snapshot.pipeline.stage, finished),
     }
+  }
+
+  /**
+   * The archive stage has only one legal operation, so a status/panel that
+   * recommends it without checking the same gates as the archive creates a
+   * loop. Evaluate the real archive gates through `gateInput`, then add the
+   * machine pass and semantic evidence that archive re-checks separately.
+   */
+  private archivePreflight(
+    snapshot: Snapshot,
+  ): { item: BlockingItem; to_stage: RollbackSubmission['toStage'] } | null {
+    if (snapshot.pipeline.stage !== 'ready_to_archive') return null
+    const text = snapshot.text ?? ''
+    const gateResult = evaluateGates(
+      this.gateInput(snapshot, 'archiveChapter', {
+        briefStage: 'P8',
+        proof: snapshot.review?.proof ?? null,
+      }),
+      { rulepack: this.rulepack, minScore: this.config.quality.minScore },
+    )
+    if (!gateResult.passed) {
+      const first = gateResult.blocking[0]!
+      const target: RollbackSubmission['toStage'] =
+        first.code === 'PG-03' || first.code === 'PG-04' || first.code === 'PG-05' || first.code === 'PG-06'
+          ? 'P3'
+          : first.code === 'PG-07' || first.code === 'PG-08' || first.code === 'PG-09'
+            ? 'P4'
+            : first.code === 'PG-11'
+              ? 'P4'
+              : 'P6'
+      return { item: { ...first, scope: first.scope ?? 'archive' }, to_stage: target }
+    }
+    const summary = snapshot.plan?.summary ?? null
+    const machine = this.machine(snapshot, text, { summary })
+    const blockers = machine.violations.filter((violation) => violation.severity === 'blocker')
+    if (blockers.length > 0) {
+      return {
+        item: {
+          code: blockers[0]!.code,
+          scope: 'archive',
+          detail: `${blockers.length} machine blocker(s) remain; first: ${blockers[0]!.detail}`,
+          hint: 'call novel_rollback with to_stage P3 and re-submit the draft and plan fields',
+        },
+        to_stage: 'P3',
+      }
+    }
+    const semantic = evaluateSemantic(
+      text,
+      Array.isArray(snapshot.check?.semantic.items) ? snapshot.check.semantic.items : [],
+    )
+    if (semantic.failed) {
+      return {
+        item: {
+          code: semantic.blocking[0]?.code ?? 'SEMANTIC_CHECK_FAILED',
+          scope: 'archive',
+          detail: `${semantic.blocking.length} semantic check item(s) fail`,
+          hint: 'call novel_rollback with to_stage P6, then re-run novel_check',
+        },
+        to_stage: 'P6',
+      }
+    }
+    return null
   }
 
   private nextStep(snapshot: Snapshot): StatusReport['next'] {
     const stage = snapshot.pipeline.stage
     const chapter = snapshot.pipeline.chapter
+    const activeIndexed = snapshot.chapters.chapters.some((record) => record.num === chapter)
+    if (activeIndexed) {
+      return {
+        tool: 'novel_amend',
+        args: { path: joinRel(STATE_DIR, STATE_FILES.chapters) },
+        reason: `chapter ${chapter} is the active chapter but is already in the index; read novel_state {kind:"chapters", include_summary:true}, remove it with novel_amend, then continue`,
+      }
+    }
     if (this.stateErrors(snapshot).length > 0) {
       const recovery = this.recoveryFor(snapshot)
+      if (recovery.tool === 'novel_amend') return recovery
       const target = recovery.args.to_stage as RollbackSubmission['toStage']
       // Once rollback has reached its target, the normal stage tool is the
       // repair path (plan_chapter at P2, review at P4, check at P6). Pointing at
@@ -2095,11 +2640,32 @@ export class EngineService {
             : `${detail}; fetch the ${briefStage} brief, then ${followUp}`,
       }
     }
+    if (
+      stage === 'P6' &&
+      snapshot.check !== null &&
+      snapshot.check.verdict === 'pass' &&
+      (!snapshot.check.scope.includes('content') || !snapshot.check.scope.includes('integrity'))
+    ) {
+      return {
+        tool: 'novel_check',
+        args: this.nextArgs('P6', chapter),
+        reason:
+          'the last check covered only one scope; run novel_check without scope (content+integrity) to reach archive',
+      }
+    }
     if (stage === 'P6' && snapshot.checkError !== null) {
       return {
         tool: 'novel_check',
         args: this.nextArgs('P6', chapter),
         reason: `CHECK_UNREADABLE@${checkFile(chapter)}; repair the check with novel_check before any stale revision blocker`,
+      }
+    }
+    const archive = this.archivePreflight(snapshot)
+    if (archive !== null) {
+      return {
+        tool: 'novel_rollback',
+        args: { chapter, to_stage: archive.to_stage },
+        reason: `${archive.item.code}: ${archive.item.detail}; ${archive.item.hint ?? ''}`.trim(),
       }
     }
     if (snapshot.pipeline.blocking.length > 0) {
@@ -2122,15 +2688,28 @@ export class EngineService {
   private roundsLimitBlock(snapshot: Snapshot): BlockingItem | null {
     const stage = snapshot.pipeline.stage
     if (!['P4', 'P5', 'P6'].includes(stage)) return null
-    const counter: 'review' | 'revise' | 'check' =
-      stage === 'P4' ? 'review' : stage === 'P5' ? 'revise' : 'check'
-    if (!roundsExhausted(snapshot.pipeline.rounds, counter)) return null
-    return {
+    const block = (counter: 'review' | 'revise' | 'check'): BlockingItem => ({
       code: 'PG-11',
       scope: 'rounds',
       detail: `round limit reached for ${counter} (review ${snapshot.pipeline.rounds.review}, revise ${snapshot.pipeline.rounds.revise}, check ${snapshot.pipeline.rounds.check})`,
       hint: 'call novel_rollback with to_stage P4; the manuscript is kept for reference',
+    })
+    if (stage === 'P4') {
+      return roundsExhausted(snapshot.pipeline.rounds, 'review') ? block('review') : null
     }
+    if (stage === 'P5') {
+      return roundsExhausted(snapshot.pipeline.rounds, 'revise') ? block('revise') : null
+    }
+    // P6 has two possible next operations: a revision clears check blockers,
+    // while a check is the only way to advance. If the check budget is spent
+    // no revision can eventually archive, so it must roll back; if only the
+    // revision budget is spent and blockers remain, the next revise is already
+    // rejected and must roll back too.
+    if (roundsExhausted(snapshot.pipeline.rounds, 'check')) return block('check')
+    if (snapshot.pipeline.blocking.length > 0 && roundsExhausted(snapshot.pipeline.rounds, 'revise')) {
+      return block('revise')
+    }
+    return null
   }
 
   /** Pipeline blockers plus budget exhaustion, so status/panel cannot say "all clear". */
@@ -2141,9 +2720,29 @@ export class EngineService {
       detail: `${error.code}: ${error.message}`,
       hint: this.recoveryFor(snapshot).reason,
     }))
+    const activeIndexed = snapshot.chapters.chapters.some(
+      (record) => record.num === snapshot.pipeline.chapter,
+    )
+    const active = activeIndexed
+      ? [
+          {
+            code: 'ACTIVE_CHAPTER_INDEXED',
+            scope: 'state',
+            detail: `chapter ${snapshot.pipeline.chapter} is active but already exists in state/chapters.yaml`,
+            hint: 'read the index with novel_state {kind:"chapters", include_summary:true}, remove the active row with novel_amend, then continue',
+          },
+        ]
+      : []
     const extra = this.roundsLimitBlock(snapshot)
     const reviewDigest = this.reviewDigestProblem(snapshot)
-    const base = [...state, ...(reviewDigest === null ? [] : [reviewDigest]), ...snapshot.pipeline.blocking]
+    const archive = this.archivePreflight(snapshot)
+    const base = [
+      ...state,
+      ...active,
+      ...(archive === null ? [] : [archive.item]),
+      ...(reviewDigest === null ? [] : [reviewDigest]),
+      ...snapshot.pipeline.blocking,
+    ]
     if (extra === null) return base
     return base.some((item) => item.code === extra.code) ? base : [...base, extra]
   }
@@ -2178,8 +2777,18 @@ export class EngineService {
   }
 
   private stateErrors(snapshot: Snapshot): StateError[] {
-    const errors: StateError[] = []
+    const errors: StateError[] = [...snapshot.ledgerErrors]
+    if (snapshot.projectError !== null) {
+      errors.push({ path: PROJECT_FILE, code: 'PROJECT_UNREADABLE', message: snapshot.projectError })
+    }
     const chapter = snapshot.pipeline.chapter
+    if (snapshot.worldPlanError !== null) {
+      errors.push({
+        path: planWorldFile(chapter),
+        code: 'WORLD_PLAN_UNREADABLE',
+        message: snapshot.worldPlanError,
+      })
+    }
     if (snapshot.planError !== null) {
       errors.push({
         path: planChapterFile(chapter),
@@ -2206,13 +2815,38 @@ export class EngineService {
 
   /** The earliest rebuild point for the current state damage. */
   private recoveryFor(snapshot: Snapshot): {
-    tool: 'novel_rollback'
+    tool: 'novel_rollback' | 'novel_amend'
     args: Record<string, unknown>
     reason: string
   } {
     const chapter = snapshot.pipeline.chapter
     const errors = this.stateErrors(snapshot)
-    const desired = snapshot.planError !== null ? 'P2' : snapshot.reviewError !== null ? 'P4' : 'P6'
+    if (snapshot.projectError !== null) {
+      return {
+        tool: 'novel_amend',
+        args: { path: PROJECT_FILE, reason: `repair PROJECT_UNREADABLE: ${snapshot.projectError}` },
+        reason: `${errors.map((error) => `${error.code}@${error.path}`).join('; ')}; read novel_state novel for the raw document, then amend with a complete project document`,
+      }
+    }
+    // Ledger damage cannot be rebuilt by replaying a stage; it needs an
+    // explicit, journaled amend. Point there first so the model does not
+    // rollback into a wall of STATE_UNREADABLE gates.
+    if (snapshot.ledgerErrors.length > 0) {
+      const first = snapshot.ledgerErrors[0]!
+      return {
+        tool: 'novel_amend',
+        args: { path: first.path, reason: `repair ${first.code}: ${first.message}` },
+        reason: `${errors.map((error) => `${error.code}@${error.path}`).join('; ')}; read novel_state for the raw document, then amend it with a complete replacement`,
+      }
+    }
+    const desired: RollbackSubmission['toStage'] =
+      snapshot.worldPlanError !== null
+        ? 'P1'
+        : snapshot.planError !== null
+          ? 'P2'
+          : snapshot.reviewError !== null
+            ? 'P4'
+            : 'P6'
     const target = this.clampRollbackTarget(snapshot.pipeline.stage, desired)
     const targetRank = STAGE_RANK[ROUND_TRANSITIONS[target]]
     const action =
@@ -2254,9 +2888,19 @@ export class EngineService {
       'runCheck',
       'archiveChapter',
     ]
+    // The chapter-plan writer overwrites a corrupt chapter plan; it must not be
+    // blocked by the very damage it repairs. The world plan is an input to P2,
+    // so a corrupt world plan does block the chapter-plan writer.
+    const worldPlanSensitive: Operation[] = ['submitChapterPlan', ...planSensitive]
     const reviewSensitive: Operation[] = ['submitRevision', 'runCheck', 'archiveChapter']
     const checkSensitive: Operation[] = ['archiveChapter']
-    const relevant: StateError[] = []
+    const relevant: StateError[] = [...snapshot.ledgerErrors]
+    if (snapshot.projectError !== null) {
+      relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'PROJECT_UNREADABLE'))
+    }
+    if (snapshot.worldPlanError !== null && worldPlanSensitive.includes(operation)) {
+      relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'WORLD_PLAN_UNREADABLE'))
+    }
     if (snapshot.planError !== null && planSensitive.includes(operation)) {
       relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'PLAN_UNREADABLE'))
     }
@@ -2345,7 +2989,7 @@ export class EngineService {
     ) {
       chapters.push({
         num: snapshot.pipeline.chapter,
-        title: snapshot.plan?.title ?? '未命名',
+        title: stripTitlePrefix(snapshot.plan?.title ?? '') || '未命名',
         text: snapshot.text,
       })
     }
@@ -2370,7 +3014,11 @@ export class EngineService {
   ): MachineResult {
     const options: MachineOptions = {
       chapter: snapshot.pipeline.chapter,
-      title: composeTitle(snapshot.pipeline.chapter, extra.title ?? snapshot.plan?.title ?? null),
+      title: composeTitle(
+        snapshot.pipeline.chapter,
+        extra.title ?? snapshot.plan?.title ?? null,
+        this.rulepack.format.title.pattern,
+      ),
       genre: snapshot.project.genre,
       sceneType: extra.sceneType ?? snapshot.plan?.scene_type ?? '日常过渡章',
       rulepack: this.rulepack,
@@ -2390,11 +3038,19 @@ export class EngineService {
   }
 
   private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
+    let cache = this.briefContextCache.get(snapshot)
+    if (cache === undefined) {
+      cache = new Map()
+      this.briefContextCache.set(snapshot, cache)
+    }
+    const cacheKey = `${stage}:${chapter}`
+    const cached = cache.get(cacheKey)
+    if (cached !== undefined) return cached
     const machine =
       ['P4', 'P5', 'P6'].includes(stage) && snapshot.text !== null
         ? this.machine(snapshot, snapshot.text, { summary: snapshot.plan?.summary ?? null })
         : undefined
-    return briefContext({
+    const context = briefContext({
       stage,
       chapter,
       project: snapshot.project,
@@ -2406,6 +3062,8 @@ export class EngineService {
       foreshadows: snapshot.foreshadows,
       timeline: snapshot.timeline,
       relationships: snapshot.relationships,
+      worldPlan: snapshot.worldPlan,
+      world_plan_error: snapshot.worldPlanError,
       plan: snapshot.plan,
       plan_error: snapshot.planError,
       review: snapshot.review,
@@ -2417,6 +3075,8 @@ export class EngineService {
       previousText: snapshot.previousText,
       handoff: snapshot.handoff,
     })
+    cache.set(cacheKey, context)
+    return context
   }
 
   private briefDigest(stage: string, snapshot: Snapshot, context: Record<string, unknown>): string {
@@ -2457,7 +3117,12 @@ export class EngineService {
     }
   }
 
-  private async assertGates(
+  /**
+   * The one place a gate input is assembled. Archive preflight evaluates the
+   * same object as the real archive, so a gate cannot pass preflight and then
+   * fail the write (the old PG-06/scope holes did exactly that).
+   */
+  private gateInput(
     snapshot: Snapshot,
     operation: Operation,
     extras: Partial<
@@ -2476,25 +3141,9 @@ export class EngineService {
         | 'semantic'
         | 'scope'
       >
-    >,
-  ): Promise<void> {
+    > = {},
+  ): GateInput {
     const text = extras.text ?? snapshot.text ?? ''
-    if (!canRun(snapshot.pipeline.stage, operation)) {
-      throw new EngineInputError(
-        ERROR_CODES.STAGE_ORDER,
-        `${operation} is not allowed at stage ${snapshot.pipeline.stage}`,
-        'call novel_status to see the next legal step',
-      )
-    }
-    const stateBlocking = this.stateGateBlock(snapshot, operation)
-    if (stateBlocking.length > 0) {
-      throw new EngineBlockedError(
-        ERROR_CODES.GATE_BLOCKED,
-        `${operation} blocked by unreadable state: ${stateBlocking[0]!.detail}`,
-        stateBlocking,
-        this.recoveryFor(snapshot).reason,
-      )
-    }
     const archive =
       operation === 'archiveChapter'
         ? {
@@ -2508,7 +3157,7 @@ export class EngineService {
               snapshot.check.content_hash === sha256(snapshot.text),
           }
         : null
-    const input: GateInput = {
+    return {
       operation,
       stage: snapshot.pipeline.stage,
       text,
@@ -2526,7 +3175,11 @@ export class EngineService {
               this.briefContextFor(extras.briefStage, snapshot, snapshot.pipeline.chapter),
             )),
       briefStage: extras.briefStage ?? briefStageFor(operation, snapshot.pipeline.stage),
-      draftTitle: composeTitle(snapshot.pipeline.chapter, extras.draftTitle ?? snapshot.plan?.title ?? null),
+      draftTitle: composeTitle(
+        snapshot.pipeline.chapter,
+        extras.draftTitle ?? snapshot.plan?.title ?? null,
+        this.rulepack.format.title.pattern,
+      ),
       sceneType: extras.sceneType ?? snapshot.plan?.scene_type ?? null,
       summary: extras.summary ?? snapshot.plan?.summary ?? null,
       summaryProvided: extras.summaryProvided,
@@ -2549,7 +3202,49 @@ export class EngineService {
       previousTexts: snapshot.previousTexts,
       priorSceneTypes: snapshot.chapters.chapters.map((record) => record.scene_type),
     }
-    const result = evaluateGates(input, { rulepack: this.rulepack, minScore: this.config.quality.minScore })
+  }
+
+  private async assertGates(
+    snapshot: Snapshot,
+    operation: Operation,
+    extras: Partial<
+      Pick<
+        GateInput,
+        | 'briefStage'
+        | 'briefDigest'
+        | 'text'
+        | 'summary'
+        | 'summaryProvided'
+        | 'draftTitle'
+        | 'sceneType'
+        | 'review'
+        | 'check'
+        | 'proof'
+        | 'semantic'
+        | 'scope'
+      >
+    >,
+  ): Promise<void> {
+    if (!canRun(snapshot.pipeline.stage, operation)) {
+      throw new EngineInputError(
+        ERROR_CODES.STAGE_ORDER,
+        `${operation} is not allowed at stage ${snapshot.pipeline.stage}`,
+        'call novel_status to see the next legal step',
+      )
+    }
+    const stateBlocking = this.stateGateBlock(snapshot, operation)
+    if (stateBlocking.length > 0) {
+      throw new EngineBlockedError(
+        ERROR_CODES.GATE_BLOCKED,
+        `${operation} blocked by unreadable state: ${stateBlocking[0]!.detail}`,
+        stateBlocking,
+        this.recoveryFor(snapshot).reason,
+      )
+    }
+    const result = evaluateGates(this.gateInput(snapshot, operation, extras), {
+      rulepack: this.rulepack,
+      minScore: this.config.quality.minScore,
+    })
     if (!result.passed) {
       const first = result.blocking[0]!
       this.onEvent?.({
@@ -2593,51 +3288,138 @@ export class EngineService {
 
   private async load(root?: string, retries = 1): Promise<Snapshot> {
     const store = this.storeFor(await this.resolveRoot(root))
-    if (!(await store.exists(PROJECT_FILE))) {
-      throw new EngineInputError(
-        ERROR_CODES.PROJECT_NOT_FOUND,
-        `no novel project at ${store.root}`,
-        'call novel_init to create one, or pass the correct project root',
-      )
+    const projectExists = await store.exists(PROJECT_FILE)
+    if (!projectExists) {
+      const stateFiles = [
+        STATE_FILES.pipeline,
+        STATE_FILES.chapters,
+        STATE_FILES.characters,
+        STATE_FILES.world,
+        STATE_FILES.locks,
+        STATE_FILES.timeline,
+        STATE_FILES.foreshadows,
+        STATE_FILES.relationships,
+        STATE_FILES.handoff,
+      ].map((file) => joinRel(STATE_DIR, file))
+      const hasState =
+        (await Promise.all(stateFiles.map((path) => store.exists(path)))).some(Boolean) ||
+        (await store.list(CHAPTERS_DIR)).length > 0 ||
+        (await store.list('plans')).length > 0 ||
+        (await store.list('reviews')).length > 0 ||
+        (await store.list('checks')).length > 0
+      if (!hasState) {
+        throw new EngineInputError(
+          ERROR_CODES.PROJECT_NOT_FOUND,
+          `no novel project at ${store.root}`,
+          'call novel_init to create one, or pass the correct project root',
+        )
+      }
     }
-    const project = await store.readDoc(PROJECT_FILE, 'project')
-    if (project === null)
-      throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${PROJECT_FILE} disappeared mid-read`)
+    let project: NovelProject = {
+      ...ENGINE_PROJECT_INITIAL,
+      title: '（项目文件不可读）',
+    }
+    let projectError: string | null = projectExists ? null : `${PROJECT_FILE} is missing`
+    if (projectExists) {
+      try {
+        const read = await store.readDoc(PROJECT_FILE, 'project')
+        if (read === null) {
+          throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${PROJECT_FILE} disappeared mid-read`)
+        }
+        project = read as unknown as NovelProject
+      } catch (error) {
+        // A newer schema or a path/symlink escape stays a hard stop; malformed
+        // current-schema project metadata is recoverable so status, panel and
+        // novel_amend can reach it.
+        if (
+          error instanceof EngineFaultError &&
+          (error.code === ERROR_CODES.SCHEMA_TOO_NEW || error.code === ERROR_CODES.PATH_ESCAPE)
+        ) {
+          throw error
+        }
+        projectError = errorMessage(error)
+      }
+    }
     const pipeline = (await store.readDoc(
       joinRel(STATE_DIR, STATE_FILES.pipeline),
       'pipeline',
     )) as unknown as PipelineState | null
     if (pipeline === null)
       throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, 'state/pipeline.yaml is missing')
-    const chapters =
-      (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.chapters), 'chapters')) ?? emptyChapters()
-    const characters =
-      (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.characters), 'characters')) ?? emptyCharacters()
-    const world = (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.world), 'world')) ?? emptyWorld()
-    const locks = (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.locks), 'locks')) ?? {
+    const ledgerErrors: StateError[] = []
+    const ledger = async <T>(
+      path: string,
+      kind: DocKind,
+      code: StateError['code'],
+      fallback: T,
+    ): Promise<T> => {
+      const read = await this.recoverableDoc<T>(store, path, kind)
+      if (read.error !== null) {
+        ledgerErrors.push({ path, code, message: read.error })
+      } else if (read.value === null) {
+        // A missing required ledger is damage, not an empty ledger. Treating it
+        // as empty lets status report a healthy project and makes the repair
+        // path unreachable; the journal would then reject every write.
+        ledgerErrors.push({ path, code, message: `${path} is missing` })
+      }
+      return read.value ?? fallback
+    }
+    const chapters = await ledger(
+      joinRel(STATE_DIR, STATE_FILES.chapters),
+      'chapters',
+      'CHAPTERS_UNREADABLE',
+      emptyChapters(),
+    )
+    const characters = await ledger(
+      joinRel(STATE_DIR, STATE_FILES.characters),
+      'characters',
+      'CHARACTERS_UNREADABLE',
+      emptyCharacters(),
+    )
+    const world = await ledger(
+      joinRel(STATE_DIR, STATE_FILES.world),
+      'world',
+      'WORLD_UNREADABLE',
+      emptyWorld(),
+    )
+    const locks = await ledger(joinRel(STATE_DIR, STATE_FILES.locks), 'locks', 'LOCKS_UNREADABLE', {
       schema_version: 1 as const,
       locked_at_chapter: 0,
       characters: {},
       locations: {},
-    }
-    const timeline = (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.timeline), 'timeline')) ?? {
-      schema_version: 1 as const,
-      next_seq: 1,
-      items: [],
-    }
-    const foreshadows = (await store.readDoc(joinRel(STATE_DIR, STATE_FILES.foreshadows), 'foreshadows')) ?? {
-      schema_version: 1 as const,
-      next_seq: 1,
-      items: [],
-    }
-    const relationships = (await store.readDoc(
+    })
+    const timeline = await ledger(
+      joinRel(STATE_DIR, STATE_FILES.timeline),
+      'timeline',
+      'TIMELINE_UNREADABLE',
+      {
+        schema_version: 1 as const,
+        next_seq: 1,
+        items: [],
+      },
+    )
+    const foreshadows = await ledger(
+      joinRel(STATE_DIR, STATE_FILES.foreshadows),
+      'foreshadows',
+      'FORESHADOWS_UNREADABLE',
+      {
+        schema_version: 1 as const,
+        next_seq: 1,
+        items: [],
+      },
+    )
+    const relationships = await ledger(
       joinRel(STATE_DIR, STATE_FILES.relationships),
       'relationships',
-    )) ?? { schema_version: 1 as const, next_seq: 1, items: [] }
-    const handoff = (await store.readDoc(
+      'RELATIONSHIPS_UNREADABLE',
+      { schema_version: 1 as const, next_seq: 1, items: [] },
+    )
+    const handoff = await ledger<HandoffDocument | null>(
       joinRel(STATE_DIR, STATE_FILES.handoff),
       'handoff',
-    )) as unknown as HandoffDocument | null
+      'HANDOFF_UNREADABLE',
+      null,
+    )
     const chapter = pipeline.chapter
     const text = await store.readText(chapterFile(chapter))
     const previousText = chapter > 1 ? await store.readText(chapterFile(chapter - 1)) : null
@@ -2662,12 +3444,45 @@ export class EngineService {
         planError = errorMessage(error)
       }
     }
+    const worldPlanPath = planWorldFile(chapter)
+    const worldPlanRaw = await store.readText(worldPlanPath)
+    let worldPlan: import('../types.js').WorldPlanInput | null = null
+    let worldPlanError: string | null = null
+    if (worldPlanRaw !== null) {
+      try {
+        const parsed = parsePlanYaml(worldPlanRaw, worldPlanPath)
+        const narrowed = narrow('worldPlan', parsed)
+        validateWorldPlanShape(narrowed, worldPlanPath)
+        worldPlan = narrowed as unknown as import('../types.js').WorldPlanInput
+      } catch (error) {
+        if (error instanceof EngineFaultError && error.code === ERROR_CODES.SCHEMA_TOO_NEW) throw error
+        worldPlanError = errorMessage(error)
+      }
+    }
     const reviewRead = await this.recoverableDoc<ReviewDocument>(store, reviewFile(chapter), 'review')
     const checkRead = await this.recoverableDoc<CheckDocument>(store, checkFile(chapter), 'check')
     const review = reviewRead.value
-    const reviewError = reviewRead.error
+    let reviewError = reviewRead.error
     const check = checkRead.value
-    const checkError = checkRead.error
+    let checkError = checkRead.error
+    // `done` is the archive state for the chapter that just finished, not the
+    // start of a new chapter cycle. The next chapter legitimately has no world
+    // plan/chapter plan/review yet; only the active cycle stages require them.
+    const cycleRank = pipeline.stage === 'done' ? STAGE_RANK.idle : STAGE_RANK[pipeline.stage]
+    if (worldPlanRaw === null && worldPlanError === null && cycleRank >= STAGE_RANK.P2) {
+      worldPlanError = `${planWorldFile(chapter)} is missing`
+    }
+    if (planRaw === null && planError === null && cycleRank >= STAGE_RANK.P3) {
+      planError = `${planChapterFile(chapter)} is missing`
+    }
+    // P5, P6 and ready_to_archive all consume the P4 review.
+    if (review === null && reviewError === null && cycleRank >= STAGE_RANK.P5) {
+      reviewError = `${reviewFile(chapter)} is missing`
+    }
+    // P6 is the check-writing stage; only ready_to_archive requires the result.
+    if (check === null && checkError === null && pipeline.stage === 'ready_to_archive') {
+      checkError = `${checkFile(chapter)} is missing`
+    }
     const latest = (await store.readDoc(
       joinRel(STATE_DIR, STATE_FILES.pipeline),
       'pipeline',
@@ -2686,6 +3501,7 @@ export class EngineService {
     return {
       root: store.root,
       project: project as unknown as NovelProject,
+      projectError,
       pipeline: pipeline as unknown as PipelineState,
       chapters: chapters as unknown as ChaptersDocument,
       characters: characters as unknown as Snapshot['characters'],
@@ -2695,11 +3511,14 @@ export class EngineService {
       foreshadows: foreshadows as unknown as Snapshot['foreshadows'],
       relationships: relationships as unknown as Snapshot['relationships'],
       handoff,
+      worldPlan,
+      ledgerErrors,
       text,
       previousText,
       previousTexts,
       plan,
       planError,
+      worldPlanError,
       review,
       reviewError,
       check,
@@ -2707,11 +3526,25 @@ export class EngineService {
     }
   }
 
+  /** A repair may bypass the journal hash only when the document is unreadable. */
+  private async stateDocIsUnreadable(store: FsStore, path: string, kind: DocKind): Promise<boolean> {
+    // A deleted required ledger is just as unreadable as invalid YAML, and it
+    // must be repairable through the same explicit amend transaction.
+    if ((await store.readText(path)) === null) return true
+    try {
+      await store.readDoc(path, kind)
+      return false
+    } catch (error) {
+      if (error instanceof EngineFaultError && error.code === ERROR_CODES.SCHEMA_TOO_NEW) return false
+      return true
+    }
+  }
+
   /** Read a review/check without letting one corrupt file wedge every read. */
   private async recoverableDoc<T>(
     store: FsStore,
     path: string,
-    kind: 'review' | 'check',
+    kind: DocKind,
   ): Promise<{ value: T | null; error: string | null }> {
     try {
       const value = (await store.readDoc(path, kind)) as unknown as T | null
@@ -2729,6 +3562,8 @@ export class EngineService {
     op: Operation
     key?: (snapshot: Snapshot) => string
     emptyAllowed?: boolean
+    /** Only an explicit amend may overwrite these externally changed paths. */
+    repairPaths?: readonly string[]
     run: (
       snapshot: Snapshot,
       context: { store: FsStore; revision: number },
@@ -2820,7 +3655,7 @@ export class EngineService {
         // The snapshot must be read while holding the cross-process lock;
         // otherwise a second process can commit between read and write and the
         // later writer silently overwrites it with a stale revision.
-        await assertJournalConsistent(store)
+        await assertJournalConsistent(store, options.repairPaths ?? [])
         const snapshot = await this.load(root)
         const key = options.key?.(snapshot)
         if (key !== undefined) {
@@ -2881,6 +3716,7 @@ export class EngineService {
     return {
       root,
       project: { ...ENGINE_PROJECT_INITIAL },
+      projectError: null,
       pipeline: emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' }),
       chapters: emptyChapters(),
       characters: emptyCharacters(),
@@ -2890,11 +3726,14 @@ export class EngineService {
       foreshadows: { schema_version: 1, next_seq: 1, items: [] },
       relationships: { schema_version: 1, next_seq: 1, items: [] },
       handoff: null,
+      worldPlan: null,
+      ledgerErrors: [],
       text: null,
       previousText: null,
       previousTexts: [],
       plan: null,
       planError: null,
+      worldPlanError: null,
       review: null,
       reviewError: null,
       check: null,
@@ -2993,32 +3832,554 @@ const machineWarnings = (machine: MachineResult): Warning[] =>
       message: `${violation.detail} (paragraph ${violation.location.paragraph})`,
     }))
 
-/** Titles are stored as bodies; the format rule judges the rendered heading. */
-const composeTitle = (chapter: number, title: string | null): string | null => {
-  if (title === null) return null
-  return /^第\s*\d+\s*章/.test(title) ? title : `第${chapter}章 ${title}`
-}
-
-const stableJson = (value: unknown): string => {
+/** 0.1.2 archive digests used localeCompare; keep that comparison only for upgrades. */
+const legacyStableJson = (value: unknown): string => {
   const normalize = (input: unknown): unknown => {
     if (Array.isArray(input)) return input.map(normalize)
     if (typeof input === 'object' && input !== null) {
       return Object.fromEntries(
         Object.entries(input as Record<string, unknown>)
-          .filter(([, value]) => value !== undefined)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([key, value]) => [key, normalize(value)]),
+          .filter(([, item]) => item !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, item]) => [key, normalize(item)]),
       )
     }
     return input
   }
-  return JSON.stringify(normalize(value))
+  return JSON.stringify(normalize(value)) ?? 'null'
+}
+
+const normalizeHandoffOverride = (value: ArchiveHandoff | undefined): ArchiveHandoff | undefined => {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'handoff must be an object')
+  }
+  const volume = value.volume
+  if (volume !== undefined && (!Number.isInteger(volume) || volume < 1)) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'handoff.volume must be a positive integer')
+  }
+  const volumeName = value.volume_name
+  if (volumeName !== undefined && (typeof volumeName !== 'string' || volumeName.trim() === '')) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'handoff.volume_name must be non-empty')
+  }
+  const act = value.act
+  if (act !== undefined && (typeof act !== 'string' || act.trim() === '')) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'handoff.act must be non-empty')
+  }
+  const actProgress = value.act_progress
+  if (actProgress !== undefined && parseActProgress(actProgress) === null) {
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      'handoff.act_progress must be n/d with a positive denominator and n <= d',
+    )
+  }
+  return {
+    ...(volume === undefined ? {} : { volume }),
+    ...(volumeName === undefined ? {} : { volume_name: volumeName.trim() }),
+    ...(act === undefined ? {} : { act: act.trim() }),
+    ...(actProgress === undefined ? {} : { act_progress: actProgress.trim() }),
+  }
+}
+
+const legacyArchiveDigest = (input: ArchiveSubmission): string =>
+  sha256(legacyStableJson({ chapter: input.chapter, state_delta: input.state_delta, handoff: input.handoff }))
+
+const LENIENT_TITLE_PREFIX = /^第\s*\d+\s*章\s*/
+
+/** Titles are stored as bodies; the format rule judges the rendered heading. */
+const stripTitlePrefix = (title: string): string => title.replace(LENIENT_TITLE_PREFIX, '').trim()
+
+const composeTitle = (chapter: number, title: string | null, pattern?: string): string | null => {
+  if (title === null) return null
+  const text = title.trim()
+  if (pattern !== undefined && new RegExp(pattern).test(text)) return text
+  // A prefixed title with non-canonical spacing is normalized rather than
+  // producing `第1章 第 1 章 …` in the export.
+  const body = stripTitlePrefix(text)
+  return `第${chapter}章 ${body === '' ? text : body}`
 }
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error
     ? `${error.message}${error.cause instanceof Error ? `: ${error.cause.message}` : ''}`
     : String(error)
+
+const recordOf = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+
+const mergeProjectAmendment = (
+  content: Record<string, unknown>,
+  old: NovelProject,
+): Record<string, unknown> => {
+  const allowed = new Set(['schema_version', 'title', 'author', 'description', 'targets', 'total_chapters'])
+  for (const key of Object.keys(content)) {
+    if (!allowed.has(key)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `novel.yaml amend cannot change "${key}"`,
+        'only title, author, description and targets.total_chapters are mutable',
+      )
+    }
+  }
+  const merged: Record<string, unknown> = { ...old, ...content }
+  if (content.targets !== undefined) {
+    const targets = recordOf(content.targets)
+    if (targets === null) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'targets must be an object')
+    }
+    const allowedTargets = new Set(['words_per_chapter', 'dialogue_ratio', 'total_chapters'])
+    for (const key of Object.keys(targets)) {
+      if (!allowedTargets.has(key)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `novel.yaml targets cannot change "${key}"`,
+          'only targets.total_chapters is mutable; words_per_chapter and dialogue_ratio are immutable',
+        )
+      }
+    }
+    merged.targets = { ...old.targets, ...targets }
+  }
+  if (Object.hasOwn(content, 'total_chapters')) {
+    const targets = recordOf(merged.targets) ?? {}
+    merged.targets = { ...targets, total_chapters: content.total_chapters }
+  }
+  delete merged.total_chapters
+  return narrow('project', merged)
+}
+
+const amendProblems = (
+  kind: DocKind,
+  oldDocument: unknown,
+  nextDocument: Record<string, unknown>,
+  snapshot: Snapshot,
+  path: string,
+  archivedFiles = 0,
+  projectBaseline: NovelProject = snapshot.project,
+  projectDamaged = false,
+  archiveDigests: Readonly<Record<string, string>> = {},
+): string[] => {
+  const problems: string[] = []
+  const old = recordOf(oldDocument)
+  if (kind === 'project') {
+    const next = nextDocument
+    const targets = recordOf(next.targets)
+    if (typeof next.title !== 'string' || next.title.trim() === '') problems.push('title must not be empty')
+    if (!projectDamaged) {
+      if (next.genre !== projectBaseline.genre) problems.push('genre is immutable')
+      if (next.platform !== projectBaseline.platform) problems.push('platform is immutable')
+      if (next.created_at !== projectBaseline.created_at) problems.push('created_at is immutable')
+    }
+    const oldTargets = projectBaseline.targets
+    if (targets === null) {
+      problems.push('targets must be an object')
+    } else {
+      if (
+        !projectDamaged &&
+        (JSON.stringify(targets.words_per_chapter) !== JSON.stringify(oldTargets.words_per_chapter) ||
+          JSON.stringify(targets.dialogue_ratio) !== JSON.stringify(oldTargets.dialogue_ratio))
+      ) {
+        problems.push('words_per_chapter and dialogue_ratio are immutable; only total_chapters may change')
+      }
+      const total = targets.total_chapters
+      if (total !== null && (!Number.isInteger(total) || (total as number) < 1)) {
+        problems.push('targets.total_chapters must be a positive integer or null')
+      }
+      const archivedCount = Math.max(snapshot.chapters.chapters.length, archivedFiles)
+      if (typeof total === 'number' && Number.isInteger(total) && total < archivedCount) {
+        problems.push(`targets.total_chapters ${total} is below the ${archivedCount} archived chapter(s)`)
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'chapters') {
+    const active = snapshot.pipeline.chapter
+    const oldRows = Array.isArray(old?.chapters) ? old.chapters : []
+    const nextRows = Array.isArray(nextDocument.chapters) ? nextDocument.chapters : []
+    const rowNum = (raw: unknown): number | null => {
+      const row = recordOf(raw)
+      return row !== null && Number.isInteger(row.num) ? (row.num as number) : null
+    }
+    const oldArchived = oldRows.filter((raw) => {
+      const num = rowNum(raw)
+      return num !== null && num < active
+    })
+    const nextArchived = nextRows.filter((raw) => {
+      const num = rowNum(raw)
+      return num !== null && num < active
+    })
+    if (nextArchived.length < oldArchived.length) {
+      problems.push('archived chapters may not be deleted')
+    }
+    const archivedCount = Math.max(0, active - 1, archivedFiles)
+    if (nextArchived.length < archivedCount) {
+      problems.push(
+        `chapters index has ${nextArchived.length} archived rows but ${archivedCount} chapter(s) are archived`,
+      )
+    }
+    const byNum = new Map<number, Record<string, unknown>>()
+    for (const [index, raw] of nextRows.entries()) {
+      const row = recordOf(raw)
+      if (row === null || !Number.isInteger(row.num)) {
+        problems.push(`chapters[${index}] is not a valid record`)
+        continue
+      }
+      const num = row.num as number
+      if (num !== index + 1) problems.push(`chapters[${index}].num must be ${index + 1}`)
+      if (num >= active) {
+        problems.push(
+          `chapter ${num} is active or in the future; the index may contain only archived chapters`,
+        )
+      }
+      if (byNum.has(num)) problems.push(`chapter ${num} appears more than once`)
+      byNum.set(num, row)
+      const knownDigest = archiveDigests[String(num)]
+      if (knownDigest !== undefined && row.archive_digest !== knownDigest) {
+        problems.push(`archived chapter ${num} cannot change its archive_digest`)
+      }
+    }
+    for (const raw of oldArchived) {
+      const before = recordOf(raw)
+      if (before === null || !Number.isInteger(before.num)) continue
+      const after = byNum.get(before.num as number)
+      if (after === undefined) {
+        problems.push(`archived chapter ${String(before.num)} is missing`)
+        continue
+      }
+      if (before.content_hash !== after.content_hash) {
+        problems.push(`archived chapter ${String(before.num)} cannot change its content_hash`)
+      }
+      if (before.archive_digest !== after.archive_digest) {
+        problems.push(`archived chapter ${String(before.num)} cannot change its archive_digest`)
+      }
+      if (stableJson(before.assigned_ids ?? {}) !== stableJson(after.assigned_ids ?? {})) {
+        problems.push(`archived chapter ${String(before.num)} cannot change its assigned_ids`)
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'timeline' || kind === 'foreshadows' || kind === 'relationships') {
+    if (snapshot.ledgerErrors.some((error) => error.code === 'CHAPTERS_UNREADABLE')) {
+      problems.push('cannot validate next_seq while chapters.yaml is unreadable')
+      return problems
+    }
+    if (
+      kind === 'foreshadows' &&
+      snapshot.ledgerErrors.some((error) => error.code === 'HANDOFF_UNREADABLE')
+    ) {
+      problems.push('cannot validate next_seq while handoff.yaml is unreadable')
+      return problems
+    }
+    const items = Array.isArray(nextDocument.items) ? nextDocument.items : []
+    const ids = new Set<string>()
+    let maxSuffix = 0
+    for (const [index, raw] of items.entries()) {
+      const row = recordOf(raw)
+      if (row === null || typeof row.id !== 'string' || row.id === '') {
+        problems.push(`items[${index}].id must be a non-empty string`)
+        continue
+      }
+      if (ids.has(row.id)) problems.push(`item id "${row.id}" appears more than once`)
+      ids.add(row.id)
+      const match = /-(\d+)$/.exec(row.id)
+      if (match !== null) maxSuffix = Math.max(maxSuffix, Number(match[1]))
+    }
+    const nextSeq = nextDocument.next_seq
+    const prefix = kind === 'foreshadows' ? 'FS-' : kind === 'timeline' ? 'TE-' : 'RL-'
+    let engineFloor = 0
+    for (const chapter of snapshot.chapters.chapters) {
+      for (const value of Object.values(chapter.assigned_ids ?? {})) {
+        if (typeof value !== 'string' || !value.startsWith(prefix)) continue
+        const match = /-(\d+)$/.exec(value)
+        if (match !== null) engineFloor = Math.max(engineFloor, Number(match[1]))
+      }
+    }
+    if (kind === 'foreshadows' && snapshot.handoff !== null) {
+      for (const hook of snapshot.handoff.open_hooks) {
+        if (!hook.id.startsWith(prefix)) continue
+        const match = /-(\d+)$/.exec(hook.id)
+        if (match !== null) engineFloor = Math.max(engineFloor, Number(match[1]))
+      }
+    }
+    if (!Number.isInteger(nextSeq) || (nextSeq as number) < 1) {
+      problems.push('next_seq must be a positive integer')
+    } else {
+      if ((nextSeq as number) < maxSuffix + 1) {
+        problems.push(`next_seq ${String(nextSeq)} would collide with existing id suffix ${maxSuffix}`)
+      }
+      if ((nextSeq as number) < items.length + 1) {
+        problems.push(`next_seq ${String(nextSeq)} is below items.length + 1`)
+      }
+      if ((nextSeq as number) < engineFloor + 1) {
+        problems.push(
+          `next_seq ${String(nextSeq)} would reuse an id already assigned by an archived chapter (${prefix}${String(engineFloor).padStart(3, '0')})`,
+        )
+      }
+      const oldSeq = old?.next_seq
+      if (typeof oldSeq === 'number' && (nextSeq as number) < oldSeq) {
+        problems.push(`next_seq cannot decrease from ${oldSeq} to ${String(nextSeq)}`)
+      }
+    }
+    if (kind !== 'relationships') return problems
+  }
+
+  if (kind === 'characters') {
+    const names = new Set(
+      (Array.isArray(nextDocument.characters) ? nextDocument.characters : [])
+        .map((raw) => recordOf(raw)?.name)
+        .filter((name): name is string => typeof name === 'string'),
+    )
+    // The target may be the damaged ledger being repaired; validity is decided
+    // by whether the *referencing* ledgers are readable, not by the target's
+    // own prior damage.
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'LOCKS_UNREADABLE')) {
+      for (const name of Object.keys(snapshot.locks.characters)) {
+        if (!names.has(name)) problems.push(`lock for removed character "${name}" still exists`)
+      }
+    }
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'RELATIONSHIPS_UNREADABLE')) {
+      for (const relationship of snapshot.relationships.items) {
+        if (!names.has(relationship.a) || !names.has(relationship.b)) {
+          problems.push(`relationship ${relationship.id} would reference a removed character`)
+        }
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'world') {
+    const locations = new Set(
+      (Array.isArray(nextDocument.locations) ? nextDocument.locations : [])
+        .map((raw) => recordOf(raw)?.name)
+        .filter((name): name is string => typeof name === 'string'),
+    )
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'LOCKS_UNREADABLE')) {
+      for (const name of Object.keys(snapshot.locks.locations)) {
+        if (!locations.has(name)) problems.push(`lock for removed location "${name}" still exists`)
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'locks') {
+    const characters = new Set(snapshot.characters.characters.map((character) => character.name))
+    const locations = new Set(snapshot.world.locations.map((location) => location.name))
+    if (snapshot.ledgerErrors.some((error) => error.code === 'CHARACTERS_UNREADABLE')) {
+      problems.push('cannot validate locks while characters.yaml is unreadable')
+    }
+    if (snapshot.ledgerErrors.some((error) => error.code === 'WORLD_UNREADABLE')) {
+      problems.push('cannot validate locks while world.yaml is unreadable')
+    }
+    for (const name of Object.keys(recordOf(nextDocument.characters) ?? {})) {
+      if (!characters.has(name)) problems.push(`lock references unknown character "${name}"`)
+    }
+    for (const name of Object.keys(recordOf(nextDocument.locations) ?? {})) {
+      if (!locations.has(name)) problems.push(`lock references unknown location "${name}"`)
+    }
+    return problems
+  }
+
+  if (kind === 'relationships') {
+    if (snapshot.ledgerErrors.some((error) => error.code === 'CHARACTERS_UNREADABLE')) {
+      problems.push('cannot validate relationships while characters.yaml is unreadable')
+      return problems
+    }
+    const names = new Set(snapshot.characters.characters.map((character) => character.name))
+    for (const raw of Array.isArray(nextDocument.items) ? nextDocument.items : []) {
+      const row = recordOf(raw)
+      if (row !== null && (typeof row.a !== 'string' || typeof row.b !== 'string')) {
+        problems.push('relationship endpoints must be strings')
+      } else if (row !== null && (!names.has(row.a as string) || !names.has(row.b as string))) {
+        problems.push(`relationship ${String(row.id)} references an unknown character`)
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'handoff') {
+    const current = nextDocument.current_chapter
+    const next = nextDocument.next_chapter
+    if (!Number.isInteger(current) || (current as number) < 0) {
+      problems.push('handoff.current_chapter must be a non-negative integer')
+    }
+    if (!Number.isInteger(next) || (next as number) < 1) {
+      problems.push('handoff.next_chapter must be a positive integer')
+    } else if (typeof current === 'number' && Number.isInteger(current) && next !== current + 1) {
+      problems.push('handoff.next_chapter must equal current_chapter + 1')
+    }
+    if (!Number.isInteger(nextDocument.volume) || (nextDocument.volume as number) < 1) {
+      problems.push('handoff.volume must be a positive integer')
+    }
+    for (const field of ['volume_name', 'act'] as const) {
+      if (typeof nextDocument[field] !== 'string' || (nextDocument[field] as string).trim() === '') {
+        problems.push(`handoff.${field} must be non-empty`)
+      }
+    }
+    if (parseActProgress(nextDocument.act_progress) === null) {
+      problems.push('handoff.act_progress must be n/d with a positive denominator and n <= d')
+    }
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'CHAPTERS_UNREADABLE')) {
+      const archivedMax = snapshot.chapters.chapters.reduce((max, record) => Math.max(max, record.num), 0)
+      if (typeof current === 'number' && Number.isInteger(current) && current !== archivedMax) {
+        problems.push(`handoff.current_chapter ${String(current)} must match archived chapter ${archivedMax}`)
+      }
+    }
+    const hooks = Array.isArray(nextDocument.open_hooks) ? nextDocument.open_hooks : []
+    const seenHooks = new Set<string>()
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'FORESHADOWS_UNREADABLE')) {
+      const openById = new Map(snapshot.foreshadows.items.map((item) => [item.id, item]))
+      for (const raw of hooks) {
+        const hook = recordOf(raw)
+        if (hook === null || typeof hook.id !== 'string' || typeof hook.title !== 'string') {
+          problems.push('handoff.open_hooks must contain id/title strings')
+          continue
+        }
+        if (seenHooks.has(hook.id)) problems.push(`handoff.open_hooks duplicate ${hook.id}`)
+        seenHooks.add(hook.id)
+        const known = openById.get(hook.id)
+        if (known === undefined) {
+          problems.push(`handoff.open_hooks references unknown foreshadow ${hook.id}`)
+        } else if (known.title !== hook.title) {
+          problems.push(`handoff.open_hooks title for ${hook.id} does not match foreshadows`)
+        }
+      }
+    }
+    return problems
+  }
+
+  // Unlisted future documents have no cross-document invariant.
+  void path
+  return problems
+}
+
+const castShapeProblems = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return ['cast must be an array']
+  if (value.length < 1 || value.length > 8) return ['cast must contain 1..8 members']
+  const problems: string[] = []
+  const names = new Set<string>()
+  for (const [index, raw] of value.entries()) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      problems.push(`cast[${index}] must be an object`)
+      continue
+    }
+    const member = raw as Record<string, unknown>
+    if (typeof member.name !== 'string' || member.name.trim() === '') {
+      problems.push(`cast[${index}].name must be non-empty`)
+      continue
+    }
+    if (names.has(member.name)) problems.push(`cast contains duplicate name "${member.name}"`)
+    names.add(member.name)
+    for (const field of ['entry_state', 'goal', 'exit_change'] as const) {
+      if (member[field] !== undefined && typeof member[field] !== 'string') {
+        problems.push(`cast[${index}].${field} must be a string`)
+      }
+    }
+    if (
+      member.knowledge !== undefined &&
+      (!Array.isArray(member.knowledge) || member.knowledge.some((item) => typeof item !== 'string'))
+    ) {
+      problems.push(`cast[${index}].knowledge must be a string array`)
+    }
+  }
+  return problems
+}
+
+const normalizeCast = (value: unknown, snapshot: Snapshot): ChapterCastMember[] | undefined => {
+  if (value === undefined) return undefined
+  const problems = castShapeProblems(value)
+  if (problems.length > 0) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, problems.join('; '))
+  }
+  const members = value as ChapterCastMember[]
+  const known = new Set([
+    ...(snapshot.worldPlan?.characters ?? []).map((character) => character.name),
+    ...snapshot.characters.characters.map((character) => character.name),
+  ])
+  for (const member of members) {
+    if (!known.has(member.name)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `cast member "${member.name}" is not declared in the P1 world plan or the character ledger`,
+        'add the character to novel_plan_world first; cast cannot invent an actor',
+      )
+    }
+  }
+  return members
+}
+
+/** The summary fields the read model dereferences at P3–P6 and in the panel. */
+const summaryContextProblems = (value: unknown): string[] => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return ['summary must be an object when present']
+  }
+  const summary = value as Record<string, unknown>
+  const problems: string[] = []
+  const strings = (key: string): void => {
+    if (!Array.isArray(summary[key]) || summary[key].some((item) => typeof item !== 'string')) {
+      problems.push(`summary.${key} must be a string array`)
+    }
+  }
+  strings('events')
+  strings('characters_appeared')
+  strings('pleasure_points')
+  const foreshadows = recordOf(summary.foreshadows)
+  if (foreshadows === null) {
+    problems.push('summary.foreshadows must be an object')
+  } else {
+    for (const key of ['planted', 'advanced', 'resolved'] as const) {
+      if (!Array.isArray(foreshadows[key])) problems.push(`summary.foreshadows.${key} must be an array`)
+    }
+  }
+  const elements = recordOf(summary.new_elements)
+  if (elements === null) {
+    problems.push('summary.new_elements must be an object')
+  } else {
+    for (const key of ['locations', 'abilities', 'artifacts'] as const) {
+      if (!Array.isArray(elements[key]) || elements[key].some((item) => typeof item !== 'string')) {
+        problems.push(`summary.new_elements.${key} must be a string array`)
+      }
+    }
+  }
+  if (!Array.isArray(summary.resource_changes)) problems.push('summary.resource_changes must be an array')
+  if (typeof summary.opening !== 'string') problems.push('summary.opening must be a string')
+  const continuity = recordOf(summary.continuity)
+  if (continuity === null) {
+    problems.push('summary.continuity must be an object')
+  } else {
+    for (const key of ['opens_from', 'ends_with'] as const) {
+      if (typeof continuity[key] !== 'string') problems.push(`summary.continuity.${key} must be a string`)
+    }
+  }
+  if (!Number.isInteger(summary.hook_strength)) problems.push('summary.hook_strength must be an integer')
+  if (!['high', 'mid', 'low'].includes(summary.plot_advancement as string)) {
+    problems.push('summary.plot_advancement must be high|mid|low')
+  }
+  return problems
+}
+
+/** Validate the nested roster fields the context builder dereferences. */
+const validateWorldPlanShape = (plan: Record<string, unknown>, path: string): void => {
+  const fail = (detail: string): never => {
+    throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${path} is not a usable world plan: ${detail}`)
+  }
+  for (const key of ['constraints', 'continuity_notes'] as const) {
+    if (!Array.isArray(plan[key]) || plan[key].some((item) => typeof item !== 'string')) {
+      fail(`${key} must be a string array`)
+    }
+  }
+  for (const key of ['characters', 'locations'] as const) {
+    if (!Array.isArray(plan[key])) fail(`${key} must be an array`)
+    for (const [index, raw] of (plan[key] as unknown[]).entries()) {
+      const row = recordOf(raw)
+      if (row === null || typeof row.name !== 'string' || row.name.trim() === '') {
+        fail(`${key}[${index}].name must be a non-empty string`)
+      }
+    }
+  }
+}
 
 /** Validate the shape a stored chapter plan must have before any stage uses it. */
 const validateStoredChapterPlan = (plan: Record<string, unknown>, path: string): void => {
@@ -3060,8 +4421,13 @@ const validateStoredChapterPlan = (plan: Record<string, unknown>, path: string):
   ) {
     fail('target_words must be [min, max] positive integers')
   }
-  if (plan.summary !== undefined && (typeof plan.summary !== 'object' || plan.summary === null)) {
-    fail('summary must be an object when present')
+  if (plan.summary !== undefined) {
+    const problems = summaryContextProblems(plan.summary)
+    if (problems.length > 0) fail(problems.join('; '))
+  }
+  if (plan.cast !== undefined) {
+    const problems = castShapeProblems(plan.cast)
+    if (problems.length > 0) fail(problems.join('; '))
   }
 }
 

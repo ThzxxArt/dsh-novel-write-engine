@@ -1,5 +1,6 @@
 import { parse as parseYaml, stringify } from 'yaml'
 import { REGISTRY_FILE } from '../constants.js'
+import { compareText } from '../domain/stable.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
 import { FsStore } from './fs.js'
 
@@ -73,7 +74,7 @@ export class ProjectRegistry {
     rows.push(row)
     const next: RegistryDocument = {
       ...document,
-      projects: rows.sort((a, b) => a.root.localeCompare(b.root)),
+      projects: rows.sort((a, b) => compareText(a.root, b.root)),
     }
     await this.write(next)
     return next

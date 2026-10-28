@@ -6,6 +6,8 @@ export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 1
+/** The panel is a recent-history view; the wire payload and UI use one cap. */
+export const PANEL_CHAPTER_LIMIT = 30
 
 /** Project-relative locations. Every write goes through these constants. */
 export const PROJECT_FILE = 'novel.yaml'
@@ -62,6 +64,12 @@ export const LIMITS = {
   lockWaitMs: 10_000,
   /** Reading proofs shorter than this cannot be verified. */
   minQuoteChars: 12,
+  /** World-plan text fields are protected context, so they need a hard bound. */
+  maxWorldPlanItems: 64,
+  maxWorldPlanTextChars: 4_000,
+  maxWorldPlanObjectiveChars: 2_000,
+  /** Cast plus summary may exceed eight, but not without a bound. */
+  maxActiveCast: 12,
 }
 
 /** Re-exported enums make adapter code readable without importing types twice. */

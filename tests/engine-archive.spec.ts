@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parse as parseYaml } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
 import {
   cleanText,
   harness,
@@ -11,6 +11,8 @@ import {
   sampleSummary,
 } from './helpers.js'
 import type { ChapterSummary } from '../src/types.js'
+import { FsStore } from '../src/store/fs.js'
+import { appendJournal } from '../src/store/journal.js'
 
 const readYaml = async (root: string, path: string): Promise<Record<string, unknown>> => {
   const text = await readProjectFile(root, path)
@@ -234,11 +236,21 @@ describe('archive state_delta reconciliation', () => {
         content_hash: review.content_hash,
         summary,
       })
-      await engine.amend({
-        path: 'state/chapters.yaml',
-        content: chapters as never,
-        reason: '构造伪造索引以验证归档边界',
-        root,
+      // Simulate a hand-written index directly, then record its bytes in the
+      // journal so the journal-consistency guard is not the thing under test.
+      await writeFile(join(root, 'state', 'chapters.yaml'), stringify(chapters), 'utf8')
+      const store = new FsStore(root)
+      const chaptersHash = await store.hashBytes('state/chapters.yaml')
+      expect(chaptersHash).not.toBeNull()
+      await appendJournal(store, {
+        txid: 'forged-active-index',
+        at: new Date().toISOString(),
+        op: 'forged-index',
+        chapter: 1,
+        revision: 1,
+        files: ['state/chapters.yaml'],
+        status: 'committed',
+        hashes: { 'state/chapters.yaml': chaptersHash! },
       })
       await expect(archive(engine, root, fullDelta(summary))).rejects.toMatchObject({
         code: 'ENGINE_SCHEMA_INVALID',

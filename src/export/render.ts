@@ -15,13 +15,16 @@ export function chapterHeading(chapter: Pick<ChapterRecord, 'num' | 'title'>): s
   return `第${chapter.num}章 ${chapter.title}`
 }
 
+/** Remove blank lines at the document edges, never manuscript indentation. */
+const trimBlankEdges = (text: string): string => text.replace(/^\n+|\n+$/g, '')
+
 /** Markdown export: one heading per chapter, body unchanged (it is plain text). */
 export function renderMarkdown(project: NovelProject, chapters: readonly ExportChapter[]): string {
   const parts = [`# ${project.title}`, '']
   if (project.author !== '') parts.push(`作者：${project.author}`, '')
   if (project.description !== '') parts.push(`> ${project.description}`, '')
   for (const chapter of chapters) {
-    parts.push(`## ${chapterHeading(chapter)}`, '', chapter.text.trim(), '')
+    parts.push(`## ${chapterHeading(chapter)}`, '', trimBlankEdges(chapter.text), '')
   }
   return parts.join('\n')
 }
@@ -30,7 +33,7 @@ export function renderMarkdown(project: NovelProject, chapters: readonly ExportC
 export function renderPlainText(project: NovelProject, chapters: readonly ExportChapter[]): string {
   const parts = [project.title, '']
   for (const chapter of chapters) {
-    parts.push(chapterHeading(chapter), '', chapter.text.trim(), '')
+    parts.push(chapterHeading(chapter), '', trimBlankEdges(chapter.text), '')
   }
   return parts.join('\n')
 }
@@ -64,13 +67,17 @@ export function renderCover(project: NovelProject): string {
 
 /** XHTML chapter document for the EPUB package. */
 export function renderEpubChapter(chapter: ExportChapter): string {
+  // Leading full-width indentation is manuscript content, not transport
+  // whitespace. Keep it and ask the reading system to preserve it; trimming
+  // here silently removes the paragraph indentation from every exported book.
   const paragraphs = chapter.text
     .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.trim() !== '')
+    .map((line) => `<p class="body">${escapeHtml(line)}</p>`)
     .join('\n')
   return `<?xml version="1.0" encoding="utf-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeHtml(chapterHeading(chapter))}</title></head>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeHtml(chapterHeading(chapter))}</title>
+<style>.body { white-space: pre-wrap; margin: 0 0 0.6em; }</style></head>
 <body><h1>${escapeHtml(chapterHeading(chapter))}</h1>${paragraphs}</body></html>`
 }

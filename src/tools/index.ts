@@ -256,6 +256,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         opening: { type: 'string' },
         ending: { type: 'string' },
         target_words: { type: 'array', items: { type: 'integer' } },
+        cast: {
+          type: 'json',
+          description:
+            'Optional 1–8 characters on stage this chapter. Each: name, entry_state, goal, knowledge, exit_change. Names must exist in the P1 world plan or the character ledger.',
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -269,6 +274,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           opening: args.opening ?? '',
           ending: args.ending ?? '',
           target_words: [args.target_words?.[0] ?? 2000, args.target_words?.[1] ?? 3000],
+          ...(args.cast === undefined ? {} : { cast: asJson<never[]>(args.cast, 'cast') }),
           root: args.project_root,
         }),
       ),
@@ -465,11 +471,28 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           ] as const,
         },
         chapter: { type: 'integer' },
+        include_summary: {
+          type: 'boolean',
+          description: 'For kind=chapters: include the full ten-field summary (default compact).',
+        },
+        chapter_range: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: 'For kind=chapters: inclusive [start, end] range.',
+        },
         project_root: root,
       },
       output: jsonOutput,
       execute: guarded(async (args) =>
-        engine.queryState({ kind: args.kind, chapter: args.chapter, root: args.project_root }),
+        engine.queryState({
+          kind: args.kind,
+          chapter: args.chapter,
+          ...(args.include_summary === undefined ? {} : { include_summary: args.include_summary }),
+          ...(args.chapter_range === undefined
+            ? {}
+            : { chapter_range: args.chapter_range as [number, number] }),
+          root: args.project_root,
+        }),
       ),
     }),
     defineTool({
@@ -480,6 +503,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           type: 'string',
           required: true,
           enum: [
+            'novel.yaml',
             'state/chapters.yaml',
             'state/characters.yaml',
             'state/world.yaml',

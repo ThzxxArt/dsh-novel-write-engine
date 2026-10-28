@@ -10,7 +10,17 @@ import {
   renderPlainText,
 } from '../src/export/render.js'
 import { FsStore } from '../src/store/fs.js'
-import { archiveDelta, harness, readyToArchive, sampleSummary } from './helpers.js'
+import { EngineService } from '../src/engine/service.js'
+import { loadRulepack } from '../src/rulepack.js'
+import {
+  FIXED_NOW,
+  TEST_CONFIG,
+  archiveDelta,
+  harness,
+  readProjectFile,
+  readyToArchive,
+  sampleSummary,
+} from './helpers.js'
 import type { NovelProject } from '../src/types.js'
 
 const project: NovelProject = {
@@ -83,7 +93,13 @@ describe('renderers', () => {
     const html = renderEpubChapter({ num: 1, title: '标题', text: 'a & <b>' })
     expect(html).toContain('&amp;')
     expect(html).toContain('&lt;b&gt;')
-    expect(html).toContain('<p>')
+    expect(html).toContain('<p class="body">')
+    const indented = renderEpubChapter({ num: 1, title: '标题', text: '　　第一段\n\n第二段' })
+    expect(indented).toContain('<p class="body">　　第一段</p>')
+    expect(indented).toContain('<p class="body">第二段</p>')
+    const indentedChapter = [{ num: 1, title: '标题', text: '　　第一段\n\n第二段' }]
+    expect(renderMarkdown(project, indentedChapter)).toContain('　　第一段')
+    expect(renderPlainText(project, indentedChapter)).toContain('　　第一段')
   })
 
   it('builds a zip whose first entry is the stored mimetype (T-12)', () => {
@@ -132,6 +148,34 @@ describe('engine export', () => {
         code: 'ENGINE_STAGE_ORDER',
       })
     } finally {
+      await cleanup()
+    }
+  })
+
+  it('does not replay an export after another process changes project metadata', async () => {
+    const { root, engine, cleanup } = await harness()
+    const second = new EngineService(
+      { ...TEST_CONFIG, projectRoot: root, stateDir: '' },
+      () => loadRulepack(),
+      { now: FIXED_NOW },
+    )
+    try {
+      const summary = sampleSummary()
+      await readyToArchive({ root, engine, summary })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+      await engine.export({ kind: 'md', root })
+      await second.amend({
+        path: 'novel.yaml',
+        content: { author: '乙', description: '另一个进程改写的简介' },
+        reason: 'change metadata in a second process',
+        root,
+      })
+      const again = await engine.export({ kind: 'md', root })
+      expect(again.replayed).not.toBe(true)
+      expect(await readProjectFile(root, 'exports/cover.svg')).toContain('乙')
+      expect(await readProjectFile(root, 'exports/blurb.txt')).toContain('另一个进程改写的简介')
+    } finally {
+      second.dispose()
       await cleanup()
     }
   })

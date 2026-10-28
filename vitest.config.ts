@@ -7,6 +7,10 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.ts', 'tests/**/*.spec.tsx'],
     environment: 'node',
+    // Branch coverage must not depend on how many workers happened to import a
+    // module. One fork keeps the report reproducible across CI and local runs.
+    pool: 'forks',
+    poolOptions: { forks: { singleFork: true } },
     globals: false,
     testTimeout: 20_000,
     hookTimeout: 20_000,

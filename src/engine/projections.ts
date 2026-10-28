@@ -1,4 +1,4 @@
-import { PANEL_ID, PHASE_STRIP, REMOTE_VERSION } from '../constants.js'
+import { PANEL_CHAPTER_LIMIT, PANEL_ID, PHASE_STRIP, REMOTE_VERSION } from '../constants.js'
 import type { BlockingItem, ChapterRecord, Stage, StatusReport } from '../types.js'
 
 /** The shared read model: everything the panel, status and commands render. */
@@ -21,6 +21,10 @@ export interface PanelSnapshot {
   revision: number
   rounds: { review: number; revise: number; check: number }
   blocking: BlockingItem[]
+  volume?: number
+  volume_name?: string
+  act?: string
+  act_progress?: string
   /** Recommended next action; lets the panel explain a stage with no blockers. */
   next?: StatusReport['next']
   /** True only when the configured total chapter target has been reached. */
@@ -30,6 +34,8 @@ export interface PanelSnapshot {
   draft?: PanelDraft | null
   /** Total words across the index, for the header. */
   totalWords: number
+  /** Book-wide archived average, not just the panel's capped rows. */
+  averageScore?: number
   /** The nine-phase strip state, derived from the pipeline stage. */
   phases: Array<{ id: string; done: boolean; active: boolean }>
 }
@@ -45,6 +51,12 @@ export interface PanelSummaryDto {
   revision: number
   totalWords: number
   totalChapters: number
+  /** Book-wide archived average; absent on older payloads. */
+  averageScore?: number
+  volume?: number
+  volume_name?: string
+  act?: string
+  act_progress?: string
   phases: Array<{ id: string; done: boolean; active: boolean }>
   blocking: BlockingItem[]
   next?: { tool: string; reason: string }
@@ -136,6 +148,15 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     revision: snapshot.revision,
     totalWords: snapshot.totalWords,
     totalChapters: snapshot.chapters.length,
+    averageScore:
+      snapshot.averageScore ??
+      (snapshot.chapters.length === 0
+        ? 0
+        : snapshot.chapters.reduce((sum, chapter) => sum + chapter.score, 0) / snapshot.chapters.length),
+    ...(snapshot.volume === undefined ? {} : { volume: snapshot.volume }),
+    ...(snapshot.volume_name === undefined ? {} : { volume_name: snapshot.volume_name }),
+    ...(snapshot.act === undefined ? {} : { act: snapshot.act }),
+    ...(snapshot.act_progress === undefined ? {} : { act_progress: snapshot.act_progress }),
     phases: snapshot.phases,
     blocking: snapshot.blocking,
     finished: snapshot.finished,
@@ -146,9 +167,16 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
 }
 
 export function projectChapters(snapshot: PanelSnapshot): PanelChaptersDto {
-  const rows = snapshot.chapters.map(projectChapter)
+  // Keep the payload bounded for a long book. `projectSummary` still reports
+  // the true total; the panel only renders recent history. An active draft is
+  // part of that history, so reserve one of the thirty slots for it instead of
+  // appending a thirty-first row.
   const draft = snapshot.draft
-  if (draft !== undefined && draft !== null && !rows.some((row) => row.num === draft.num)) {
+  const draftNeedsRow =
+    draft !== undefined && draft !== null && !snapshot.chapters.some((row) => row.num === draft.num)
+  const archivedLimit = draftNeedsRow ? PANEL_CHAPTER_LIMIT - 1 : PANEL_CHAPTER_LIMIT
+  const rows = snapshot.chapters.slice(-archivedLimit).map(projectChapter)
+  if (draftNeedsRow) {
     rows.push({
       num: draft.num,
       title: draft.title,

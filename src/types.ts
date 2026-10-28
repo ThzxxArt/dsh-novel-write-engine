@@ -237,10 +237,26 @@ export interface CheckDocument {
   verdict: 'pass' | 'fail'
 }
 
+/** Every persisted document whose damage status/panel can report. */
+export type StateErrorCode =
+  | 'PROJECT_UNREADABLE'
+  | 'PLAN_UNREADABLE'
+  | 'WORLD_PLAN_UNREADABLE'
+  | 'REVIEW_UNREADABLE'
+  | 'CHECK_UNREADABLE'
+  | 'CHAPTERS_UNREADABLE'
+  | 'CHARACTERS_UNREADABLE'
+  | 'WORLD_UNREADABLE'
+  | 'LOCKS_UNREADABLE'
+  | 'TIMELINE_UNREADABLE'
+  | 'FORESHADOWS_UNREADABLE'
+  | 'RELATIONSHIPS_UNREADABLE'
+  | 'HANDOFF_UNREADABLE'
+
 /** A state document that exists but cannot be read safely. */
 export interface StateError {
   path: string
-  code: 'PLAN_UNREADABLE' | 'REVIEW_UNREADABLE' | 'CHECK_UNREADABLE'
+  code: StateErrorCode
   message: string
 }
 
@@ -527,6 +543,15 @@ export interface WorldPlanInput {
   continuity_notes: string[]
 }
 
+/** A character the chapter plan puts on stage; no new persisted schema. */
+export interface ChapterCastMember {
+  name: string
+  entry_state?: string
+  goal?: string
+  knowledge?: string[]
+  exit_change?: string
+}
+
 /** Chapter plan (`plans/chNNN.chapter.yaml`). */
 export interface ChapterPlanInput {
   chapter: number
@@ -537,6 +562,8 @@ export interface ChapterPlanInput {
   opening: string
   ending: string
   target_words: [number, number]
+  /** Optional in 0.1.3: older plans remain readable; new plans may name 1–8 actors. */
+  cast?: ChapterCastMember[]
 }
 
 /** Draft submission payload. */
@@ -639,9 +666,14 @@ export interface StatusReport {
   stage: Stage
   rounds: RoundCounters
   blocking: BlockingItem[]
-  /** plan/review/check files that exist but cannot be read safely. */
+  /** plan/review/check/ledger files that exist but cannot be read safely. */
   state_errors: StateError[]
   metrics: WordMetrics | null
+  /** Inherited handoff labels; absent before the first archive. */
+  volume?: number
+  volume_name?: string
+  act?: string
+  act_progress?: string
   next: { tool: string; args: Record<string, unknown>; reason: string }
 }
 

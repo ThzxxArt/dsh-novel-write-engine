@@ -62,3 +62,16 @@ export function paragraphAt(text: string, paragraph: number): string | null {
   if (!Number.isInteger(paragraph) || paragraph < 1 || paragraph > paragraphs.length) return null
   return paragraphs[paragraph - 1]!
 }
+
+/**
+ * The opening quote rule is shared by PG-05 (draft/revise) and the P5 fast
+ * check. Keeping one implementation prevents the two paths from disagreeing
+ * about what counts as the first two paragraphs.
+ */
+export function openingInFirstTwoParagraphs(text: string, opening: string): boolean {
+  const needle = opening.trim()
+  if (needle === '') return false
+  return splitParagraphs(text)
+    .slice(0, 2)
+    .some((paragraph) => paragraph.includes(needle))
+}

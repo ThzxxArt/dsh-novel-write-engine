@@ -20,6 +20,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
+if (process.platform === 'win32') {
+  // The DSH CLI is a POSIX shim here; spawning it through cmd.exe with a
+  // multi-word task silently changes argv. Refuse instead of printing a false
+  // "passed" from a truncated prompt. Windows packaging is covered by
+  // platform-build in CI.
+  console.error('check:host is POSIX-only; use the platform-build job on Windows')
+  process.exit(2)
+}
 const shell = process.platform === 'win32'
 const npm = shell ? 'npm.cmd' : 'npm'
 const dsh = process.env.DSH_BIN ?? 'dsh'
@@ -332,26 +340,26 @@ try {
   if (!headlessConfig.includes('id: preset-novel-write-engine')) {
     throw new Error('headless profile is missing the novel preset')
   }
+  // 0.2.1-rc.3 npm releases do not yet expose `--permission-mode`; keep the
+  // gate compatible with both the source checkout and the published CLI.
+  const headlessHelp = run(['--profile', headlessProfile, '--help'])
+  const headlessArgs = [
+    '--profile',
+    headlessProfile,
+    ...(headlessHelp.includes('--permission-mode') ? ['--permission-mode', 'danger-full-access'] : []),
+    'create the host smoke project',
+  ]
   let smoke
   try {
-    smoke = await runAsync(
-      [
-        '--profile',
-        headlessProfile,
-        '--permission-mode',
-        'danger-full-access',
-        'create the host smoke project',
-      ],
-      {
-        env: {
-          ...env,
-          DEEPSEEK_API_KEY: 'host-smoke-key',
-          DEEPSEEK_BASE_URL: mock.baseURL,
-          DSH_PERMISSION_MODE: 'danger-full-access',
-        },
-        timeout: Number(process.env.DSH_SMOKE_TIMEOUT_MS ?? 180_000),
+    smoke = await runAsync(headlessArgs, {
+      env: {
+        ...env,
+        DEEPSEEK_API_KEY: 'host-smoke-key',
+        DEEPSEEK_BASE_URL: mock.baseURL,
+        DSH_PERMISSION_MODE: 'danger-full-access',
       },
-    )
+      timeout: Number(process.env.DSH_SMOKE_TIMEOUT_MS ?? 180_000),
+    })
   } catch (error) {
     throw new Error(
       `headless smoke failed after ${mock.requests.length} model request(s): ${error instanceof Error ? error.message : String(error)}\n${String(error?.stdout ?? '')}\n${String(error?.stderr ?? '')}`,
@@ -363,11 +371,36 @@ try {
   if (!existsSync(join(smokeProject, 'novel.yaml'))) {
     throw new Error('headless smoke called the model but novel_init did not create the project')
   }
-  const wire = JSON.stringify(mock.requests)
-  for (const tool of expectedNovelTools) {
-    if (!wire.includes(tool)) throw new Error(`headless request never exposed ${tool}`)
+  // Read the declared tool list, never a substring of the whole request JSON.
+  // Persona/task-book text legitimately mentions tool names and used to make
+  // this loop pass even when the host registered no tools at all.
+  const declared = new Set()
+  for (const request of mock.requests) {
+    if (!Array.isArray(request.tools)) continue
+    for (const tool of request.tools) {
+      if (typeof tool?.name === 'string') declared.add(tool.name)
+    }
   }
-  if (!wire.includes('tool_result')) throw new Error('headless did not return a tool result to the model')
+  for (const tool of expectedNovelTools) {
+    if (!declared.has(tool)) throw new Error(`headless request never declared tool ${tool}`)
+  }
+  const toolResults = mock.requests.flatMap((request) =>
+    Array.isArray(request.messages)
+      ? request.messages.flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content.filter(
+                (block) => block?.type === 'tool_result' && block?.tool_use_id === 'host-smoke-call',
+              )
+            : [],
+        )
+      : [],
+  )
+  if (toolResults.length === 0) {
+    throw new Error('headless did not return a tool_result for host-smoke-call to the model')
+  }
+  if (!JSON.stringify(toolResults).includes('Host Smoke')) {
+    throw new Error('headless tool_result did not carry the novel_init result')
+  }
   console.log('host gate passed: headless exposed novel_init and executed it through the host')
 
   await mock.close()

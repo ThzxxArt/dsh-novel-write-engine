@@ -109,7 +109,10 @@ describe('gate evaluation', () => {
       'PG-01',
       'PG-02',
       'PG-04',
+      'PG-03',
       'PG-05',
+      'PG-06',
+      'PG-07',
       'PG-08',
       'PG-09',
       'PG-10',
@@ -199,6 +202,38 @@ describe('gate evaluation', () => {
     expect(codes(input({ sceneType: null }))).toContain('PG-06')
     expect(codes(input({ priorSceneTypes: ['日常过渡章', '日常过渡章'] }))).toContain('PG-06')
     expect(codes(input({ sceneType: '战斗/动作章', priorSceneTypes: ['战斗/动作章'] }))).toContain('PG-06')
+  })
+
+  it('PG-06 is part of check and archive, not only draft', () => {
+    const base = input({
+      operation: 'runCheck',
+      stage: 'P6',
+      pipeline: {
+        ...input().pipeline,
+        stage: 'P6',
+        briefs: { P6: { issued_at: 'x', digest: 'D' } },
+      },
+      briefStage: 'P6',
+      proof: proof(),
+      review: review(),
+      sceneType: '战斗/动作章',
+      priorSceneTypes: ['战斗/动作章', '战斗/动作章'],
+    })
+    expect(codes(base)).toContain('PG-06')
+    expect(
+      codes({
+        ...base,
+        operation: 'archiveChapter',
+        stage: 'ready_to_archive',
+        pipeline: {
+          ...base.pipeline,
+          stage: 'ready_to_archive',
+          briefs: { P8: { issued_at: 'x', digest: 'D' } },
+        },
+        briefStage: 'P8',
+        archive: { chapterExists: false, checkPassed: true, hashMatches: true },
+      } as GateInput),
+    ).toContain('PG-06')
   })
 
   it('PG-07 requires closing arithmetic, locatable deductions and the score floor', () => {
@@ -386,6 +421,11 @@ describe('gate evaluation', () => {
     expect(verifyReference(text, proof().opening)).toBeNull()
   })
 
+  it('accepts a verbatim quote that includes full-width paragraph indentation', () => {
+    const text = `　　风从窗缝里挤进来，把桌上的纸吹得翻了一页。\n\n第二段也有足够长的文字。`
+    expect(verifyReference(text, { paragraph: 1, quote: '　　风从窗缝里挤进来，把桌上' })).toBeNull()
+  })
+
   it('PG-09 checks the actual paragraph, not the submitted paragraph, for opening and ending', () => {
     const longText = cleanText(6)
     const paragraphs = longText.split('\n\n')
@@ -472,10 +512,10 @@ describe('gate evaluation', () => {
         briefs: { P6: { issued_at: 'x', digest: 'D' } },
       },
       briefStage: 'P6' as const,
-      rounds: { review: 3, revise: 2, check: 2 },
+      rounds: { review: 3, revise: 3, check: 2 },
     }
     expect(codes({ ...base, operation: 'runCheck' } as GateInput)).not.toContain('PG-11')
-    expect(codes({ ...base, operation: 'submitRevision' } as GateInput)).not.toContain('PG-11')
+    expect(codes({ ...base, operation: 'submitRevision' } as GateInput)).toContain('PG-11')
     expect(codes({ ...base, operation: 'submitReview' } as GateInput)).toContain('PG-11')
   })
 
@@ -519,7 +559,7 @@ describe('gate evaluation', () => {
       check: {
         schema_version: 1,
         chapter: 1,
-        scope: ['content'],
+        scope: ['content', 'integrity'],
         content_hash: 'x',
         machine: {
           violations: [],
@@ -553,5 +593,12 @@ describe('gate evaluation', () => {
     expect(
       codes({ ...base, archive: { chapterExists: false, checkPassed: true, hashMatches: true } }),
     ).not.toContain('PG-12')
+    expect(
+      codes({
+        ...base,
+        check: { ...base.check!, scope: ['content'] },
+        archive: { chapterExists: false, checkPassed: true, hashMatches: true },
+      }),
+    ).toContain('PG-12')
   })
 })

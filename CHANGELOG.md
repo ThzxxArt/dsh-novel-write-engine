@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3
+
+- 八个权威台账（chapters/characters/world/locks/timeline/foreshadows/relationships/handoff）以及 `novel.yaml` 损坏或丢失时不再拖垮 `novel_status`/panel；`state_errors` 暴露全部错误，`novel_state` 对 ledger、project、review、check 返回损坏文档的 `raw` 文本，`next` 指向 `novel_amend`。
+- `novel_amend` 会为当前所有不可读状态文档豁免 journal 的既有 hash；真正可读文件的外部改动仍 fail-closed。amend 增加 chapters 只含已归档章、不减少、已归档 `content_hash`/`archive_digest` 不可改写、`next_seq` 不得复用已归档 assigned ids、locks/relationships 引用闭合、chapters 与章节文件 hash 一致、handoff 续写点与 open_hooks 闭合等不变量。
+- `archiveChapter` 将每章 digest 写入 journal 跟踪的 `state/archive-digests.json`，修复 chapters 索引时用它校验归档幂等性，避免重建索引时伪造/丢失 digest。
+- `novel.yaml` 可通过 amend 修改 `title/author/description/targets.total_chapters`；`genre/platform/created_at/words_per_chapter/dialogue_ratio` 保持不可变；`total_chapters` 不得低于已归档章数；项目文件损坏/丢失时接受完整项目文档并优先用备份恢复不可变基线。
+- P2/P3/P4/P5/P6 brief 包含 P1 `world_plan`；P3/P4 的 `characters` 只放本章活跃角色完整卡，`other_characters` 是压缩索引；P2 的 `characters` 是 P1 候选角色；P6 新增受保护的 `active_cast`。角色排序改为 cast → 正文/计划提及 → `last_seen` → 稳定 key；正文新出现的已知角色会补进显式 cast，独立提到的短名不会被长名误杀。
+- `novel_plan_chapter` 新增可选 `cast`（1–8 人：`name/entry_state/goal/knowledge/exit_change`）；名字必须来自 P1 世界计划或角色台账；旧 plan 不需要 cast 也能读。
+- 归档 handoff 继承上一章 volume/volume_name；`act`/`act_progress` 从上一章推进（第五幕/1/5，不再在第 21 章重置成第一幕），`handoff.act`/`act_progress` 可覆盖且会校验；`open_hooks` 按最久未动优先。status/panel/P1 显示活跃章的下一幕位置。
+- `novel_state {kind:"chapters"}` 默认返回紧凑索引（num/title/word_count/score/status），新增 `include_summary` 与 `chapter_range`；300 章默认 ≤64 KB；panel 只送最近 30 行，并显示卷/幕标签和幕内进度；panel 平均分改用全书 archived 分数，不再被 30 行上限截断。
+- 只跑 `content` 或 `integrity` 的 check 通过后停留在 P6，不再进入 archive 死循环；返回 `CHECK_SCOPE_PARTIAL` warning。check 始终执行 PG-03 字数与 PG-07 评分下限，scope 只控制 PG-04/PG-10 等机检。
+- 新增 `src/domain/stable.ts`：`compareText` / `stableJson` 使用 code-unit 排序，替换 localeCompare 与 registry 排序；brief digest 不再随 `LANG` 变化。
+- 删除 `TRANSITIONS[].guards` 死字段，`applicableGates` 是门控唯一 owner；opening 检查抽成共享 helper；P2 标题长度读取 rulepack；EPUB 保留段首全角缩进。
+- `check:host` 改为遍历请求体 `tools[]`，不再用整段 JSON 子串把 persona 文本当成工具声明；CI 增加 Windows 测试、真实 host/preset job 与跨进程 SIGKILL gate。
+- 新增 30 章真实引擎闭环、120 角色 cast、300 章读口、1000 行 journal amend 测试；`scripts/check-crash.mjs` 在真实子进程 SIGKILL 后验证 pending journal 恢复。状态 schema 仍为 v1，不新增工具/命令/运行时依赖。
+- 第三轮全量复核修复：`PG-11` 真正约束 P5/P6 `novel_revise`，status 按下一步实际操作选择 revise/check 预算；`PG-06` 进入 `runCheck` 与 archive preflight；`archivePreflight` 复用同一 `GateInput` 评估全部归档门控（含 PG-05/PG-06/PG-12 的 content+integrity scope）；归档不再接受被收窄 scope 的 check。
+- 修复 `assigned_ids` 篡改、chapters 不可读时绕过 next_seq floor、settings pack 绕过 locks/relationships/chapters 引用与 revision 冲突；export replay key 纳入活跃章 plan title，活跃章改名后不会返回旧文件。
+
 ## 0.1.2
 
 - `novel_init` 显式传入的 `author`/`description` 必须是字符串；P1/P2 计划在服务边界做运行时窄化：世界计划数组/对象形状、章节标题 4–8 字、narrator、5–8 个节拍、opening/ending、target_words 全部校验，非法输入零写盘。

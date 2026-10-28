@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { countWordMetrics, countWordMetricsOfParagraph } from '../src/domain/wordcount.js'
-import { paragraphAt, sentenceRhythm, splitParagraphs, splitSentences } from '../src/domain/text.js'
+import {
+  openingInFirstTwoParagraphs,
+  paragraphAt,
+  sentenceRhythm,
+  splitParagraphs,
+  splitSentences,
+} from '../src/domain/text.js'
 import {
   hammingDistance,
   maxParagraphSimilarity,
@@ -83,6 +89,8 @@ describe('text segmentation', () => {
   it('splits paragraphs on blank lines and trims', () => {
     expect(splitParagraphs('\n\n甲\n\n\n乙  \n')).toEqual(['甲', '乙'])
     expect(splitSentences('甲。乙！丙？')).toEqual(['甲', '乙', '丙'])
+    expect(openingInFirstTwoParagraphs('　　风从窗缝里挤进来。\n\n第二段。', '风从窗缝里')).toBe(true)
+    expect(openingInFirstTwoParagraphs('　　风从窗缝里挤进来。', '　　')).toBe(false)
     expect(splitSentences('He stopped. She left. Ok?')).toEqual(['He stopped', 'She left', 'Ok'])
     expect(splitSentences('他走了……她来了。')).toEqual(['他走了', '她来了'])
   })
@@ -279,9 +287,11 @@ describe('transition table', () => {
     expect(findTransition('P3', 'archiveChapter')).toBeUndefined()
   })
 
-  it('has exactly one data-dependent branch (P4 review → P5 or P6)', () => {
+  it('keeps the data-dependent transitions in the table (review and check scope)', () => {
     expect(nextStage('P4', 'submitReview', 1)).toBe('P5')
     expect(nextStage('P4', 'submitReview', 0)).toBe('P6')
+    expect(nextStage('P6', 'runCheck', 0)).toBe('ready_to_archive')
+    expect(nextStage('P6', 'runCheck', 0, { completeCheck: false })).toBe('P6')
     expect(nextStage('idle', 'submitWorldPlan', 0)).toBe('P2')
     expect(nextStage('ready_to_archive', 'archiveChapter', 0)).toBe('done')
     expect(() => nextStage('P3', 'archiveChapter', 0)).toThrow(/not allowed at stage P3/)

@@ -4,7 +4,7 @@
 
 它不是一个提示词合集，也不是独立的写作软件。它把「这一章处于什么阶段、下一步只能做什么、正文是否达标、归档要核销哪些实体」变成可执行、可回滚、可审计的引擎；模型负责写，引擎负责裁决和记账。
 
-> **当前版本：0.1.2** · 中文界面 · MIT
+> **当前版本：0.1.3** · 中文界面 · MIT
 >
 > **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 
@@ -70,26 +70,26 @@
 - 不是「装完就自动写完整本书」的生成器；它管流程、门禁和状态，正文仍由模型写。
 - 不是独立 CLI；必须作为 DSH 插件安装到某个 profile 才能使用。
 - 不提供云端同步、账号体系、在线书城或多人协作。
-- 0.1.2 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
+- 0.1.3 只有中文界面与中文任务书，没有 `locale/`，也不读取系统语言。
 
 ---
 
 ## 二、功能全貌
 
-| 能力 | 说明 |
-|---|---|
-| 18 个 `novel_*` 工具 | 从建项目、领任务书、写初稿、评审、修订、校验、归档到导出、审计、回退 |
-| 5 条 `/novel*` 命令 | 状态、下一步、统计、导出、隐藏操作；命令与工具共用同一套服务 |
-| 1 个侧边栏面板「网文工坊」 | 只读；Hero、统计、九阶段轨、下一步卡、章节卡、门控区 |
-| 1 个内置 Agent 预设「网文工坊」 | 18 个工具全开，**不挂载 bash / 文件写入工具**；会话开始后不能切换 |
-| 1 个入口技能 | 告诉模型什么时候该用引擎、哪些写入口是唯一的 |
-| 12 条门控 | 任务书、阶段、字数、格式、摘要、场景类型、评分、问题清零、阅读证明、一致性、轮次、归档原子性 |
-| 15 维评分 | 满分 150，默认过关线 120；分数必须逐项可核对 |
-| 事务化归档 | staging → 校验 → 备份 → pending journal → rename → 读回 → committed journal |
-| 规则包外置 | 词表、格式、标点、语义、跨章阈值都在 `rulepacks/default.yaml`，代码只执行 |
-| 三种导出 | Markdown、纯文本、EPUB 3；附 `cover.svg` 与 `blurb.txt` |
-| 多项目注册表 | `stateDir/projects.yaml` 记录已知项目与当前项目；不影响项目目录 |
-| 运行期依赖极少 | 只有 `yaml` 一个运行时依赖；不联网、不调用外部 API、不读环境变量里的密钥 |
+| 能力                            | 说明                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| 18 个 `novel_*` 工具            | 从建项目、领任务书、写初稿、评审、修订、校验、归档到导出、审计、回退                         |
+| 5 条 `/novel*` 命令             | 状态、下一步、统计、导出、隐藏操作；命令与工具共用同一套服务                                 |
+| 1 个侧边栏面板「网文工坊」      | 只读；Hero、统计、九阶段轨、下一步卡、章节卡、门控区                                         |
+| 1 个内置 Agent 预设「网文工坊」 | 18 个工具全开，**不挂载 bash / 文件写入工具**；会话开始后不能切换                            |
+| 1 个入口技能                    | 告诉模型什么时候该用引擎、哪些写入口是唯一的                                                 |
+| 12 条门控                       | 任务书、阶段、字数、格式、摘要、场景类型、评分、问题清零、阅读证明、一致性、轮次、归档原子性 |
+| 15 维评分                       | 满分 150，默认过关线 120；分数必须逐项可核对                                                 |
+| 事务化归档                      | staging → 校验 → 备份 → pending journal → rename → 读回 → committed journal                  |
+| 规则包外置                      | 词表、格式、标点、语义、跨章阈值都在 `rulepacks/default.yaml`，代码只执行                    |
+| 三种导出                        | Markdown、纯文本、EPUB 3；附 `cover.svg` 与 `blurb.txt`                                      |
+| 多项目注册表                    | `stateDir/projects.yaml` 记录已知项目与当前项目；不影响项目目录                              |
+| 运行期依赖极少                  | 只有 `yaml` 一个运行时依赖；不联网、不调用外部 API、不读环境变量里的密钥                     |
 
 ### 关键设计
 
@@ -103,46 +103,46 @@
 
 ### 九个阶段
 
-| 阶段 | 名称 | 谁执行 | 产物 |
-|---|---|---|---|
-| P1 | 世界观约束 | 模型 | `plans/chNNN.world.yaml` |
-| P2 | 章节计划 | 模型 | `plans/chNNN.chapter.yaml` |
-| P3 | 初稿 | 模型 | `chapters/chapter-NNN.md` |
-| P4 | 评审 | 模型 | `reviews/chNNN.review.yaml` |
-| P5 | 修订 | 模型（有 blocker 时） | 覆盖正文 |
-| P6 | 一致性校验 | 引擎机检 + 模型语义项 | `checks/chNNN.check.yaml` |
-| P7 | 状态同步 | **引擎事务** | `state/*.yaml` |
-| P8 | 终审 | **引擎事务** | 三端一致性报告 |
-| P9 | 归档 | **引擎事务** | 章节索引 + 交接 |
+| 阶段 | 名称       | 谁执行                | 产物                        |
+| ---- | ---------- | --------------------- | --------------------------- |
+| P1   | 世界观约束 | 模型                  | `plans/chNNN.world.yaml`    |
+| P2   | 章节计划   | 模型                  | `plans/chNNN.chapter.yaml`  |
+| P3   | 初稿       | 模型                  | `chapters/chapter-NNN.md`   |
+| P4   | 评审       | 模型                  | `reviews/chNNN.review.yaml` |
+| P5   | 修订       | 模型（有 blocker 时） | 覆盖正文                    |
+| P6   | 一致性校验 | 引擎机检 + 模型语义项 | `checks/chNNN.check.yaml`   |
+| P7   | 状态同步   | **引擎事务**          | `state/*.yaml`              |
+| P8   | 终审       | **引擎事务**          | 三端一致性报告              |
+| P9   | 归档       | **引擎事务**          | 章节索引 + 交接             |
 
 P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `done`；下一章仍从 P1 开始。只有项目配置的 `total_chapters` 全部归档，面板才显示「全书完成」。
 
 ### 十二道门控
 
-| 编号 | 名称 | 管什么 |
-|---|---|---|
-| PG-01 | `BRIEF_REQUIRED` | 当前阶段任务书已签发，digest 匹配 |
-| PG-02 | `STAGE_ORDER` | 只能提交当前阶段允许的产物 |
-| PG-03 | `WORD_COUNT` | 字数达到项目下限 |
-| PG-04 | `FORMAT` | 段落、标点、Markdown、标题等格式 blocker 为零 |
-| PG-05 | `SUMMARY_SCHEMA` | 十章摘要的十个字段齐全且类型正确 |
-| PG-06 | `SCENE_TYPE` | 场景类型合法，节奏约束满足 |
-| PG-07 | `SCORE` | 十五维齐全、算术闭合、总分达到 `minScore` |
-| PG-08 | `ISSUES_CLEARED` | 所有 blocker issue 已修复并带正文证据 |
-| PG-09 | `READING_PROOF` | 三段逐字引用能在正文对应位置找到；开头/结尾按实际段落判定 |
-| PG-10 | `CONSISTENCY` | 伏笔、时间线、资源、关系、重复段落等跨章对账 |
-| PG-11 | `ROUNDS` | 评审/修订、校验/修订均不超过 3 轮 |
-| PG-12 | `ARCHIVE_ATOMIC` | 归档事务三端一致且读回验证通过 |
+| 编号  | 名称             | 管什么                                                    |
+| ----- | ---------------- | --------------------------------------------------------- |
+| PG-01 | `BRIEF_REQUIRED` | 当前阶段任务书已签发，digest 匹配                         |
+| PG-02 | `STAGE_ORDER`    | 只能提交当前阶段允许的产物                                |
+| PG-03 | `WORD_COUNT`     | 字数达到项目下限                                          |
+| PG-04 | `FORMAT`         | 段落、标点、Markdown、标题等格式 blocker 为零             |
+| PG-05 | `SUMMARY_SCHEMA` | 十章摘要的十个字段齐全且类型正确                          |
+| PG-06 | `SCENE_TYPE`     | 场景类型合法，节奏约束满足                                |
+| PG-07 | `SCORE`          | 十五维齐全、算术闭合、总分达到 `minScore`                 |
+| PG-08 | `ISSUES_CLEARED` | 所有 blocker issue 已修复并带正文证据                     |
+| PG-09 | `READING_PROOF`  | 三段逐字引用能在正文对应位置找到；开头/结尾按实际段落判定 |
+| PG-10 | `CONSISTENCY`    | 伏笔、时间线、资源、关系、重复段落等跨章对账              |
+| PG-11 | `ROUNDS`         | 评审/修订、校验/修订均不超过 3 轮                         |
+| PG-12 | `ARCHIVE_ATOMIC` | 归档事务三端一致且读回验证通过                            |
 
 门控按固定顺序求值，并且**收集全部失败项**，不是遇到第一个就返回——这样模型可以一次改完。
 
 ### 十五维评分
 
-| 组 | 维度 |
-|---|---|
+| 组               | 维度                                                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | A 核心叙事（90） | R-W-01 人设驱动 15 · R-W-02 情绪外化 10 · R-W-03 对话区分度 10 · R-W-04 爽点密度 20 · R-W-05 断章法则 15 · R-W-12 反文青病 20 |
-| B 商业指标（45） | R-W-11 元描写与视角侵入 10 · R-W-13 信息增量 15 · R-W-14 钩子质量 10 · R-W-15 期待值兑现 10 |
-| C 格式硬性（15） | R-W-06 段落长度 4 · R-W-07 去 AI 味 4 · R-W-08 硬性禁令 4 · R-W-09 字数 2 · R-W-10 标题 1 |
+| B 商业指标（45） | R-W-11 元描写与视角侵入 10 · R-W-13 信息增量 15 · R-W-14 钩子质量 10 · R-W-15 期待值兑现 10                                   |
+| C 格式硬性（15） | R-W-06 段落长度 4 · R-W-07 去 AI 味 4 · R-W-08 硬性禁令 4 · R-W-09 字数 2 · R-W-10 标题 1                                     |
 
 合计严格 150。默认 `minScore = 120`，可在配置里改；它是 PG-07 的唯一过关线。
 
@@ -157,15 +157,15 @@ P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `d
 
 ## 三、兼容性与前置条件
 
-| 项目 | 要求 |
-|---|---|
-| DSH | `>=0.2.1-rc.2 <0.3.0-0`；由 `package.json` 的 `engines.dsh` 声明，安装与启动都会检查 |
-| Node.js | `>=24.9.0` |
-| pnpm | CLI 安装/卸载插件需要；建议 11.x（本仓库开发基线为 11.28.9） |
+| 项目     | 要求                                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| DSH      | `>=0.2.1-rc.2 <0.3.0-0`；由 `package.json` 的 `engines.dsh` 声明，安装与启动都会检查                 |
+| Node.js  | `>=24.9.0`                                                                                           |
+| pnpm     | CLI 安装/卸载插件需要；建议 11.x（本仓库开发基线为 11.28.9）                                         |
 | 宿主形态 | Web（面板 + 预设）、Desktop（面板 + 预设，插件由桌面壳管理）、headless（只有工具/命令，无面板/预设） |
-| 磁盘 | 项目根目录可写；默认 `stateDir` 可写 |
-| 网络 | 安装时需要访问 npm / Git 托管；运行插件本身不联网 |
-| 语言 | 0.1.2 仅中文 |
+| 磁盘     | 项目根目录可写；默认 `stateDir` 可写                                                                 |
+| 网络     | 安装时需要访问 npm / Git 托管；运行插件本身不联网                                                    |
+| 语言     | 0.1.3 仅中文                                                                                         |
 
 检查命令：
 
@@ -233,12 +233,12 @@ corepack pnpm dsh web
 
 DSH 把不同应用形态放在 profile 里：
 
-| 启动方式 | profile | 面板 | 内置预设 |
-|---|---|---|---|
-| `dsh web` | `web` | 有 | 有 |
-| Desktop | `desktop` | 有 | 有 |
-| `dsh headless` | `headless` | 无 | 无 |
-| `dsh --profile <名字> web` | `<名字>` | 取决于该 profile | 取决于该 profile |
+| 启动方式                   | profile    | 面板             | 内置预设         |
+| -------------------------- | ---------- | ---------------- | ---------------- |
+| `dsh web`                  | `web`      | 有               | 有               |
+| Desktop                    | `desktop`  | 有               | 有               |
+| `dsh headless`             | `headless` | 无               | 无               |
+| `dsh --profile <名字> web` | `<名字>`   | 取决于该 profile | 取决于该 profile |
 
 profile 默认位于：
 
@@ -269,7 +269,7 @@ dsh plugin --profile web add dsh-novel-write-engine
 固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.2
+dsh plugin --profile web add dsh-novel-write-engine@0.1.3
 ```
 
 `dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
@@ -324,13 +324,13 @@ corepack pnpm pack
 会得到类似：
 
 ```text
-dsh-novel-write-engine-0.1.2.tgz
+dsh-novel-write-engine-0.1.3.tgz
 ```
 
 把这个 tarball 复制到目标机器，放在一个**稳定、不会随手删除**的路径，然后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.2.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.3.tgz
 ```
 
 tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内已经包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch。它是最接近「发布产物」的安装方式。
@@ -345,9 +345,9 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 2. 点 **添加插件**（或旁边的箭头 → **安装第三方插件**）。
 3. 在包名字段填入以下任一形式：
    - npm 包名：`dsh-novel-write-engine`
-   - 精确版本：`dsh-novel-write-engine@0.1.2`
+   - 精确版本：`dsh-novel-write-engine@0.1.3`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
-   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.2.tgz`
+   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.1.3.tgz`
 4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
@@ -442,31 +442,32 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 ### 4. 一章的标准调用顺序
 
-| 步骤 | 调用 | 说明 |
-|---|---|---|
-| 1 | `novel_brief P1` | 领取 P1 世界观任务书，签收 digest |
-| 2 | `novel_plan_world` | 提交世界观约束 |
-| 3 | `novel_brief P2` | 领取 P2 章节计划任务书 |
-| 4 | `novel_plan_chapter` | 提交本章计划 |
-| 5 | `novel_brief P3` | 领取 P3 初稿任务书 |
-| 6 | `novel_write_draft` | 提交正文；格式/字数/摘要不过则整体拒绝 |
-| 7 | `novel_brief P4` | 领取 P4 评审任务书 |
-| 8 | `novel_review` | 十五维评分 + 三段阅读证明 |
-| 9 | 有 blocker：`novel_brief P5` → `novel_revise` | 修订后回到 P4 重评 |
-| 10 | 无 blocker：`novel_brief P6` → `novel_check` | 机检 + 四个语义项 |
-| 11 | `novel_brief P8` | 领取终审任务书 |
-| 12 | `novel_archive` | 必须带 `state_delta`，一次事务归档 |
-| 13 | `novel_export md` | 或 `txt` / `epub` |
+| 步骤 | 调用                                          | 说明                                   |
+| ---- | --------------------------------------------- | -------------------------------------- |
+| 1    | `novel_brief P1`                              | 领取 P1 世界观任务书，签收 digest      |
+| 2    | `novel_plan_world`                            | 提交世界观约束                         |
+| 3    | `novel_brief P2`                              | 领取 P2 章节计划任务书                 |
+| 4    | `novel_plan_chapter`                          | 提交本章计划                           |
+| 5    | `novel_brief P3`                              | 领取 P3 初稿任务书                     |
+| 6    | `novel_write_draft`                           | 提交正文；格式/字数/摘要不过则整体拒绝 |
+| 7    | `novel_brief P4`                              | 领取 P4 评审任务书                     |
+| 8    | `novel_review`                                | 十五维评分 + 三段阅读证明              |
+| 9    | 有 blocker：`novel_brief P5` → `novel_revise` | 修订后回到 P4 重评                     |
+| 10   | 无 blocker：`novel_brief P6` → `novel_check`  | 机检 + 四个语义项                      |
+| 11   | `novel_brief P8`                              | 领取终审任务书                         |
+| 12   | `novel_archive`                               | 必须带 `state_delta`，一次事务归档     |
+| 13   | `novel_export md`                             | 或 `txt` / `epub`                      |
 
 关键点：
 
 - **每一步提交前都要先领任务书**，PG-01 会检查 digest。`novel_status` / `novel_pipeline` 在任务书缺失或过期时会先返回 `novel_brief`，不会让你直接撞 PG-01。
-- **plan/review/check 损坏时不是死锁**：status 返回 `state_errors` 与 `STATE_UNREADABLE`；当前阶段晚于重建点时，`next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时则直接指向 `novel_brief` → 对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。不会让模型在同一条 rollback 上循环。P6 的 check 损坏优先于旧 revision 阻塞；归档前 `review_digest` 缺失/不匹配会显示 `REVIEW_DIGEST_MISSING`/`REVIEW_DIGEST_MISMATCH` 并回退 P4。
-- **计划先校验再落盘**：P1 的 `constraints`/`characters`/`locations`/`continuity_notes` 有形状校验；P2 的标题 4–8 字、5–8 个非空节拍、narrator、opening/ending 都会在服务边界拒绝。
-- **上下文有预算**：每个 brief 的 `context.context_meta` 给出 `budget`/`used`/`truncated`/`omitted`；正文、当前 plan/review/check 与摘要受保护，不会被静默截断。裁剪会参与 digest，升级后旧 brief 需要重新领取。
+- **坏状态不是死锁**：plan/review/check/worldPlan 与八个 ledger 损坏时，status 返回 `state_errors` 与 `STATE_UNREADABLE`；plan/review/check 走 rollback/阶段重建，ledger/project 则 `novel_state` 返回 `raw`、`next` 指向 `novel_amend`。`novel_amend` 会为当前所有不可读状态文档豁免 journal 的既有 hash，并在同一事务里写目标文档与 `state/pipeline.yaml`（不是只写一个文件）；其他可读文件的外部改动仍拒绝。P6 的 check 损坏优先于旧 revision 阻塞；归档前 `review_digest` 缺失/不匹配会回退 P4。损坏或丢失的 `novel.yaml` 也走同一条 `PROJECT_UNREADABLE` 修复路径。
+- **计划先校验再落盘**：P1 的 `constraints`/`characters`/`locations`/`continuity_notes` 有形状校验；P2 的标题长度读 rulepack、5–8 个非空节拍、narrator、opening/ending 都会在服务边界拒绝。P2 可选 `cast`（1–8 人），名字必须来自 P1 世界计划或角色台账。
+- **上下文有预算且不裁主角团**：每个 brief 的 `context.context_meta` 给出 `budget`/`used`/`truncated`/`omitted`；P1 `world_plan` 的目标/约束/连续性说明、P3/P4/P5 的本章活跃角色完整卡、P6 的 `active_cast` 与正文/当前 plan/review/check/摘要受保护；`world_plan.characters/locations` 是可裁剪的候选名单，`other_characters` 只放压缩索引。裁剪会参与 digest，升级后旧 brief 需要重新领取。
+- **长书读口**：`novel_state {kind:"chapters"}` 默认返回紧凑索引，`include_summary`/`chapter_range` 按需取；panel 只送最近 30 行。归档继承上一章 handoff 的 volume/volume_name；act/act_progress 从上一章推进，`handoff.act`/`act_progress` 可覆盖。
 - `ready_to_archive` 在 P8 任务书当前后，`next.tool` 才返回 `novel_archive`；P5/P6 有阻塞时返回 `novel_revise`。
 - `novel_review` 的 `total` 是必填的，必须等于 `150 - Σdelta`；三段阅读证明必须逐字来自正文，开头/结尾按**实际段落**判定；issue 的 `dimension` 必须是当前十五维之一，`location` 必须是本章实际段落。
-- `novel_check` 的 `semantic` 恰好四个语义项，每项带至少 8 字、四条互不相同的正文引用；`scope` 默认 `content + integrity`，只跑一类时另一类不参与本次 check。
+- `novel_check` 的 `semantic` 恰好四个语义项，每项带至少 8 字、四条互不相同的正文引用；`scope` 默认 `content + integrity`，只跑一类时另一类不参与本次 check，且通过后仍停留 P6（`CHECK_SCOPE_PARTIAL`），不能归档。
 - `novel_archive` 的 `state_delta` 要逐实体核销角色、伏笔、时间线、世界、关系；新伏笔标题必须出现在正文，`no_change` 也要写原因；review 存在但 `review_digest` 缺失时拒绝归档，需重新 `novel_review`。
 - 正文改动后，旧的评审分数和 check 会失效；不要试图手工改 `state/` 绕过。
 
@@ -488,11 +489,11 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 ### 8.1 三种会话形态
 
-| 形态 | 怎么进 | 工具 | 写文件能力 | 面板/预设 |
-|---|---|---|---|---|
-| 内置预设「网文工坊」 | 新会话选预设 | 18 个全开 | 不挂 bash/fs 写入工具，正文只经引擎 | 有 |
-| 普通会话 | 任意标准会话 | 18 个工具在根层注册 | 可能还有 bash/fs；引擎保证会被绕过 | 有面板，无专用预设 |
-| headless / 自动化 | `dsh --profile headless "..."` | 18 个（或 core 8 个） | 取决于该 profile | 无面板、无预设 |
+| 形态                 | 怎么进                         | 工具                  | 写文件能力                          | 面板/预设          |
+| -------------------- | ------------------------------ | --------------------- | ----------------------------------- | ------------------ |
+| 内置预设「网文工坊」 | 新会话选预设                   | 18 个全开             | 不挂 bash/fs 写入工具，正文只经引擎 | 有                 |
+| 普通会话             | 任意标准会话                   | 18 个工具在根层注册   | 可能还有 bash/fs；引擎保证会被绕过  | 有面板，无专用预设 |
+| headless / 自动化    | `dsh --profile headless "..."` | 18 个（或 core 8 个） | 取决于该 profile                    | 无面板、无预设     |
 
 **要用「引擎保证」就用「网文工坊」预设。** 普通会话里，模型仍然可以用文件工具直接改 `state/` 或正文；那时你得到的是「引擎工具 + 人工操作」的混合状态，事务、门控、审计都不再完整。
 
@@ -500,26 +501,26 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 ### 8.2 18 个工具
 
-| 工具 | 阶段 | 做什么 | 写盘 |
-|---|---|---|---|
-| `novel_init` | — | 建项目：`novel.yaml` + `state/` + 目录 | 是 |
-| `novel_status` | 任意 | 当前活跃章、阶段、轮次、阻塞项、`state_errors`、下一步；`chapter` 只用于字数查询 | 否 |
-| `novel_brief` | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields`、`context` 与 `context_meta` 并记录 digest | 仅任务书签收 |
-| `novel_plan_world` | P1 | 提交世界观约束；数组/对象形状在服务边界校验 | 是 |
-| `novel_plan_chapter` | P2 | 提交章节计划；标题 4–8 字、5–8 个节拍、opening/ending 非空 | 是 |
-| `novel_write_draft` | P3 | 提交初稿；格式/字数/摘要不过整体拒绝 | 是 |
-| `novel_review` | P4 | 十五维评分、问题清单、三段阅读证明；issue 维度/段落和 blocker waived 会被拒绝 | 是 |
-| `novel_revise` | P5/P6 | 提交修订；blocker 必须有正文证据，不能降级或 waived；issue 只能改 status/evidence | 是 |
-| `novel_check` | P6 | 机检 + 四个语义一致性项；`scope` 可只跑 `content` 或 `integrity` | 是 |
-| `novel_archive` | P7–P9 | 事务归档；必须带 `state_delta`；旧 review 无 digest 时拒绝 | 事务 |
-| `novel_word_count` | 任意 | 按引擎唯一口径数字数 | 否 |
-| `novel_state` | 任意 | 读账本、计划、评审、检查、handoff；`review`/`check` 可按历史章读取 | 否 |
-| `novel_amend` | 任意 | 带原因修订一个状态文档 | 是，入 journal |
-| `novel_rollback` | 任意 | 只退回当前阶段或更早，保留正文供参考 | 是 |
-| `novel_diff` | 任意 | 与上次归档备份或两段文本比较 | 否 |
-| `novel_export` | 任意 | 导出 `md` / `txt` / `epub` | 导出目录 |
-| `novel_audit` | 任意 | 读追加式 journal 审计记录 | 否 |
-| `novel_pipeline` | 任意 | 「下一步该做什么」的建议 | 否 |
+| 工具                 | 阶段       | 做什么                                                                                                                                              | 写盘           |
+| -------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `novel_init`         | —          | 建项目：`novel.yaml` + `state/` + 目录                                                                                                              | 是             |
+| `novel_status`       | 任意       | 当前活跃章、阶段、轮次、阻塞项、`state_errors`、下一步；`chapter` 只用于字数查询                                                                    | 否             |
+| `novel_brief`        | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields`、`context`；`context.world_plan` 与 `context.context_meta` 在 `context` 内，并记录 digest                     | 仅任务书签收   |
+| `novel_plan_world`   | P1         | 提交世界观约束；数组/对象形状在服务边界校验                                                                                                         | 是             |
+| `novel_plan_chapter` | P2         | 提交章节计划；标题长度读 rulepack、5–8 个节拍、opening/ending 非空；可选 `cast` 1–8 人                                                              | 是             |
+| `novel_write_draft`  | P3         | 提交初稿；格式/字数/摘要不过整体拒绝                                                                                                                | 是             |
+| `novel_review`       | P4         | 十五维评分、问题清单、三段阅读证明；issue 维度/段落和 blocker waived 会被拒绝                                                                       | 是             |
+| `novel_revise`       | P5/P6      | 提交修订；blocker 必须有正文证据，不能降级或 waived；issue 只能改 status/evidence                                                                   | 是             |
+| `novel_check`        | P6         | 机检 + 四个语义一致性项；`scope` 可只跑 `content`/`integrity`，但单 scope 不推进归档                                                                | 是             |
+| `novel_archive`      | P7–P9      | 事务归档；必须带 `state_delta`；旧 review 无 digest 时拒绝                                                                                          | 事务           |
+| `novel_word_count`   | 任意       | 按引擎唯一口径数字数                                                                                                                                | 否             |
+| `novel_state`        | 任意       | 读账本、计划、评审、检查、handoff；`review`/`check` 可按历史章读取；chapters 默认紧凑，支持 `include_summary`/`chapter_range`；损坏 ledger 返回 raw | 否             |
+| `novel_amend`        | 任意       | 带原因修订 `novel.yaml` 或八个 ledger，带不变量与单目标 repair                                                                                      | 是，入 journal |
+| `novel_rollback`     | 任意       | 只退回当前阶段或更早，保留正文供参考                                                                                                                | 是             |
+| `novel_diff`         | 任意       | 与上次归档备份或两段文本比较                                                                                                                        | 否             |
+| `novel_export`       | 任意       | 导出 `md` / `txt` / `epub`                                                                                                                          | 导出目录       |
+| `novel_audit`        | 任意       | 读追加式 journal 审计记录                                                                                                                           | 否             |
+| `novel_pipeline`     | 任意       | 「下一步该做什么」的建议                                                                                                                            | 否             |
 
 工具失败时统一返回：
 
@@ -537,13 +538,13 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 
 注册的命令是 5 条：
 
-| 命令 | 作用 |
-|---|---|
-| `/novel` | 不带参数 = 状态；`/novel status` 同义 |
-| `/novel-next` | 下一步工具与理由 |
-| `/novel-stats` | 章节数、总字数、平均分、未回收伏笔、规则包版本 |
+| 命令            | 作用                                                  |
+| --------------- | ----------------------------------------------------- |
+| `/novel`        | 不带参数 = 状态；`/novel status` 同义                 |
+| `/novel-next`   | 下一步工具与理由                                      |
+| `/novel-stats`  | 章节数、总字数、平均分、未回收伏笔、规则包版本        |
 | `/novel-export` | 导出 `md` / `txt` / `epub`，例如 `/novel-export epub` |
-| `/novel-admin` | `/novel-admin <op> <json>` 执行隐藏/运维操作 |
+| `/novel-admin`  | `/novel-admin <op> <json>` 执行隐藏/运维操作          |
 
 `/novel` 还有子命令：
 
@@ -651,14 +652,14 @@ exports/
 
 ### 9.1 六个配置项
 
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `projectRoot` | `./novel` | 默认项目根；相对路径相对于 DSH 进程工作目录。工具可用 `project_root` 覆盖 |
-| `minScore` | `120` | PG-07 过关线，整数 0..150；唯一 owner |
-| `toolsMode` | `all` | `all` 注册 18 个工具；`core` 只注册 8 个，其余走 `/novel admin` |
-| `briefsOverrides` | 空 | 自定义任务书目录；某阶段文件缺失时回退包内 `briefs/<阶段>.md` |
-| `backupRetention` | `5` | 保留的归档备份目录数；只清理引擎自己创建的 `backups/<txid>` |
-| `stateDir` | 空 → `~/.dsh/novel-write-engine` | 多项目注册表位置；**不要放进项目目录** |
+| 键                | 默认                             | 说明                                                                      |
+| ----------------- | -------------------------------- | ------------------------------------------------------------------------- |
+| `projectRoot`     | `./novel`                        | 默认项目根；相对路径相对于 DSH 进程工作目录。工具可用 `project_root` 覆盖 |
+| `minScore`        | `120`                            | PG-07 过关线，整数 0..150；唯一 owner                                     |
+| `toolsMode`       | `all`                            | `all` 注册 18 个工具；`core` 只注册 8 个，其余走 `/novel admin`           |
+| `briefsOverrides` | 空                               | 自定义任务书目录；某阶段文件缺失时回退包内 `briefs/<阶段>.md`             |
+| `backupRetention` | `5`                              | 保留的归档备份目录数；只清理引擎自己创建的 `backups/<txid>`               |
+| `stateDir`        | 空 → `~/.dsh/novel-write-engine` | 多项目注册表位置；**不要放进项目目录**                                    |
 
 > `stateDir` 的默认值是代码按当前用户 home 拼出的 `~/.dsh/novel-write-engine`，不跟随 `DSH_HOME`。如果你改了 `DSH_HOME`，建议显式把它设成绝对路径。
 >
@@ -701,7 +702,7 @@ Windows 路径：
     projectRoot: D:/novels
     minScore: 125
     toolsMode: all
-    briefsOverrides: ""
+    briefsOverrides: ''
     backupRetention: 5
     stateDir: C:/Users/you/.dsh/novel-write-engine
 ```
@@ -731,7 +732,7 @@ P8.md
 
 ### 9.4 规则包不能运行期切换
 
-`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.2 **不接受**运行期外部规则包路径。
+`rulepacks/default.yaml` 是随包加载的：词表、格式、标点、语义、跨章阈值、平台默认值都在里面。0.1.3 **不接受**运行期外部规则包路径。
 
 要改规则，只有两条路：
 
@@ -773,6 +774,7 @@ corepack pnpm test
 │   ├── foreshadows.yaml
 │   ├── relationships.yaml
 │   ├── handoff.yaml
+│   ├── archive-digests.json      # 内部归档幂等账本（journal 跟踪）
 │   └── journal.jsonl             # 追加式事务日志
 ├── backups/<txid>/               # 归档前快照
 ├── exports/                      # 导出产物
@@ -800,7 +802,7 @@ corepack pnpm test
 - 正文可以读，但不建议手改；正文一改，评审分数、check、content hash 都会失效。
 - `state/` 不要手改；要改就用 `novel_amend`，它要求 `reason` 并写入 journal。
 - 要回退阶段用 `novel_rollback`；它只允许退回当前阶段或更早，会保留正文为参考，清空任务书签收与轮次。
-- plan/review/check 损坏时，status 的 `state_errors` 会指出文件；不要手改。当前阶段晚于重建点时先 `novel_rollback`；已经处在 P2/P4/P6 时直接重新取 brief，再用对应阶段工具重建。
+- plan/review/check 损坏时，status 的 `state_errors` 会指出文件；不要手改。当前阶段晚于重建点时先 `novel_rollback`；已经处在 P2/P4/P6 时直接重新取 brief，再用对应阶段工具重建。八个 ledger 或 `novel.yaml` 损坏时，`novel_state` 返回 raw，按 `next` 调 `novel_amend` 修复；当前所有不可读状态文档的 journal hash 会被豁免，其他可读文件的外部改动仍 fail-closed。
 - 不要在引擎运行时删 `.engine.lock`；锁由引擎回收，手删可能让两个写者同时进入。
 
 ### 10.4 备份与恢复
@@ -814,7 +816,21 @@ corepack pnpm test
 
 ## 十一、升级
 
-### 11.0 从 0.1.1 升级到 0.1.2
+### 11.0 从 0.1.2 升级到 0.1.3
+
+0.1.3 不 bump schema，也不新增工具；新增参数 `cast`、`include_summary`、`chapter_range`，并允许 `novel_amend` 以 `novel.yaml` 为修复目标。旧项目可以直接打开。升级后第一次取 brief 会因 `context_meta.strategy=stage-v2` 与 `world_plan` 进入 digest 而失效，重新 `novel_brief` 即可。
+
+需要知道的行为变化：
+
+1. **损坏台账可修**：八个 ledger 损坏时 status/panel 仍可读；`novel_state` 返回 `raw`，用 `novel_amend` 修复。amend 会为当前所有不可读状态文档豁免 journal 的既有 hash；真正可读文件的外部改动仍 fail-closed。
+2. **chapters 不变量**：amend 不能删已归档章、不能改 `content_hash`/`archive_digest`；有章节文件时还会核对 hash。
+3. **P2 cast 可选**：旧 plan 没有 `cast` 仍可读；新 plan 可传 1–8 人，P3 会把这些人物的完整卡放进上下文。
+4. **chapters 查询变紧凑**：`novel_state {kind:"chapters"}` 默认不再带 summary；需要完整摘要加 `include_summary:true` 或 `chapter_range`。
+5. **单 scope check 不再归档**：只跑 content 或 integrity 的 check 通过后停留 P6，并附 `CHECK_SCOPE_PARTIAL`；必须再跑完整 scope。
+6. **handoff 派生**：归档不再每章重算 `ceil(chapter/20)`；volume/volume_name 继承上一章，act/act_progress 从上一章推进，`handoff.act`/`act_progress` 可覆盖。
+7. **panel 上限 30 行**：长书面板只送最近 30 章，统计仍用全书总数。
+
+### 11.0.1 从 0.1.1 升级到 0.1.2
 
 0.1.2 不 bump schema，也不改工具名/参数；但它会主动让三类旧状态暴露出来：
 
@@ -840,7 +856,7 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.1.2
+dsh plugin --profile web add dsh-novel-write-engine@0.1.3
 ```
 
 升级后核对：
@@ -882,7 +898,7 @@ corepack pnpm pack
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.2.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.1.3.tgz
 ```
 
 ### 11.5 在 Web / Desktop 里升级
@@ -999,25 +1015,25 @@ dsh --profile web --dump-config | grep dsh-novel-write-engine
 
 ## 十三、故障排查
 
-| 现象 | 最可能的原因 | 处理 |
-|---|---|---|
-| `dsh plugin add` 404 / 找不到包 | 包名拼错、registry 不可达，或镜像尚未同步 | 确认 `npm view dsh-novel-write-engine version`；必要时切回官方 registry |
-| `npm install` 成功但 DSH 没有插件 | `npm install` 不会把插件加入 profile | 执行 `dsh plugin --profile web add dsh-novel-write-engine`，见 5.1 |
-| `dsh: command not found` | CLI 未全局安装 | 用 `npx @deepseek-ai/dsh ...`，或先 `npm i -g @deepseek-ai/dsh` |
-| `dsh plugin` 报找不到 pnpm | 只装了 DSH，没装 pnpm | `corepack enable && corepack prepare pnpm@11.28.9 --activate` |
-| `--dump-config` 没有插件层 | 装到了别的 profile | 用实际启动的 profile 重装；`dsh --profile <name> ...` |
-| 插件页显示已安装但开关打不开 | 包不完整/版本不兼容/被更高层覆盖 | 看插件页诊断；用 tarball 重装；检查 `engines.dsh` |
-| 侧边栏没有「网文工坊」 | 不是 Web/Desktop profile，或 client bundle 未加载 | 用 `dsh web` / Desktop；刷新；重启 |
-| 预设列表没有「网文工坊」 | headless/acp/sdk 没有 `agentPresets`，或插件未启用 | 改用 Web；插件页启用；新开会话 |
-| 会话里没有 `novel_*` 工具 | 插件未启用、旧会话未刷新、装错 profile | 新开会话；重启；`--dump-config` 核对 |
-| `ENGINE_STAGE_ORDER` | 跳过了阶段或顺序不对 | `/novel` / `novel_status` 看下一步；按 `novel_brief` 领任务书 |
-| `ENGINE_GATE_BLOCKED` | 门控未过 | 看 `blocking` 的 code/detail/hint；改正文或补证据；不要手改 state |
-| `ENGINE_PROJECT_NOT_FOUND` | 项目根不对/未初始化 | `novel_init`，或传正确的 `project_root` |
-| 面板空白/显示没有项目 | 当前没有项目，或 active 指向旧路径 | 先 `novel_init`；`/novel admin novel_registry_activate` 切到正确项目 |
-| 面板显示「需要刷新」 | 浏览器缓存了旧 client bundle | 刷新页面；重启 DSH |
-| 升级后仍是旧行为 | 源码目录没 `corepack pnpm build`，或旧会话未换 | 重新构建；重启；新开会话 |
-| 卸载后配置项还在 | profile 的 `cordis.patch.yml` 还留着覆盖 | 删除 `id: novel-write-engine` 的段落 |
-| `EACCES` / 写入失败 | 项目根或 `stateDir` 对 DSH 进程不可写 | 改权限，或换可写路径 |
+| 现象                              | 最可能的原因                                       | 处理                                                                    |
+| --------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `dsh plugin add` 404 / 找不到包   | 包名拼错、registry 不可达，或镜像尚未同步          | 确认 `npm view dsh-novel-write-engine version`；必要时切回官方 registry |
+| `npm install` 成功但 DSH 没有插件 | `npm install` 不会把插件加入 profile               | 执行 `dsh plugin --profile web add dsh-novel-write-engine`，见 5.1      |
+| `dsh: command not found`          | CLI 未全局安装                                     | 用 `npx @deepseek-ai/dsh ...`，或先 `npm i -g @deepseek-ai/dsh`         |
+| `dsh plugin` 报找不到 pnpm        | 只装了 DSH，没装 pnpm                              | `corepack enable && corepack prepare pnpm@11.28.9 --activate`           |
+| `--dump-config` 没有插件层        | 装到了别的 profile                                 | 用实际启动的 profile 重装；`dsh --profile <name> ...`                   |
+| 插件页显示已安装但开关打不开      | 包不完整/版本不兼容/被更高层覆盖                   | 看插件页诊断；用 tarball 重装；检查 `engines.dsh`                       |
+| 侧边栏没有「网文工坊」            | 不是 Web/Desktop profile，或 client bundle 未加载  | 用 `dsh web` / Desktop；刷新；重启                                      |
+| 预设列表没有「网文工坊」          | headless/acp/sdk 没有 `agentPresets`，或插件未启用 | 改用 Web；插件页启用；新开会话                                          |
+| 会话里没有 `novel_*` 工具         | 插件未启用、旧会话未刷新、装错 profile             | 新开会话；重启；`--dump-config` 核对                                    |
+| `ENGINE_STAGE_ORDER`              | 跳过了阶段或顺序不对                               | `/novel` / `novel_status` 看下一步；按 `novel_brief` 领任务书           |
+| `ENGINE_GATE_BLOCKED`             | 门控未过                                           | 看 `blocking` 的 code/detail/hint；改正文或补证据；不要手改 state       |
+| `ENGINE_PROJECT_NOT_FOUND`        | 项目根不对/未初始化                                | `novel_init`，或传正确的 `project_root`                                 |
+| 面板空白/显示没有项目             | 当前没有项目，或 active 指向旧路径                 | 先 `novel_init`；`/novel admin novel_registry_activate` 切到正确项目    |
+| 面板显示「需要刷新」              | 浏览器缓存了旧 client bundle                       | 刷新页面；重启 DSH                                                      |
+| 升级后仍是旧行为                  | 源码目录没 `corepack pnpm build`，或旧会话未换     | 重新构建；重启；新开会话                                                |
+| 卸载后配置项还在                  | profile 的 `cordis.patch.yml` 还留着覆盖           | 删除 `id: novel-write-engine` 的段落                                    |
+| `EACCES` / 写入失败               | 项目根或 `stateDir` 对 DSH 进程不可写              | 改权限，或换可写路径                                                    |
 
 ### 仍然卡住时，提供这四样信息
 
@@ -1062,7 +1078,8 @@ DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制�
 
 ## 十五、已知限制
 
-- **0.1.2 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
+- **0.1.3 没有书级大纲**：`outline/` 不是 0.1.3 的数据源，也没有读写路径；书级大纲、卷弧/契约、作者豁免与 schema v2 是 0.2.0 的范围。
+- **0.1.3 只有中文**：面板、命令、错误、任务书都是中文；没有 `locale/`，不跟随系统语言。
 - **通过 npm 分发**：安装与升级统一使用 `dsh plugin add`；源码目录和 tarball 用于开发或离线环境。
 - **面板与预设只在 Web/Desktop**：headless / acp / sdk 没有 `agentPresets` 服务，也没有浏览器面板；18 个工具仍可用。
 - **规则包不可运行期替换**：要改词表/阈值，必须改源码、重新构建、重新安装。
@@ -1145,12 +1162,13 @@ tests/            # 单测、集成、falsify、e2e
 
 ### 16.5 当前验证基线
 
-0.1.2 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
+0.1.3 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
 
-- `corepack pnpm test` 全绿（当前树 379 项）；
-- 覆盖率语句/分支/函数/行均达到门槛；
+- `corepack pnpm test` 全绿（当前树 456 项，61 个测试文件）；
+- 最近一次覆盖率语句 93.64% / 分支 88.12% / 函数 97.96% / 行 93.64%（V8 分支/行计数会有 ±0.01 波动，门禁按单次真实结果判定），`test:coverage` 与逐文件 domain 门禁全过；
 - `typecheck`、`lint`、`check:hygiene`、`test:isolated`、`build`、`validate:rulepack`、`check:pack`、`check:artifacts`、`check:install` 全绿；
-- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、headless 真实触发 `novel_init` 工具并落盘、`remove` 后层消失。
+- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、headless 真实触发 `novel_init` 工具并落盘、`remove` 后层消失；`check:preset` 从真实 bundle 解析 13 个包；
+- `check:crash` 在真实子进程 SIGKILL 后恢复 pending journal：目标项目仍可读，无遗留 pending 事务。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把上面的历史数字当保证。
 
@@ -1158,17 +1176,18 @@ tests/            # 单测、集成、falsify、e2e
 
 ## 十七、文档地图与许可
 
-| 文档 | 内容 |
-|---|---|
-| [DESIGN.md](DESIGN.md) | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
-| [PLAN.md](PLAN.md) | 0.1.0 实施计划（历史） |
-| [docs/0.1.2-plan.md](docs/0.1.2-plan.md) | 0.1.2 长书可运行性与证据闭环方案 |
-| [docs/0.1.1-plan.md](docs/0.1.1-plan.md) | 0.1.1 契约收口与证据加固方案（历史） |
-| [docs/tools.md](docs/tools.md) | 18 个工具与命令面速查 |
-| [docs/states.md](docs/states.md) | 状态机、迁移表、轮次与回退 |
-| [docs/rulepack.md](docs/rulepack.md) | 规则包结构、编译器断言、改词表流程 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
-| [LICENSE](LICENSE) | MIT |
+| 文档                                     | 内容                                                      |
+| ---------------------------------------- | --------------------------------------------------------- |
+| [DESIGN.md](DESIGN.md)                   | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设  |
+| [PLAN.md](PLAN.md)                       | 0.1.0 实施计划（历史）                                    |
+| [docs/0.1.3-plan.md](docs/0.1.3-plan.md) | 0.1.3 让书能长大：状态修复、活跃 cast、handoff 与规模证据 |
+| [docs/0.1.2-plan.md](docs/0.1.2-plan.md) | 0.1.2 长书可运行性与证据闭环方案（历史）                  |
+| [docs/0.1.1-plan.md](docs/0.1.1-plan.md) | 0.1.1 契约收口与证据加固方案（历史）                      |
+| [docs/tools.md](docs/tools.md)           | 18 个工具与命令面速查                                     |
+| [docs/states.md](docs/states.md)         | 状态机、迁移表、轮次与回退                                |
+| [docs/rulepack.md](docs/rulepack.md)     | 规则包结构、编译器断言、改词表流程                        |
+| [CHANGELOG.md](CHANGELOG.md)             | 版本变更                                                  |
+| [LICENSE](LICENSE)                       | MIT                                                       |
 
 ### 反馈
 

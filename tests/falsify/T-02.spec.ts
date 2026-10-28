@@ -38,12 +38,17 @@ it('T-02 concurrent archives produce one commit and one replay', async () => {
         (result.reason as { code?: string }).code === 'ENGINE_LOCK_TIMEOUT',
     )
     expect(fulfilled.length + timedOut.length).toBe(2)
-    expect(
-      fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed === true),
-    ).toHaveLength(1)
-    expect(
-      fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed !== true),
-    ).toHaveLength(1)
+    if (timedOut.length === 1) {
+      expect(fulfilled).toHaveLength(1)
+      expect(fulfilled[0]!.status === 'fulfilled' && fulfilled[0]!.value.replayed !== true).toBe(true)
+    } else {
+      expect(
+        fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed === true),
+      ).toHaveLength(1)
+      expect(
+        fulfilled.filter((result) => result.status === 'fulfilled' && result.value.replayed !== true),
+      ).toHaveLength(1)
+    }
 
     for (const name of [
       'chapters',

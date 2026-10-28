@@ -2,17 +2,18 @@ import { LIMITS } from '../constants.js'
 import type { Operation, Stage } from '../types.js'
 import { ERROR_CODES, EngineInputError } from '../types.js'
 
-/** One row of the transition table. */
+/** One row of the transition table. Gate applicability has one owner: `applicableGates`. */
 export interface Transition {
   from: Stage
   op: Operation
   to: (context: TransitionContext) => Stage
-  guards: readonly string[]
 }
 
 /** The only input a `to` function may read. */
 export interface TransitionContext {
   openBlockers: number
+  /** A check over only content or integrity is a pass but not an archive pass. */
+  completeCheck?: boolean
 }
 
 /**
@@ -20,45 +21,23 @@ export interface TransitionContext {
  * instead of writing `if (stage === ...)` branches.
  */
 export const TRANSITIONS: readonly Transition[] = [
-  { from: 'idle', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02'] },
-  { from: 'done', op: 'submitWorldPlan', to: () => 'P2', guards: ['PG-01', 'PG-02'] },
-  { from: 'P2', op: 'submitChapterPlan', to: () => 'P3', guards: ['PG-01', 'PG-02'] },
-  {
-    from: 'P3',
-    op: 'submitDraft',
-    to: () => 'P4',
-    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-06'],
-  },
+  { from: 'idle', op: 'submitWorldPlan', to: () => 'P2' },
+  { from: 'done', op: 'submitWorldPlan', to: () => 'P2' },
+  { from: 'P2', op: 'submitChapterPlan', to: () => 'P3' },
+  { from: 'P3', op: 'submitDraft', to: () => 'P4' },
   {
     from: 'P4',
     op: 'submitReview',
     to: (context) => (context.openBlockers > 0 ? 'P5' : 'P6'),
-    guards: ['PG-01', 'PG-02', 'PG-07', 'PG-09', 'PG-11'],
   },
-  {
-    from: 'P5',
-    op: 'submitRevision',
-    to: () => 'P4',
-    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-08', 'PG-09'],
-  },
-  {
-    from: 'P6',
-    op: 'submitRevision',
-    to: () => 'P4',
-    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-08', 'PG-09'],
-  },
+  { from: 'P5', op: 'submitRevision', to: () => 'P4' },
+  { from: 'P6', op: 'submitRevision', to: () => 'P4' },
   {
     from: 'P6',
     op: 'runCheck',
-    to: () => 'ready_to_archive',
-    guards: ['PG-01', 'PG-02', 'PG-04', 'PG-05', 'PG-08', 'PG-09', 'PG-10', 'PG-11'],
+    to: (context) => (context.completeCheck === false ? 'P6' : 'ready_to_archive'),
   },
-  {
-    from: 'ready_to_archive',
-    op: 'archiveChapter',
-    to: () => 'done',
-    guards: ['PG-01', 'PG-02', 'PG-03', 'PG-04', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-10', 'PG-12'],
-  },
+  { from: 'ready_to_archive', op: 'archiveChapter', to: () => 'done' },
 ]
 
 /** Find the row for this (stage, op), if any. */
@@ -72,7 +51,12 @@ export function canRun(stage: Stage, op: Operation): boolean {
 }
 
 /** Compute the next stage, or throw `ENGINE_STAGE_ORDER` with an actionable message. */
-export function nextStage(stage: Stage, op: Operation, openBlockers: number): Stage {
+export function nextStage(
+  stage: Stage,
+  op: Operation,
+  openBlockers: number,
+  context: Omit<TransitionContext, 'openBlockers'> = {},
+): Stage {
   const transition = findTransition(stage, op)
   if (transition === undefined) {
     throw new EngineInputError(
@@ -81,7 +65,7 @@ export function nextStage(stage: Stage, op: Operation, openBlockers: number): St
       `allowed here: ${availableOps(stage).join(', ')}; call novel_status for the full picture`,
     )
   }
-  return transition.to({ openBlockers })
+  return transition.to({ openBlockers, ...context })
 }
 
 /** Operations legal at a stage, in table order. */

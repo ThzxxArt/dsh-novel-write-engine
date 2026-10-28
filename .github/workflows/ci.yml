@@ -53,6 +53,9 @@ jobs:
           - os: macos-latest
             node: 24.x
             label: macos-current
+          - os: windows-latest
+            node: 24.x
+            label: windows-current
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -106,6 +109,7 @@ jobs:
       - run: pnpm check:pack
       - run: pnpm check:artifacts
       - run: pnpm check:install
+      - run: pnpm check:crash
       - run: node --check lib/client.js
       - run: mkdir -p dist && npm pack --pack-destination dist
       - uses: actions/upload-artifact@v4
@@ -113,6 +117,28 @@ jobs:
           name: npm-package
           path: dist/*.tgz
           retention-days: 7
+
+  host:
+    name: host-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install disposable DSH runtime
+        run: npm install --prefix "$RUNNER_TEMP/dsh-runtime" --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+      - name: Resolve every preset package from the real bundle
+        run: DSH_BUNDLE_ROOT="$RUNNER_TEMP/dsh-runtime/node_modules/@deepseek-ai/dsh-web-app" pnpm check:preset
+      - name: Mount, execute novel_init and remove the plugin in the real host
+        run: DSH_BIN="$RUNNER_TEMP/dsh-runtime/node_modules/.bin/dsh" pnpm check:host
 
   platform-build:
     name: platform-build (${{ matrix.os }})

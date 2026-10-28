@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { runAdminOperation } from '../src/commands/admin.js'
 import { FsStore } from '../src/store/fs.js'
 import { ProjectRegistry } from '../src/store/registry.js'
-import { harness, bootstrapToDraft } from './helpers.js'
+import { archiveDelta, bootstrapToDraft, harness, readyToArchive, sampleSummary } from './helpers.js'
 
 describe('project registry', () => {
   it('tracks rows without becoming authoritative', async () => {
@@ -110,6 +110,24 @@ describe('settings pack import', () => {
       await expect(
         engine.importPack({ kind: 'characters', content: { schema_version: 1 }, root }),
       ).rejects.toThrow(/missing required key/)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('does not let a settings pack remove a character still referenced by locks', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = sampleSummary()
+      await readyToArchive({ root, engine, summary })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+      await expect(
+        engine.importPack({
+          kind: 'characters',
+          content: { schema_version: 1, characters: [] },
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
     } finally {
       await cleanup()
     }

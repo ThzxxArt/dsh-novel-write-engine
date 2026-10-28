@@ -275,4 +275,347 @@ describe('0.1.2 context budget', () => {
 
     expect(briefContext(reversed)).toEqual(normal)
   })
+
+  it('keeps every planned actor in the P3/P4 cast even when 120 characters exist', () => {
+    const input = largeInput()
+    input.stage = 'P3'
+    input.characters.characters = Array.from({ length: 120 }, (_, index) => ({
+      name: `角色${index + 1}`,
+      role: 'supporting',
+      first_appearance: index + 1,
+      profile: { bio: `人物小传 ${index + 1}`.repeat(12) },
+      current_state: { mood: '平静' },
+      growth: [],
+      updated_at: index + 1,
+    }))
+    input.plan = {
+      ...input.plan!,
+      cast: Array.from({ length: 8 }, (_, index) => ({
+        name: `角色${index + 1}`,
+        goal: `目标 ${index + 1}`,
+        entry_state: '登场',
+        knowledge: ['知道来信'],
+        exit_change: '决定赴约',
+      })),
+    }
+    const context = briefContext(input)
+    const meta = context.context_meta as { budget: number; used: number }
+    expect(meta.used).toBeLessThanOrEqual(meta.budget)
+    const cast = context.characters as Array<{ name: string; goal?: string }>
+    expect(cast.map((character) => character.name)).toEqual([
+      ...Array.from({ length: 8 }, (_, index) => `角色${index + 1}`),
+      '角色100',
+    ])
+    expect(cast.slice(0, 8).every((character) => character.goal !== undefined)).toBe(true)
+    expect(cast.at(-1)).toMatchObject({ name: '角色100', role: 'supporting' })
+  })
+
+  it('delivers the P1 world plan to P2 and preserves the active cast at P6', () => {
+    const input = largeInput()
+    input.stage = 'P2'
+    input.plan = null
+    input.worldPlan = {
+      chapter: 100,
+      objective: '让主角在雨夜找到旧信',
+      constraints: ['没有超能力'],
+      characters: [
+        { name: '角色1', role: '主角', current_state: '警惕' },
+        { name: '角色2', role: '同伴', current_state: '受伤' },
+      ],
+      locations: [{ name: '旧楼', layout: '一层两户', capacity: 20 }],
+      continuity_notes: ['雨夜'],
+    }
+    const p2 = briefContext(input)
+    expect((p2.world_plan as { objective: string }).objective).toContain('旧信')
+    expect((p2.characters as Array<{ name: string }>).map((row) => row.name)).toEqual(['角色1', '角色2'])
+
+    const p6 = briefContext({
+      ...input,
+      stage: 'P6',
+      plan: {
+        ...largeInput().plan!,
+        cast: [
+          { name: '角色9', goal: '找到出口' },
+          { name: '角色10', goal: '守住门' },
+        ],
+      },
+    })
+    expect((p6.context_meta as { used: number }).used).toBeLessThanOrEqual(32_000)
+    // The plan cast plus the characters the summary says appeared are all active.
+    expect((p6.active_cast as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '角色9',
+      '角色10',
+      '角色100',
+    ])
+    expect(p6.world_plan).toMatchObject({ objective: expect.stringContaining('旧信') })
+  })
+
+  it('orders non-cast characters by last seen, not first appearance', () => {
+    const input = largeInput()
+    input.stage = 'P3'
+    input.plan = {
+      ...input.plan!,
+      cast: [{ name: '角色1', goal: '留在舞台中央' }],
+    }
+    input.characters.characters = [
+      { ...input.characters.characters[0]!, name: '角色1', updated_at: 1 },
+      { ...input.characters.characters[1]!, name: '角色2', first_appearance: 1, updated_at: 90 },
+      { ...input.characters.characters[2]!, name: '角色3', first_appearance: 80, updated_at: 2 },
+    ]
+    input.chapters.chapters = []
+    input.world.locations = []
+    input.world.abilities = []
+    input.world.artifacts = []
+    input.world.factions = []
+    input.world.rules = []
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    input.locks.characters = {}
+    input.locks.locations = {}
+    const context = briefContext(input)
+    expect((context.other_characters as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '角色2',
+      '角色3',
+    ])
+  })
+
+  it('does not throw on empty ledgers or partial optional rows at any stage', () => {
+    const input = largeInput()
+    input.chapters.chapters = []
+    input.characters.characters = [{ name: '他' } as never]
+    input.world = {
+      schema_version: 1,
+      locations: [],
+      abilities: [{} as never],
+      artifacts: [],
+      factions: [],
+      rules: [],
+    }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows = { schema_version: 1, next_seq: 1, items: [{} as never] }
+    input.timeline = { schema_version: 1, next_seq: 1, items: [{} as never] }
+    input.relationships = { schema_version: 1, next_seq: 1, items: [{} as never] }
+    input.plan = null
+    input.review = null
+    input.check = null
+    input.text = null
+    input.previousText = null
+    input.handoff = null
+    input.worldPlan = null
+    for (const stage of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8']) {
+      const context = briefContext({ ...input, stage })
+      expect((context.context_meta as { stage: string }).stage).toBe(stage)
+    }
+  })
+
+  it('keeps a 300-chapter index from turning the P6 brief into a full-book payload', () => {
+    const input = largeInput()
+    input.chapters.chapters = Array.from({ length: 300 }, (_, index) => record(index + 1))
+    const context = briefContext(input)
+    const meta = context.context_meta as { budget: number; used: number; truncated: string[] }
+    expect(meta.used).toBeLessThanOrEqual(meta.budget)
+    expect(meta.truncated).toEqual(expect.arrayContaining(['characters']))
+    expect((context.score_history as unknown[]).length).toBeLessThanOrEqual(5)
+  })
+
+  it('does not activate a shorter ledger name when only a longer name is mentioned', () => {
+    const input = largeInput()
+    input.stage = 'P3'
+    input.plan = null
+    input.chapters.chapters = []
+    input.world = { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    input.characters.characters = [
+      {
+        name: '林',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      },
+      {
+        name: '林小雨',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 2,
+      },
+    ]
+    input.text = '林小雨推门进来。'
+    const context = briefContext(input)
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual(['林小雨'])
+  })
+
+  it('orders the fallback active cast by recency', () => {
+    const input = largeInput()
+    input.stage = 'P3'
+    input.plan = null
+    input.chapters.chapters = []
+    input.world = { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    input.characters.characters = Array.from({ length: 10 }, (_, index) => ({
+      name: index === 0 ? '林小雨' : `角色${index + 1}`,
+      role: 'supporting',
+      first_appearance: 1,
+      profile: { bio: `人物 ${index + 1}` },
+      current_state: { mood: '平静' },
+      growth: [],
+      updated_at: index + 1,
+    }))
+    input.text = `林小雨和${input.characters.characters
+      .slice(1)
+      .map((character) => character.name)
+      .join('、')}都在场。`
+    const context = briefContext(input)
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '角色10',
+      '角色9',
+      '角色8',
+      '角色7',
+      '角色6',
+      '角色5',
+      '角色4',
+      '角色3',
+    ])
+  })
+
+  it('keeps independent shorter names when a longer name also appears', () => {
+    const input = largeInput()
+    input.stage = 'P3'
+    input.plan = null
+    input.chapters.chapters = []
+    input.world = { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    input.characters.characters = [
+      {
+        name: '林',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      },
+      {
+        name: '林小雨',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 2,
+      },
+      {
+        name: '角色1',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 100,
+      },
+      {
+        name: '角色10',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 3,
+      },
+    ]
+    input.text = '林小雨提起角色1，又在门口遇见角色10。'
+    const context = briefContext(input)
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '角色1',
+      '角色10',
+      '林小雨',
+      // "林" only occurs inside "林小雨"; it must not be promoted separately.
+    ])
+  })
+
+  it('adds a manuscript-mentioned actor to an explicit cast after a revision', () => {
+    const input = largeInput()
+    input.stage = 'P5'
+    input.plan = {
+      ...input.plan!,
+      cast: [{ name: '角色1', goal: '守住门' }],
+      summary: summary(100),
+    }
+    input.plan.summary!.characters_appeared = ['角色1']
+    input.characters.characters = [
+      {
+        name: '角色1',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: { bio: '角色1' },
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      },
+      {
+        name: '角色2',
+        role: 'supporting',
+        first_appearance: 1,
+        profile: { bio: '角色2' },
+        current_state: {},
+        growth: [],
+        updated_at: 2,
+      },
+    ]
+    input.text = '角色1回头时，角色2已经站在门外。'
+    input.chapters.chapters = []
+    input.world = { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    const context = briefContext(input)
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual(['角色1', '角色2'])
+  })
+
+  it('keeps a summary-only ninth actor as a full active card', () => {
+    const input = largeInput()
+    input.stage = 'P4'
+    input.plan = {
+      ...input.plan!,
+      cast: Array.from({ length: 8 }, (_, index) => ({ name: `角色${index + 1}`, goal: '在场' })),
+      summary: summary(100),
+    }
+    input.characters.characters = Array.from({ length: 20 }, (_, index) => ({
+      name: `角色${index + 1}`,
+      role: 'supporting',
+      first_appearance: index + 1,
+      profile: { bio: '人物' },
+      current_state: { mood: '平静' },
+      growth: [],
+      updated_at: index + 1,
+    }))
+    input.plan.summary!.characters_appeared = ['角色1', '角色9']
+    input.chapters.chapters = []
+    input.world = { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] }
+    input.locks = { schema_version: 1, locked_at_chapter: 0, characters: {}, locations: {} }
+    input.foreshadows.items = []
+    input.timeline.items = []
+    input.relationships.items = []
+    const context = briefContext(input)
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      ...Array.from({ length: 8 }, (_, index) => `角色${index + 1}`),
+      '角色9',
+    ])
+  })
 })

@@ -156,6 +156,27 @@ describe('semantic check evidence', () => {
     }
   })
 
+  it('does not spend the check budget on partial-scope passes', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const semantic = sampleSemantic(text)
+      for (const scope of [['content'], ['integrity'], ['content']] as string[][]) {
+        await engine.getBrief({ stage: 'P6', root })
+        const partial = await engine.runCheck({ chapter: 1, scope, semantic, root })
+        expect(partial.data.verdict).toBe('pass')
+        expect((await pipeline(root)).rounds).toMatchObject({ check: 0 })
+      }
+      await engine.getBrief({ stage: 'P6', root })
+      const full = await engine.runCheck({ chapter: 1, semantic, root })
+      expect(full.data.verdict).toBe('pass')
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 1 })
+      expect((await pipeline(root)).stage).toBe('ready_to_archive')
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('applies content and integrity scopes separately and records the actual scope', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
@@ -171,26 +192,51 @@ describe('semantic check evidence', () => {
       const polluted = `${original} # 这是 Markdown 污染`
       await writeFile(join(root, 'chapters/chapter-001.md'), polluted, 'utf8')
       await engine.getBrief({ stage: 'P6', root })
+      // The review binds the manuscript. A scope check must not pass a text
+      // that no longer matches its P4 review, even if that scope skips PG-04.
+      await expect(
+        engine.runCheck({
+          chapter: 1,
+          scope: ['integrity'],
+          semantic: sampleSemantic(polluted),
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_GATE_BLOCKED' })
+
+      await writeFile(join(root, 'chapters/chapter-001.md'), original, 'utf8')
+      await engine.getBrief({ stage: 'P6', root })
       const integrityOnly = await engine.runCheck({
         chapter: 1,
         scope: ['integrity'],
-        semantic: sampleSemantic(polluted),
+        semantic,
         root,
       })
       expect(integrityOnly.data.verdict).toBe('pass')
-      expect((await pipeline(root)).stage).toBe('ready_to_archive')
+      // A single-scope pass is not an archive pass; it must not leave status
+      // pointing at an archive that PG-04/PG-10 will always reject.
+      expect((await pipeline(root)).stage).toBe('P6')
       const check = parseYaml((await readProjectFile(root, 'checks/ch001.check.yaml'))!) as {
         scope: string[]
       }
       expect(check.scope).toEqual(['integrity'])
 
+      await engine.rollback({ chapter: 1, toStage: 'P6', reason: '重新跑内容检查', root })
+      await engine.getBrief({ stage: 'P6', root })
+      const contentOnly = await engine.runCheck({
+        chapter: 1,
+        scope: ['content'],
+        semantic,
+        root,
+      })
+      expect(contentOnly.data.verdict).toBe('pass')
+      expect((await pipeline(root)).stage).toBe('P6')
+
       await engine.rollback({ chapter: 1, toStage: 'P6', reason: '重新跑全量检查', root })
-      await writeFile(join(root, 'chapters/chapter-001.md'), original, 'utf8')
       await engine.getBrief({ stage: 'P6', root })
       const allScopes = await engine.runCheck({
         chapter: 1,
         scope: ['integrity', 'content'],
-        semantic: sampleSemantic(original),
+        semantic,
         root,
       })
       expect(allScopes.data.verdict).toBe('pass')

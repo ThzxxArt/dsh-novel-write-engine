@@ -1,5 +1,5 @@
 import { createElement, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { PANEL_ROUTE } from '../constants.js'
+import { PANEL_CHAPTER_LIMIT, PANEL_ROUTE } from '../constants.js'
 import { buildView, fetchPanel, type PanelChapter, type PanelView } from './viewmodel.js'
 import type { PanelPayloadDto } from './dto.js'
 
@@ -550,7 +550,11 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
             createElement(
               'span',
               { className: 'nwe-section-note' },
-              `${view.rows.length} 条记录${view.rows.length > 30 ? ' · 显示最近 30 条' : ''}`,
+              `${view.stats.chapters} 条记录${
+                view.stats.chapters > view.rows.filter((row) => row.tone === 'ok').length
+                  ? ` · 显示最近 ${view.rows.length} 条`
+                  : ''
+              }`,
             ),
           ),
           view.rows.length === 0
@@ -561,7 +565,11 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
                 createElement('div', { className: 'nwe-state-title' }, '书架还是空的'),
                 createElement('div', { className: 'nwe-state-text' }, '完成第一次归档后，章节会出现在这里。'),
               )
-            : createElement('ul', { className: 'nwe-chapters' }, ...view.rows.slice(-30).map(chapterCard)),
+            : createElement(
+                'ul',
+                { className: 'nwe-chapters' },
+                ...view.rows.slice(-PANEL_CHAPTER_LIMIT).map(chapterCard),
+              ),
         )
       : null,
     ready

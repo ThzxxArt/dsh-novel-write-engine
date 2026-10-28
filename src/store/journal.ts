@@ -198,8 +198,18 @@ export async function recoverPending(store: FsStore): Promise<void> {
   )
 }
 
-/** Throw before a write when the journal or the last commit is inconsistent. */
-export async function assertJournalConsistent(store: FsStore): Promise<void> {
+/**
+ * Throw before a write when the journal or the last commit is inconsistent.
+ *
+ * `repairPaths` is used only by an explicit amend: a damaged ledger is by
+ * definition a file whose bytes no longer match the last committed hash, and
+ * refusing every write would make the documented repair path unreachable. All
+ * other mismatches still fail closed.
+ */
+export async function assertJournalConsistent(
+  store: FsStore,
+  repairPaths: readonly string[] = [],
+): Promise<void> {
   await recoverPending(store)
   // A crash after the committed row but before staging cleanup leaves an
   // orphan. The transaction is terminal, so its before-images are no longer a
@@ -217,8 +227,10 @@ export async function assertJournalConsistent(store: FsStore): Promise<void> {
   }
   const { malformed, mismatches } = await reconcileJournal(store)
   assertJournalHealthy(malformed)
-  if (mismatches.length > 0) {
-    const first = mismatches[0]!
+  const allowed = new Set(repairPaths)
+  const fatal = mismatches.filter((mismatch) => !allowed.has(mismatch.path))
+  if (fatal.length > 0) {
+    const first = fatal[0]!
     throw new EngineFaultError(
       ERROR_CODES.TXN_ABORTED,
       `journal hash mismatch for ${first.path} (txid ${first.txid}); expected ${first.expected}, found ${first.actual ?? 'missing'}`,

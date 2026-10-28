@@ -19,6 +19,7 @@ const groups = [
       '/src/domain/index.ts',
       '/src/domain/scoring.ts',
       '/src/domain/simhash.ts',
+      '/src/domain/stable.ts',
       '/src/domain/text.ts',
       '/src/domain/transitions.ts',
       '/src/domain/wordcount.ts',

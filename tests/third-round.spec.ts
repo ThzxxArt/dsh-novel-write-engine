@@ -1,0 +1,182 @@
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { describe, expect, it } from 'vitest'
+import {
+  archiveDelta,
+  bootstrapToDraft,
+  cleanText,
+  harness,
+  readyToArchive,
+  readProjectFile,
+  sampleSummary,
+} from './helpers.js'
+
+/**
+ * Third-round regressions. Each test names the behavior it protects, not the
+ * implementation that currently happens to satisfy it.
+ */
+describe('0.1.3 third-round review regressions', () => {
+  it('does not replay an active-chapter export after its plan title changes', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      await engine.getBrief({ stage: 'P3', root })
+      await engine.submitDraft({
+        chapter: 1,
+        content: cleanText(),
+        chapter_title: '开端之雨',
+        scene_type: '日常过渡章',
+        narrator: '他',
+        summary: sampleSummary(),
+        root,
+      })
+      const first = await engine.export({ kind: 'md', chapter: 1, root })
+      expect(first.replayed).not.toBe(true)
+      expect(await readProjectFile(root, 'exports/book-ch001.md')).toContain('第1章 开端之雨')
+
+      const planPath = join(root, 'plans', 'ch001.chapter.yaml')
+      const plan = parseYaml((await readFile(planPath, 'utf8'))!) as Record<string, unknown>
+      await writeFile(planPath, stringifyYaml({ ...plan, title: '换过的标题' }), 'utf8')
+
+      const second = await engine.export({ kind: 'md', chapter: 1, root })
+      expect(second.replayed).not.toBe(true)
+      expect(await readProjectFile(root, 'exports/book-ch001.md')).toContain('换过的标题')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses to rewrite assigned ids on an archived chapter row', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = sampleSummary({
+        foreshadows: {
+          planted: [{ key: 'hookA', title: '蜡印', description: '蜡印' }],
+          advanced: [],
+          resolved: [],
+        },
+      })
+      await readyToArchive({ root, engine, summary })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+      const saved = await engine.queryState({ kind: 'chapters', include_summary: true, root })
+      const forged = structuredClone(saved.data) as {
+        chapters: Array<Record<string, unknown>>
+      }
+      forged.chapters[0]!.assigned_ids = {}
+      await expect(
+        engine.amend({
+          path: 'state/chapters.yaml',
+          content: forged as never,
+          reason: 'erase an assigned id so it can be reused',
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses to lower next_seq while the chapters ledger cannot prove the floor', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = sampleSummary({
+        foreshadows: {
+          planted: [{ key: 'hookA', title: '蜡印', description: '蜡印' }],
+          advanced: [],
+          resolved: [],
+        },
+      })
+      await readyToArchive({ root, engine, summary })
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+      await writeFile(join(root, 'state', 'chapters.yaml'), 'chapters: [unclosed\n', 'utf8')
+      await writeFile(join(root, 'state', 'handoff.yaml'), 'volume: [unclosed\n', 'utf8')
+      await expect(
+        engine.amend({
+          path: 'state/foreshadows.yaml',
+          content: { schema_version: 1, next_seq: 1, items: [] },
+          reason: 'reuse FS-001 while the archive index is unreadable',
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('budgets the counter of the operation the P6 status will recommend', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await readyToArchive({ root, engine })
+      const internals = engine as unknown as {
+        load(root?: string): Promise<unknown>
+        roundsLimitBlock(snapshot: unknown): { code: string; detail: string } | null
+      }
+      const snapshot = (await internals.load(root)) as {
+        pipeline: {
+          stage: string
+          rounds: { review: number; revise: number; check: number }
+          blocking: Array<{ code: string; detail: string }>
+        }
+        check: unknown
+        checkError: string | null
+      }
+      snapshot.pipeline.stage = 'P6'
+      snapshot.pipeline.blocking = [{ code: 'SEMANTIC_CHECK_FAILED', detail: 'needs revision' }]
+      snapshot.check = null
+      snapshot.checkError = null
+      snapshot.pipeline.rounds = { review: 0, revise: 3, check: 0 }
+      expect(internals.roundsLimitBlock(snapshot)?.detail).toContain('revise')
+      snapshot.checkError = 'check is unreadable'
+      snapshot.pipeline.rounds = { review: 0, revise: 0, check: 3 }
+      expect(internals.roundsLimitBlock(snapshot)?.detail).toContain('check')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses archive when the check scope lost integrity after ready', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await readyToArchive({ root, engine })
+      const checkPath = join(root, 'checks', 'ch001.check.yaml')
+      const check = parseYaml((await readFile(checkPath, 'utf8'))!) as {
+        scope: string[]
+      }
+      check.scope = ['content']
+      await writeFile(checkPath, stringifyYaml(check), 'utf8')
+      await engine.getBrief({ stage: 'P8', root })
+      const status = await engine.getStatus({ root })
+      expect(status.data.blocking).toContainEqual(expect.objectContaining({ code: 'PG-12' }))
+      expect(status.data.next).toMatchObject({ tool: 'novel_rollback', args: { to_stage: 'P6' } })
+      await expect(
+        engine.archiveChapter({
+          chapter: 1,
+          state_delta: archiveDelta(sampleSummary()),
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_GATE_BLOCKED' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('reports PG-05 at archive preflight when the stored summary becomes malformed', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await readyToArchive({ root, engine })
+      const planPath = join(root, 'plans', 'ch001.chapter.yaml')
+      const plan = parseYaml((await readFile(planPath, 'utf8'))!) as {
+        summary: { events: string[] }
+      }
+      plan.summary.events = []
+      await writeFile(planPath, stringifyYaml(plan), 'utf8')
+      await engine.getBrief({ stage: 'P8', root })
+      const status = await engine.getStatus({ root })
+      expect(status.data.blocking).toContainEqual(expect.objectContaining({ code: 'PG-05' }))
+      expect(status.data.next).toMatchObject({ tool: 'novel_rollback', args: { to_stage: 'P3' } })
+    } finally {
+      await cleanup()
+    }
+  })
+})
