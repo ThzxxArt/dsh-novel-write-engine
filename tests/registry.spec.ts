@@ -50,13 +50,15 @@ describe('project registry', () => {
     const { root, engine, cleanup } = await harness({ stateDir })
     try {
       await bootstrapToDraft({ root, engine })
+      const parseAdminJson = (value: string): Record<string, unknown> =>
+        JSON.parse(value.slice(value.indexOf('{'))) as Record<string, unknown>
       expect(await runAdminOperation(engine, 'novel_registry_list', '{}')).toContain('projects')
-      expect(await runAdminOperation(engine, 'novel_registry_register', JSON.stringify({ root }))).toContain(
-        root,
-      )
-      expect(await runAdminOperation(engine, 'novel_registry_activate', JSON.stringify({ root }))).toContain(
-        root,
-      )
+      const registered = await runAdminOperation(engine, 'novel_registry_register', JSON.stringify({ root }))
+      expect(parseAdminJson(registered)).toMatchObject({
+        projects: [expect.objectContaining({ root })],
+      })
+      const activated = await runAdminOperation(engine, 'novel_registry_activate', JSON.stringify({ root }))
+      expect(parseAdminJson(activated)).toMatchObject({ active: root })
       expect(await runAdminOperation(engine, 'novel_registry_forget', JSON.stringify({ root }))).toContain(
         'projects',
       )
