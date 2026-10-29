@@ -1243,7 +1243,7 @@ tests/            # 单测、集成、falsify、e2e
 
 0.2.0 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
 
-- `corepack pnpm test` 全绿（当前树 622 项，71 个测试文件）；
+- `corepack pnpm test` 全绿（当前树 624 项，71 个测试文件）；
 - 最近一次覆盖率语句 93.87% / 分支 89.16% / 函数 98.30% / 行 93.87%（V8 分支/行计数会有 ±0.01 波动，门禁按单次真实结果判定），`test:coverage` 与逐文件 domain/book/insight 门禁全过；
 - `typecheck`、`lint`、`check:hygiene`、`test:isolated`、`build`、`validate:rulepack`、`check:pack`、`check:artifacts`、`check:install` 全绿；
 - `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、headless 真实触发 `novel_init` 工具并落盘、`remove` 后层消失；`check:preset` 从真实 bundle 解析 13 个包；

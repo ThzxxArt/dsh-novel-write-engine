@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { promises as fs } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { FileLock } from '../src/store/lock.js'
 import { harness } from './helpers.js'
 
@@ -148,6 +149,41 @@ describe('file lock reclaim', () => {
       expect(audit.data).toContainEqual(expect.objectContaining({ op: 'lock_reclaimed' }))
     } finally {
       await cleanup()
+    }
+  })
+
+  it('retries a transient EPERM while opening a contended lock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    const busy = Object.assign(new Error('sharing violation'), { code: 'EPERM' })
+    const open = vi.spyOn(fs, 'open').mockRejectedValueOnce(busy as never)
+    try {
+      const lock = new FileLock(path, 1_000, 1_000)
+      await lock.acquire()
+      expect(await readFile(path, 'utf8')).toContain('"pid"')
+      await lock.release()
+    } finally {
+      open.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('retries a transient EPERM while linking a stale lock claim', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    const busy = Object.assign(new Error('sharing violation'), { code: 'EPERM' })
+    const link = vi.spyOn(fs, 'link').mockRejectedValueOnce(busy as never)
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), nonce: 'stale' }),
+      )
+      const lock = new FileLock(path, 1_000, 1_000)
+      await lock.acquire()
+      await lock.release()
+    } finally {
+      link.mockRestore()
+      await rm(dir, { recursive: true, force: true })
     }
   })
 

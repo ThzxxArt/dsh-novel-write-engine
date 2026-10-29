@@ -113,7 +113,11 @@ export class FileLock {
         this.held = record
         return
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        const code = (error as NodeJS.ErrnoException).code
+        // Windows can report EPERM/EACCES instead of EEXIST while another
+        // process is deleting or antivirus is scanning the lock file. Treat
+        // those as lock contention and let the normal deadline decide.
+        if (code !== 'EEXIST' && code !== 'EPERM' && code !== 'EACCES') throw error
         if (await this.tryReclaim()) continue
         if (Date.now() >= deadline) {
           throw new EngineFaultError(
@@ -193,7 +197,11 @@ export class FileLock {
     try {
       await fs.link(this.absolutePath, claimPath)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return true
+      // A Windows sharing/AV window can make link fail while the owner is
+      // still releasing. Do not fail the writer; retry until the deadline.
+      if (code === 'EPERM' || code === 'EACCES') return false
       throw error
     }
     const moved = await this.readAt(claimPath)
