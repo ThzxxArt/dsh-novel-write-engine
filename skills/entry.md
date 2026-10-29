@@ -16,6 +16,10 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 5. **不编设定。** 人物、地点、伏笔、资源状态拿不准就 `novel_state` 查。
 6. **归档是一次事务，且必须核销。** `novel_archive` 必须带 `state_delta`：本章每个角色/伏笔/事件/新设定/关系逐条声明 `created|updated|no_change`；不要手工拼章节索引或交接文件。
 
+## 书级规划（0.2.0）
+
+新项目先 `novel_guide`；推荐但不强制：`novel_blueprint`（蓝图/卷）→ `novel_outline`（章卡）→ `novel_worldbook`（设定集）。已有大纲可用 `novel_outline_import` 导入 Markdown/YAML/JSON。只要存在章卡，P2/P3 就按章卡校验标题、场景、字数与 cast；严格模式还要求章卡必须存在。要改已归档章先 `novel_reopen`（必须带 reason）。
+
 ## 流程路由
 
 | 当前阶段         | 任务书           | 下一动作             |
@@ -36,7 +40,16 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 | 工具 | 用途 |
 | --- | --- |
 | `novel_init` | 建项目 |
-| `novel_status` | 当前章/阶段/阻塞/下一步 |
+| `novel_status` | 当前章/阶段/阻塞/书级摘要/下一步 |
+| `novel_blueprint` | 书级蓝图与卷结构 |
+| `novel_outline` | 卷/章卡 |
+| `novel_outline_import` | 导入 Markdown/YAML/JSON 大纲 |
+| `novel_worldbook` | 世界观设定集 |
+| `novel_search` | 搜索正文/大纲/世界观/台账 |
+| `novel_doctor` | 项目体检 |
+| `novel_report` | 全书报告 |
+| `novel_guide` | 上手引导与下一步 |
+| `novel_reopen` | 从归档备份重开紧邻的上一章 |
 | `novel_brief` | 取阶段任务书与上下文 |
 | `novel_plan_world` | P1 世界观计划 |
 | `novel_plan_chapter` | P2 章节计划 |
@@ -50,19 +63,19 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 | `novel_amend` | 受控改状态文档 |
 | `novel_rollback` | 回退阶段 |
 | `novel_diff` | 与备份/文本对比 |
-| `novel_export` | md/txt/epub |
+| `novel_export` | md/txt/epub/outline/worldbook/proposal |
 | `novel_audit` | 事务审计 |
 | `novel_pipeline` | 推荐下一步与参数 |
 
 ## 工具怎么用
 
 - 参数是 JSON 对象；`summary`、`dimensions`、`issues`、`proof` 是结构化对象，按任务书字段填。
-- `novel_check` 必须带四个语义项（`L2-SCENE-ANCHOR` / `L2-CHARACTER-STATE` / `L2-CAUSALITY` / `L2-VOICE`），每项都要有正文逐字引用；缺一项即校验不过。
+- `novel_check` 必须带五个语义项（`L2-SCENE-ANCHOR` / `L2-CHARACTER-STATE` / `L2-CAUSALITY` / `L2-VOICE` / `L2-POV`），每项都要有正文逐字引用，且来自不同句子；缺一项即校验不过。
 - 失败分三类：参数错（改参数）、门控没过（改正文）、系统故障（查目录/稍后重试）。错误消息里的 code 说明属于哪类。
 - 门控失败会一次列出**全部**阻塞项；一次改完再交，不要逐条试。
 
 ## 交付
 
 - 每章归档后，用户在面板「网文工坊」看到章节表与阻塞区。
-- 导出：`novel_export md|txt|epub`。
+- 导出：`novel_export md|txt|epub|outline|worldbook|proposal`。
 - 不要在对话里重复整章正文；工具结果已经可见。

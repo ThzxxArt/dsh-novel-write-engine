@@ -26,11 +26,35 @@ const groups = [
     ],
   },
   { prefix: '/src/client/viewmodel.ts', floor: 95, expected: ['/src/client/viewmodel.ts'] },
+  {
+    prefix: '/src/engine/book.ts',
+    floor: 95,
+    keys: ['lines', 'statements', 'functions'],
+    expected: ['/src/engine/book.ts'],
+  },
+  {
+    prefix: '/src/engine/book.ts',
+    floor: 93,
+    keys: ['branches'],
+    expected: ['/src/engine/book.ts'],
+  },
+  {
+    prefix: '/src/engine/insight.ts',
+    floor: 95,
+    keys: ['lines', 'statements', 'functions'],
+    expected: ['/src/engine/insight.ts'],
+  },
+  {
+    prefix: '/src/engine/insight.ts',
+    floor: 93,
+    keys: ['branches'],
+    expected: ['/src/engine/insight.ts'],
+  },
 ]
 
 const files = Object.entries(summary).filter(([file]) => file !== 'total')
 const failures = []
-for (const { prefix, floor, expected } of groups) {
+for (const { prefix, floor, keys: groupKeys = keys, expected } of groups) {
   const matched = files.filter(([file]) => file.replaceAll('\\', '/').includes(prefix))
   if (matched.length === 0) {
     failures.push(`coverage group ${prefix} matched no files; the gate is not running`)
@@ -43,7 +67,7 @@ for (const { prefix, floor, expected } of groups) {
   }
   for (const [file, data] of matched) {
     const normalized = file.replaceAll('\\', '/')
-    for (const key of keys) {
+    for (const key of groupKeys) {
       const pct = data[key]?.pct
       if (typeof pct !== 'number' || pct < floor) {
         failures.push(`${normalized}: ${key} ${String(pct)}% < ${floor}%`)

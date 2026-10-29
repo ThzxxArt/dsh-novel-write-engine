@@ -1,6 +1,7 @@
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { buildEpub, buildZip } from '../src/export/epub.js'
+import { emptyOutline, emptyWorldbook } from '../src/engine/book.js'
 import {
   chapterHeading,
   renderBlurb,
@@ -8,6 +9,7 @@ import {
   renderEpubChapter,
   renderMarkdown,
   renderPlainText,
+  renderProposal,
 } from '../src/export/render.js'
 import { FsStore } from '../src/store/fs.js'
 import { EngineService } from '../src/engine/service.js'
@@ -178,5 +180,65 @@ describe('engine export', () => {
       second.dispose()
       await cleanup()
     }
+  })
+
+  it('renders a proposal with and without planning content', () => {
+    const empty = renderProposal(project, emptyOutline('2026-01-01'), emptyWorldbook('2026-01-01'), [])
+    expect(empty).toContain('测试之书')
+    const outline = emptyOutline('2026-01-01')
+    outline.book.logline = '梗概'
+    outline.book.premise = '前提'
+    outline.book.themes = ['主题']
+    outline.book.tone = '冷'
+    outline.book.pov = '第三人称'
+    outline.book.selling_points = ['卖点']
+    outline.book.ending = '结局'
+    outline.volumes = [
+      {
+        id: 'V1',
+        title: '第一卷',
+        start_chapter: 1,
+        end_chapter: 3,
+        goal: '目标',
+        arc: '',
+        climax: '',
+        status: 'planned',
+      },
+    ]
+    const worldbook = emptyWorldbook('2026-01-01')
+    worldbook.premise = '世界'
+    worldbook.setting = '设定'
+    worldbook.characters = [{ name: '他', role: '主角', description: '档案员', arc: '成长' }]
+    const rendered = renderProposal(project, outline, worldbook, [
+      {
+        num: 1,
+        title: '开端',
+        file: 'chapters/chapter-001.md',
+        word_count: 100,
+        dialogue_lines: 0,
+        dialogue_ratio: 0,
+        scene_type: '日常过渡章',
+        narrator: '他',
+        score: 140,
+        status: 'reviewed',
+        content_hash: 'hash',
+        summary: {
+          events: ['事件'],
+          characters_appeared: ['他'],
+          foreshadows: { planted: [], advanced: [], resolved: [] },
+          new_elements: { locations: [], abilities: [], artifacts: [] },
+          resource_changes: [],
+          opening: '开头',
+          continuity: { opens_from: '', ends_with: '' },
+          hook_strength: 3,
+          pleasure_points: [],
+          plot_advancement: 'mid',
+        },
+      },
+    ] as never)
+    expect(rendered).toContain('## 前提')
+    expect(rendered).toContain('第一卷')
+    expect(rendered).toContain('档案员')
+    expect(rendered).toContain('章节样例')
   })
 })

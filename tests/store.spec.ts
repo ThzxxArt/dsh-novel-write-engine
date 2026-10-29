@@ -45,7 +45,7 @@ describe('path guard', () => {
 
 describe('schema narrowing', () => {
   it('covers every document kind and rejects defects', () => {
-    expect(DOC_KINDS).toHaveLength(14)
+    expect(DOC_KINDS).toHaveLength(16)
     const pipeline = {
       schema_version: 1,
       revision: 1,

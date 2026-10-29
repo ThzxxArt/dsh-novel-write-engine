@@ -4,7 +4,7 @@
       config:
         id: novel-write-engine
         name: 网文工坊
-        description: 网文创作专用会话：18 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
+        description: 网文创作专用会话：27 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
         order: 20
         plugins:
           - id: persona

@@ -53,7 +53,7 @@ export async function harness(config: Partial<EngineConfig> = {}): Promise<Harne
 }
 
 /** A clean paragraph set: no markdown, no curly quotes, no semicolons, no long paragraphs. */
-export function cleanText(paragraphs = 4): string {
+export function cleanText(paragraphs = 5): string {
   const lines = [
     '风从窗缝里挤进来，把桌上的纸吹得翻了一页。他伸手压住，指腹沾了一点灰。',
     '走廊尽头传来脚步声，不快不慢，在门口停了两秒。他没有抬头，只把笔帽扣紧。',
@@ -214,34 +214,27 @@ export async function writeDraft(input: {
   })
 }
 
-/** Four disjoint 8-character quotes from the manuscript, one per semantic item. */
+/** Five disjoint 8-character quotes from five different sentences. */
 export function semanticQuotes(text: string): string[] {
   const found: string[] = []
   const seen = new Set<string>()
-  const add = (quote: string): void => {
-    if (Array.from(quote).length < 8 || seen.has(quote)) return
+  const sentences = text.match(/[^。！？!?]+[。！？!?]?/g) ?? []
+  for (const sentence of sentences) {
+    const chars = Array.from(sentence.trim())
+    if (chars.length < 8) continue
+    const quote = chars.slice(0, 8).join('')
+    if (seen.has(quote)) continue
     seen.add(quote)
     found.push(quote)
+    if (found.length === 5) break
   }
-  for (const paragraph of text.split(/\n+/)) {
-    const chars = Array.from(paragraph.trim())
-    add(chars.slice(0, 8).join(''))
+  if (found.length < 5) {
+    throw new Error(`sampleSemantic needs five distinct sentence quotes, found ${found.length}`)
   }
-  if (found.length < 4) {
-    for (const paragraph of text.split(/\n+/)) {
-      const chars = Array.from(paragraph.trim())
-      for (let start = 0; start + 8 <= chars.length && found.length < 4; start += 8) {
-        add(chars.slice(start, start + 8).join(''))
-      }
-    }
-  }
-  if (found.length < 4) {
-    throw new Error(`sampleSemantic needs four distinct 8-character quotes, found ${found.length}`)
-  }
-  return found.slice(0, 4)
+  return found
 }
 
-/** The four P6 semantic items, all passing against distinct quotes from the text. */
+/** The five P6 semantic items, all passing against distinct quotes from the text. */
 export function sampleSemantic(
   text: string,
   patch: Partial<Record<(typeof SEMANTIC_CHECK_IDS)[number], Partial<SemanticItem>>> = {},

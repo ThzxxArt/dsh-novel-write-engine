@@ -16,22 +16,14 @@ const rootArg = (args: Record<string, unknown>): string => {
 }
 
 /**
- * The ten tools hidden when `tools.mode=core`, plus the explicit
+ * The seventeen tools hidden when `tools.mode=core`, plus the explicit
  * registry/settings-pack operations that are command-only by design (§6.8).
  * They stay reachable through `/novel admin <operation> <json>`; the caller
  * supplies the same arguments the tool schema would have accepted.
  */
 const OPERATIONS: Record<string, Handler> = {
-  novel_plan_world: (engine, args) => engine.submitWorldPlan({ chapter: 0, ...args } as never),
-  novel_plan_chapter: (engine, args) =>
-    engine.submitChapterPlan({
-      chapter: 0,
-      beats: [],
-      opening: '',
-      ending: '',
-      target_words: [2000, 3000],
-      ...args,
-    } as never),
+  novel_plan_world: (engine, args) => engine.submitWorldPlan(args as never),
+  novel_plan_chapter: (engine, args) => engine.submitChapterPlan(args as never),
   novel_word_count: (engine, args) => engine.countWords(args as never),
   novel_amend: (engine, args) => engine.amend(args as never),
   novel_rollback: (engine, args) =>
@@ -44,6 +36,15 @@ const OPERATIONS: Record<string, Handler> = {
   novel_audit: (engine, args) => engine.auditHistory(args as never),
   novel_pipeline: (engine, args) => engine.advise(args as never),
   novel_state: (engine, args) => engine.queryState(args as never),
+  novel_blueprint: (engine, args) => engine.submitBookPlan(args as never),
+  novel_outline: (engine, args) => engine.submitOutline(args as never),
+  novel_outline_import: (engine, args) => engine.importOutline(args as never),
+  novel_worldbook: (engine, args) => engine.submitWorldbook(args as never),
+  novel_search: (engine, args) => engine.search(args as never),
+  novel_doctor: (engine, args) => engine.doctor(args as never),
+  novel_report: (engine, args) => engine.report(args as never),
+  novel_guide: (engine, args) => engine.guide(args as never),
+  novel_reopen: (engine, args) => engine.reopenChapter(args as never),
   novel_registry_list: (engine) => engine.listProjects(),
   novel_registry_register: (engine, args) => engine.registerProject({ root: rootArg(args) }),
   novel_registry_activate: (engine, args) => engine.setActiveProject({ root: rootArg(args) }),
@@ -110,5 +111,20 @@ export async function runAdminOperation(
     typeof result === 'object' && result !== null && 'data' in result
       ? (result as { data: unknown }).data
       : result
-  return `${operation} 完成\n${JSON.stringify(payload, null, 2)}`
+  let text = `${operation} 完成\n${JSON.stringify(payload, null, 2)}`
+  if (typeof result === 'object' && result !== null) {
+    const warnings = (result as { warnings?: unknown }).warnings
+    if (Array.isArray(warnings) && warnings.length > 0) {
+      const lines = warnings.map((warning) => {
+        if (typeof warning !== 'object' || warning === null) return String(warning)
+        const entry = warning as { code?: unknown; message?: unknown }
+        return `${String(entry.code ?? 'WARNING')}: ${String(entry.message ?? '')}`
+      })
+      text += `\n\n引擎警告：\n${lines.map((line) => `- ${line}`).join('\n')}`
+    }
+    if ((result as { replayed?: unknown }).replayed === true) {
+      text += '\n\n（replayed: true — 本次未再次写盘）'
+    }
+  }
+  return text
 }

@@ -31,6 +31,8 @@ export interface TransactionInput {
   backupRetention?: number
   /** Optional abort signal; checked before any target file is touched. */
   signal?: AbortSignal
+  /** Human reason for a maintenance transaction; persisted in the journal. */
+  reason?: string
   /** Test seam: runs after staging is verified, before commit. */
   afterVerify?: () => Promise<void>
   /** Test seam: runs after each rename; throwing triggers compensation. */
@@ -97,6 +99,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
   const targetDirectories = new Set<string>()
   let journaledCommitted = false
   let backupMarked = false
+  let backupComplete = false
 
   try {
     for (const file of input.files) {
@@ -141,13 +144,23 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     }
 
     if (input.backup) {
+      // Build the backup inside staging and move the completed directory into
+      // backups/ only after every pre-image and the marker are durable. A crash
+      // during this window leaves an ordinary staging orphan, not an unmarked
+      // directory that retention can never see.
+      const stagingBackup = joinRel(staging, 'backup')
       for (const file of input.files) {
         const existing = before.get(file.path)
         if (existing === null || existing === undefined) continue
-        await store.writeBytes(joinRel(backupDir(input.txid), file.path), existing)
+        await store.writeBytes(joinRel(stagingBackup, file.path), existing)
       }
-      await store.writeText(joinRel(backupDir(input.txid), BACKUP_MARKER), '1')
+      await store.writeText(joinRel(stagingBackup, BACKUP_MARKER), '1')
+      const targetBackup = store.path(backupDir(input.txid))
+      await fs.mkdir(dirname(targetBackup), { recursive: true })
+      await fs.rename(store.path(stagingBackup), targetBackup)
+      await syncDirectory(dirname(targetBackup))
       backupMarked = true
+      backupComplete = true
     }
 
     // A crash after this row but before the committed row is recoverable: the
@@ -173,6 +186,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       status: 'pending',
       hashes: Object.fromEntries(expected),
       before: beforeHashes,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     })
 
     for (const [index, file] of input.files.entries()) {
@@ -208,6 +222,10 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       files: input.files.map((file) => file.path),
       status: 'committed',
       hashes: Object.fromEntries(expected),
+      // Keep the pre-image hashes on the terminal row too: `novel_reopen`
+      // needs them to distinguish "new file" from "backup was pruned".
+      before: beforeHashes,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     })
     journaledCommitted = true
 
@@ -222,22 +240,29 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     if (rollbackProblem === null) {
       await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
     }
-    if (input.backup && !backupMarked) {
-      // A failure while writing backup pre-images leaves an unmarked directory
-      // that pruning will never see; remove our own partial copy.
+    if (input.backup && (!backupMarked || (!backupComplete && renamed.length === 0))) {
+      // An unmarked directory, or a marked copy that failed before any rename,
+      // is not a recovery source; remove our own partial copy.
       await store.removeTree(backupDir(input.txid)).catch(() => undefined)
     }
     if (!journaledCommitted) {
-      await appendJournal(store, {
-        txid: input.txid,
-        at: new Date().toISOString(),
-        op: input.op,
-        chapter: input.chapter,
-        revision: input.revision,
-        files: input.files.map((file) => file.path),
-        status: 'aborted',
-        reason: error instanceof Error ? error.message : String(error),
-      }).catch(() => undefined)
+      await appendJournal(
+        store,
+        {
+          txid: input.txid,
+          at: new Date().toISOString(),
+          op: input.op,
+          chapter: input.chapter,
+          revision: input.revision,
+          files: input.files.map((file) => file.path),
+          status: 'aborted',
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        // The pending append that just failed may have left a torn line. If the
+        // abort row is appended without repairing it, appendText inserts a
+        // newline and turns the fragment into a permanent malformed row.
+        { repairTrailing: true },
+      ).catch(() => undefined)
     }
     const suffix =
       rollbackProblem === null

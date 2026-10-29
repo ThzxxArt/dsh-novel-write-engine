@@ -1,11 +1,12 @@
 import type { BlockingItem, SemanticItem } from '../types.js'
 
-/** The four checks the P6 task book requires; a subset cannot pass. */
+/** The five checks the P6 task book requires; a subset cannot pass. */
 export const SEMANTIC_CHECK_IDS = [
   'L2-SCENE-ANCHOR',
   'L2-CHARACTER-STATE',
   'L2-CAUSALITY',
   'L2-VOICE',
+  'L2-POV',
 ] as const
 
 /** Extract the quoted part of an evidence string, tolerating "第 N 段：" labels. */

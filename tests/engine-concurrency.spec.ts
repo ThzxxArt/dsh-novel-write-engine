@@ -5,7 +5,7 @@ import { loadRulepack } from '../src/rulepack.js'
 import { FileLock } from '../src/store/lock.js'
 import { FIXED_NOW, TEST_CONFIG, bootstrapToDraft, harness, readProjectFile } from './helpers.js'
 
-type Load = (root?: string) => Promise<unknown>
+type Load = (root?: string, retries?: number, allowLock?: boolean) => Promise<unknown>
 
 const emptyWorld = (marker: string): Record<string, unknown> => ({
   schema_version: 1,
@@ -39,8 +39,8 @@ describe('cross-process write lock', () => {
         firstLoaded = resolve
       })
       const original = (engine as unknown as { load: Load }).load.bind(engine)
-      ;(engine as unknown as { load: Load }).load = async (projectRoot?: string) => {
-        const snapshot = await original(projectRoot)
+      ;(engine as unknown as { load: Load }).load = async (...args) => {
+        const snapshot = await original(...args)
         firstLoaded()
         await holdFirst
         return snapshot
@@ -64,9 +64,9 @@ describe('cross-process write lock', () => {
         return originalAcquire.call(this)
       })
       const originalSecond = (second as unknown as { load: Load }).load.bind(second)
-      ;(second as unknown as { load: Load }).load = async (projectRoot?: string) => {
+      ;(second as unknown as { load: Load }).load = async (...args) => {
         secondLoaded = true
-        return originalSecond(projectRoot)
+        return originalSecond(...args)
       }
       const secondWrite = second.amend({
         path: 'state/world.yaml',

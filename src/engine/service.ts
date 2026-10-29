@@ -8,8 +8,10 @@ import {
   EXPORT_DIR,
   LIMITS,
   LOCK_FILE,
+  OUTLINE_FILE,
   PROJECT_FILE,
   STATE_DIR,
+  WORLDBOOK_FILE,
   STATE_FILES,
   chapterFile,
   checkFile,
@@ -39,8 +41,14 @@ import {
 import { homedir } from 'node:os'
 import { ensureDirAt } from '../assets.js'
 import { runTransaction } from '../store/txn.js'
-import { KeyedMutex, FileLock } from '../store/lock.js'
-import { appendJournal, assertJournalConsistent, readJournal, reconcileJournal } from '../store/journal.js'
+import { KeyedMutex, FileLock, isLockRecord, lockRecordIsLive } from '../store/lock.js'
+import {
+  appendJournal,
+  assertJournalConsistent,
+  hasCommittedJournal,
+  readJournal,
+  reconcileJournal,
+} from '../store/journal.js'
 import { listBackups } from '../store/backup.js'
 import { narrow, type DocKind } from '../store/schema.js'
 import { buildEpub } from '../export/epub.js'
@@ -49,8 +57,37 @@ import {
   renderCover,
   renderMarkdown,
   renderPlainText,
+  renderProposal,
   type ExportChapter,
 } from '../export/render.js'
+import {
+  autoCardCast,
+  bookPlanPresent,
+  emptyOutline,
+  emptyWorldbook,
+  markOutlineArchived,
+  markOutlineReopened,
+  mergeBookPlan,
+  mergeWorldbook,
+  normalizeOutlineChapters,
+  normalizeVolumes,
+  outlineCard,
+  outlineDrift,
+  outlineSummary,
+  parseOutlineInput,
+  renderOutlineMarkdown,
+  renderWorldbookMarkdown,
+  stripChapterPrefix,
+  validateOutlineDocument,
+  validateWorldbookDocument,
+  volumeForChapter,
+  worldbookCounts,
+  type BookPatch,
+  type OutlineInput,
+  type VolumeInput,
+  type WorldbookPatch,
+} from './book.js'
+import { buildBookReport, buildGuide, searchSnapshot } from './insight.js'
 import { BriefLibrary } from './brief.js'
 import { briefContext } from './context.js'
 import { applyStateDelta } from './state-delta.js'
@@ -81,6 +118,7 @@ import {
   SCENE_TYPES,
   SCHEMA_VERSION,
   EngineBlockedError,
+  EngineError,
   EngineFaultError,
   EngineInputError,
   type AuditRow,
@@ -113,6 +151,13 @@ import {
   type Warning,
   type WordMetrics,
   type WorldPlanInput,
+  type BookReport,
+  type DoctorCheck,
+  type DoctorReport,
+  type GuideReport,
+  type OutlineDocument,
+  type SearchReport,
+  type WorldbookDocument,
 } from '../types.js'
 
 export interface InitProjectInput {
@@ -124,6 +169,17 @@ export interface InitProjectInput {
   words_per_chapter?: [number, number]
   total_chapters?: number | null
   dialogue_ratio?: [number, number]
+  /** 0.2.0 book-planning seed; every field is optional. */
+  premise?: string
+  logline?: string
+  themes?: string[]
+  tone?: string
+  pov?: string
+  audience?: string
+  selling_points?: string[]
+  ending?: string
+  /** Strict outline is opt-in; a new project defaults to false. */
+  strict_outline?: boolean
   root?: string
 }
 
@@ -171,7 +227,7 @@ export interface RevisionSubmission extends Omit<RevisionInput, 'summary'> {
 
 export interface CheckSubmission {
   chapter: number
-  /** The four P6 semantic items; omission is a failed check, never a pass. */
+  /** The five P6 semantic items; omission is a failed check, never a pass. */
   semantic: SemanticItem[]
   scope?: string[]
   root?: string
@@ -201,7 +257,7 @@ export interface RollbackSubmission {
 }
 
 export interface DiffInput {
-  chapter: number
+  chapter?: number
   before?: string
   after?: string
   root?: string
@@ -234,6 +290,52 @@ export interface WordCountInput {
   root?: string
 }
 
+export interface BookPlanSubmission extends BookPatch {
+  volumes?: VolumeInput[]
+  root?: string
+}
+
+export interface OutlineSubmission extends OutlineInput {
+  root?: string
+}
+
+export interface OutlineImportSubmission {
+  format: 'markdown' | 'yaml' | 'json'
+  content: string
+  dry_run?: boolean
+  root?: string
+}
+
+export interface WorldbookSubmission extends WorldbookPatch {
+  root?: string
+}
+
+export interface ReopenSubmission {
+  chapter: number
+  /** A reopen is a history-changing maintenance action; the reason is mandatory. */
+  reason: string
+  root?: string
+}
+
+export interface SearchInput {
+  query: string
+  scope?: 'all' | 'chapters' | 'summaries' | 'outline' | 'worldbook' | 'ledgers'
+  limit?: number
+  root?: string
+}
+
+export interface DoctorInput {
+  root?: string
+}
+
+export interface ReportSubmission {
+  root?: string
+}
+
+export interface GuideInput {
+  root?: string
+}
+
 interface Snapshot {
   root: string
   project: NovelProject
@@ -248,6 +350,12 @@ interface Snapshot {
   foreshadows: import('../types.js').ForeshadowsDocument
   relationships: import('../types.js').RelationshipsDocument
   handoff: import('../types.js').HandoffDocument | null
+  outline: OutlineDocument
+  outlinePresent: boolean
+  outlineError: string | null
+  worldbook: WorldbookDocument
+  worldbookPresent: boolean
+  worldbookError: string | null
   worldPlan: import('../types.js').WorldPlanInput | null
   /** Unreadable ledgers are reported instead of wedging status/panel. */
   ledgerErrors: StateError[]
@@ -310,6 +418,8 @@ const MUTABLE_STATE: Record<string, DocKind> = {
   [joinRel(STATE_DIR, STATE_FILES.foreshadows)]: 'foreshadows',
   [joinRel(STATE_DIR, STATE_FILES.relationships)]: 'relationships',
   [joinRel(STATE_DIR, STATE_FILES.handoff)]: 'handoff',
+  [OUTLINE_FILE]: 'outline',
+  [WORLDBOOK_FILE]: 'worldbook',
 }
 
 /**
@@ -499,9 +609,43 @@ export class EngineService {
         }
         const pipeline = emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' })
         const documents = emptyDocuments()
+        const now = this.now().toISOString()
+        const book = mergeBookPlan(
+          {
+            premise: '',
+            logline: '',
+            themes: [],
+            tone: '',
+            pov: '',
+            audience: '',
+            selling_points: [],
+            ending: '',
+            strict: false,
+            strict_explicit: false,
+          },
+          {
+            ...(input.premise === undefined ? {} : { premise: input.premise }),
+            ...(input.logline === undefined ? {} : { logline: input.logline }),
+            ...(input.themes === undefined ? {} : { themes: input.themes }),
+            ...(input.tone === undefined ? {} : { tone: input.tone }),
+            ...(input.pov === undefined ? {} : { pov: input.pov }),
+            ...(input.audience === undefined ? {} : { audience: input.audience }),
+            ...(input.selling_points === undefined ? {} : { selling_points: input.selling_points }),
+            ...(input.ending === undefined ? {} : { ending: input.ending }),
+            ...(input.strict_outline === undefined ? {} : { strict: input.strict_outline }),
+          },
+        )
+        const outline = { ...emptyOutline(now), book }
+        const worldbook = mergeWorldbook(
+          emptyWorldbook(now),
+          input.premise === undefined ? {} : { premise: input.premise },
+          now,
+        )
         const files: StagedFile[] = [
           { path: PROJECT_FILE, text: yaml(project) },
           { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(pipeline) },
+          { path: OUTLINE_FILE, text: yaml(outline) },
+          { path: WORLDBOOK_FILE, text: yaml(worldbook) },
           ...Object.entries(documents).map(([name, document]) => ({
             path: joinRel(STATE_DIR, name),
             text: yaml(document),
@@ -517,6 +661,699 @@ export class EngineService {
     })
   }
 
+  /* ---------------------------------------------------------- 0.2.0 book ops */
+
+  async submitBookPlan(
+    input: BookPlanSubmission,
+  ): Promise<
+    OpResult<{ premise: string; logline: string; strict: boolean; volumes: number; chapters: number }>
+  > {
+    const allowed = new Set([
+      'premise',
+      'logline',
+      'themes',
+      'tone',
+      'pov',
+      'audience',
+      'selling_points',
+      'ending',
+      'strict',
+      'volumes',
+      'root',
+    ])
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `unknown novel_blueprint argument "${key}"`,
+          `allowed: ${[...allowed].join(', ')}`,
+        )
+      }
+    }
+    // The replay cache is consulted inside mutate() before run(). Check the
+    // planning document here as well, otherwise an external corruption can be
+    // masked by a cached successful answer for the same input.
+    const current = await this.load(input.root)
+    this.assertProjectReadable(current, 'novel_blueprint')
+    this.assertPlanningDocumentReadable(current, 'outline', 'novel_blueprint')
+    this.assertArchiveIndexReadable(current, 'novel_blueprint')
+    return this.mutate({
+      root: input.root,
+      op: 'submitBookPlan',
+      key: () => `blueprint:${sha256(stableJson(input))}`,
+      run: async (snapshot, context) => {
+        this.assertProjectReadable(snapshot, 'novel_blueprint')
+        this.assertPlanningDocumentReadable(snapshot, 'outline', 'novel_blueprint')
+        this.assertArchiveIndexReadable(snapshot, 'novel_blueprint')
+        const now = this.now().toISOString()
+        const bookPatch = Object.fromEntries(
+          Object.entries(input).filter(([key]) => key !== 'volumes' && key !== 'root'),
+        ) as BookPatch
+        const book = mergeBookPlan(snapshot.outline.book, bookPatch)
+        const volumes =
+          input.volumes === undefined
+            ? snapshot.outline.volumes
+            : normalizeVolumes(input.volumes, { totalChapters: snapshot.project.targets.total_chapters })
+        let chapters = snapshot.outline.chapters.map((card) => ({
+          ...card,
+          volume: volumeForChapter(volumes, card.num, card.volume),
+        }))
+        // A blueprint write must never erase the archive record just because
+        // the outline file was missing or had lost a card.
+        for (const record of snapshot.chapters.chapters) {
+          if (chapters.some((card) => card.num === record.num)) continue
+          chapters = markOutlineArchived(
+            { ...snapshot.outline, updated_at: now, book, volumes, chapters },
+            record,
+            now,
+            snapshot.project.targets.words_per_chapter,
+          ).chapters
+        }
+        const outline: OutlineDocument = {
+          ...snapshot.outline,
+          updated_at: now,
+          book,
+          volumes,
+          chapters,
+        }
+        this.assertOutlineWritable(snapshot, outline, 'novel_blueprint')
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          last_action: action('novel_blueprint', this.now(), shortDigest(stableJson(input))),
+        })
+        return {
+          files: [
+            { path: OUTLINE_FILE, text: yaml(outline) },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ],
+          backup: true,
+          data: {
+            premise: book.premise,
+            logline: book.logline,
+            strict: book.strict,
+            volumes: volumes.length,
+            chapters: chapters.length,
+          },
+          event: {
+            name: 'novel/planned',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: snapshot.root,
+              kind: 'blueprint',
+              chapters: chapters.length,
+              volumes: volumes.length,
+            },
+          },
+        }
+      },
+    })
+  }
+
+  async submitOutline(
+    input: OutlineSubmission,
+  ): Promise<
+    OpResult<{ planned: number; archived: number; total: number; strict: boolean; volumes: number }>
+  > {
+    const allowed = new Set(['book', 'volumes', 'chapters', 'strict', 'root'])
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `unknown novel_outline argument "${key}"`,
+          `allowed: ${[...allowed].join(', ')}`,
+        )
+      }
+    }
+    const current = await this.load(input.root)
+    this.assertProjectReadable(current, 'novel_outline')
+    this.assertPlanningDocumentReadable(current, 'outline', 'novel_outline')
+    this.assertArchiveIndexReadable(current, 'novel_outline')
+    return this.mutate({
+      root: input.root,
+      op: 'submitOutline',
+      key: () => `outline:${sha256(stableJson(input))}`,
+      run: async (snapshot, context) => {
+        this.assertProjectReadable(snapshot, 'novel_outline')
+        this.assertPlanningDocumentReadable(snapshot, 'outline', 'novel_outline')
+        this.assertArchiveIndexReadable(snapshot, 'novel_outline')
+        const now = this.now().toISOString()
+        const book = mergeBookPlan(
+          snapshot.outline.book,
+          input.book === undefined
+            ? undefined
+            : { ...input.book, ...(input.strict === undefined ? {} : { strict: input.strict }) },
+        )
+        if (input.strict !== undefined) {
+          book.strict = input.strict
+          book.strict_explicit = true
+        } else if (input.book?.strict === undefined) {
+          // First outline submission turns strict mode on. Once the author has
+          // authored a blueprint or volume, preserve their strict choice; the
+          // old check only looked at chapter cards, so importing an outline
+          // after `novel_blueprint {strict:false}` silently re-enabled it.
+          const firstCardSubmission =
+            snapshot.outline.chapters.length === 0 && snapshot.outline.book.strict_explicit !== true
+          if (firstCardSubmission) {
+            book.strict = true
+            book.strict_explicit = true
+          }
+        }
+        const volumes =
+          input.volumes === undefined
+            ? snapshot.outline.volumes
+            : normalizeVolumes(input.volumes, { totalChapters: snapshot.project.targets.total_chapters })
+        const chapters = normalizeOutlineChapters(input.chapters, {
+          volumes,
+          existing: snapshot.outline.chapters,
+          archived: snapshot.chapters.chapters,
+          titleRule: this.rulepack.format.title,
+          totalChapters: snapshot.project.targets.total_chapters,
+          defaultTargetWords: snapshot.project.targets.words_per_chapter,
+          now,
+        })
+        const outline: OutlineDocument = { schema_version: 1, updated_at: now, book, volumes, chapters }
+        this.assertActiveCardPreserved(snapshot, book.strict, chapters, 'novel_outline')
+        this.assertOutlineWritable(snapshot, outline, 'novel_outline')
+        const planned = chapters.filter((card) => card.status === 'planned').length
+        const archived = chapters.filter((card) => card.status === 'archived').length
+        const kept = new Set(chapters.filter((card) => card.status === 'planned').map((card) => card.num))
+        const dropped = snapshot.outline.chapters
+          .filter((card) => card.status === 'planned' && !kept.has(card.num))
+          .map((card) => card.num)
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          last_action: action('novel_outline', this.now(), shortDigest(stableJson(input))),
+        })
+        return {
+          files: [
+            { path: OUTLINE_FILE, text: yaml(outline) },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ],
+          backup: true,
+          data: { planned, archived, total: chapters.length, strict: book.strict, volumes: volumes.length },
+          warnings:
+            dropped.length === 0
+              ? []
+              : [
+                  {
+                    code: 'OUTLINE_PLANNED_DROPPED',
+                    message: `this replacement dropped planned cards: ${dropped.join(', ')}; resubmit every existing card when adding one`,
+                  },
+                ],
+          event: {
+            name: 'novel/planned',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: snapshot.root,
+              kind: 'outline',
+              chapters: chapters.length,
+              volumes: volumes.length,
+            },
+          },
+        }
+      },
+    })
+  }
+
+  async importOutline(input: OutlineImportSubmission): Promise<
+    OpResult<{
+      format: string
+      planned: number
+      archived: number
+      total: number
+      warnings: string[]
+      preview: string
+      applied: boolean
+    }>
+  > {
+    const allowed = new Set(['format', 'content', 'dry_run', 'root'])
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `unknown novel_outline_import argument "${key}"`,
+          `allowed: ${[...allowed].join(', ')}`,
+        )
+      }
+    }
+    const parsed = parseOutlineInput(input.content, input.format)
+    const snapshot = await this.load(input.root)
+    this.assertProjectReadable(snapshot, 'novel_outline_import')
+    this.assertPlanningDocumentReadable(snapshot, 'outline', 'novel_outline_import')
+    this.assertArchiveIndexReadable(snapshot, 'novel_outline_import')
+    const now = this.now().toISOString()
+    const volumes =
+      parsed.volumes.length === 0
+        ? snapshot.outline.volumes
+        : normalizeVolumes(parsed.volumes, { totalChapters: snapshot.project.targets.total_chapters })
+    const book = mergeBookPlan(
+      snapshot.outline.book,
+      parsed.book.strict === undefined ? parsed.book : { ...parsed.book, strict: parsed.book.strict },
+    )
+    if (parsed.book.strict === undefined) {
+      const firstCardSubmission =
+        snapshot.outline.chapters.length === 0 && snapshot.outline.book.strict_explicit !== true
+      if (firstCardSubmission) {
+        book.strict = true
+        book.strict_explicit = true
+      }
+    }
+    const chapters = normalizeOutlineChapters(parsed.chapters, {
+      volumes,
+      existing: snapshot.outline.chapters,
+      archived: snapshot.chapters.chapters,
+      titleRule: this.rulepack.format.title,
+      totalChapters: snapshot.project.targets.total_chapters,
+      defaultTargetWords: snapshot.project.targets.words_per_chapter,
+      now,
+    })
+    const candidate: OutlineDocument = { schema_version: 1, updated_at: now, book, volumes, chapters }
+    const preview = diffLines(yaml(snapshot.outline), yaml(candidate))
+      .hunks.filter((hunk) => hunk.kind !== 'same')
+      .slice(0, 80)
+      .map((hunk) => `${hunk.kind === 'add' ? '+' : '-'} ${hunk.line}`)
+      .join('\n')
+    const summary = {
+      format: parsed.format,
+      planned: chapters.filter((card) => card.status === 'planned').length,
+      archived: chapters.filter((card) => card.status === 'archived').length,
+      total: chapters.length,
+      warnings: parsed.warnings,
+    }
+    if (input.dry_run === true) {
+      return {
+        data: { ...summary, preview, applied: false },
+        revision: snapshot.pipeline.revision,
+        warnings: [],
+      }
+    }
+    const result = await this.mutate({
+      root: input.root,
+      op: 'importOutline',
+      key: (current) => `outline-import:${current.pipeline.revision}:${sha256(input.content)}`,
+      run: async (fresh, context) => {
+        if (fresh.pipeline.revision !== snapshot.pipeline.revision) {
+          throw new EngineFaultError(
+            ERROR_CODES.TXN_ABORTED,
+            `outline import was prepared against revision ${snapshot.pipeline.revision}, but the project is now at ${fresh.pipeline.revision}`,
+            're-run the import against the current project; nothing was written',
+          )
+        }
+        this.assertProjectReadable(fresh, 'novel_outline_import')
+        this.assertPlanningDocumentReadable(fresh, 'outline', 'novel_outline_import')
+        this.assertArchiveIndexReadable(fresh, 'novel_outline_import')
+        const nextVolumes =
+          parsed.volumes.length === 0
+            ? fresh.outline.volumes
+            : normalizeVolumes(parsed.volumes, {
+                totalChapters: fresh.project.targets.total_chapters,
+              })
+        const nextBook = mergeBookPlan(fresh.outline.book, parsed.book)
+        if (parsed.book.strict === undefined) {
+          const firstCardSubmission =
+            fresh.outline.chapters.length === 0 && fresh.outline.book.strict_explicit !== true
+          if (firstCardSubmission) {
+            nextBook.strict = true
+            nextBook.strict_explicit = true
+          }
+        }
+        const nextChapters = normalizeOutlineChapters(parsed.chapters, {
+          volumes: nextVolumes,
+          existing: fresh.outline.chapters,
+          archived: fresh.chapters.chapters,
+          titleRule: this.rulepack.format.title,
+          totalChapters: fresh.project.targets.total_chapters,
+          defaultTargetWords: fresh.project.targets.words_per_chapter,
+          now,
+        })
+        const outline: OutlineDocument = {
+          schema_version: 1,
+          updated_at: now,
+          book: nextBook,
+          volumes: nextVolumes,
+          chapters: nextChapters,
+        }
+        this.assertActiveCardPreserved(fresh, nextBook.strict, nextChapters, 'novel_outline_import')
+        this.assertOutlineWritable(fresh, outline, 'novel_outline_import')
+        const appliedPreview = diffLines(yaml(fresh.outline), yaml(outline))
+          .hunks.filter((hunk) => hunk.kind !== 'same')
+          .slice(0, 80)
+          .map((hunk) => `${hunk.kind === 'add' ? '+' : '-'} ${hunk.line}`)
+          .join('\n')
+        const nextPipeline = pipelineWith(fresh, context.revision, {
+          last_action: action('novel_import_outline', this.now(), shortDigest(input.content)),
+        })
+        const kept = new Set(nextChapters.filter((card) => card.status === 'planned').map((card) => card.num))
+        const dropped = fresh.outline.chapters
+          .filter((card) => card.status === 'planned' && !kept.has(card.num))
+          .map((card) => card.num)
+        return {
+          files: [
+            { path: OUTLINE_FILE, text: yaml(outline) },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ],
+          backup: true,
+          warnings:
+            dropped.length === 0
+              ? []
+              : [
+                  {
+                    code: 'OUTLINE_PLANNED_DROPPED',
+                    message: `this import dropped planned cards: ${dropped.join(', ')}; import the complete outline when replacing it`,
+                  },
+                ],
+          data: {
+            ...summary,
+            planned: nextChapters.filter((card) => card.status === 'planned').length,
+            archived: nextChapters.filter((card) => card.status === 'archived').length,
+            total: nextChapters.length,
+            preview: appliedPreview,
+            applied: true,
+          },
+          event: {
+            name: 'novel/planned',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: fresh.root,
+              kind: 'outline',
+              chapters: nextChapters.length,
+              volumes: nextVolumes.length,
+            },
+          },
+        }
+      },
+    })
+    return result
+  }
+
+  async submitWorldbook(
+    input: WorldbookSubmission,
+  ): Promise<OpResult<{ sections: string[]; entries: number; counts: Record<string, number> }>> {
+    const allowed = new Set([
+      'premise',
+      'setting',
+      'rules',
+      'factions',
+      'locations',
+      'characters',
+      'glossary',
+      'backstory',
+      'themes',
+    ])
+    const keys = Object.entries(input)
+      .filter(([key, value]) => key !== 'root' && value !== undefined)
+      .map(([key]) => key)
+    const unknown = keys.filter((key) => !allowed.has(key))
+    if (unknown.length > 0) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown worldbook section(s): ${unknown.join(', ')}`,
+      )
+    }
+    if (keys.length === 0) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'worldbook update requires at least one section',
+        'send premise, setting, rules, factions, locations, characters, glossary, backstory or themes',
+      )
+    }
+    const current = await this.load(input.root)
+    this.assertProjectReadable(current, 'novel_worldbook')
+    this.assertPlanningDocumentReadable(current, 'worldbook', 'novel_worldbook')
+    return this.mutate({
+      root: input.root,
+      op: 'submitWorldbook',
+      key: () => `worldbook:${sha256(stableJson(input))}`,
+      run: async (snapshot, context) => {
+        this.assertProjectReadable(snapshot, 'novel_worldbook')
+        this.assertPlanningDocumentReadable(snapshot, 'worldbook', 'novel_worldbook')
+        const now = this.now().toISOString()
+        const worldbook = mergeWorldbook(snapshot.worldbook, input, now)
+        const counts = {
+          premise: worldbook.premise === '' ? 0 : 1,
+          setting: worldbook.setting === '' ? 0 : 1,
+          themes: worldbook.themes.length,
+          rules: worldbook.rules.length,
+          factions: worldbook.factions.length,
+          locations: worldbook.locations.length,
+          characters: worldbook.characters.length,
+          glossary: worldbook.glossary.length,
+          backstory: worldbook.backstory.length,
+        }
+        const entries =
+          counts.characters +
+          counts.locations +
+          counts.factions +
+          counts.rules +
+          counts.glossary +
+          counts.backstory
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          last_action: action('novel_worldbook', this.now(), shortDigest(stableJson(input))),
+        })
+        return {
+          files: [
+            { path: WORLDBOOK_FILE, text: yaml(worldbook) },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ],
+          backup: true,
+          data: { sections: keys, entries, counts },
+          event: {
+            name: 'novel/planned',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: snapshot.root,
+              kind: 'worldbook',
+              chapters: 0,
+              volumes: 0,
+            },
+          },
+        }
+      },
+    })
+  }
+
+  async reopenChapter(
+    input: ReopenSubmission,
+  ): Promise<OpResult<{ chapter: number; stage: Stage; restore_txid: string }>> {
+    this.assertChapterParameter(input.chapter)
+    if (typeof input.reason !== 'string' || input.reason.trim() === '') {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'reopen requires a non-empty reason',
+        'state why the archived chapter must be restored; the reason is written to the journal',
+      )
+    }
+    const reason = input.reason.trim()
+    const current = await this.load(input.root)
+    this.assertProjectReadable(current, 'novel_reopen')
+    if (current.outlineError !== null) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `cannot reopen while ${OUTLINE_FILE} is unreadable: ${current.outlineError}`,
+        `repair ${OUTLINE_FILE} with novel_amend first; reopening would overwrite it with an empty outline`,
+      )
+    }
+    return this.mutate({
+      root: input.root,
+      op: 'reopenChapter',
+      reason,
+      key: () => `reopen:${input.chapter}:${shortDigest(reason)}`,
+      run: async (snapshot, context) => {
+        this.assertProjectReadable(snapshot, 'novel_reopen')
+        if (snapshot.outlineError !== null) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `cannot reopen while ${OUTLINE_FILE} is unreadable: ${snapshot.outlineError}`,
+            `repair ${OUTLINE_FILE} with novel_amend first; reopening would overwrite it with an empty outline`,
+          )
+        }
+        const record = snapshot.chapters.chapters.find((row) => row.num === input.chapter)
+        if (record === undefined) {
+          throw new EngineInputError(
+            ERROR_CODES.STAGE_ORDER,
+            `chapter ${input.chapter} is not archived`,
+            'only an archived chapter can be reopened',
+          )
+        }
+        if (snapshot.pipeline.chapter !== input.chapter + 1) {
+          throw new EngineInputError(
+            ERROR_CODES.STAGE_ORDER,
+            `chapter ${input.chapter} is not the immediately preceding chapter (active is ${snapshot.pipeline.chapter})`,
+            'archive or finish the active chapter before reopening an older one',
+          )
+        }
+        if (snapshot.pipeline.stage !== 'done' || snapshot.text !== null) {
+          throw new EngineInputError(
+            ERROR_CODES.STAGE_ORDER,
+            `chapter ${input.chapter} cannot be reopened while chapter ${snapshot.pipeline.chapter} is in progress`,
+            'finish and archive the active chapter, or remove chapters/chapter-<N>.md from the project, before reopening the previous one; novel_rollback alone keeps the manuscript',
+          )
+        }
+        const { records } = await readJournal(this.storeFor(snapshot.root))
+        const archive = [...records]
+          .reverse()
+          .find(
+            (row) =>
+              row.status === 'committed' && row.op === 'archiveChapter' && row.chapter === input.chapter,
+          )
+        if (archive === undefined) {
+          throw new EngineFaultError(
+            ERROR_CODES.TXN_ABORTED,
+            `no committed archive transaction found for chapter ${input.chapter}`,
+            'restore the journal or re-archive before reopening',
+          )
+        }
+        const beforeHashes =
+          archive.before ??
+          records.find((row) => row.txid === archive.txid && row.before !== undefined)?.before
+        const store = this.storeFor(snapshot.root)
+        const changedAfterArchive: string[] = []
+        if (archive.hashes !== undefined) {
+          for (const path of archive.files) {
+            if (
+              path === joinRel(STATE_DIR, STATE_FILES.pipeline) ||
+              path === OUTLINE_FILE ||
+              path === ARCHIVE_DIGESTS
+            ) {
+              continue
+            }
+            const expected = archive.hashes[path]
+            if (expected === undefined) continue
+            const actual = await store.hashBytes(path)
+            if (actual !== expected) changedAfterArchive.push(path)
+          }
+        }
+        if (changedAfterArchive.length > 0) {
+          throw new EngineFaultError(
+            ERROR_CODES.TXN_ABORTED,
+            `refusing to reopen: ${changedAfterArchive.join(', ')} changed after chapter ${input.chapter} was archived`,
+            'move the amended files aside or restore the archived versions first; reopening would overwrite them silently',
+          )
+        }
+        const files: StagedFile[] = []
+        for (const path of archive.files) {
+          if (path === joinRel(STATE_DIR, STATE_FILES.pipeline) || path === OUTLINE_FILE) continue
+          const hasBeforeEntry = beforeHashes !== undefined && Object.hasOwn(beforeHashes, path)
+          const expectedBefore = hasBeforeEntry ? beforeHashes![path] : undefined
+          if (hasBeforeEntry && expectedBefore === null) {
+            // The archive created this file; its pre-image is absence. A fresh
+            // empty digest ledger is the closest representable restore.
+            if (path === ARCHIVE_DIGESTS) files.push({ path, text: '{}\n' })
+            continue
+          }
+          const backup = await store.readText(joinRel(BACKUP_DIR, archive.txid, path))
+          if (backup === null) {
+            if (path === ARCHIVE_DIGESTS) {
+              // A pre-0.2.0 journal has no `before` map, so a missing backup
+              // cannot prove whether this file existed before the archive.
+              // Writing `{}` would silently erase the idempotency ledger.
+              if (beforeHashes === undefined || hasBeforeEntry) {
+                throw new EngineFaultError(
+                  ERROR_CODES.TXN_ABORTED,
+                  `backup snapshot for ${path} is missing (${joinRel(BACKUP_DIR, archive.txid)})`,
+                  'reopening is impossible after the backup was pruned; restore the file manually',
+                )
+              }
+              files.push({ path, text: '{}\n' })
+              continue
+            }
+            // A journal written before 0.2.0 has no `before` map. In that case
+            // the backup directory is the only evidence; skipping a missing
+            // pre-image would silently restore only part of the project.
+            if (beforeHashes === undefined || hasBeforeEntry) {
+              throw new EngineFaultError(
+                ERROR_CODES.TXN_ABORTED,
+                `backup snapshot for ${path} is missing (${joinRel(BACKUP_DIR, archive.txid)})`,
+                'reopening is impossible after the backup was pruned; restore the file manually',
+              )
+            }
+            // A file absent from the map was created by the archive; no
+            // pre-image exists and there is nothing to restore.
+            continue
+          }
+          files.push({ path, text: backup })
+        }
+        const reopenedAt = this.now().toISOString()
+        let outline = markOutlineReopened(
+          snapshot.outline,
+          input.chapter,
+          reopenedAt,
+          record,
+          snapshot.project.targets.words_per_chapter,
+        )
+        // snapshot.plan belongs to the active chapter (chapter + 1), not the
+        // chapter being reopened. Read the archived chapter's own plan so the
+        // reopened card and the P2 contract stay aligned.
+        const planRaw = await store.readText(planChapterFile(input.chapter))
+        if (planRaw === null) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `chapter ${input.chapter} has no stored plan; reopening would leave P3 without a plan`,
+            `restore ${planChapterFile(input.chapter)} from backups/ before reopening`,
+          )
+        }
+        const plan = parsePlanYaml(planRaw, planChapterFile(input.chapter))
+        validateStoredChapterPlan(plan, planChapterFile(input.chapter))
+        const planCast = Array.isArray(plan.cast)
+          ? plan.cast
+              .map((member) => (recordOf(member)?.name as string | undefined) ?? '')
+              .filter((name) => name !== '')
+          : []
+        outline = {
+          ...outline,
+          chapters: outline.chapters.map((card) =>
+            card.num === input.chapter
+              ? {
+                  ...card,
+                  title: stripChapterPrefix(plan.title as string),
+                  scene_type: plan.scene_type as import('../types.js').SceneType,
+                  target_words: plan.target_words as [number, number],
+                  cast: planCast,
+                }
+              : card,
+          ),
+        }
+        try {
+          validateOutlineDocument(outline, {
+            titleRule: this.rulepack.format.title,
+            totalChapters: snapshot.project.targets.total_chapters,
+          })
+        } catch (error) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `reopen would write an invalid ${OUTLINE_FILE}: ${errorMessage(error)}`,
+            `restore a valid ${OUTLINE_FILE} from backups/, or repair it with novel_amend before reopening`,
+            { cause: error },
+          )
+        }
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          chapter: input.chapter,
+          stage: 'P3',
+          rounds: { review: 0, revise: 0, check: 0 },
+          briefs: {},
+          blocking: [],
+          review_digest: undefined,
+          last_action: action('novel_reopen', this.now(), shortDigest(reason)),
+        })
+        delete (nextPipeline as { review_digest?: string }).review_digest
+        files.push({ path: OUTLINE_FILE, text: yaml(outline) })
+        files.push({ path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) })
+        return {
+          files,
+          backup: true,
+          data: { chapter: input.chapter, stage: 'P3' as Stage, restore_txid: archive.txid },
+          event: {
+            name: 'novel/reopened',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: snapshot.root,
+              chapter: input.chapter,
+              restore_txid: archive.txid,
+            },
+          },
+        }
+      },
+    })
+  }
+
   /* --------------------------------------------------------------- queries */
 
   /**
@@ -526,9 +1363,32 @@ export class EngineService {
    */
   private async journalBlocking(snapshot: Snapshot): Promise<BlockingItem[]> {
     const store = this.storeFor(snapshot.root)
-    if (await store.exists(LOCK_FILE)) return []
+    // A stale lock left by a crash must not hide journal damage. load() already
+    // waited for a live writer, so only a live lock suppresses this check.
+    if (await this.lockIsLive(store)) return []
+    const projectPresent = await store.exists(PROJECT_FILE)
+    if (projectPresent) {
+      const journalPresent = await store.exists(joinRel(STATE_DIR, STATE_FILES.journal))
+      const journal = journalPresent ? await readJournal(store) : null
+      if (!journalPresent || journal === null || !hasCommittedJournal(journal.records)) {
+        return [
+          {
+            code: 'JOURNAL_MISSING',
+            scope: 'journal',
+            detail: journalPresent
+              ? 'state/journal.jsonl has no committed project transaction'
+              : 'state/journal.jsonl is missing',
+            hint: 'restore the journal from a backup; writes are disabled until a committed history exists',
+          },
+        ]
+      }
+    }
     try {
       const { malformed, mismatches } = await reconcileJournal(store)
+      // A writer may have acquired the lock after the check above and be
+      // between renames. Those files are not external corruption; retry on the
+      // next read instead of reporting every half-committed path.
+      if (mismatches.length > 0 && (await this.lockIsLive(store))) return []
       const items: BlockingItem[] = []
       if (malformed > 0) {
         items.push({
@@ -598,6 +1458,7 @@ export class EngineService {
               act_progress: position.act_progress,
             }
           })()),
+      book: this.bookStatus(snapshot),
       next,
     }
     return { data: report, revision: snapshot.pipeline.revision, warnings: [] }
@@ -690,6 +1551,34 @@ export class EngineService {
         return { data: snapshot.relationships, revision: snapshot.pipeline.revision, warnings: [] }
       case 'handoff':
         return { data: snapshot.handoff, revision: snapshot.pipeline.revision, warnings: [] }
+      case 'outline':
+        if (snapshot.outlineError !== null) {
+          return {
+            data: {
+              error: 'OUTLINE_UNREADABLE',
+              message: snapshot.outlineError,
+              path: OUTLINE_FILE,
+              raw: await store.readText(OUTLINE_FILE),
+            },
+            revision: snapshot.pipeline.revision,
+            warnings: [],
+          }
+        }
+        return { data: snapshot.outline, revision: snapshot.pipeline.revision, warnings: [] }
+      case 'worldbook':
+        if (snapshot.worldbookError !== null) {
+          return {
+            data: {
+              error: 'WORLDBOOK_UNREADABLE',
+              message: snapshot.worldbookError,
+              path: WORLDBOOK_FILE,
+              raw: await store.readText(WORLDBOOK_FILE),
+            },
+            revision: snapshot.pipeline.revision,
+            warnings: [],
+          }
+        }
+        return { data: snapshot.worldbook, revision: snapshot.pipeline.revision, warnings: [] }
       case 'review': {
         if (chapter === snapshot.pipeline.chapter && snapshot.reviewError !== null) {
           return {
@@ -754,11 +1643,14 @@ export class EngineService {
           return { data: snapshot.worldPlan, revision: snapshot.pipeline.revision, warnings: [] }
         }
         const raw = await store.readText(planWorldFile(chapter))
+        if (raw === null) {
+          return { data: null, revision: snapshot.pipeline.revision, warnings: [] }
+        }
+        const parsed = parsePlanYaml(raw, planWorldFile(chapter))
+        const narrowed = narrow('worldPlan', parsed)
+        validateWorldPlanShape(narrowed, planWorldFile(chapter))
         return {
-          data:
-            raw === null
-              ? null
-              : (narrow('worldPlan', parsePlanYaml(raw, planWorldFile(chapter))) as unknown),
+          data: narrowed as unknown,
           revision: snapshot.pipeline.revision,
           warnings: [],
         }
@@ -822,6 +1714,573 @@ export class EngineService {
     }
   }
 
+  /* ------------------------------------------------------- 0.2.0 observability */
+
+  async search(input: SearchInput): Promise<OpResult<SearchReport>> {
+    const query = typeof input.query === 'string' ? input.query.trim() : ''
+    if (query === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'search query must not be empty')
+    }
+    if (Array.from(query).length > LIMITS.maxSearchQueryChars) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `search query is longer than ${LIMITS.maxSearchQueryChars} characters`,
+      )
+    }
+    const scope = input.scope ?? 'all'
+    if (!['all', 'chapters', 'summaries', 'outline', 'worldbook', 'ledgers'].includes(scope)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `unknown search scope "${String(scope)}"`,
+        'allowed: all, chapters, summaries, outline, worldbook, ledgers',
+      )
+    }
+    const requested = input.limit ?? 20
+    if (!Number.isInteger(requested) || requested < 1 || requested > 50) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `search limit must be an integer between 1 and 50, got ${String(input.limit)}`,
+      )
+    }
+    const limit = requested
+    const snapshot = await this.load(input.root)
+    const warnings: Warning[] = []
+    const seenWarnings = new Set<string>()
+    const warn = (code: string, message: string): void => {
+      const key = `${code}\u0000${message}`
+      if (seenWarnings.has(key)) return
+      seenWarnings.add(key)
+      warnings.push({ code, message })
+    }
+    const chaptersInScope = scope === 'all' || scope === 'chapters' || scope === 'summaries'
+    const chapterTexts = new Map<number, string>()
+    const missingChapters: number[] = []
+    if (scope === 'all' || scope === 'chapters') {
+      for (const record of snapshot.chapters.chapters) {
+        const text = await this.readChapter(snapshot, record.num)
+        if (text === null) missingChapters.push(record.num)
+        else chapterTexts.set(record.num, text)
+      }
+      if (
+        snapshot.text !== null &&
+        !snapshot.chapters.chapters.some((row) => row.num === snapshot.pipeline.chapter)
+      ) {
+        chapterTexts.set(snapshot.pipeline.chapter, snapshot.text)
+      }
+    }
+    if (chaptersInScope) {
+      const chaptersDamage = snapshot.ledgerErrors.find((error) => error.code === 'CHAPTERS_UNREADABLE')
+      if (chaptersDamage !== undefined) warn(chaptersDamage.code, chaptersDamage.message)
+    }
+    if (missingChapters.length > 0) {
+      warn(
+        'CHAPTER_MANUSCRIPT_MISSING',
+        `chapter manuscript(s) missing for: ${missingChapters.join(', ')}; search results omit them`,
+      )
+    }
+    if ((scope === 'all' || scope === 'outline') && snapshot.outlineError !== null) {
+      warn('OUTLINE_UNREADABLE', snapshot.outlineError)
+    }
+    if ((scope === 'all' || scope === 'worldbook') && snapshot.worldbookError !== null) {
+      warn('WORLDBOOK_UNREADABLE', snapshot.worldbookError)
+    }
+    if (scope === 'all' || scope === 'ledgers') {
+      for (const error of snapshot.ledgerErrors) warn(error.code, `${error.path}: ${error.message}`)
+    }
+    return {
+      data: searchSnapshot({
+        query,
+        scope,
+        limit,
+        chapterTexts,
+        chapters: snapshot.chapters.chapters,
+        outline: snapshot.outline,
+        worldbook: snapshot.worldbook,
+        characters: snapshot.characters,
+        world: snapshot.world,
+        timeline: snapshot.timeline,
+        foreshadows: snapshot.foreshadows,
+        relationships: snapshot.relationships,
+        locks: snapshot.locks,
+        handoff: snapshot.handoff,
+      }),
+      revision: snapshot.pipeline.revision,
+      warnings,
+    }
+  }
+
+  async doctor(input: DoctorInput = {}): Promise<OpResult<DoctorReport>> {
+    const root = await this.resolveRoot(input.root)
+    const store = this.storeFor(root)
+    const checks: DoctorCheck[] = []
+    const add = (check: DoctorCheck): void => {
+      checks.push(check)
+    }
+    if (!(await store.exists(PROJECT_FILE)) && !(await this.projectStateExists(store))) {
+      add({
+        id: 'project',
+        severity: 'error',
+        title: '项目不存在',
+        detail: `${PROJECT_FILE} is missing`,
+        hint: 'call novel_init, or pass the correct project root',
+      })
+      return {
+        data: {
+          ok: false,
+          root,
+          checks,
+          summary: { errors: 1, warnings: 0, infos: 0 },
+        },
+        revision: 1,
+        warnings: [],
+      }
+    }
+    let snapshot: Snapshot
+    try {
+      snapshot = await this.load(root)
+    } catch (error) {
+      add({
+        id: 'load',
+        severity: 'error',
+        title: '项目无法加载',
+        detail: errorMessage(error),
+        hint: this.recoveryForSafe(error),
+      })
+      return {
+        data: {
+          ok: false,
+          root,
+          checks,
+          summary: { errors: 1, warnings: 0, infos: 0 },
+        },
+        revision: 1,
+        warnings: [],
+      }
+    }
+    add({
+      id: 'project',
+      severity: snapshot.projectError === null ? 'ok' : 'error',
+      title: '项目定义',
+      detail: snapshot.projectError ?? `${PROJECT_FILE} is readable`,
+      ...(snapshot.projectError === null
+        ? {}
+        : { hint: 'read novel_state {kind:"novel"} and repair it with novel_amend' }),
+    })
+    add({
+      id: 'pipeline',
+      severity: 'ok',
+      title: '流水线',
+      detail: `revision ${snapshot.pipeline.revision} · 第 ${snapshot.pipeline.chapter} 章 · ${snapshot.pipeline.stage}`,
+    })
+    for (const error of this.stateErrors(snapshot)) {
+      add({
+        id: `state:${error.path}`,
+        severity: 'error',
+        title: '状态文档不可读',
+        detail: `${error.code}: ${error.message}`,
+        hint: `repair ${error.path} with novel_amend`,
+      })
+    }
+    add({
+      id: 'outline',
+      severity:
+        snapshot.outlineError !== null ? 'error' : snapshot.outline.chapters.length > 0 ? 'ok' : 'warning',
+      title: '书级大纲',
+      detail:
+        snapshot.outlineError ??
+        (snapshot.outlinePresent
+          ? `${snapshot.outline.chapters.length} 张章卡 / ${snapshot.outline.volumes.length} 卷 / strict=${String(snapshot.outline.book.strict)}`
+          : 'outline/outline.yaml is missing'),
+      ...(snapshot.outlineError !== null
+        ? { hint: 'repair outline/outline.yaml with novel_amend' }
+        : snapshot.outlinePresent
+          ? {}
+          : { hint: 'create a card with novel_outline before relying on PG-13' }),
+    })
+    add({
+      id: 'worldbook',
+      severity: snapshot.worldbookError !== null ? 'error' : snapshot.worldbookPresent ? 'ok' : 'info',
+      title: '世界观设定集',
+      detail:
+        snapshot.worldbookError ??
+        (snapshot.worldbookPresent ? 'worldbook is readable' : 'outline/worldbook.yaml is missing'),
+      ...(snapshot.worldbookError !== null ? { hint: 'repair outline/worldbook.yaml with novel_amend' } : {}),
+    })
+    try {
+      const journalPresent = await store.exists(joinRel(STATE_DIR, STATE_FILES.journal))
+      const journal = await readJournal(store)
+      const journalCommitted = hasCommittedJournal(journal.records)
+      const health = await reconcileJournal(store)
+      add({
+        id: 'journal',
+        severity:
+          !journalPresent || !journalCommitted || journal.malformed > 0 || health.mismatches.length > 0
+            ? 'error'
+            : 'ok',
+        title: '事务日志',
+        detail: !journalPresent
+          ? 'state/journal.jsonl is missing'
+          : !journalCommitted
+            ? 'state/journal.jsonl has no committed project transaction'
+            : journal.malformed > 0
+              ? `${journal.malformed} malformed line(s)`
+              : health.mismatches.length > 0
+                ? `${health.mismatches.length} file(s) changed after commit`
+                : `${journal.rows.length} audit rows`,
+        ...(!journalPresent || !journalCommitted
+          ? {
+              hint: !journalPresent
+                ? 'restore state/journal.jsonl from a backup; writes are disabled until it exists'
+                : 'restore a journal that contains the committed project history; writes are disabled until then',
+            }
+          : health.mismatches.length > 0
+            ? { hint: `first mismatch: ${health.mismatches[0]!.path}` }
+            : {}),
+      })
+    } catch (error) {
+      add({
+        id: 'journal',
+        severity: 'error',
+        title: '事务日志不可读',
+        detail: errorMessage(error),
+        hint: 'inspect state/journal.jsonl; do not rewrite it automatically',
+      })
+    }
+    const archived = new Set(snapshot.chapters.chapters.map((record) => record.num))
+    let missing = 0
+    let mismatched = 0
+    for (const record of snapshot.chapters.chapters) {
+      const text = await store.readText(record.file)
+      if (text === null) missing += 1
+      else if (sha256(text) !== record.content_hash) mismatched += 1
+    }
+    add({
+      id: 'manuscripts',
+      severity: missing > 0 || mismatched > 0 ? 'error' : 'ok',
+      title: '正文与索引',
+      detail:
+        missing > 0 || mismatched > 0
+          ? `${missing} missing, ${mismatched} hash mismatch`
+          : `${archived.size} archived chapter(s) match their index`,
+      ...(missing > 0 || mismatched > 0
+        ? { hint: 'restore the manuscripts from backups/ or repair the index with novel_amend' }
+        : {}),
+    })
+    const reviewProblems: string[] = []
+    for (const record of snapshot.chapters.chapters) {
+      try {
+        if ((await store.readDoc(reviewFile(record.num), 'review')) === null) {
+          reviewProblems.push(`chapter ${record.num}: missing`)
+        }
+      } catch (error) {
+        reviewProblems.push(`chapter ${record.num}: ${errorMessage(error)}`)
+      }
+    }
+    add({
+      id: 'reviews',
+      severity: reviewProblems.length === 0 ? 'ok' : 'error',
+      title: '历史评审',
+      detail:
+        reviewProblems.length === 0
+          ? `${snapshot.chapters.chapters.length} archived chapter review(s) readable`
+          : `${reviewProblems.length} review problem(s): ${reviewProblems.slice(0, 3).join('; ')}`,
+      ...(reviewProblems.length === 0
+        ? {}
+        : { hint: 'restore reviews/ from backups/ or consult novel_report for affected chapters' }),
+    })
+    const extraChapters: number[] = []
+    for (const name of await store.list(CHAPTERS_DIR)) {
+      const match = /^chapter-(\d+)\.md$/.exec(name)
+      if (match === null) continue
+      const num = Number(match[1])
+      if (!archived.has(num) && num !== snapshot.pipeline.chapter) extraChapters.push(num)
+    }
+    add({
+      id: 'orphans',
+      severity: extraChapters.length === 0 ? 'ok' : 'warning',
+      title: '孤立正文',
+      detail:
+        extraChapters.length === 0
+          ? 'no orphan chapter file'
+          : `chapter file(s) not in the index: ${extraChapters.join(', ')}`,
+      ...(extraChapters.length === 0
+        ? {}
+        : { hint: 'archive the chapter, or move the file out of chapters/' }),
+    })
+    const drift = outlineDrift(snapshot.outline, snapshot.chapters.chapters)
+    add({
+      id: 'outline-drift',
+      severity: drift.length === 0 ? 'ok' : 'warning',
+      title: '大纲与正文',
+      detail:
+        drift.length === 0 ? 'no drift' : `${drift.length} drift item(s); first chapter ${drift[0]!.chapter}`,
+      ...(drift.length === 0
+        ? {}
+        : { hint: 'read novel_report for the full drift list; do not edit archived cards directly' }),
+    })
+    const backups = await listBackups(store)
+    const archivedRecords = snapshot.chapters.chapters
+    const archivedCards = new Set(
+      snapshot.outline.chapters.filter((card) => card.status === 'archived').map((card) => card.num),
+    )
+    const missingCards = archivedRecords.filter((record) => !archivedCards.has(record.num))
+    const extraCards = [...archivedCards].filter(
+      (num) => !archivedRecords.some((record) => record.num === num),
+    )
+    const coverage =
+      archivedRecords.length === 0
+        ? 0
+        : (archivedRecords.length - missingCards.length) / archivedRecords.length
+    add({
+      id: 'outline-coverage',
+      severity: missingCards.length === 0 && extraCards.length === 0 ? 'ok' : 'warning',
+      title: '大纲覆盖率',
+      detail:
+        archivedRecords.length === 0
+          ? '0%（暂无已归档章节）'
+          : `${Math.round(coverage * 100)}% · ${missingCards.length} 章缺卡 · ${extraCards.length} 张卡无正文`,
+      ...(missingCards.length === 0 && extraCards.length === 0
+        ? {}
+        : {
+            hint: `missing cards: ${missingCards.map((record) => record.num).join(', ') || 'none'}; extra cards: ${extraCards.join(', ') || 'none'}`,
+          }),
+    })
+    const stageMissing: string[] = []
+    switch (snapshot.pipeline.stage) {
+      case 'P2':
+        if (snapshot.worldPlan === null) stageMissing.push('P1 世界计划')
+        break
+      case 'P3':
+        if (snapshot.plan === null) stageMissing.push('P2 章节计划')
+        break
+      case 'P4':
+        if (snapshot.plan === null) stageMissing.push('P2 章节计划')
+        if (snapshot.text === null) stageMissing.push('P3 正文')
+        break
+      case 'P5':
+      case 'P6':
+        if (snapshot.plan === null) stageMissing.push('P2 章节计划')
+        if (snapshot.text === null) stageMissing.push('P3 正文')
+        if (snapshot.review === null) stageMissing.push('P4 评审')
+        break
+      case 'ready_to_archive':
+        if (snapshot.plan === null) stageMissing.push('P2 章节计划')
+        if (snapshot.text === null) stageMissing.push('P3 正文')
+        if (snapshot.review === null) stageMissing.push('P4 评审')
+        if (snapshot.check === null || snapshot.check.verdict !== 'pass') stageMissing.push('P6 通过校验')
+        break
+      case 'done':
+        if (snapshot.text !== null) stageMissing.push('done 阶段不应有活跃正文')
+        break
+      default:
+        break
+    }
+    add({
+      id: 'stage-products',
+      severity: stageMissing.length === 0 ? 'ok' : 'error',
+      title: '当前阶段产物',
+      detail:
+        stageMissing.length === 0
+          ? `${snapshot.pipeline.stage} 阶段所需产物齐全`
+          : `缺少：${stageMissing.join('、')}`,
+      ...(stageMissing.length === 0
+        ? {}
+        : { hint: 'use novel_brief/novel_status to rebuild the missing stage product' }),
+    })
+    add({
+      id: 'backups',
+      severity: 'info',
+      title: '备份',
+      detail: `${backups.length} backup snapshot(s)`,
+    })
+    const locked = await store.exists(LOCK_FILE)
+    add({
+      id: 'lock',
+      severity: locked ? 'warning' : 'ok',
+      title: '写锁',
+      detail: locked ? '.engine.lock exists; another writer may be active' : 'no writer lock',
+      ...(locked ? { hint: 'if no other process is writing, wait for the stale lock window' } : {}),
+    })
+    const target = snapshot.project.targets.total_chapters
+    if (target !== null) {
+      add({
+        id: 'target',
+        severity: snapshot.chapters.chapters.length > target ? 'warning' : 'info',
+        title: '目标进度',
+        detail: `${snapshot.chapters.chapters.length}/${target} archived chapter(s)`,
+        ...(snapshot.chapters.chapters.length > target
+          ? { hint: 'raise targets.total_chapters with novel_amend' }
+          : {}),
+      })
+    }
+    const journalBlocking = await this.journalBlocking(snapshot)
+    const next =
+      journalBlocking.length > 0 && this.stateErrors(snapshot).length === 0
+        ? {
+            tool: 'novel_audit',
+            args: {},
+            reason: `${journalBlocking[0]!.code}: ${journalBlocking[0]!.detail}; inspect and restore before the next write`,
+          }
+        : this.nextStep(snapshot)
+    add({
+      id: 'next',
+      severity: 'info',
+      title: '下一步',
+      detail: `${next.tool}: ${next.reason}`,
+    })
+    const summary = {
+      errors: checks.filter((check) => check.severity === 'error').length,
+      warnings: checks.filter((check) => check.severity === 'warning').length,
+      infos: checks.filter((check) => check.severity === 'info').length,
+    }
+    return {
+      data: { ok: summary.errors === 0, root, checks, summary },
+      revision: snapshot.pipeline.revision,
+      warnings: [],
+    }
+  }
+
+  private recoveryForSafe(error: unknown): string {
+    if (error instanceof EngineFaultError) return error.hint ?? 'inspect the project files'
+    if (error instanceof EngineInputError) return error.hint ?? 'call novel_status first'
+    return 'inspect the project files'
+  }
+
+  async report(input: ReportSubmission = {}): Promise<OpResult<BookReport>> {
+    const snapshot = await this.load(input.root)
+    const store = this.storeFor(snapshot.root)
+    const reviews: ReviewDocument[] = []
+    const reviewIssues: string[] = []
+    for (const record of snapshot.chapters.chapters) {
+      try {
+        const review = await store.readDoc(reviewFile(record.num), 'review')
+        if (review === null) reviewIssues.push(`chapter ${record.num}: review is missing`)
+        else reviews.push(review as unknown as ReviewDocument)
+      } catch (error) {
+        reviewIssues.push(`chapter ${record.num}: ${errorMessage(error)}`)
+      }
+    }
+    const journal = await readJournal(store)
+    const report = buildBookReport({
+      project: snapshot.project,
+      outline: snapshot.outline,
+      outlinePresent: snapshot.outlinePresent,
+      outlineError: snapshot.outlineError,
+      worldbook: snapshot.worldbook,
+      worldbookPresent: snapshot.worldbookPresent,
+      worldbookError: snapshot.worldbookError,
+      chapters: snapshot.chapters.chapters,
+      characters: snapshot.characters,
+      timeline: snapshot.timeline,
+      foreshadows: snapshot.foreshadows,
+      relationships: snapshot.relationships,
+      reviews,
+      activity: journal.rows.slice(-8),
+      targetChapters: snapshot.project.targets.total_chapters,
+      minScore: this.config.quality.minScore,
+      foreshadowDormantAfter: this.rulepack.crosschapter.foreshadow_dormant_after,
+    })
+    if (snapshot.projectError !== null) {
+      report.warnings.push(`项目定义不可读：${snapshot.projectError}`)
+    }
+    for (const error of snapshot.ledgerErrors) {
+      report.warnings.push(`${error.code} @ ${error.path}：${error.message}`)
+    }
+    for (const issue of reviewIssues) report.warnings.push(`评审文档不可读：${issue}`)
+    report.warnings = [...new Set(report.warnings)]
+    return { data: report, revision: snapshot.pipeline.revision, warnings: [] }
+  }
+
+  async guide(input: GuideInput = {}): Promise<OpResult<GuideReport>> {
+    const root = await this.resolveRoot(input.root)
+    const store = this.storeFor(root)
+    if (!(await store.exists(PROJECT_FILE)) && !(await this.projectStateExists(store))) {
+      const guide = buildGuide({
+        projectPresent: false,
+        chapter: 1,
+        stage: 'idle',
+        archived: 0,
+        target: null,
+        finished: false,
+        outline: {
+          schema_version: 1,
+          updated_at: this.now().toISOString(),
+          book: {
+            premise: '',
+            logline: '',
+            themes: [],
+            tone: '',
+            pov: '',
+            audience: '',
+            selling_points: [],
+            ending: '',
+            strict: false,
+            strict_explicit: false,
+          },
+          volumes: [],
+          chapters: [],
+        },
+        outlinePresent: false,
+        worldbook: {
+          schema_version: 1,
+          updated_at: this.now().toISOString(),
+          premise: '',
+          setting: '',
+          rules: [],
+          factions: [],
+          locations: [],
+          characters: [],
+          glossary: [],
+          backstory: [],
+          themes: [],
+        },
+        worldbookPresent: false,
+        next: {
+          tool: 'novel_init',
+          args: { title: '我的第一本书', genre: '都市现代', platform: 'fanqie' },
+          reason: '还没有项目；先创建一本书',
+        },
+        blocking: 0,
+        stateErrors: 0,
+      })
+      return { data: guide, revision: 1, warnings: [] }
+    }
+    const snapshot = await this.load(root)
+    const target = snapshot.project.targets.total_chapters
+    const finished =
+      snapshot.pipeline.stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
+    const journalBlocking = await this.journalBlocking(snapshot)
+    const next =
+      journalBlocking.length > 0 && this.stateErrors(snapshot).length === 0
+        ? {
+            tool: 'novel_audit',
+            args: {},
+            reason: `${journalBlocking[0]!.code}: ${journalBlocking[0]!.detail}; inspect and restore before the next write`,
+          }
+        : this.nextStep(snapshot)
+    return {
+      data: buildGuide({
+        projectPresent: true,
+        chapter: snapshot.pipeline.chapter,
+        stage: snapshot.pipeline.stage,
+        archived: snapshot.chapters.chapters.length,
+        target,
+        finished,
+        outline: snapshot.outline,
+        outlinePresent: snapshot.outlinePresent,
+        outlineError: snapshot.outlineError,
+        worldbook: snapshot.worldbook,
+        worldbookPresent: snapshot.worldbookPresent,
+        worldbookError: snapshot.worldbookError,
+        next,
+        blocking: this.effectiveBlocking(snapshot).length + journalBlocking.length,
+        stateErrors: this.stateErrors(snapshot).length,
+      }),
+      revision: snapshot.pipeline.revision,
+      warnings: [],
+    }
+  }
+
   /* ----------------------------------------------------------------- briefs */
 
   async getBrief(input: BriefInput): Promise<
@@ -875,10 +2334,15 @@ export class EngineService {
           /** P4 must apply exclusions before its arithmetic closes. */
           score_exclusions: this.rulepack.exclusions,
           next_tool: NEXT_TOOL_BY_BRIEF[input.stage],
+          book_plan: snapshot.outline.book,
+          outline_card: outlineCard(snapshot.outline, chapter),
+          worldbook_counts: worldbookCounts(snapshot.worldbook),
           ...(snapshot.worldPlanError === null ? {} : { world_plan_error: snapshot.worldPlanError }),
           ...(snapshot.planError === null ? {} : { plan_error: snapshot.planError }),
           ...(snapshot.reviewError === null ? {} : { review_error: snapshot.reviewError }),
           ...(snapshot.checkError === null ? {} : { check_error: snapshot.checkError }),
+          ...(snapshot.outlineError === null ? {} : { outline_error: snapshot.outlineError }),
+          ...(snapshot.worldbookError === null ? {} : { worldbook_error: snapshot.worldbookError }),
         }
         const data = {
           stage: input.stage,
@@ -970,6 +2434,7 @@ export class EngineService {
       op: 'submitWorldPlan',
       key: (snapshot) => `world:${snapshot.pipeline.chapter}:${sha256(stableJson(input))}`,
       run: async (snapshot, context) => {
+        this.assertChapterWithinTarget(snapshot, snapshot.pipeline.chapter, 'novel_plan_world')
         await this.assertGates(snapshot, 'submitWorldPlan', { briefStage: 'P1' })
         const chapter = snapshot.pipeline.chapter
         const plan: WorldPlanInput = {
@@ -1065,8 +2530,15 @@ export class EngineService {
       op: 'submitChapterPlan',
       key: (snapshot) => `plan:${snapshot.pipeline.chapter}:${sha256(stableJson(input))}`,
       run: async (snapshot, context) => {
-        await this.assertGates(snapshot, 'submitChapterPlan', { briefStage: 'P2' })
+        this.assertChapterWithinTarget(snapshot, snapshot.pipeline.chapter, 'novel_plan_chapter')
         const cast = normalizeCast(input.cast, snapshot)
+        await this.assertGates(snapshot, 'submitChapterPlan', {
+          briefStage: 'P2',
+          draftTitle: input.title,
+          sceneType: input.scene_type,
+          planTargetWords: input.target_words,
+          planCast: cast?.map((member) => member.name) ?? null,
+        })
         const chapter = snapshot.pipeline.chapter
         const path = planChapterFile(chapter)
         const plan = {
@@ -1133,12 +2605,16 @@ export class EngineService {
         )}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
+        this.assertChapterWithinTarget(snapshot, input.chapter, 'novel_write_draft')
         await this.assertGates(snapshot, 'submitDraft', {
           briefStage: 'P3',
           text: input.content,
           summary: input.summary,
           draftTitle: input.chapter_title,
           sceneType: input.scene_type,
+          planTargetWords: snapshot.plan?.target_words ?? null,
+          planCast:
+            snapshot.plan?.cast === undefined ? null : snapshot.plan.cast.map((member) => member.name),
         })
         const machine = this.machine(snapshot, input.content, {
           title: input.chapter_title,
@@ -1601,6 +3077,17 @@ export class EngineService {
           semantic: { items: semantic },
           verdict,
         }
+        try {
+          narrow('check', check)
+        } catch (error) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `novel_check would write an invalid check document: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            'each semantic item needs id, verdict and a string evidence quote; nothing was written',
+          )
+        }
         // A pass over only one scope is not an archive pass. Advancing to
         // ready_to_archive here made status point at archive even though PG-04
         // or PG-10 never ran, producing a permanent archive/check loop.
@@ -1731,6 +3218,7 @@ export class EngineService {
           }
         }
         this.assertChapter(snapshot, input.chapter)
+        this.assertChapterWithinTarget(snapshot, input.chapter, 'novel_archive')
         const text = snapshot.text ?? ''
         const summary = snapshot.plan?.summary
         if (summary === undefined) {
@@ -1788,7 +3276,7 @@ export class EngineService {
         }
         // A check document is a plain YAML file once written. Re-validate the
         // semantic evidence here as well, so editing checks/*.yaml to a pass
-        // cannot bypass the four P6 checks at the last write boundary.
+        // cannot bypass the five P6 checks at the last write boundary.
         const archivedSemantic = evaluateSemantic(
           text,
           Array.isArray(snapshot.check?.semantic.items) ? snapshot.check.semantic.items : [],
@@ -1798,7 +3286,7 @@ export class EngineService {
             ERROR_CODES.GATE_BLOCKED,
             `archiveChapter blocked by ${archivedSemantic.blocking.length} semantic finding(s), first: ${archivedSemantic.blocking[0]!.code}`,
             archivedSemantic.blocking.map((item) => ({ ...item, scope: 'archive' })),
-            're-run novel_check with the four evidence-backed semantic items',
+            're-run novel_check with the five evidence-backed semantic items',
           )
         }
         const metrics = countWordMetrics(text)
@@ -1836,6 +3324,14 @@ export class EngineService {
         })
         record.assigned_ids = ledger.assigned
         record.archive_digest = archiveDigest
+        const archivedAt = this.now().toISOString()
+        const outline = markOutlineArchived(
+          snapshot.outline,
+          record,
+          archivedAt,
+          snapshot.project.targets.words_per_chapter,
+        )
+        this.assertOutlineWritable(snapshot, outline, 'novel_archive')
         const foreshadows = ledger.foreshadows
         const timeline = ledger.timeline
         for (const item of foreshadows.items) {
@@ -1899,30 +3395,7 @@ export class EngineService {
           ['handoff', handoff],
         ])
 
-        const digestRaw = await context.store.readText(ARCHIVE_DIGESTS)
-        let archiveDigests: Record<string, string> = {}
-        if (digestRaw !== null) {
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(digestRaw)
-          } catch (error) {
-            throw new EngineFaultError(
-              ERROR_CODES.SCHEMA_INVALID,
-              `${ARCHIVE_DIGESTS} is not valid JSON`,
-              'restore the internal archive ledger before archiving; it protects idempotent replays',
-              { cause: error },
-            )
-          }
-          const record = recordOf(parsed)
-          if (record === null || Object.values(record).some((value) => typeof value !== 'string')) {
-            throw new EngineFaultError(
-              ERROR_CODES.SCHEMA_INVALID,
-              `${ARCHIVE_DIGESTS} must be a JSON object of chapter -> digest`,
-              'restore the internal archive ledger before archiving',
-            )
-          }
-          archiveDigests = record as Record<string, string>
-        }
+        const archiveDigests = await this.readArchiveDigests(context.store, snapshot)
         archiveDigests[String(chapter)] = archiveDigest
         const files: StagedFile[] = [
           // Re-staging the manuscript makes the archive backup a true snapshot of
@@ -1937,6 +3410,7 @@ export class EngineService {
           { path: joinRel(STATE_DIR, STATE_FILES.world), text: yaml(ledger.world) },
           { path: joinRel(STATE_DIR, STATE_FILES.locks), text: yaml(ledger.locks) },
           { path: joinRel(STATE_DIR, STATE_FILES.relationships), text: yaml(ledger.relationships) },
+          { path: OUTLINE_FILE, text: yaml(outline) },
           { path: ARCHIVE_DIGESTS, text: `${JSON.stringify(archiveDigests, null, 2)}\n` },
         ]
         return {
@@ -1992,6 +3466,7 @@ export class EngineService {
     return this.mutate({
       root: resolvedRoot,
       op: 'amend',
+      reason: input.reason,
       ...(repairPaths.length === 0 ? {} : { repairPaths }),
       key: (snapshot) => `amend:${input.path}:${snapshot.pipeline.revision}`,
       run: async (snapshot, context) => {
@@ -2022,12 +3497,45 @@ export class EngineService {
             }
           }
         }
-        const document =
+        let document = (
           kind === 'project'
             ? snapshot.projectError !== null
               ? narrow('project', { ...input.content, schema_version: input.content.schema_version ?? 1 })
               : mergeProjectAmendment(input.content, snapshot.project)
             : narrow(kind, { ...input.content, schema_version: input.content.schema_version ?? 1 })
+        ) as Record<string, unknown>
+        if (kind === 'outline') {
+          try {
+            document = validateOutlineDocument(document, {
+              titleRule: this.rulepack.format.title,
+              totalChapters: snapshot.project.targets.total_chapters,
+            }) as unknown as Record<string, unknown>
+          } catch (error) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `amend would write an invalid outline: ${errorMessage(error)}`,
+              error instanceof EngineError
+                ? error.hint
+                : `repair ${OUTLINE_FILE} with a complete valid document`,
+            )
+          }
+        }
+        if (kind === 'worldbook') {
+          try {
+            document = validateWorldbookDocument(document, this.now().toISOString()) as unknown as Record<
+              string,
+              unknown
+            >
+          } catch (error) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `amend would write an invalid worldbook: ${errorMessage(error)}`,
+              error instanceof EngineError
+                ? error.hint
+                : `repair ${WORLDBOOK_FILE} with a complete valid document`,
+            )
+          }
+        }
         let oldDocument = (snapshot as unknown as Record<string, unknown>)[kind]
         // A damaged file has no trustworthy in-memory shape. Recover the last
         // committed backup so "no archived chapter may disappear" still has
@@ -2035,6 +3543,19 @@ export class EngineService {
         // would trivially pass the monotonicity check.
         if (kind === 'project') {
           oldDocument = projectBaseline
+        } else if (kind === 'outline' && (snapshot.outlineError !== null || !snapshot.outlinePresent)) {
+          const backup = await this.latestBackup(context.store, input.path)
+          if (backup !== null) {
+            try {
+              oldDocument = validateOutlineDocument(narrow('outline', parseYaml(backup)), {
+                titleRule: this.rulepack.format.title,
+                totalChapters: snapshot.project.targets.total_chapters,
+              })
+            } catch {
+              // A damaged backup cannot weaken the archived-card guard; the
+              // chapter index still supplies every archived record below.
+            }
+          }
         } else if (snapshot.ledgerErrors.some((error) => error.path === input.path)) {
           const backup = await this.latestBackup(context.store, input.path)
           if (backup !== null) {
@@ -2046,41 +3567,88 @@ export class EngineService {
             }
           }
         }
+        // A corrupt outline may have no backup card for an auto-created
+        // archived card. Reconstruct the comparison card only from independent
+        // evidence (the archive record plus the stored plan/project target);
+        // title/scene/word/score are still checked by amendProblems below.
+        if (kind === 'outline' && (snapshot.outlineError !== null || !snapshot.outlinePresent)) {
+          const old = recordOf(oldDocument)
+          const oldChapters = Array.isArray(old?.chapters) ? [...old.chapters] : []
+          const known = new Set(
+            oldChapters
+              .map((raw) => recordOf(raw))
+              .filter((row): row is Record<string, unknown> => row !== null)
+              .map((row) => row.num)
+              .filter((num): num is number => Number.isInteger(num)),
+          )
+          const candidates = new Map(
+            (Array.isArray(document.chapters) ? document.chapters : [])
+              .map((raw) => recordOf(raw))
+              .filter((row): row is Record<string, unknown> => row !== null && Number.isInteger(row.num))
+              .map((row) => [row.num as number, row] as const),
+          )
+          for (const record of snapshot.chapters.chapters) {
+            if (known.has(record.num)) continue
+            const candidate = candidates.get(record.num)
+            if (candidate === undefined || candidate.status !== 'archived') continue
+            let plan: Record<string, unknown> | null = null
+            const planRaw = await context.store.readText(planChapterFile(record.num))
+            if (planRaw !== null) {
+              try {
+                const parsed = parsePlanYaml(planRaw, planChapterFile(record.num))
+                validateStoredChapterPlan(parsed, planChapterFile(record.num))
+                plan = parsed
+              } catch {
+                plan = null
+              }
+            }
+            const planCast = Array.isArray(plan?.cast)
+              ? plan.cast
+                  .map((member) => (recordOf(member)?.name as string | undefined) ?? '')
+                  .filter((name) => name !== '')
+              : []
+            const allowedTargets = [
+              snapshot.project.targets.words_per_chapter,
+              ...(Array.isArray(plan?.target_words) ? [plan.target_words] : []),
+            ]
+            const allowedCasts = [planCast, autoCardCast(record)]
+            const targetMatches = allowedTargets.some(
+              (target) => JSON.stringify(target) === JSON.stringify(candidate.target_words),
+            )
+            const castMatches = allowedCasts.some(
+              (cast) => JSON.stringify(cast) === JSON.stringify(candidate.cast),
+            )
+            if (!targetMatches || !castMatches) continue
+            oldChapters.push({ ...candidate })
+            known.add(record.num)
+          }
+          oldDocument = { ...(old ?? {}), chapters: oldChapters }
+        }
+        const archivedChapterNumbers = (await context.store.list(CHAPTERS_DIR))
+          .map((name) => /^chapter-(\d+)\.md$/.exec(name))
+          .filter((match): match is RegExpExecArray => match !== null)
+          .map((match) => Number(match[1]))
+          // The active chapter may already have a manuscript file; it is not
+          // an archived row and must not make a repair demand a row before the
+          // chapter is indexed.
+          .filter((num) => num !== snapshot.pipeline.chapter)
         const archivedFiles =
-          kind === 'chapters' || kind === 'project'
-            ? (await context.store.list(CHAPTERS_DIR))
-                .map((name) => /^chapter-(\d{3})\.md$/.exec(name))
-                .filter((match): match is RegExpExecArray => match !== null)
-                .map((match) => Number(match[1]))
-                // The active chapter may already have a manuscript file; it is
-                // not an archived row and must not make a repair demand a row
-                // before the chapter is indexed.
-                .filter((num) => num !== snapshot.pipeline.chapter).length
-            : 0
+          kind === 'chapters' || kind === 'project' || kind === 'outline' ? archivedChapterNumbers.length : 0
         let archiveDigests: Record<string, string> = {}
         if (kind === 'chapters') {
-          const digestRaw = await context.store.readText(ARCHIVE_DIGESTS)
-          if (digestRaw !== null) {
-            let parsed: unknown
-            try {
-              parsed = JSON.parse(digestRaw)
-            } catch (error) {
-              throw new EngineFaultError(
-                ERROR_CODES.SCHEMA_INVALID,
-                `${ARCHIVE_DIGESTS} is not valid JSON`,
-                'restore the internal archive ledger before repairing chapters',
-                { cause: error },
-              )
+          archiveDigests = await this.readArchiveDigests(context.store, snapshot)
+          // When the chapters index itself is the document being repaired,
+          // snapshot.chapters is the empty fallback. The previous image is the
+          // only trustworthy source for the digests that must stay immutable.
+          const oldRows = recordOf(oldDocument)?.chapters
+          if (Array.isArray(oldRows)) {
+            for (const raw of oldRows) {
+              const row = recordOf(raw)
+              if (row === null || !Number.isInteger(row.num) || typeof row.archive_digest !== 'string') {
+                continue
+              }
+              archiveDigests[String(row.num)] = row.archive_digest
             }
-            const record = recordOf(parsed)
-            if (record === null || Object.values(record).some((value) => typeof value !== 'string')) {
-              throw new EngineFaultError(
-                ERROR_CODES.SCHEMA_INVALID,
-                `${ARCHIVE_DIGESTS} must be a JSON object of chapter -> digest`,
-                'restore the internal archive ledger before repairing chapters',
-              )
-            }
-            archiveDigests = record as Record<string, string>
           }
         }
         const problems = amendProblems(
@@ -2093,6 +3661,7 @@ export class EngineService {
           projectBaseline,
           projectDamaged,
           archiveDigests,
+          archivedChapterNumbers,
         )
         if (kind === 'chapters') {
           for (const raw of Array.isArray(document.chapters) ? document.chapters : []) {
@@ -2136,6 +3705,7 @@ export class EngineService {
     return this.mutate({
       root: input.root,
       op: 'rollback',
+      reason: input.reason,
       key: () => `rollback:${input.chapter}:${input.toStage}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
@@ -2179,24 +3749,61 @@ export class EngineService {
   }
 
   async diff(input: DiffInput): Promise<OpResult<import('../types.js').DiffReport>> {
+    if (input.chapter !== undefined) this.assertChapterParameter(input.chapter)
+    if (input.before !== undefined && typeof input.before !== 'string') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'diff before must be a string')
+    }
+    if (input.after !== undefined && typeof input.after !== 'string') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'diff after must be a string')
+    }
+    if (input.before !== undefined && input.after !== undefined) {
+      // Text-to-text diff is independent of a project by contract. If a project
+      // happens to exist, still report its active chapter and revision so the
+      // existing project-scoped callers keep their chapter number.
+      let chapter = input.chapter
+      let revision = 1
+      if (chapter === undefined) {
+        try {
+          const snapshot = await this.load(input.root)
+          chapter = snapshot.pipeline.chapter
+          revision = snapshot.pipeline.revision
+        } catch {
+          chapter = 0
+        }
+      }
+      const report = diffLines(input.before, input.after)
+      return {
+        data: {
+          chapter,
+          before: input.before,
+          after: input.after,
+          added: report.added,
+          removed: report.removed,
+          hunks: report.hunks,
+        },
+        revision,
+        warnings: [],
+      }
+    }
     const snapshot = await this.load(input.root)
-    if (!Number.isInteger(input.chapter) || input.chapter < 1) {
+    const chapter = input.chapter ?? snapshot.pipeline.chapter
+    if (input.chapter === undefined && input.before === undefined && input.after === undefined) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
-        `chapter must be a positive integer (got ${String(input.chapter)})`,
+        'diff requires a chapter or supplied before/after texts',
       )
     }
     const store = this.storeFor(snapshot.root)
-    const after = input.after ?? (await this.readChapter(snapshot, input.chapter)) ?? ''
+    const after = input.after ?? (await this.readChapter(snapshot, chapter)) ?? ''
     const before =
       input.before ??
-      (await this.latestBackup(store, chapterFile(input.chapter))) ??
-      (await store.readText(deprecatedChapterFile(input.chapter))) ??
+      (await this.latestBackup(store, chapterFile(chapter))) ??
+      (await store.readText(deprecatedChapterFile(chapter))) ??
       ''
     const report = diffLines(before, after)
     return {
       data: {
-        chapter: input.chapter,
+        chapter,
         before,
         after,
         added: report.added,
@@ -2211,11 +3818,23 @@ export class EngineService {
   async auditHistory(input: AuditInput = {}): Promise<OpResult<AuditRow[]>> {
     const snapshot = await this.load(input.root)
     const store = this.storeFor(snapshot.root)
-    const { rows, malformed } = await readJournal(store)
-    const health = (await store.exists(LOCK_FILE))
+    const { rows, malformed, records } = await readJournal(store)
+    let health = (await this.lockIsLive(store))
       ? { mismatches: [] as Array<{ path: string; expected: string | null; actual: string | null }> }
       : await reconcileJournal(store)
+    if (health.mismatches.length > 0 && (await this.lockIsLive(store))) {
+      // A writer started during the multi-file reconciliation; its half-renamed
+      // paths are not evidence of external tampering.
+      health = { mismatches: [] }
+    }
     const warnings: Warning[] = []
+    if ((await store.exists(PROJECT_FILE)) && !hasCommittedJournal(records)) {
+      warnings.push({
+        code: 'JOURNAL_MISSING',
+        message:
+          'state/journal.jsonl has no committed project transaction; audit history and crash recovery are unavailable',
+      })
+    }
     if (malformed > 0)
       warnings.push({ code: 'JOURNAL_MALFORMED', message: `${malformed} malformed journal line(s)` })
     if (health.mismatches.length > 0) {
@@ -2230,17 +3849,48 @@ export class EngineService {
   }
 
   async export(input: ExportInput): Promise<OpResult<{ kind: ExportKind; files: string[] }>> {
-    if (input.kind !== 'md' && input.kind !== 'txt' && input.kind !== 'epub') {
+    const exportKinds: readonly ExportKind[] = ['md', 'txt', 'epub', 'outline', 'worldbook', 'proposal']
+    if (!exportKinds.includes(input.kind)) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         `unknown export kind "${String(input.kind)}"`,
-        'allowed: md, txt, epub',
+        `allowed: ${exportKinds.join(', ')}`,
+      )
+    }
+    if (
+      (input.kind === 'outline' || input.kind === 'worldbook' || input.kind === 'proposal') &&
+      input.chapter !== undefined
+    ) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${input.kind} exports the whole book; do not pass chapter`,
       )
     }
     if (input.chapter !== undefined && (!Number.isInteger(input.chapter) || input.chapter < 1)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter must be a positive integer')
     }
-    return this.mutate({
+    if (input.kind === 'outline' || input.kind === 'worldbook' || input.kind === 'proposal') {
+      const current = await this.load(input.root)
+      this.assertExportIndexReadable(current, input.kind)
+      if ((input.kind === 'outline' || input.kind === 'proposal') && current.outlineError !== null) {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${OUTLINE_FILE} is unreadable; refusing to export an empty outline`,
+          `repair ${OUTLINE_FILE} with novel_amend before exporting`,
+        )
+      }
+      if ((input.kind === 'worldbook' || input.kind === 'proposal') && current.worldbookError !== null) {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${WORLDBOOK_FILE} is unreadable; refusing to export an empty worldbook`,
+          `repair ${WORLDBOOK_FILE} with novel_amend before exporting`,
+        )
+      }
+    } else {
+      const current = await this.load(input.root)
+      this.assertExportIndexReadable(current, input.kind)
+    }
+    return this.mutate<{ kind: ExportKind; files: string[] }>({
       root: input.root,
       op: 'export',
       // Export itself advances the revision, so the cache key must bind to the
@@ -2253,14 +3903,94 @@ export class EngineService {
             text: sha256(snapshot.text ?? ''),
             plan_title: stripTitlePrefix(snapshot.plan?.title ?? ''),
             project: sha256(stableJson(snapshot.project)),
+            outline: sha256(stableJson(snapshot.outline)),
+            worldbook: sha256(stableJson(snapshot.worldbook)),
             chapters: snapshot.chapters.chapters.map((chapter) => ({
               content_hash: chapter.content_hash,
               title: chapter.title,
+              summary: sha256(stableJson(chapter.summary)),
             })),
             title: snapshot.project.title,
           }),
         )}`,
       run: async (snapshot, context) => {
+        if ((input.kind === 'outline' || input.kind === 'proposal') && snapshot.outlineError !== null) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `${OUTLINE_FILE} is unreadable; refusing to export an empty outline`,
+            `repair ${OUTLINE_FILE} with novel_amend before exporting`,
+          )
+        }
+        if ((input.kind === 'worldbook' || input.kind === 'proposal') && snapshot.worldbookError !== null) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `${WORLDBOOK_FILE} is unreadable; refusing to export an empty worldbook`,
+            `repair ${WORLDBOOK_FILE} with novel_amend before exporting`,
+          )
+        }
+        this.assertExportIndexReadable(snapshot, input.kind)
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          last_action: action('novel_export', this.now(), input.kind),
+        })
+        if (input.kind === 'outline') {
+          const files: StagedFile[] = [
+            {
+              path: joinRel(EXPORT_DIR, 'outline.md'),
+              text: renderOutlineMarkdown(snapshot.project, snapshot.outline, snapshot.chapters.chapters),
+            },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ]
+          return {
+            files,
+            backup: false,
+            data: { kind: input.kind, files: [files[0]!.path] },
+            event: {
+              name: 'novel/exported',
+              payload: { schemaVersion: 1, projectRoot: snapshot.root, kind: input.kind, files: 1 },
+            },
+          }
+        }
+        if (input.kind === 'worldbook') {
+          const files: StagedFile[] = [
+            {
+              path: joinRel(EXPORT_DIR, 'worldbook.md'),
+              text: renderWorldbookMarkdown(snapshot.project, snapshot.worldbook),
+            },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ]
+          return {
+            files,
+            backup: false,
+            data: { kind: input.kind, files: [files[0]!.path] },
+            event: {
+              name: 'novel/exported',
+              payload: { schemaVersion: 1, projectRoot: snapshot.root, kind: input.kind, files: 1 },
+            },
+          }
+        }
+        if (input.kind === 'proposal') {
+          const files: StagedFile[] = [
+            {
+              path: joinRel(EXPORT_DIR, 'proposal.md'),
+              text: renderProposal(
+                snapshot.project,
+                snapshot.outline,
+                snapshot.worldbook,
+                snapshot.chapters.chapters,
+              ),
+            },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ]
+          return {
+            files,
+            backup: false,
+            data: { kind: input.kind, files: [files[0]!.path] },
+            event: {
+              name: 'novel/exported',
+              payload: { schemaVersion: 1, projectRoot: snapshot.root, kind: input.kind, files: 1 },
+            },
+          }
+        }
         const chapters = await this.chaptersForExport(snapshot, input.chapter)
         const suffix = input.chapter === undefined ? '' : `-ch${String(input.chapter).padStart(3, '0')}`
         const base = joinRel(EXPORT_DIR, `book${suffix}.${input.kind}`)
@@ -2274,14 +4004,20 @@ export class EngineService {
         else if (input.kind === 'txt')
           files.push({ path: base, text: renderPlainText(snapshot.project, chapters) })
         else files.push({ path: base, bytes: buildEpub(snapshot.project, chapters) })
-        const nextPipeline = pipelineWith(snapshot, context.revision, {
-          last_action: action('novel_export', this.now(), input.kind),
-        })
         files.push({ path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) })
         return {
           files,
           backup: false,
           data: { kind: input.kind, files: [base, cover, blurb] },
+          event: {
+            name: 'novel/exported',
+            payload: {
+              schemaVersion: 1,
+              projectRoot: snapshot.root,
+              kind: input.kind,
+              files: files.length - 1,
+            },
+          },
         }
       },
     })
@@ -2323,10 +4059,18 @@ export class EngineService {
     averageScore: number
     lastScore: number
     openForeshadows: number
+    plannedChapters: number
+    outlineCoverage: number
+    blueprintReady: boolean
+    worldbookEntries: number
+    strictOutline: boolean
+    targetChapters: number | null
   }> {
     const snapshot = await this.load(input.root)
     const totalWords = snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0)
     const scores = snapshot.chapters.chapters.map((chapter) => chapter.score)
+    const outline = outlineSummary(snapshot.outline, snapshot.chapters.chapters.length)
+    const counts = worldbookCounts(snapshot.worldbook)
     return {
       totalWords,
       chapters: snapshot.chapters.chapters.length,
@@ -2338,6 +4082,18 @@ export class EngineService {
           : Math.round(scores.reduce((total, score) => total + score, 0) / scores.length),
       lastScore: scores.length === 0 ? 0 : scores[scores.length - 1]!,
       openForeshadows: snapshot.foreshadows.items.filter((item) => item.status !== 'resolved').length,
+      plannedChapters: outline.planned,
+      outlineCoverage: outline.coverage,
+      blueprintReady: bookPlanPresent(snapshot.outline.book),
+      worldbookEntries:
+        counts.characters +
+        counts.locations +
+        counts.factions +
+        counts.rules +
+        counts.glossary +
+        counts.backstory,
+      strictOutline: snapshot.outline.book.strict,
+      targetChapters: snapshot.project.targets.total_chapters,
     }
   }
 
@@ -2452,6 +4208,144 @@ export class EngineService {
 
   /* ---------------------------------------------------------------- internals */
 
+  /**
+   * Planning writes use project targets as invariants. The fallback project is
+   * only for reads; writing against its null target (or default word range)
+   * would create a document the real novel.yaml rejects after repair.
+   */
+  private assertProjectReadable(snapshot: Snapshot, operation: string): void {
+    if (snapshot.projectError === null) return
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `${PROJECT_FILE} is unreadable; ${operation} cannot safely enforce the project targets`,
+      `read ${PROJECT_FILE} with novel_state {kind:"novel"} and repair it with novel_amend before ${operation}`,
+    )
+  }
+
+  /**
+   * Planning documents are read-only inputs to the write tools. A corrupt file
+   * must be repaired explicitly with novel_amend; allowing a normal write to
+   * proceed would silently replace every planned card or worldbook section it
+   * could not read.
+   */
+  private assertPlanningDocumentReadable(
+    snapshot: Snapshot,
+    kind: 'outline' | 'worldbook',
+    operation: string,
+  ): void {
+    const error = kind === 'outline' ? snapshot.outlineError : snapshot.worldbookError
+    if (error === null) return
+    const path = kind === 'outline' ? OUTLINE_FILE : WORLDBOOK_FILE
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `${path} is unreadable; ${operation} would overwrite the unreadable planning document`,
+      `read ${path} with novel_state and repair it with novel_amend before ${operation}`,
+    )
+  }
+
+  /**
+   * A strict outline cannot silently lose the active chapter's card while the
+   * chapter is still being written. Otherwise a late replacement turns a
+   * strict project non-strict in effect and archive would auto-create the card
+   * the author was required to provide.
+   */
+  private assertActiveCardPreserved(
+    snapshot: Snapshot,
+    strict: boolean,
+    chapters: readonly { num: number }[],
+    operation: string,
+  ): void {
+    if (!strict) return
+    const chapter = snapshot.pipeline.chapter
+    if (!snapshot.outline.chapters.some((card) => card.num === chapter)) return
+    if (chapters.some((card) => card.num === chapter)) return
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `${operation} cannot remove the active chapter ${chapter} card while strict mode is on`,
+      'include the active card in the replacement, or turn strict mode off with novel_blueprint {"strict":false}',
+    )
+  }
+
+  /**
+   * The outline is a derived progress view and the PG-13 input. Every write
+   * path must stage a document the loader will accept; otherwise a successful
+   * archive/planning call can leave the project with an unreadable outline and
+   * an unreachable repair path. Auto-created cards are normalized by book.ts;
+   * this is the final fail-closed boundary for all callers.
+   */
+  private assertOutlineWritable(snapshot: Snapshot, outline: OutlineDocument, operation: string): void {
+    try {
+      validateOutlineDocument(outline, {
+        titleRule: this.rulepack.format.title,
+        totalChapters: snapshot.project.targets.total_chapters,
+      })
+    } catch (error) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${operation} would write an invalid ${OUTLINE_FILE}: ${errorMessage(error)}`,
+        `repair the stale card or archived chapter data before retrying; nothing was written`,
+        { cause: error },
+      )
+    }
+  }
+
+  /**
+   * total_chapters is a hard ceiling everywhere: outline cards already enforce
+   * it, and writing/archiving a chapter past it would make the auto-created
+   * archived card invalid. Fail at the first stage instead of after the draft.
+   */
+  private assertChapterWithinTarget(snapshot: Snapshot, chapter: number, operation: string): void {
+    const target = snapshot.project.targets.total_chapters
+    if (target === null || chapter <= target) return
+    throw new EngineInputError(
+      ERROR_CODES.STAGE_ORDER,
+      `${operation} cannot start chapter ${chapter}; targets.total_chapters is ${target}`,
+      'raise targets.total_chapters with novel_amend, or export the completed book instead of starting another chapter',
+    )
+  }
+
+  /**
+   * Without the chapter index, normalizeOutlineChapters cannot re-add archived
+   * cards and cannot prove that a replacement did not delete them. Planning
+   * writes must wait for a chapters repair; only novel_amend may repair it.
+   */
+  private assertArchiveIndexReadable(snapshot: Snapshot, operation: string): void {
+    if (!snapshot.ledgerErrors.some((error) => error.code === 'CHAPTERS_UNREADABLE')) return
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `state/${STATE_FILES.chapters} is unreadable; ${operation} cannot preserve archived outline cards`,
+      `repair state/${STATE_FILES.chapters} with novel_amend before ${operation}`,
+    )
+  }
+
+  private bookStatus(snapshot: Snapshot): NonNullable<StatusReport['book']> {
+    const summary = outlineSummary(snapshot.outline, snapshot.chapters.chapters.length)
+    const counts = worldbookCounts(snapshot.worldbook)
+    return {
+      premise: snapshot.outline.book.premise,
+      logline: snapshot.outline.book.logline,
+      strict: snapshot.outline.book.strict,
+      outline: {
+        present: snapshot.outlinePresent && summary.present,
+        total: summary.total,
+        planned: summary.planned,
+        archived: summary.archived,
+        coverage: summary.coverage,
+        volumes: summary.volumes,
+        current: outlineCard(snapshot.outline, snapshot.pipeline.chapter),
+      },
+      worldbook: {
+        present: snapshot.worldbookPresent && counts.present,
+        characters: counts.characters,
+        locations: counts.locations,
+        factions: counts.factions,
+        rules: counts.rules,
+        glossary: counts.glossary,
+        backstory: counts.backstory,
+      },
+    }
+  }
+
   private async panelSnapshot(root?: string): Promise<PanelSnapshot> {
     const snapshot = await this.load(root)
     const archived = snapshot.chapters.chapters
@@ -2459,6 +4353,66 @@ export class EngineService {
     const target = snapshot.project.targets.total_chapters
     const finished = snapshot.pipeline.stage === 'done' && target !== null && archived.length >= target
     const draftWords = snapshot.text === null ? 0 : countWordMetrics(snapshot.text).total_word_count
+    const journal = await readJournal(this.storeFor(snapshot.root))
+    const journalBlocking = await this.journalBlocking(snapshot)
+    const outline = outlineSummary(snapshot.outline, archived.length)
+    const counts = worldbookCounts(snapshot.worldbook)
+    const scores = archived.slice(-10).map((chapter) => chapter.score)
+    const blocking = [...this.effectiveBlocking(snapshot), ...journalBlocking]
+    const healthBlocking = blocking.length
+    const stateErrorCount = this.stateErrors(snapshot).length
+    const book = {
+      premise: snapshot.outline.book.premise,
+      logline: snapshot.outline.book.logline,
+      strict: snapshot.outline.book.strict,
+      target,
+      outline: {
+        present: snapshot.outlinePresent && outline.present,
+        total: outline.total,
+        planned: outline.planned,
+        archived: outline.archived,
+        coverage: outline.coverage,
+        volumes: snapshot.outline.volumes.map((volume) => {
+          const cards = snapshot.outline.chapters.filter(
+            (card) => card.num >= volume.start_chapter && card.num <= volume.end_chapter,
+          )
+          return {
+            title: volume.title,
+            start: volume.start_chapter,
+            end: volume.end_chapter,
+            planned: cards.filter((card) => card.status === 'planned').length,
+            archived: cards.filter((card) => card.status === 'archived').length,
+          }
+        }),
+      },
+      worldbook: {
+        present: snapshot.worldbookPresent && counts.present,
+        characters: counts.characters,
+        locations: counts.locations,
+        factions: counts.factions,
+        rules: counts.rules,
+        glossary: counts.glossary,
+        backstory: counts.backstory,
+      },
+    }
+    const qualityScores = scores.slice(-5)
+    const previousScores = scores.slice(-10, -5)
+    const quality = {
+      averageScore:
+        scores.length === 0 ? 0 : scores.reduce((total, score) => total + score, 0) / scores.length,
+      scores,
+      trend:
+        previousScores.length === 0
+          ? 0
+          : qualityScores.reduce((total, score) => total + score, 0) / qualityScores.length -
+            previousScores.reduce((total, score) => total + score, 0) / previousScores.length,
+    }
+    const activity = journal.rows.slice(-5).map((row) => ({
+      at: row.at,
+      op: row.op,
+      chapter: row.chapter,
+      status: row.status,
+    }))
     const draft =
       archivedCurrent || snapshot.pipeline.stage === 'done'
         ? null
@@ -2467,8 +4421,7 @@ export class EngineService {
             title: stripTitlePrefix(snapshot.plan?.title ?? '') || `第${snapshot.pipeline.chapter}章`,
             wordCount: draftWords,
             score: snapshot.review?.total ?? 0,
-            status: (this.effectiveBlocking(snapshot).length > 0 ? 'blocked' : 'draft') as
-              'blocked' | 'draft',
+            status: (blocking.length > 0 ? 'blocked' : 'draft') as 'blocked' | 'draft',
             details: (snapshot.plan?.summary?.events ?? []).join('；').slice(0, 240),
           }
     return {
@@ -2480,7 +4433,7 @@ export class EngineService {
       stage: snapshot.pipeline.stage,
       revision: snapshot.pipeline.revision,
       rounds: snapshot.pipeline.rounds,
-      blocking: this.effectiveBlocking(snapshot),
+      blocking,
       ...(snapshot.handoff === null
         ? {}
         : (() => {
@@ -2492,7 +4445,15 @@ export class EngineService {
               act_progress: position.act_progress,
             }
           })()),
-      next: finished ? undefined : this.nextStep(snapshot),
+      next: finished
+        ? undefined
+        : journalBlocking.length > 0 && this.stateErrors(snapshot).length === 0
+          ? {
+              tool: 'novel_audit',
+              args: {},
+              reason: `${journalBlocking[0]!.code}: ${journalBlocking[0]!.detail}; inspect and restore before the next write`,
+            }
+          : this.nextStep(snapshot),
       finished,
       chapters: archived,
       draft,
@@ -2504,6 +4465,14 @@ export class EngineService {
           ? 0
           : archived.reduce((total, chapter) => total + chapter.score, 0) / archived.length,
       phases: phaseStrip(snapshot.pipeline.stage, finished),
+      book,
+      quality,
+      health: {
+        ok: healthBlocking === 0 && stateErrorCount === 0,
+        blocking: healthBlocking,
+        stateErrors: stateErrorCount,
+      },
+      activity,
     }
   }
 
@@ -2597,6 +4566,44 @@ export class EngineService {
         reason: `${reviewDigest.code}: ${reviewDigest.detail}; ${reviewDigest.hint}`,
       }
     }
+    const targetLimit = snapshot.project.targets.total_chapters
+    if (targetLimit !== null && chapter > targetLimit && snapshot.chapters.chapters.length >= targetLimit) {
+      return {
+        tool: 'novel_export',
+        args: { kind: 'epub' },
+        reason: `已归档 ${snapshot.chapters.chapters.length} 章，达到目标 ${targetLimit} 章；先导出成书，若要继续写请用 novel_amend 提高 targets.total_chapters`,
+      }
+    }
+    const outlineMismatch = this.outlineGateBlock(snapshot)
+    if (outlineMismatch !== null && outlineCard(snapshot.outline, chapter) !== null) {
+      if (stage === 'P3') {
+        return {
+          tool: 'novel_rollback',
+          args: { chapter, to_stage: 'P2' },
+          reason: `${outlineMismatch.code}: ${outlineMismatch.detail}; ${outlineMismatch.hint}`,
+        }
+      }
+      const plan = snapshot.plan
+      const chapters =
+        plan === null
+          ? snapshot.outline.chapters.map((card) => ({ ...card }))
+          : snapshot.outline.chapters.map((card) =>
+              card.num === chapter
+                ? {
+                    ...card,
+                    title: stripChapterPrefix(plan.title),
+                    scene_type: plan.scene_type,
+                    target_words: plan.target_words,
+                    cast: (plan.cast ?? []).map((member) => member.name),
+                  }
+                : { ...card },
+            )
+      return {
+        tool: 'novel_outline',
+        args: { chapters },
+        reason: `${outlineMismatch.code}: ${outlineMismatch.detail}; args 已将当前章卡对齐到 P2 计划，确认后提交 novel_outline`,
+      }
+    }
     const step = STAGE_NEXT[stage]
     const target = snapshot.project.targets.total_chapters
     const finished = stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
@@ -2605,6 +4612,44 @@ export class EngineService {
         tool: 'novel_export',
         args: { kind: 'epub' },
         reason: '全书已完成；可导出成书，或结束本书',
+      }
+    }
+    if (
+      snapshot.outline.book.strict &&
+      outlineCard(snapshot.outline, chapter) === null &&
+      (stage === 'idle' ||
+        stage === 'done' ||
+        stage === 'P2' ||
+        stage === 'P3' ||
+        stage === 'P4' ||
+        stage === 'P5' ||
+        stage === 'P6' ||
+        stage === 'ready_to_archive')
+    ) {
+      const chapters = snapshot.outline.chapters.map((card) => ({ ...card }))
+      if (!chapters.some((card) => card.num === chapter)) {
+        chapters.push({
+          num: chapter,
+          volume: null,
+          title: '待定章卡',
+          scene_type: '日常过渡章',
+          goal: '待补充目标',
+          conflict: '待补充冲突',
+          hook: '待补充钩子',
+          cast: [],
+          target_words: snapshot.project.targets.words_per_chapter,
+          notes: '',
+          status: 'planned',
+          archived_at: null,
+          word_count: null,
+          score: null,
+        })
+        chapters.sort((left, right) => left.num - right.num)
+      }
+      return {
+        tool: 'novel_outline',
+        args: { chapters },
+        reason: `严格大纲模式下第 ${chapter} 章还没有章卡；args 已带现有全部章卡和一张待定卡，补齐标题/场景/目标/冲突/钩子后提交 novel_outline`,
       }
     }
     const roundsBlock = this.roundsLimitBlock(snapshot)
@@ -2736,15 +4781,58 @@ export class EngineService {
     const extra = this.roundsLimitBlock(snapshot)
     const reviewDigest = this.reviewDigestProblem(snapshot)
     const archive = this.archivePreflight(snapshot)
+    const outline = this.outlineGateBlock(snapshot)
     const base = [
       ...state,
       ...active,
       ...(archive === null ? [] : [archive.item]),
+      ...(outline === null ? [] : [outline]),
       ...(reviewDigest === null ? [] : [reviewDigest]),
       ...snapshot.pipeline.blocking,
     ]
     if (extra === null) return base
     return base.some((item) => item.code === extra.code) ? base : [...base, extra]
+  }
+
+  /** The PG-13 block that status must show before P2/P3 even tries to write. */
+  private outlineGateBlock(snapshot: Snapshot): BlockingItem | null {
+    if (!['P2', 'P3', 'P4', 'P5', 'P6', 'ready_to_archive'].includes(snapshot.pipeline.stage)) return null
+    const card = outlineCard(snapshot.outline, snapshot.pipeline.chapter)
+    if (card === null) {
+      if (!snapshot.outline.book.strict) return null
+      return {
+        code: 'PG-13',
+        scope: 'outline',
+        detail: `chapter ${snapshot.pipeline.chapter} has no outline card while strict mode is on`,
+        hint: 'call novel_outline to add the card, or novel_blueprint {"strict":false} to turn strict mode off',
+      }
+    }
+    const plan = snapshot.plan
+    if (plan === null) return null
+    const problems: string[] = []
+    const title = stripChapterPrefix(plan.title)
+    if (title !== card.title) problems.push(`title "${title}" != card "${card.title}"`)
+    if (plan.scene_type !== card.scene_type) {
+      problems.push(`scene_type "${plan.scene_type}" != card "${card.scene_type}"`)
+    }
+    if (
+      Math.max(plan.target_words[0], card.target_words[0]) >
+      Math.min(plan.target_words[1], card.target_words[1])
+    ) {
+      problems.push(
+        `target_words ${plan.target_words.join('-')} does not overlap card ${card.target_words.join('-')}`,
+      )
+    }
+    const planCast = new Set((plan.cast ?? []).map((member) => member.name))
+    const missing = card.cast.filter((name) => !planCast.has(name))
+    if (missing.length > 0) problems.push(`cast missing ${missing.join(', ')}`)
+    if (problems.length === 0) return null
+    return {
+      code: 'PG-13',
+      scope: 'outline',
+      detail: problems.join('; '),
+      hint: 'fix the card with novel_outline, or roll back to P2 to rewrite the plan',
+    }
   }
 
   /**
@@ -2810,6 +4898,12 @@ export class EngineService {
         message: snapshot.checkError,
       })
     }
+    if (snapshot.outlineError !== null) {
+      errors.push({ path: OUTLINE_FILE, code: 'OUTLINE_UNREADABLE', message: snapshot.outlineError })
+    }
+    if (snapshot.worldbookError !== null) {
+      errors.push({ path: WORLDBOOK_FILE, code: 'WORLDBOOK_UNREADABLE', message: snapshot.worldbookError })
+    }
     return errors
   }
 
@@ -2831,6 +4925,20 @@ export class EngineService {
     // Ledger damage cannot be rebuilt by replaying a stage; it needs an
     // explicit, journaled amend. Point there first so the model does not
     // rollback into a wall of STATE_UNREADABLE gates.
+    if (snapshot.outlineError !== null) {
+      return {
+        tool: 'novel_amend',
+        args: { path: OUTLINE_FILE, reason: `repair OUTLINE_UNREADABLE: ${snapshot.outlineError}` },
+        reason: `${OUTLINE_FILE} is unreadable; read the raw file, then amend it with a complete outline document`,
+      }
+    }
+    if (snapshot.worldbookError !== null) {
+      return {
+        tool: 'novel_amend',
+        args: { path: WORLDBOOK_FILE, reason: `repair WORLDBOOK_UNREADABLE: ${snapshot.worldbookError}` },
+        reason: `${WORLDBOOK_FILE} is unreadable; read the raw file, then amend it with a complete worldbook document`,
+      }
+    }
     if (snapshot.ledgerErrors.length > 0) {
       const first = snapshot.ledgerErrors[0]!
       return {
@@ -2894,6 +5002,11 @@ export class EngineService {
     const worldPlanSensitive: Operation[] = ['submitChapterPlan', ...planSensitive]
     const reviewSensitive: Operation[] = ['submitRevision', 'runCheck', 'archiveChapter']
     const checkSensitive: Operation[] = ['archiveChapter']
+    // The outline is the PG-13 input; a corrupt outline must not let P2/P3
+    // silently behave as if strict mode were off. The worldbook is planning
+    // context for P1/P2, so a corrupt one blocks those two writers only.
+    const outlineSensitive: Operation[] = ['submitChapterPlan', 'submitDraft', 'archiveChapter']
+    const worldbookSensitive: Operation[] = ['submitWorldPlan', 'submitChapterPlan']
     const relevant: StateError[] = [...snapshot.ledgerErrors]
     if (snapshot.projectError !== null) {
       relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'PROJECT_UNREADABLE'))
@@ -2909,6 +5022,12 @@ export class EngineService {
     }
     if (snapshot.checkError !== null && checkSensitive.includes(operation)) {
       relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'CHECK_UNREADABLE'))
+    }
+    if (snapshot.outlineError !== null && outlineSensitive.includes(operation)) {
+      relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'OUTLINE_UNREADABLE'))
+    }
+    if (snapshot.worldbookError !== null && worldbookSensitive.includes(operation)) {
+      relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'WORLDBOOK_UNREADABLE'))
     }
     return relevant.map((error) => ({
       code: 'STATE_UNREADABLE',
@@ -2950,12 +5069,55 @@ export class EngineService {
     return this.storeFor(snapshot.root).readText(chapterFile(chapter))
   }
 
+  /**
+   * archive-digests.json is a derived mirror, not a source of truth. A damaged
+   * mirror must never make every write unreachable; rebuild the missing rows
+   * from the chapter index and let the next archive rewrite a valid file.
+   */
+  private async readArchiveDigests(store: FsStore, snapshot: Snapshot): Promise<Record<string, string>> {
+    const digests: Record<string, string> = {}
+    const raw = await store.readText(ARCHIVE_DIGESTS)
+    if (raw !== null) {
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        const record = recordOf(parsed)
+        if (record !== null && Object.values(record).every((value) => typeof value === 'string')) {
+          for (const [key, value] of Object.entries(record)) digests[key] = value as string
+        }
+      } catch {
+        // Rebuild below from indexed archive evidence.
+      }
+    }
+    for (const chapter of snapshot.chapters.chapters) {
+      if (chapter.archive_digest !== undefined) {
+        digests[String(chapter.num)] = chapter.archive_digest
+      }
+    }
+    return digests
+  }
+
   private async latestBackup(store: FsStore, path: string): Promise<string | null> {
     for (const entry of await listBackups(store)) {
       const text = await store.readText(joinRel(BACKUP_DIR, entry.name, path))
       if (text !== null) return text
     }
     return null
+  }
+
+  /**
+   * A manuscript export with an unreadable chapter index cannot prove which
+   * chapters exist. Refusing is preferable to writing a short book that looks
+   * complete; the repair path is novel_amend, not a silent partial export.
+   */
+  private assertExportIndexReadable(snapshot: Snapshot, kind: ExportKind): void {
+    if (kind === 'outline' || kind === 'worldbook') return
+    const damage = snapshot.ledgerErrors.find((error) => error.code === 'CHAPTERS_UNREADABLE')
+    if (damage === undefined) return
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `cannot export ${kind}: state/${STATE_FILES.chapters} is unreadable (${damage.message})`,
+      `repair state/${STATE_FILES.chapters} with novel_amend before exporting`,
+    )
   }
 
   private async chaptersForExport(snapshot: Snapshot, chapter?: number): Promise<ExportChapter[]> {
@@ -3074,6 +5236,12 @@ export class EngineService {
       machine,
       previousText: snapshot.previousText,
       handoff: snapshot.handoff,
+      outline: snapshot.outline,
+      outlinePresent: snapshot.outlinePresent,
+      outline_error: snapshot.outlineError,
+      worldbook: snapshot.worldbook,
+      worldbookPresent: snapshot.worldbookPresent,
+      worldbook_error: snapshot.worldbookError,
     })
     cache.set(cacheKey, context)
     return context
@@ -3140,6 +5308,8 @@ export class EngineService {
         | 'proof'
         | 'semantic'
         | 'scope'
+        | 'planTargetWords'
+        | 'planCast'
       >
     > = {},
   ): GateInput {
@@ -3201,6 +5371,11 @@ export class EngineService {
       previousText: snapshot.previousText,
       previousTexts: snapshot.previousTexts,
       priorSceneTypes: snapshot.chapters.chapters.map((record) => record.scene_type),
+      outline: snapshot.outline,
+      planTargetWords: extras.planTargetWords ?? snapshot.plan?.target_words ?? null,
+      planCast:
+        extras.planCast ??
+        (snapshot.plan?.cast === undefined ? null : snapshot.plan.cast.map((member) => member.name)),
     }
   }
 
@@ -3222,6 +5397,8 @@ export class EngineService {
         | 'proof'
         | 'semantic'
         | 'scope'
+        | 'planTargetWords'
+        | 'planCast'
       >
     >,
   ): Promise<void> {
@@ -3286,34 +5463,68 @@ export class EngineService {
     }
   }
 
-  private async load(root?: string, retries = 1): Promise<Snapshot> {
+  /** True when anything survives in the project directory besides novel.yaml. */
+  private async projectStateExists(store: FsStore): Promise<boolean> {
+    const stateFiles = [
+      STATE_FILES.pipeline,
+      STATE_FILES.chapters,
+      STATE_FILES.characters,
+      STATE_FILES.world,
+      STATE_FILES.locks,
+      STATE_FILES.timeline,
+      STATE_FILES.foreshadows,
+      STATE_FILES.relationships,
+      STATE_FILES.handoff,
+    ].map((file) => joinRel(STATE_DIR, file))
+    stateFiles.push(joinRel(STATE_DIR, STATE_FILES.journal), ARCHIVE_DIGESTS)
+    return (
+      (await Promise.all(stateFiles.map((path) => store.exists(path)))).some(Boolean) ||
+      (await store.list(CHAPTERS_DIR)).length > 0 ||
+      (await store.list('plans')).length > 0 ||
+      (await store.list('reviews')).length > 0 ||
+      (await store.list('checks')).length > 0 ||
+      (await store.exists(OUTLINE_FILE)) ||
+      (await store.exists(WORLDBOOK_FILE))
+    )
+  }
+
+  /** A live writer lock makes a read-only snapshot potentially torn. */
+  private async lockIsLive(store: FsStore): Promise<boolean> {
+    const text = await store.readText(LOCK_FILE)
+    if (text !== null) {
+      try {
+        const record: unknown = JSON.parse(text)
+        if (isLockRecord(record)) return lockRecordIsLive(record)
+      } catch {
+        // A half-written lock is judged by its mtime below.
+      }
+    }
+    const info = await store.stat(LOCK_FILE)
+    return info !== null && Date.now() - info.mtimeMs < 1_000
+  }
+
+  private async load(root?: string, retries = 1, allowLock = false): Promise<Snapshot> {
     const store = this.storeFor(await this.resolveRoot(root))
-    const projectExists = await store.exists(PROJECT_FILE)
-    if (!projectExists) {
-      const stateFiles = [
-        STATE_FILES.pipeline,
-        STATE_FILES.chapters,
-        STATE_FILES.characters,
-        STATE_FILES.world,
-        STATE_FILES.locks,
-        STATE_FILES.timeline,
-        STATE_FILES.foreshadows,
-        STATE_FILES.relationships,
-        STATE_FILES.handoff,
-      ].map((file) => joinRel(STATE_DIR, file))
-      const hasState =
-        (await Promise.all(stateFiles.map((path) => store.exists(path)))).some(Boolean) ||
-        (await store.list(CHAPTERS_DIR)).length > 0 ||
-        (await store.list('plans')).length > 0 ||
-        (await store.list('reviews')).length > 0 ||
-        (await store.list('checks')).length > 0
-      if (!hasState) {
-        throw new EngineInputError(
-          ERROR_CODES.PROJECT_NOT_FOUND,
-          `no novel project at ${store.root}`,
-          'call novel_init to create one, or pass the correct project root',
+    if (!allowLock && (await this.lockIsLive(store))) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        if (!(await this.lockIsLive(store))) break
+      }
+      if (await this.lockIsLive(store)) {
+        throw new EngineFaultError(
+          ERROR_CODES.TXN_IN_PROGRESS,
+          'a writer is changing this project; the read-only snapshot would be torn',
+          'retry after the write finishes; do not interpret this snapshot as stable',
         )
       }
+    }
+    const projectExists = await store.exists(PROJECT_FILE)
+    if (!projectExists && !(await this.projectStateExists(store))) {
+      throw new EngineInputError(
+        ERROR_CODES.PROJECT_NOT_FOUND,
+        `no novel project at ${store.root}`,
+        'call novel_init to create one, or pass the correct project root',
+      )
     }
     let project: NovelProject = {
       ...ENGINE_PROJECT_INITIAL,
@@ -3420,6 +5631,43 @@ export class EngineService {
       'HANDOFF_UNREADABLE',
       null,
     )
+    const nowIso = this.now().toISOString()
+    // Synthesized planning documents must have a stable timestamp; otherwise
+    // read-only probes and export replay keys change on every load.
+    const emptyAt = project.created_at === '' ? '1970-01-01T00:00:00.000Z' : project.created_at
+    let outline = emptyOutline(emptyAt)
+    let outlinePresent = false
+    let outlineError: string | null = null
+    if (await store.exists(OUTLINE_FILE)) {
+      outlinePresent = true
+      try {
+        const parsed = await store.readDoc(OUTLINE_FILE, 'outline')
+        if (parsed === null)
+          throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${OUTLINE_FILE} disappeared mid-read`)
+        outline = validateOutlineDocument(parsed, {
+          titleRule: this.rulepack.format.title,
+          totalChapters: project.targets.total_chapters,
+        })
+      } catch (error) {
+        if (error instanceof EngineFaultError && error.code === ERROR_CODES.SCHEMA_TOO_NEW) throw error
+        outlineError = errorMessage(error)
+      }
+    }
+    let worldbook = emptyWorldbook(emptyAt)
+    let worldbookPresent = false
+    let worldbookError: string | null = null
+    if (await store.exists(WORLDBOOK_FILE)) {
+      worldbookPresent = true
+      try {
+        const parsed = await store.readDoc(WORLDBOOK_FILE, 'worldbook')
+        if (parsed === null)
+          throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, `${WORLDBOOK_FILE} disappeared mid-read`)
+        worldbook = validateWorldbookDocument(parsed, nowIso)
+      } catch (error) {
+        if (error instanceof EngineFaultError && error.code === ERROR_CODES.SCHEMA_TOO_NEW) throw error
+        worldbookError = errorMessage(error)
+      }
+    }
     const chapter = pipeline.chapter
     const text = await store.readText(chapterFile(chapter))
     const previousText = chapter > 1 ? await store.readText(chapterFile(chapter - 1)) : null
@@ -3488,11 +5736,22 @@ export class EngineService {
       'pipeline',
     )) as unknown as PipelineState | null
     if (latest === null || latest.revision !== pipeline.revision) {
-      if (retries > 0) return this.load(store.root, retries - 1)
+      if (retries > 0) return this.load(store.root, retries - 1, allowLock)
       throw new EngineFaultError(
         ERROR_CODES.TXN_ABORTED,
         'the project changed while its snapshot was being read',
         'retry the read; if it keeps moving, wait for the writer to finish',
+      )
+    }
+    // A writer may have taken the lock after the initial check. Re-check before
+    // returning: otherwise this read can see new ledgers with the old pipeline
+    // while the writer is still before its pipeline rename.
+    if (!allowLock && (await this.lockIsLive(store))) {
+      if (retries > 0) return this.load(store.root, retries - 1, false)
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_IN_PROGRESS,
+        'a writer started while the snapshot was being read; the snapshot is torn',
+        'retry after the write finishes; do not interpret this snapshot as stable',
       )
     }
     // Only a confirmed snapshot may become the panel's remembered root. A typo
@@ -3511,6 +5770,12 @@ export class EngineService {
       foreshadows: foreshadows as unknown as Snapshot['foreshadows'],
       relationships: relationships as unknown as Snapshot['relationships'],
       handoff,
+      outline,
+      outlinePresent,
+      outlineError,
+      worldbook,
+      worldbookPresent,
+      worldbookError,
       worldPlan,
       ledgerErrors,
       text,
@@ -3532,7 +5797,15 @@ export class EngineService {
     // must be repairable through the same explicit amend transaction.
     if ((await store.readText(path)) === null) return true
     try {
-      await store.readDoc(path, kind)
+      const document = await store.readDoc(path, kind)
+      if (kind === 'outline') {
+        validateOutlineDocument(document, {
+          titleRule: this.rulepack.format.title,
+          totalChapters: null,
+        })
+      } else if (kind === 'worldbook') {
+        validateWorldbookDocument(document, this.now().toISOString())
+      }
       return false
     } catch (error) {
       if (error instanceof EngineFaultError && error.code === ERROR_CODES.SCHEMA_TOO_NEW) return false
@@ -3562,6 +5835,8 @@ export class EngineService {
     op: Operation
     key?: (snapshot: Snapshot) => string
     emptyAllowed?: boolean
+    /** Human reason for a maintenance transaction; persisted in the journal. */
+    reason?: string
     /** Only an explicit amend may overwrite these externally changed paths. */
     repairPaths?: readonly string[]
     run: (
@@ -3592,27 +5867,51 @@ export class EngineService {
     return this.mutex.run(root, async () => {
       if (options.emptyAllowed === true) ensureDirAt(root)
       const store = this.storeFor(root)
+      const journalPath = joinRel(STATE_DIR, STATE_FILES.journal)
+      const journalWasPresent = await store.exists(journalPath)
+      const projectExists = await store.exists(PROJECT_FILE)
+      if (options.emptyAllowed === true && projectExists) {
+        throw new EngineInputError(
+          ERROR_CODES.PROJECT_EXISTS,
+          `a project already exists at ${store.root}`,
+          'use a different directory, or call novel_status to inspect the existing project',
+        )
+      }
+      if (
+        options.emptyAllowed !== true &&
+        projectExists &&
+        !(await store.exists(joinRel(STATE_DIR, STATE_FILES.journal)))
+      ) {
+        throw new EngineFaultError(
+          ERROR_CODES.JOURNAL_MISSING,
+          'state/journal.jsonl is missing; journal integrity and crash recovery are unavailable',
+          'restore state/journal.jsonl from a backup before writing; a project with novel.yaml must have its audit journal',
+        )
+      }
       const lock = new FileLock(join(root, LOCK_FILE), undefined, undefined, async (record) => {
-        await appendJournal(store, {
-          txid: randomUUID(),
-          at: new Date().toISOString(),
-          op: 'lock_reclaimed',
-          chapter: 0,
-          revision: 0,
-          files: [LOCK_FILE],
-          status: 'committed',
-          reason:
-            record === null
-              ? 'reclaimed a partially written lock file'
-              : `reclaimed lock from pid ${record.pid}`,
-        })
+        await appendJournal(
+          store,
+          {
+            txid: randomUUID(),
+            at: new Date().toISOString(),
+            op: 'lock_reclaimed',
+            chapter: 0,
+            revision: 0,
+            files: [LOCK_FILE],
+            status: 'committed',
+            reason:
+              record === null
+                ? 'reclaimed a partially written lock file'
+                : `reclaimed lock from pid ${record.pid}`,
+          },
+          { repairTrailing: true },
+        )
       })
       await lock.acquire()
       try {
         if (options.emptyAllowed === true) {
           const exists = await store.exists(PROJECT_FILE)
           if (!exists) {
-            await assertJournalConsistent(store)
             const stateFiles = [
               STATE_FILES.pipeline,
               STATE_FILES.chapters,
@@ -3624,12 +5923,24 @@ export class EngineService {
               STATE_FILES.relationships,
               STATE_FILES.handoff,
             ].map((file) => joinRel(STATE_DIR, file))
+            stateFiles.push(joinRel(STATE_DIR, STATE_FILES.journal), ARCHIVE_DIGESTS)
+            // A journal created by the lock-reclaim callback is part of this
+            // init, not pre-existing project evidence. Only count a journal
+            // that was present before the lock attempt.
+            const stateCandidates = journalWasPresent
+              ? stateFiles
+              : stateFiles.filter((path) => path !== joinRel(STATE_DIR, STATE_FILES.journal))
+            // A surviving journal or derived mirror is project evidence. Reject
+            // before journal reconciliation so the caller gets PROJECT_EXISTS,
+            // not a misleading hash mismatch from the old project.
             const hasState =
-              (await Promise.all(stateFiles.map((file) => store.exists(file)))).some(Boolean) ||
+              (await Promise.all(stateCandidates.map((file) => store.exists(file)))).some(Boolean) ||
               (await store.list('chapters')).length > 0 ||
               (await store.list('plans')).length > 0 ||
               (await store.list('reviews')).length > 0 ||
-              (await store.list('checks')).length > 0
+              (await store.list('checks')).length > 0 ||
+              (await store.exists(OUTLINE_FILE)) ||
+              (await store.exists(WORLDBOOK_FILE))
             if (hasState) {
               throw new EngineInputError(
                 ERROR_CODES.PROJECT_EXISTS,
@@ -3637,6 +5948,7 @@ export class EngineService {
                 'restore novel.yaml, or initialize a new empty directory',
               )
             }
+            await assertJournalConsistent(store)
             const created = await options.run(this.emptySnapshot(root), { store, revision: 1 })
             await runTransaction(store, {
               txid: randomUUID(),
@@ -3646,6 +5958,7 @@ export class EngineService {
               files: created.files,
               backup: false,
               signal,
+              ...(options.reason === undefined ? {} : { reason: options.reason }),
             })
             this.replay.clear()
             this.lastRoot = root
@@ -3656,11 +5969,18 @@ export class EngineService {
         // otherwise a second process can commit between read and write and the
         // later writer silently overwrites it with a stale revision.
         await assertJournalConsistent(store, options.repairPaths ?? [])
-        const snapshot = await this.load(root)
+        const snapshot = await this.load(root, 1, true)
         const key = options.key?.(snapshot)
         if (key !== undefined) {
           const cached = this.replay.get(`${root}|${options.op}|${key}`)
-          if (cached !== undefined) return { ...(cached as OpResult<T>), replayed: true }
+          // Export content is a pure function of the files it reads; other
+          // exports interleaved between two identical calls advance the
+          // revision without changing that content. Its key includes every
+          // rendered input, so it can replay across those revisions safely.
+          const revisionBound = options.op !== 'export'
+          if (cached !== undefined && (!revisionBound || cached.revision === snapshot.pipeline.revision)) {
+            return { ...(cached as OpResult<T>), replayed: true }
+          }
         }
         const revision = snapshot.pipeline.revision + 1
         abortIfNeeded()
@@ -3683,6 +6003,7 @@ export class EngineService {
           backup: outcome.backup ?? false,
           backupRetention: this.config.storage.backupRetention,
           signal,
+          ...(options.reason === undefined ? {} : { reason: options.reason }),
         })
         const result: OpResult<T> = { data: outcome.data, revision, warnings: outcome.warnings ?? [] }
         if (key !== undefined) {
@@ -3726,6 +6047,12 @@ export class EngineService {
       foreshadows: { schema_version: 1, next_seq: 1, items: [] },
       relationships: { schema_version: 1, next_seq: 1, items: [] },
       handoff: null,
+      outline: emptyOutline(this.now().toISOString()),
+      outlinePresent: false,
+      outlineError: null,
+      worldbook: emptyWorldbook(this.now().toISOString()),
+      worldbookPresent: false,
+      worldbookError: null,
       worldPlan: null,
       ledgerErrors: [],
       text: null,
@@ -3959,6 +6286,7 @@ const amendProblems = (
   projectBaseline: NovelProject = snapshot.project,
   projectDamaged = false,
   archiveDigests: Readonly<Record<string, string>> = {},
+  archivedChapterNumbers?: readonly number[],
 ): string[] => {
   const problems: string[] = []
   const old = recordOf(oldDocument)
@@ -3989,6 +6317,20 @@ const amendProblems = (
       const archivedCount = Math.max(snapshot.chapters.chapters.length, archivedFiles)
       if (typeof total === 'number' && Number.isInteger(total) && total < archivedCount) {
         problems.push(`targets.total_chapters ${total} is below the ${archivedCount} archived chapter(s)`)
+      }
+      if (typeof total === 'number' && Number.isInteger(total) && snapshot.outlineError === null) {
+        for (const volume of snapshot.outline.volumes) {
+          if (volume.end_chapter > total) {
+            problems.push(
+              `targets.total_chapters ${total} would truncate volume "${volume.title}" ending at ${volume.end_chapter}`,
+            )
+          }
+        }
+        for (const card of snapshot.outline.chapters) {
+          if (card.num > total) {
+            problems.push(`targets.total_chapters ${total} is below the existing outline card ${card.num}`)
+          }
+        }
       }
     }
     return problems
@@ -4056,6 +6398,22 @@ const amendProblems = (
       }
       if (stableJson(before.assigned_ids ?? {}) !== stableJson(after.assigned_ids ?? {})) {
         problems.push(`archived chapter ${String(before.num)} cannot change its assigned_ids`)
+      }
+      for (const field of [
+        'title',
+        'file',
+        'word_count',
+        'dialogue_lines',
+        'dialogue_ratio',
+        'scene_type',
+        'narrator',
+        'score',
+        'status',
+        'summary',
+      ] as const) {
+        if (stableJson(before[field]) !== stableJson(after[field])) {
+          problems.push(`archived chapter ${String(before.num)} cannot change its ${field}`)
+        }
       }
     }
     return problems
@@ -4250,6 +6608,122 @@ const amendProblems = (
     return problems
   }
 
+  if (kind === 'outline') {
+    const chapters = Array.isArray(nextDocument.chapters) ? nextDocument.chapters : []
+    const byNum = new Map<number, Record<string, unknown>>()
+    for (const [index, raw] of chapters.entries()) {
+      const row = recordOf(raw)
+      if (row === null || !Number.isInteger(row.num)) {
+        problems.push(`chapters[${index}] must have an integer num`)
+        continue
+      }
+      const num = row.num as number
+      if (byNum.has(num)) problems.push(`chapter ${num} appears more than once`)
+      byNum.set(num, row)
+    }
+    const oldChapters = Array.isArray(old?.chapters) ? old.chapters : []
+    const oldCards = new Map<number, Record<string, unknown>>()
+    for (const raw of oldChapters) {
+      const row = recordOf(raw)
+      if (row !== null && Number.isInteger(row.num)) oldCards.set(row.num as number, row)
+    }
+    const indexed = new Set(snapshot.chapters.chapters.map((record) => record.num))
+    const chaptersUnreadable = snapshot.ledgerErrors.some((error) => error.code === 'CHAPTERS_UNREADABLE')
+    if (!chaptersUnreadable) {
+      for (const [num, card] of byNum) {
+        if (card.status === 'archived' && !indexed.has(num)) {
+          problems.push(`archived chapter ${num} has a card but is not in the chapter index`)
+        }
+      }
+    }
+    const volumes = Array.isArray(nextDocument.volumes) ? nextDocument.volumes : []
+    for (const [index, raw] of volumes.entries()) {
+      const row = recordOf(raw)
+      if (
+        row === null ||
+        !Number.isInteger(row.start_chapter) ||
+        !Number.isInteger(row.end_chapter) ||
+        (row.end_chapter as number) < (row.start_chapter as number)
+      ) {
+        problems.push(`volumes[${index}] must have start_chapter <= end_chapter`)
+      }
+    }
+    for (const record of snapshot.chapters.chapters) {
+      const card = byNum.get(record.num)
+      if (card === undefined) {
+        problems.push(`archived chapter ${record.num} must keep its outline card`)
+        continue
+      }
+      if (card.status !== 'archived') {
+        problems.push(`archived chapter ${record.num} cannot be changed back to planned`)
+      }
+      if (card.title !== stripChapterPrefix(record.title)) {
+        problems.push(`archived chapter ${record.num} cannot change its card title`)
+      }
+      if (card.scene_type !== record.scene_type) {
+        problems.push(`archived chapter ${record.num} cannot change its card scene_type`)
+      }
+      if (card.word_count !== record.word_count || card.score !== record.score) {
+        problems.push(`archived chapter ${record.num} cannot change its word_count/score`)
+      }
+      const before = oldCards.get(record.num)
+      if (before === undefined) {
+        // Without the old card there is no evidence for target_words, cast or
+        // archived_at. Accepting a fabricated card here would let an amend
+        // bypass the archive protection after the backup was pruned.
+        problems.push(
+          `archived chapter ${record.num} has no previous outline card; restore its archive backup before repairing target_words/cast/archived_at`,
+        )
+        continue
+      }
+      if (JSON.stringify(before.target_words) !== JSON.stringify(card.target_words)) {
+        problems.push(`archived chapter ${record.num} cannot change its target_words`)
+      }
+      const beforeCast = Array.isArray(before.cast) ? before.cast : []
+      const afterCast = Array.isArray(card.cast) ? card.cast : []
+      if (beforeCast.length !== afterCast.length || afterCast.some((name) => !beforeCast.includes(name))) {
+        problems.push(`archived chapter ${record.num} cannot change its cast`)
+      }
+      if (
+        before.archived_at !== card.archived_at &&
+        !(before.archived_at === null && typeof card.archived_at === 'string')
+      ) {
+        problems.push(`archived chapter ${record.num} cannot change archived_at`)
+      }
+    }
+    if (chaptersUnreadable) {
+      const expected = new Set<number>(archivedChapterNumbers ?? [])
+      for (const [num, card] of oldCards) {
+        if (card.status === 'archived') expected.add(num)
+      }
+      const missing = [...expected].filter((num) => byNum.get(num)?.status !== 'archived')
+      if (missing.length > 0) {
+        problems.push(
+          `cannot verify archived cards while chapters.yaml is unreadable; keep archived cards for ${missing.join(', ')}`,
+        )
+      }
+    }
+    return problems
+  }
+
+  if (kind === 'worldbook') {
+    for (const key of ['characters', 'locations', 'factions', 'rules', 'glossary'] as const) {
+      const rows = Array.isArray(nextDocument[key]) ? nextDocument[key] : []
+      const names = new Set<string>()
+      for (const raw of rows) {
+        const row = recordOf(raw)
+        const name = row === null ? null : typeof row.name === 'string' ? row.name : row.term
+        if (typeof name !== 'string' || name.trim() === '') {
+          problems.push(`${key} entries must have a non-empty name/term`)
+          continue
+        }
+        if (names.has(name)) problems.push(`${key} contains duplicate "${name}"`)
+        names.add(name)
+      }
+    }
+    return problems
+  }
+
   // Unlisted future documents have no cross-document invariant.
   void path
   return problems
@@ -4411,8 +6885,13 @@ const validateStoredChapterPlan = (plan: Record<string, unknown>, path: string):
   if (!(SCENE_TYPES as readonly string[]).includes(plan.scene_type as string)) {
     fail(`unknown scene_type "${String(plan.scene_type)}"`)
   }
-  if (!Array.isArray(plan.beats) || plan.beats.some((beat) => typeof beat !== 'string')) {
-    fail('beats must be a string array')
+  if (
+    !Array.isArray(plan.beats) ||
+    plan.beats.length < 5 ||
+    plan.beats.length > 8 ||
+    plan.beats.some((beat) => typeof beat !== 'string' || beat.trim() === '')
+  ) {
+    fail('beats must be 5..8 non-empty strings')
   }
   if (
     !Array.isArray(plan.target_words) ||
@@ -4420,6 +6899,10 @@ const validateStoredChapterPlan = (plan: Record<string, unknown>, path: string):
     plan.target_words.some((value) => !Number.isInteger(value) || (value as number) <= 0)
   ) {
     fail('target_words must be [min, max] positive integers')
+  }
+  const targetWords = plan.target_words as number[]
+  if (targetWords[0]! > targetWords[1]!) {
+    fail('target_words min must not exceed max')
   }
   if (plan.summary !== undefined) {
     const problems = summaryContextProblems(plan.summary)

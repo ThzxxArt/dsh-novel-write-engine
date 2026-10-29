@@ -41,18 +41,23 @@ export type SceneType = (typeof SCENE_TYPES)[number]
 /** A violation is blocking unless the rule pack declares it advisory. */
 export type Severity = 'blocker' | 'advisory'
 
-/** All twenty-two service operations. */
+/** All thirty-one service operations (22 inherited from 0.1.x, 9 book-level). */
 export const OPERATIONS = [
   'initProject',
   'archiveChapter',
   'amend',
   'rollback',
+  'reopenChapter',
   'submitWorldPlan',
   'submitChapterPlan',
   'submitDraft',
   'submitReview',
   'submitRevision',
   'runCheck',
+  'submitBookPlan',
+  'submitOutline',
+  'importOutline',
+  'submitWorldbook',
   'getStatus',
   'getBrief',
   'countWords',
@@ -60,6 +65,10 @@ export const OPERATIONS = [
   'diff',
   'auditHistory',
   'advise',
+  'search',
+  'doctor',
+  'report',
+  'guide',
   'export',
   'panelSummary',
   'panelChapters',
@@ -120,6 +129,8 @@ export const ERROR_CODES = {
   PATH_ESCAPE: 'ENGINE_PATH_ESCAPE',
   LOCK_TIMEOUT: 'ENGINE_LOCK_TIMEOUT',
   TXN_ABORTED: 'ENGINE_TXN_ABORTED',
+  JOURNAL_MISSING: 'ENGINE_JOURNAL_MISSING',
+  TXN_IN_PROGRESS: 'ENGINE_TXN_IN_PROGRESS',
   RULEPACK_INVALID: 'ENGINE_RULEPACK_INVALID',
   ID_EXHAUSTED: 'ENGINE_ID_EXHAUSTED',
   CONFIG_INVALID: 'ENGINE_CONFIG_INVALID',
@@ -252,6 +263,8 @@ export type StateErrorCode =
   | 'FORESHADOWS_UNREADABLE'
   | 'RELATIONSHIPS_UNREADABLE'
   | 'HANDOFF_UNREADABLE'
+  | 'OUTLINE_UNREADABLE'
+  | 'WORLDBOOK_UNREADABLE'
 
 /** A state document that exists but cannot be read safely. */
 export interface StateError {
@@ -566,6 +579,234 @@ export interface ChapterPlanInput {
   cast?: ChapterCastMember[]
 }
 
+/* ------------------------------------------------------- 0.2.0 book layer */
+
+/** Book-level pitch and structure, persisted in `outline/outline.yaml`. */
+export interface BookPlan {
+  premise: string
+  logline: string
+  themes: string[]
+  tone: string
+  pov: string
+  audience: string
+  selling_points: string[]
+  ending: string
+  /** Strict mode requires a chapter card before P2/P3 for every chapter. */
+  strict: boolean
+  /** True once the author explicitly chose strict on/off; used for the first-outline default. */
+  strict_explicit?: boolean
+}
+
+/** One volume of the planned book. `end_chapter` is inclusive. */
+export interface OutlineVolume {
+  id: string
+  title: string
+  start_chapter: number
+  end_chapter: number
+  goal: string
+  arc: string
+  climax: string
+  status: 'planned' | 'writing' | 'done'
+}
+
+/** One planned chapter card. Only the archive transaction may write the archived fields. */
+export interface OutlineChapter {
+  num: number
+  volume: number | null
+  title: string
+  scene_type: SceneType
+  goal: string
+  conflict: string
+  hook: string
+  cast: string[]
+  target_words: [number, number]
+  notes: string
+  status: 'planned' | 'archived'
+  archived_at: string | null
+  word_count: number | null
+  score: number | null
+}
+
+/** The planning SSOT read by P1–P8, PG-13, report, doctor and export. */
+export interface OutlineDocument {
+  schema_version: 1
+  updated_at: string
+  book: BookPlan
+  volumes: OutlineVolume[]
+  chapters: OutlineChapter[]
+}
+
+/** One worldbuilding rule/constraint. */
+export interface WorldbookRule {
+  name: string
+  description: string
+}
+
+/** One faction in the world bible. */
+export interface WorldbookFaction {
+  name: string
+  description: string
+  goal: string
+}
+
+/** One location in the world bible. */
+export interface WorldbookLocation {
+  name: string
+  description: string
+  layout: string
+  capacity: number
+}
+
+/** One planned character (not the post-prose ledger entry). */
+export interface WorldbookCharacter {
+  name: string
+  role: string
+  description: string
+  arc: string
+}
+
+/** One glossary entry. */
+export interface WorldbookGlossary {
+  term: string
+  definition: string
+}
+
+/** One backstory event. */
+export interface WorldbookBackstory {
+  time: string
+  event: string
+}
+
+/** Worldbuilding plan, persisted in `outline/worldbook.yaml`. */
+export interface WorldbookDocument {
+  schema_version: 1
+  updated_at: string
+  premise: string
+  setting: string
+  rules: WorldbookRule[]
+  factions: WorldbookFaction[]
+  locations: WorldbookLocation[]
+  characters: WorldbookCharacter[]
+  glossary: WorldbookGlossary[]
+  backstory: WorldbookBackstory[]
+  themes: string[]
+}
+
+/** One hit from `novel_search`; the scope names the source family. */
+export interface SearchResultItem {
+  kind: 'chapters' | 'summaries' | 'outline' | 'worldbook' | 'ledgers'
+  chapter?: number
+  title?: string
+  paragraph?: number
+  snippet: string
+}
+
+/** Search response; `total` counts every matching segment, `results` is capped by `limit`. */
+export interface SearchReport {
+  query: string
+  scope: 'all' | 'chapters' | 'summaries' | 'outline' | 'worldbook' | 'ledgers'
+  total: number
+  truncated: boolean
+  results: SearchResultItem[]
+}
+
+/** One structured health check. */
+export interface DoctorCheck {
+  id: string
+  severity: 'ok' | 'info' | 'warning' | 'error'
+  title: string
+  detail: string
+  hint?: string
+}
+
+/** `novel_doctor` payload; a missing project is reported, never thrown. */
+export interface DoctorReport {
+  ok: boolean
+  root: string
+  checks: DoctorCheck[]
+  summary: { errors: number; warnings: number; infos: number }
+}
+
+/** Book-wide quality, outline, cast and pacing aggregates. */
+export interface BookReport {
+  progress: {
+    archived: number
+    target: number | null
+    words: number
+    average_words: number
+    percent: number
+    remaining_words: number | null
+  }
+  outline: {
+    present: boolean
+    strict: boolean
+    planned: number
+    archived: number
+    coverage: number
+    volumes: Array<{ title: string; start: number; end: number; planned: number; archived: number }>
+    drift: Array<{ chapter: number; field: string; planned: string; actual: string }>
+  }
+  worldbook: {
+    present: boolean
+    characters: number
+    locations: number
+    factions: number
+    rules: number
+    glossary: number
+    backstory: number
+  }
+  quality: {
+    average: number
+    median: number
+    min: number
+    max: number
+    last_five: number[]
+    trend: number
+    dimensions: Array<{ id: string; average: number; samples: number }>
+  }
+  pacing: {
+    scene_types: Record<string, number>
+    hook_strength: Record<string, number>
+    plot_advancement: Record<string, number>
+    longest: { chapter: number; words: number } | null
+    shortest: { chapter: number; words: number } | null
+  }
+  cast: {
+    total: number
+    top: Array<{ name: string; appearances: number; last_seen: number; role: string }>
+  }
+  foreshadows: {
+    open: number
+    dormant: number
+    overdue: number
+    resolved: number
+    oldest: Array<{ id: string; title: string; last_touched: number; age: number }>
+  }
+  timeline: { events: number; first_chapter: number | null; last_chapter: number | null }
+  relationships: { total: number; types: Record<string, number> }
+  activity: Array<{ at: string; op: string; chapter: number; status: string }>
+  warnings: string[]
+}
+
+/** One onboarding step. */
+export interface GuideStep {
+  id: string
+  title: string
+  detail: string
+  done: boolean
+  tool?: string
+}
+
+/** `novel_guide` payload. */
+export interface GuideReport {
+  state: 'no-project' | 'new' | 'planning' | 'writing' | 'blocked' | 'finished'
+  title: string
+  steps: GuideStep[]
+  next: { tool: string; args: Record<string, unknown>; reason: string }
+  commands: string[]
+  tips: string[]
+}
+
 /** Draft submission payload. */
 export interface DraftInput {
   chapter: number
@@ -638,6 +879,12 @@ export interface GateInput {
   /** The three preceding chapters, newest first, for the duplicate rule. */
   previousTexts: string[]
   priorSceneTypes: SceneType[]
+  /** 0.2.0 planning input; undefined means "no outline" for older fixtures. */
+  outline?: OutlineDocument | null
+  /** The chapter plan's target range, used by PG-13. */
+  planTargetWords?: [number, number] | null
+  /** The chapter plan's declared cast names, used by PG-13. */
+  planCast?: string[] | null
 }
 
 /** Gate evaluation outcome. */
@@ -674,6 +921,30 @@ export interface StatusReport {
   volume_name?: string
   act?: string
   act_progress?: string
+  /** 0.2.0 book-level visibility; absent on older synthetic payloads. */
+  book?: {
+    premise: string
+    logline: string
+    strict: boolean
+    outline: {
+      present: boolean
+      total: number
+      planned: number
+      archived: number
+      coverage: number
+      volumes: number
+      current: OutlineChapter | null
+    }
+    worldbook: {
+      present: boolean
+      characters: number
+      locations: number
+      factions: number
+      rules: number
+      glossary: number
+      backstory: number
+    }
+  }
   next: { tool: string; args: Record<string, unknown>; reason: string }
 }
 
@@ -709,5 +980,5 @@ export interface DiffReport {
   hunks: Array<{ kind: 'add' | 'remove' | 'same'; line: string }>
 }
 
-/** Export capabilities. */
-export type ExportKind = 'md' | 'txt' | 'epub'
+/** Export capabilities; the last three are book-planning deliverables. */
+export type ExportKind = 'md' | 'txt' | 'epub' | 'outline' | 'worldbook' | 'proposal'

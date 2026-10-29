@@ -114,7 +114,7 @@ describe('architecture rules', () => {
   it('R6: tools all live in the novel_ namespace and the names are unique', () => {
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length)
     for (const name of TOOL_NAMES) expect(name.startsWith('novel_')).toBe(true)
-    expect(TOOL_NAMES).toHaveLength(18)
+    expect(TOOL_NAMES).toHaveLength(27)
   })
 
   it('R7: no test is skipped, focused, or marked todo', async () => {
@@ -124,10 +124,10 @@ describe('architecture rules', () => {
     }
   })
 
-  it('R8: all twelve falsification tests exist', async () => {
+  it('R8: all fifteen falsification tests exist', async () => {
     const names = await readdir(join(root, 'tests/falsify'))
     const expected = Array.from(
-      { length: 12 },
+      { length: 15 },
       (_, index) => `T-${String(index + 1).padStart(2, '0')}.spec.ts`,
     )
     expect(names.filter((name) => name.endsWith('.spec.ts')).sort()).toEqual(expected)

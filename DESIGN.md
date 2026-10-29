@@ -2,12 +2,12 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.1.3`                                                                                                  |
+| 插件版本 | `0.2.0`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
 | 验证基线 | DSH `0.2.1-rc.3`、Cordis `4.0.5`、Schemastery `3.18.5`                                                   |
-| 硬约束   | 不依赖 Python、不做数据库、除正文外全部 YAML/JSON、**运行时不依赖任何外部技能文件**、**测试覆盖率 ≥85%** |
+| 硬约束   | 不依赖 Python、不做数据库、除正文外全部 YAML/JSON、**运行时不依赖任何外部技能文件**、**测试覆盖率 ≥90%** |
 
 ---
 
@@ -23,10 +23,10 @@
 | -------- | --------------------------------------------------------------------- |
 | 状态机   | 9 个命名阶段、迁移表数据化、非法迁移直接拒绝、断点可续                |
 | 账本     | 角色/伏笔/时间线/关系/资源/章节索引，全部是正文的「影子」             |
-| 门禁     | 12 条机器可判定的门控（PG-01~PG-12），任一不过即阻塞                  |
+| 门禁     | 13 条机器可判定的门控（PG-01~PG-13），任一不过即阻塞                  |
 | 规则引擎 | 字数、标点、格式、词表、节奏、跨章、一致性——约 30 条可机检规则        |
 | 事务器   | 归档是一次原子提交（暂存→校验→提交→读回），不是「写一堆文件祈祷成功」 |
-| 服务     | 22 个服务操作，同时被工具、命令、面板、任务书四条通道复用             |
+| 服务     | 31 个服务操作，同时被工具、命令、面板、任务书四条通道复用             |
 
 | 不是                 | 原因                                                |
 | -------------------- | --------------------------------------------------- |
@@ -40,19 +40,22 @@
 
 ```
 阶段        9 个（模型执行 6 个，事务执行 3 个）
-门控        12 条（PG-01 ~ PG-12）
-服务操作    22 个（18 工具 + 3 面板投影 + 1 统计投影）
+门控        13 条（PG-01 ~ PG-13）
+服务操作    31 个（27 工具 + 3 面板投影 + 1 统计投影）
 分层        6 层（L0 类型 / L1 领域 / L2 规则 / L3 存储 / L4 引擎 / L5 适配）
 评分        15 维 / 满分 150 / 合格 120
+语义项      5 条（场景/人物状态/因果/声音/视角）
 循环上限    评审-修复 3 轮，校验-修订 3 轮
 字数口径    total_word_count = 汉字 + 英文单词 + 数字 + 标点
-文件        YAML 9 个 + JSONL 1 个 + 正文 Markdown N 个
+文件        YAML 12 个 + JSONL 1 个 + 正文 Markdown N 个 + 导出 N 个
 运行时依赖  1 个（yaml）
-斜杠命令    5 条
-客户端半边  1 个面板（「网文工坊」）
+斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 子命令）
+客户端半边  1 个面板（「网文工坊」v2）
 Agent 预设  1 个（「网文工坊」）
-覆盖率门禁  全局 85%，纯函数层 100%
+覆盖率门禁  全局 90%，engine 90/85，纯函数层 100%
 ```
+
+0.2.0 新增书级规划层：`outline/outline.yaml`（蓝图 + 卷 + 章卡）与 `outline/worldbook.yaml`（世界观设定集）。它们是规划输入与进度视图，不替代 `state/` 台账；正文仍是唯一真实来源。
 
 ### 0.4 架构一句话
 
@@ -101,7 +104,7 @@ Agent 预设  1 个（「网文工坊」）
 | **影子**   | `state/*.yaml`                   | 只有 `novel_archive` 的事务（模型提交 delta，引擎落盘）         | 一致性校验、后续章节上下文 |
 | **规划**   | `outline/*.yaml`、`plans/*.yaml` | 人可以随便改                                                    | 写作指导，**不是数据来源** |
 
-`novel_amend` 是状态文档的维护通道：只能改 allowlist 内的 `state/*.yaml`，不能写 `chapters/`；不参与阶段门控，但必须给出非空 `reason`。
+`novel_amend` 是状态文档的维护通道：只能改 allowlist 内的 `state/*.yaml`、`novel.yaml` 与 `outline/*.yaml`，不能写 `chapters/`；不参与阶段门控，但必须给出非空 `reason`。outline 的归档卡 title/scene/target_words/cast/word_count/score/archived_at 仍受不可变保护。
 
 铁律的落地方式：**引擎没有任何「从 outline 写 state」的代码路径**。大纲里的角色不会自动进角色库——只有正文写了、且归档事务提交了 delta，才会存在。
 
@@ -189,7 +192,7 @@ Agent 预设  1 个（「网文工坊」）
 ┌─────────────────────────────────────────────────────────────┐
 │ L5 适配层   tools(18) · commands(5) · remote(3) · skill(1)   │ 薄壳：窄化 + 渲染
 ├─────────────────────────────────────────────────────────────┤
-│ L4 引擎     EngineService：22 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
+│ L4 引擎     EngineService：31 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
 ├─────────────────────────────────────────────────────────────┤
 │ L3 存储     FsStore：原子写 · 事务 · 锁 · 迁移 · 项目注册表    │ 唯一 IO
 ├─────────────────────────────────────────────────────────────┤
@@ -211,8 +214,8 @@ Agent 预设  1 个（「网文工坊」）
 | `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表        | types         | 否     | 纯单测 + 表驱动             |
 | `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度         | types, domain | 否     | 纯单测 + golden             |
 | `src/store/`    | 原子写、事务、锁、schema 加载、迁移、注册表、备份  | types         | **是** | 真实 tmpdir + 故障注入      |
-| `src/engine/`   | 22 个操作、门控、任务书、只读投影、journal         | 全部下层      | 间接   | 集成（真 store + 真 rules） |
-| `src/tools/`    | 18 个 `defineTool`：窄化 → 调 op → 规范值 → render | engine        | 否     | 假 engine（spy）            |
+| `src/engine/`   | 31 个操作、门控、任务书、只读投影、journal         | 全部下层      | 间接   | 集成（真 store + 真 rules） |
+| `src/tools/`    | 27 个 `defineTool`：窄化 → 调 op → 规范值 → render | engine        | 否     | 假 engine（spy）            |
 | `src/commands/` | 5 条斜杠命令                                       | engine        | 否     | 假 engine                   |
 | `src/remote/`   | 3 个只读投影 + DTO 版本                            | engine        | 否     | 假 engine + 形状断言        |
 | `src/skills/`   | 1 份入口技能正文                                   | —             | 否     | 快照 + 字数上限             |
@@ -264,22 +267,22 @@ export function apply(ctx: Context, config: Config) {
 | 清理 | `ctx.effect` 调用 `EngineService.dispose()` 清空内存缓存；文件锁在每个 `mutate` 的 `finally` 释放，引擎不持有文件句柄 |
 | 失败 | `apply` 只在**配置非法**时抛错；项目不存在是「操作错误」，不是装配错误                                                |
 
-### 2.5 服务操作契约（22 个）
+### 2.5 服务操作契约（31 个）
 
 **这是全系统的唯一入口**。工具、命令、面板、任务书都只能调这些操作。
 
 | 类别     | 操作                | 写盘                         | 门控依赖                         | 幂等键                                    |
 | -------- | ------------------- | ---------------------------- | -------------------------------- | ----------------------------------------- |
 | 生命周期 | `initProject`       | 是                           | —                                | 项目根路径                                |
-|          | `archiveChapter`    | 是（事务）                   | PG-01~12                         | `(chapter, contentHash)`                  |
+|          | `archiveChapter`    | 是（事务）                   | PG-01~10/12/13（不含 PG-11）      | `(chapter, contentHash)`                  |
 |          | `amend`             | 是                           | PG-01                            | `(target, path, 期望 revision)`           |
 |          | `rollback`          | 是                           | —                                | `(chapter, toStage)`                      |
 | 提交     | `submitWorldPlan`   | 是                           | PG-01/02/11                      | `(chapter, digest)`                       |
-|          | `submitChapterPlan` | 是                           | PG-01/02                         | `(chapter, digest)`                       |
-|          | `submitDraft`       | 是                           | PG-01/02/03/04/05/06             | `(chapter, contentHash)`                  |
+|          | `submitChapterPlan` | 是                           | PG-01/02/13                      | `(chapter, digest)`                       |
+|          | `submitDraft`       | 是                           | PG-01/02/03/04/05/06/13          | `(chapter, contentHash)`                  |
 |          | `submitReview`      | 是                           | PG-01/02/07/09/11                | `(chapter, round, contentHash)`           |
-|          | `submitRevision`    | 是                           | PG-01/02/03/04/08/09             | `(chapter, round, contentHash)`           |
-|          | `runCheck`          | 是                           | PG-01/02/03/04/05/07/08/09/10/11 | `(chapter, contentHash, semantic, scope)` |
+|          | `submitRevision`    | 是                           | PG-01/02/03/04/05/08/09/11       | `(chapter, round, contentHash)`           |
+|          | `runCheck`          | 是                           | PG-01/02/03/04/05/06/07/08/09/10/11 | `(chapter, contentHash, semantic, scope)` |
 | 查询     | `getStatus`         | 否                           | —                                | —                                         |
 |          | `getBrief`          | 是（仅 `briefs` 字段，幂等） | —                                | `(stage, chapter, stateDigest)`           |
 |          | `countWords`        | 否                           | —                                | —                                         |
@@ -292,6 +295,17 @@ export function apply(ctx: Context, config: Config) {
 |          | `panelChapters`     | 否                           | —                                | —                                         |
 |          | `panelGates`        | 否                           | —                                | —                                         |
 |          | `stats`             | 否                           | —                                | —                                         |
+| 书级规划 | `submitBookPlan`    | 是                           | —                                | `(blueprint digest)`                      |
+|          | `submitOutline`     | 是                           | —                                | `(outline digest)`                        |
+|          | `importOutline`     | 否（dry_run）/是             | —                                | `(content hash)`                          |
+|          | `submitWorldbook`   | 是                           | —                                | `(worldbook digest)`                      |
+|          | `reopenChapter`     | 是（事务）                   | 仅已归档且活动章未开始           | `(chapter, reason)`                       |
+| 可观测   | `search`            | 否                           | —                                | —                                         |
+|          | `doctor`            | 否                           | —                                | —                                         |
+|          | `report`            | 否                           | —                                | —                                         |
+|          | `guide`             | 否                           | —                                | —                                         |
+
+面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，不增加业务操作计数，也不引入写路径。
 
 **契约形状**（所有操作统一）：
 
@@ -316,7 +330,7 @@ interface OpResult<T> {
 
 | 适配器       | 做什么                                          | 不做什么                                     |
 | ------------ | ----------------------------------------------- | -------------------------------------------- |
-| Tool（18）   | 参数窄化 → 调 op → 组装规范值 → `render` 成卡片 | 不读文件、不做校验、不算字数                 |
+| Tool（27）   | 参数窄化 → 调 op → 组装规范值 → `render` 成卡片 | 不读文件、不做校验、不算字数                 |
 | Command（5） | 解析参数 → 调 op → 输出 Markdown                | 不引入第二数据路径                           |
 | Remote（3）  | 调投影 op → 组装 DTO（带 `schemaVersion`）      | **没有任何写方法**（接口层面就没有，INV-10） |
 | Skill（1）   | 一段 Markdown：何时用、怎么驱动、路由表         | 不含阶段知识（那由 `novel_brief` 投递）      |
@@ -332,7 +346,7 @@ interface OpResult<T> {
              ├─ keyedMutex(projectRoot) 串行化          ← 进程内
              ├─ FileLock(.engine.lock)                   ← 跨进程
              ├─ store.loadSnapshot()                     ← 读 pipeline/state/正文
-             ├─ gates.evaluate(PG-01..PG-12)             ← 纯函数
+             ├─ gates.evaluate(PG-01..PG-13)             ← 纯函数
              │    └─ 任一不过 → throw EngineBlockedError（零写盘）
              ├─ rules.run(full)                          ← 重跑全量机检，不信任旧结果
              ├─ delta 核销 + ID 分配                      ← 纯函数 + 计数器
@@ -506,7 +520,7 @@ dsh-novel-write-engine/
 
 | 原语                  | 用不用  | 说明                                                         |
 | --------------------- | ------- | ------------------------------------------------------------ |
-| `ctx.tools`           | ✅      | 18 个工具                                                    |
+| `ctx.tools`           | ✅      | 27 个工具                                                    |
 | `ctx.skills.register` | ✅ 1 个 | 入口技能                                                     |
 | `ctx.commands`        | ✅ 5 条 | 斜杠命令                                                     |
 | `ctx.subagents`       | ❌      | 不派发；由模型用原生 `subagent` 决定                         |
@@ -542,9 +556,9 @@ dsh-novel-write-engine/
 ```
 <projectRoot>/
 ├── novel.yaml                    # 项目定义（人可编辑）
-├── outline/                      # 0.2.0 规划层；0.1.3 不读取、不写入
-│   ├── outline.yaml
-│   └── volumes/vol-01.yaml
+├── outline/                      # 0.2.0 规划层（引擎读写）
+│   ├── outline.yaml              # 书级蓝图 + 卷 + 章卡
+│   └── worldbook.yaml            # 世界观设定集
 ├── chapters/chapter-001.md       # 正文（唯一 SSOT，纯文本，禁 Markdown）
 ├── plans/{chNNN.world.yaml, chNNN.chapter.yaml}
 ├── reviews/chNNN.review.yaml
@@ -585,6 +599,37 @@ targets:
   total_chapters: null
   dialogue_ratio: [0.40, 0.60]
 ```
+
+#### `outline/outline.yaml`（0.2.0 书级规划）
+
+```yaml
+schema_version: 1
+updated_at: '...'
+book:
+  { premise: '', logline: '', themes: [], tone: '', pov: '', audience: '',
+    selling_points: [], ending: '', strict: false }
+volumes:
+  - { id: V1, title: '第一卷', start_chapter: 1, end_chapter: 30,
+      goal: '', arc: '', climax: '', status: planned }
+chapters:
+  - { num: 1, volume: 1, title: '开端之雨', scene_type: 日常过渡章,
+      goal: '', conflict: '', hook: '', cast: [], target_words: [2000, 3000],
+      notes: '', status: planned, archived_at: null, word_count: null, score: null }
+```
+
+`book.strict` 为 true 时，P2/P3 必须有当前章卡；只要章卡存在，任何模式下都要通过标题/场景/目标字数/cast 的 PG-13 对齐检查。归档卡不可改，需先 `novel_reopen`（reason 必填）。大纲是规划输入与进度视图，不是第二真相。
+
+#### `outline/worldbook.yaml`（0.2.0 世界观设定集）
+
+```yaml
+schema_version: 1
+updated_at: '...'
+premise: ''; setting: ''
+rules: []; factions: []; locations: []; characters: []
+glossary: []; backstory: []; themes: []
+```
+
+按段替换；名称/术语在段内唯一。它只进入 P1/P2/P3 任务书上下文与报告，不会自动写入 `state/world.yaml`。
 
 #### `state/pipeline.yaml`（控制流 SSOT，唯一）
 
@@ -762,10 +807,14 @@ machine:
 semantic:
   items:
     - { id: L2-SCENE-ANCHOR, verdict: pass, evidence: '第 4 段：整层只有他一个人…', note: '已核对' }
+    - { id: L2-CHARACTER-STATE, verdict: pass, evidence: '他伸手压住，指腹沾了一点灰', note: '与台账一致' }
+    - { id: L2-CAUSALITY, verdict: pass, evidence: '门被推开时带进一股凉气', note: '有前置动作' }
+    - { id: L2-VOICE, verdict: pass, evidence: '来人的声音压得很低', note: '可区分' }
+    - { id: L2-POV, verdict: pass, evidence: '他没有回头', note: '第三人称限知' }
 verdict: pass
 ```
 
-**语义项必须带证据**：`evidence` 至少 8 字、必须逐字出现在正文里，且四个语义项必须使用四条互不相同的引用；找不到、过短或重复 = 证据无效 = 该 check 不成立。
+**语义项必须带证据**：`evidence` 至少 8 字、必须逐字出现在正文里，且五个语义项必须使用五条互不相同、来自不同句子的引用；找不到、过短或重复 = 证据无效 = 该 check 不成立。
 
 #### `state/handoff.yaml`
 
@@ -904,7 +953,7 @@ dialogue_ratio = dialogue_lines / nonEmptyLines     // 小数字面量，禁百�
 ### 5.5 词表与规则包结构
 
 ```yaml
-# rulepacks/default.yaml（节选；0.1.3 真实 schema）
+# rulepacks/default.yaml（节选；0.2.0 真实 schema）
 schema_version: 1
 name: default
 version: '1.0.0'
@@ -1069,11 +1118,11 @@ rhythm:
 
 **这张表的意义**：11 维不该全压给模型。引擎直接判 3 维（●），给出事实层让模型判 4 维（◐），模型只需对剩下的 4 维（○）做判断并附原文证据。**机检度不是装饰，它决定哪一层负责**。
 
-> **0.1.x 实现边界**：已落地时间回溯、资源余额、关系未声明、锁定地点描写、重复段落、伏笔休眠/过早回收；POV、章间桥接、姓名来源、空间布局、势力人数与物品流转仍由 P6 的四个语义项覆盖，尚未各自升级为独立规则码。这里明确写出，避免把“设计目标”误读成“已交付”。
+> **0.2.0 实现边界**：已落地时间回溯、资源余额、关系未声明、锁定地点描写、重复段落、伏笔休眠/过早回收；POV、章间桥接、姓名来源、空间布局、势力人数与物品流转由 P6 的五个语义项（含 `L2-POV`）覆盖，尚未各自升级为独立规则码。这里明确写出，避免把“设计目标”误读成“已交付”。
 
 ### 5.10 十二种类型的关键差异
 
-类型不是「风格标签」，但 0.1.3 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
+类型不是「风格标签」，但 0.2.0 的引擎只把它用于**任务书上下文、类型指南与 contextual 词表**；下表的“专项约束”是写作指导，不改变规则阈值。阈值仍由场景类型、平台参数与规则包决定：
 
 | 类型     | 首个卖点位置         | 专项约束                                                    |
 | -------- | -------------------- | ----------------------------------------------------------- |
@@ -1293,7 +1342,9 @@ const TRANSITIONS: readonly Transition[] = [
 
 轮次记在 `pipeline.rounds`，由引擎自增，**模型不能传轮次参数**（防自报「这是第 1 轮」）。三个计数器彼此独立；`next`/status/panel 只对下一步真正要消耗的计数器报 PG-11。
 
-### 7.4 十二条门控
+### 7.4 十三条门控
+
+> 0.2.0 的 PG-13 在 `submitChapterPlan` / `submitDraft` / `archiveChapter` 求值；大纲是规划输入，不是第二真相。严格模式默认关闭，`novel_outline` 首次提交开启。缺失章卡只在严格模式拒绝；已有章卡的对齐检查在任何模式都执行。归档前再次检查，防止 P3 后删除或改写章卡绕过。
 
 | 编号  | 名称             | 判定条件                                                                                 | 触发点            |
 | ----- | ---------------- | ---------------------------------------------------------------------------------------- | ----------------- |
@@ -1303,9 +1354,10 @@ const TRANSITIONS: readonly Transition[] = [
 | PG-04 | `FORMAT`         | 格式类规则 0 个 blocker                                                                  | P3 / P5 / P6 / P9 |
 | PG-05 | `SUMMARY_SCHEMA` | 10 必填字段齐全 + 类型正确                                                               | P3 / P6 / P9      |
 | PG-06 | `SCENE_TYPE`     | 四选一 + 节奏约束（不连续 3 章同型；战斗不连续 2 章）                                    | P3 / P6 / P9      |
+| PG-13 | `OUTLINE_ALIGNMENT` | 有章卡时标题/场景/目标字数/cast 必须一致；严格模式无卡也拒绝；归档卡不可改 | P2 / P3 |
 | PG-07 | `SCORE`          | 15 维齐全、算术闭合；P4 允许低分如实进入修订，`total >= minScore` 在 P6 与 P9 归档前执行 | P4 / P6 / P9      |
 | PG-08 | `ISSUES_CLEARED` | 所有 `blocker` issue 状态 `fixed` 且有证据                                               | P5 / P6 / P8 / P9 |
-| PG-09 | `READING_PROOF`  | 三处原文引用按实际段落验证；开头/结尾边界不可用提交段落号绕过                            | P4 / P5 / P6      |
+| PG-09 | `READING_PROOF`  | 三处原文引用按实际段落验证；开头/结尾边界不可用提交段落号绕过                            | P4 / P5 / P6 / P9 |
 | PG-10 | `CONSISTENCY`    | 跨章对账（伏笔/时间线/资源/关系/重复）                                                   | P6 / P8 / P9      |
 | PG-11 | `ROUNDS`         | 轮次未超限                                                                               | P4 / P5 / P6      |
 | PG-12 | `ARCHIVE_ATOMIC` | 事务三端一致 + 读回验证通过                                                              | P9                |
@@ -1504,7 +1556,7 @@ ctx.skills.register({
 | 核心循环 | `status → brief → 做 → submit → status`                                    |
 | 六条铁律 | 不跳阶段、不伪造指标、不绕过门控、ID 由引擎分配、正文 SSOT、blocker 必须修 |
 | 路由表   | 「改情节」→ P3；「有 AI 味」→ P4；「前后矛盾」→ P6；「重写」→ P1           |
-| 工具速查 | 18 个工具一行一个                                                          |
+| 工具速查 | 27 个工具一行一个                                                          |
 | 失败处理 | 常见错误码 → 该做什么                                                      |
 
 **为什么不给 9 个阶段各注册一个技能**：那等于把 9 份阶段文档搬进上下文，token 成本高，且模型会在错误阶段加载错误文档。阶段知识由 `novel_brief` 精确投递。
@@ -1550,7 +1602,7 @@ ctx.skills.register({
 
 ## 9. 工具面与命令面
 
-### 9.1 十八个工具（全部是 `EngineService` 的薄适配器）
+### 9.1 二十七个工具（全部是 `EngineService` 的薄适配器）
 
 | #   | 工具                 | 阶段     | 服务操作            | 写盘              |
 | --- | -------------------- | -------- | ------------------- | ----------------- |
@@ -1572,6 +1624,15 @@ ctx.skills.register({
 | 16  | `novel_export`       | 任意     | `export`            | 是（导出目录）    |
 | 17  | `novel_audit`        | 任意     | `auditHistory`      | 否                |
 | 18  | `novel_pipeline`     | 任意     | `advise`            | 否                |
+| 19  | `novel_blueprint`    | 任意     | `submitBookPlan`    | 是                |
+| 20  | `novel_outline`      | 任意     | `submitOutline`     | 是                |
+| 21  | `novel_outline_import` | 任意   | `importOutline`     | 可选              |
+| 22  | `novel_worldbook`    | 任意     | `submitWorldbook`   | 是                |
+| 23  | `novel_search`       | 任意     | `search`            | 否                |
+| 24  | `novel_doctor`       | 任意     | `doctor`            | 否                |
+| 25  | `novel_report`       | 任意     | `report`            | 否                |
+| 26  | `novel_guide`        | 任意     | `guide`             | 否                |
+| 27  | `novel_reopen`       | 已归档章 | `reopenChapter`     | 是（事务）        |
 
 ### 9.2 四个关键契约
 
@@ -1592,6 +1653,7 @@ output.schema: {
     blocking:       { type: 'array', required: true, items: { type: 'object' } },
     state_errors:   { type: 'array', required: true, items: { type: 'object' } },
     metrics:        { type: ['object', 'null'], required: true },
+    book: { type: 'object', required: true, additionalProperties: true }, // 0.2.0 书级摘要
     next: { type: 'object', required: true, additionalProperties: false,
       properties: {
         tool:   { type: 'string', required: true },
@@ -1604,7 +1666,7 @@ output.schema: {
 
 `chapter` 只影响字数查询，`active_chapter` 才是管线正在写的章。`next.tool` 必须是当前阶段合法、且参数可用的下一步：任何阶段只要该阶段 brief 缺失或 digest 过期，先返回 `novel_brief`（`args` 带 `stage` 与 `chapter`）；brief 当前后才返回实际写操作。P5/P6 有阻塞时返回 `novel_revise`；`ready_to_archive` 在 P8 brief 当前后返回 `novel_archive`；`done` 未完成时先取 P1。不能返回只读的 `novel_status`，也不能用已过期的 brief 硬推下一步。
 
-`state_errors` 是 `{path, code, message}` 数组，覆盖 `novel.yaml`、plan/review/check、worldPlan 与八个 ledger。plan/review/check 文件缺失或无法读取时，status 仍可建立快照；当前阶段晚于重建点时 `next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时直接指向 `novel_brief` 与对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。ledger/project 损坏时 `next` 指向 `novel_amend`，`novel_state` 返回 `{error,message,path,raw}`；amend 为当前所有不可读状态文档豁免 journal 的既有 hash，其他可读文件的外部改动仍 fail-closed。`STATE_UNREADABLE` 同时进入 `blocking`，需要该文档的写操作会在落盘前拒绝。
+`state_errors` 是 `{path, code, message}` 数组，覆盖 `novel.yaml`、plan/review/check、worldPlan、八个 ledger 与 outline/worldbook。plan/review/check 文件缺失或无法读取时，status 仍可建立快照；当前阶段晚于重建点时 `next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时直接指向 `novel_brief` 与对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。ledger/project/规划文档损坏时 `next` 指向 `novel_amend`，`novel_state` 返回 `{error,message,path,raw}`；amend 为当前所有不可读状态文档豁免 journal 的既有 hash，其他可读文件的外部改动仍 fail-closed。`STATE_UNREADABLE` 同时进入 `blocking`，需要该文档的写操作会在落盘前拒绝。
 
 #### `novel_brief`
 
@@ -1684,8 +1746,8 @@ relationships: { ['a|b']: string → { action, reason?, a?, b?, type?, descripti
 /novel             → 状态卡（项目头 + 当前位置 + 下一步）
 /novel next        → 下一步该调的工具与参数
 /novel stats       → 字数 / 评分 / 伏笔 / 词表命中统计
-/novel export      → 导出 md / txt / epub，附封面 SVG 与平台简介
-/novel admin <op>  → 触达未注册在高频面的 10 个工具（仅 tools.mode=core 时需要）
+/novel export      → 导出 md / txt / epub / outline / worldbook / proposal，附封面 SVG 与平台简介
+/novel admin <op>  → 触达未注册在高频面的 17 个工具（仅 toolsMode=core 时需要）
 ```
 
 命令与工具共用同一套投影（§6.6），不引入第二条数据路径；命令是「少一次工具调用」的糖，不是新能力。
@@ -1724,10 +1786,12 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 1. **Hero**：书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数；右侧刷新。
 2. **统计**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`。
-3. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
-4. **下一步卡**：工具的中文动作 + 可读理由；原始工具名只作为次要技术标识。
-5. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
-6. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
+3. **全书规划**：蓝图/严格模式、章卡进度条、卷列表、世界观计数、质量趋势、健康度；数据来自 `panelSummary.book/quality/health`。
+4. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
+5. **下一步卡**：工具的中文动作 + 可读理由；原始工具名只作为次要技术标识。
+6. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
+7. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
+8. **最近活动**：最近 5 条 journal 操作（时间、op、章节、状态）；无活动时整段不渲染。
 
 **状态与可达性**：loading 用骨架 + `role=status`；empty 显示 `novel_init` 命令；error 用 `role=alert` + 重试；outdated 用 `location.reload()`（客户端 bundle 已陈旧，重新请求同 bundle 无效）；根节点 `aria-busy`，统计区 `role=group`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 
@@ -1796,12 +1860,12 @@ interface PresetDefinition {
 **为什么不把工具塞进预设**：
 
 1. **根行必须存在**：客户端半边只随「说明符恰好等于包名」的行挂载；只挂进预设，侧边栏根本不会出现。
-2. **会撞名**：同包两处挂载 = 两份实例，18 个工具重复注册。
+2. **会撞名**：同包两处挂载 = 两份实例，27 个工具重复注册。
 3. **能力不该随会话类型消失**：工具在根上，标准会话里 `/novel` 照样能用。
 
 | 层   | 挂什么                                                                                  | 目的                                |
 | ---- | --------------------------------------------------------------------------------------- | ----------------------------------- |
-| 根行 | `dsh-novel-write-engine` 整包                                                           | 18 工具 + 技能 + 面板，任何会话可用 |
+| 根行 | `dsh-novel-write-engine` 整包                                                           | 27 工具 + 技能 + 面板，任何会话可用 |
 | 预设 | persona、time-context、tool-skill、ask-user、todo、present、web、compaction、delegation | 身份 + 精简名录                     |
 
 **预设刻意不给**：`tool-bash`、`tool-pwsh`、`tool-fs`、`tool-fs-search`、`tool-jobs`、`tool-schedule`、`tool-goal`、`plan-mode`、`plugin-manager`。
@@ -1824,7 +1888,7 @@ interface PresetDefinition {
       config:
         id: novel-write-engine
         name: 网文工坊
-        description: 网文创作专用会话：18 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
+        description: 网文创作专用会话：27 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
         order: 20
         plugins:
           - { id: persona, name: '@deepseek-ai/dsh-persona', config: { prefix: '（见 §11.5）' } }
@@ -1891,7 +1955,7 @@ interface PresetDefinition {
 
 三道防线：组合测试（`entryListProblem()` 校验名录 + 嵌套 id/isolate 断言）、发布门禁 `pnpm check:preset`（在真实 bundle root 上 `require.resolve` 每个非 group name）、最小引用面（只引 9 个顶层行）。`apply()` 不读宿主预设内部结构，也不做启动自检。
 
-验收：预设卡片显示且排序在标准之后；会话头显示名字；对话开始后切换被拒且提示可见；该会话含 18 个 `novel_*` 且**不含** bash/pwsh/fs/fs-search；标准会话里 `novel_*` 仍在但无主笔人格；面板在任何预设下都在；卸载后无残留。
+验收：预设卡片显示且排序在标准之后；会话头显示名字；对话开始后切换被拒且提示可见；该会话含 27 个 `novel_*` 且**不含** bash/pwsh/fs/fs-search；标准会话里 `novel_*` 仍在但无主笔人格；面板在任何预设下都在；卸载后无残留。
 
 ---
 
@@ -1910,7 +1974,7 @@ export interface Config {
 }
 ```
 
-**0.1.3 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖列入 0.2.0，不在本版本伪装成已支持。
+**0.2.0 只支持中文**：面板、命令、错误消息与任务书均为中文；不随包发布 `locale/`，也不读取系统 locale。英文覆盖不在本版本伪装成已支持。
 
 **阈值优先级（同一键只保留一个最终值，不叠乘、不取交集）**：
 
@@ -1924,25 +1988,25 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 12.2 工具面预算
 
-18 个工具常驻所有会话，估算 prompt 成本约 1.5–2k tokens。提供一个逃生门：
+27 个工具常驻所有会话，估算 prompt 成本约 3–4k tokens。提供一个逃生门：
 
-- `tools.mode = 'all'`（默认）：18 个全注册。
-- `tools.mode = 'core'`：只注册 8 个高频工具（`init/status/brief/write_draft/review/revise/check/archive`），其余 10 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。多项目注册表与设定包导入（§6.8）也只走 `/novel admin`：`novel_registry_list/register/activate/forget`、`novel_import`。
+- `toolsMode = 'all'`（默认）：27 个全注册。
+- `toolsMode = 'core'`：只注册 10 个高频工具（`init/status/guide/brief/outline/write_draft/review/revise/check/archive`），其余 17 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。多项目注册表与设定包导入（§6.8）也只走 `/novel admin`：`novel_registry_list/register/activate/forget`、`novel_import`。
 
 **为什么能做到**：工具与命令共用 `EngineService`（§2.6），所以「隐藏工具」不损失能力——这正是单一入口带来的额外收益。
 
 ### 12.3 国际化
 
-- 0.1.3 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
+- 0.2.0 仅中文：不发布 `locale/`，所有面向用户与模型的文案以中文为准。
 - 任务书可用 `briefsOverrides` 指向用户目录覆盖；缺阶段文件时回退随包版本。
-- 英文覆盖与 `ctx.locale` 集成延后到 0.2.0，届时再引入键表与缺失键报告。
+- 英文覆盖与 `ctx.locale` 集成延后到后续版本，届时再引入键表与缺失键报告。
 
 ---
 
 ## 13. 测试架构与覆盖率门禁
 
-> **硬要求：测试覆盖率必须 ≥85%（四项指标，全局）。**
-> 这一章把「≥85%」翻译成可执行、可检验、不可糊弄的规则。
+> **硬要求：全局 statements/lines/functions ≥ 90%、branches ≥ 89%；domain 层 100%。**
+> 这一章把门槛翻译成可执行、可检验、不可糊弄的规则；branches 单独按 89 地板，是因为 V8 分支包含大量不可达的防御性 else。
 
 ### 13.1 覆盖率意味着什么、不意味着什么
 
@@ -1952,7 +2016,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | 错误分支不是死代码       | 错误处理是正确的 |
 | 重构时有人替你踩雷       | 需求实现了       |
 
-**所以**：85% 是**地板不是天花板**；配套还有 §13.5 的「证伪测试清单」——那 12 条是覆盖率测不出来的东西。
+**所以**：90% 是**地板不是天花板**；配套还有 §13.5 的「证伪测试清单」——那 15 条是覆盖率测不出来的东西。
 
 ### 13.2 度量口径
 
@@ -1990,7 +2054,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | `src/commands/**` |      85 |       85 |        85 |         85 | 假 engine                       |
 | `src/remote/**`   |      85 |       85 |        85 |         85 | 形状断言                        |
 | `src/client/**`   |      85 |       85 |        85 |         85 | view model 单独 ≥95             |
-| **全局**          |  **85** |   **85** |    **85** |     **85** | 兜底                            |
+| **全局**          |  **90** |   **89** |    **90** |     **90** | 兜底；branches 按 89 地板     |
 
 **为什么纯函数层要 100%**：`domain` 是「字数、算术、迁移表」——它们错了，上面所有门控都错。而且它们无 IO、无异步、无时间，100% 是可达的；达不到说明设计里混进了不该有的东西。
 
@@ -2004,16 +2068,16 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | 2   | 规则单测   | rules：每条规则的命中/不命中/严重度/豁免            | 构造文本片段                 | ~180   |
 | 3   | 规则包单测 | 编译器六条断言、平台/类型覆盖顺序、互斥去重         | 合法/非法包 fixture          | ~40    |
 | 4   | 存储测试   | 原子写、事务七步、锁回收、journal、迁移             | 真实 tmpdir + 故障注入       | ~90    |
-| 5   | 引擎集成   | 22 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~120   |
-| 6   | 适配器契约 | 18 工具 + 5 命令 + 3 remote 的规范值/渲染/错误映射  | 假 engine（spy）             | ~110   |
+| 5   | 引擎集成   | 31 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~180   |
+| 6   | 适配器契约 | 27 工具 + 5 命令 + 3 remote 的规范值/渲染/错误映射  | 假 engine（spy）             | ~150   |
 | 7   | 架构测试   | 六条依赖规则、规则码唯一、面板只读                  | 静态扫描源码                 | ~20    |
 | 8   | 端到端     | 一个 3 章样例项目跑完整流程                         | 宿主替身 harness             | ~10    |
 
 **宿主替身 harness**（`tests/harness/`）：实现 12 个原语的假 `Context`（tools/skills/commands/logger/effect/inject…），让 `apply()` 能在无宿主环境跑起来。它同时是工具契约测试的基础设施。
 
-### 13.5 必须存在的证伪测试（12 条）
+### 13.5 必须存在的证伪测试（15 条）
 
-这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.1.3 不发。
+这些是「覆盖率测不出来、但必须证明」的行为。缺一条，0.2.0 不发。
 
 | #    | 证伪目标             | 测试方式                                                                                                               | 对应   |
 | ---- | -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------ |
@@ -2029,6 +2093,9 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | T-10 | 面板只读             | `remote` 导出对象运行时无写方法；类型层 `@ts-expect-error` 钉死                                                        | INV-10 |
 | T-11 | 预设名录合法         | 结构 + `check:preset` 在真实 bundle root 上解析外层与嵌套 name（需要宿主 checkout）                                    | §11.6  |
 | T-12 | EPUB 可解压          | 用 `node:zlib` 解回 ZIP，断言 `mimetype` 首条且未压缩                                                                  | §14.2  |
+| T-13 | 归档卡不可改写       | 归档后 `novel_outline` 改标题 → 拒绝；status 仍显示归档卡                                                              | PG-13  |
+| T-14 | 重开是恢复不是重写   | `novel_reopen` 后索引清空/阶段 P3；删除对应备份 → 拒绝                                                                 | §7.9   |
+| T-15 | 严格模式不可绕过     | strict 空大纲 P2 → PG-13；补卡后同计划通过                                                                             | PG-13  |
 
 ### 13.6 架构约束测试
 
@@ -2049,7 +2116,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 tests/
 ├── helpers.ts          # harness、cleanText、sampleReview、semanticQuotes、archiveDelta
 ├── harness/context.ts  # 12 个原语的假 Context
-├── falsify/T-01..12    # 12 条证伪测试
+├── falsify/T-01..15    # 15 条证伪测试
 ├── e2e.spec.ts         # 三章端到端
 ├── rules*.spec.ts      # 规则表驱动
 └── store*.spec.ts      # 真实 tmpdir 上的 IO/事务/锁
@@ -2127,35 +2194,38 @@ CI 不伪造这个解析结果。
 | S2   | 领域层：字数 / 分段 / 句长 / SimHash / 评分算术 / 迁移表              | 3            |
 | S3   | 存储层：FsStore · 原子写 · 事务七步 · 锁 · journal · schema · migrate | 4            |
 | S4   | 规则层：编译器 · 注册表 · 求值流水线 · 八类规则                       | 6            |
-| S5   | 门控层：12 门控 · 求值器 · 证据模型                                   | 4            |
-| S6   | 引擎服务：22 操作 · 幂等 · 4 个投影                                   | 7            |
-| S7   | 适配层：18 工具 · 5 命令 · 3 remote                                   | 5            |
+| S5   | 门控层：13 门控 · 求值器 · 证据模型                                   | 4            |
+| S6   | 引擎服务：31 操作 · 幂等 · 4 个投影                                   | 7            |
+| S7   | 适配层：27 工具 · 5 命令 · 3 remote                                   | 5            |
 | S8   | 知识层：入口技能 · 7 份任务书 · 类型与平台 · 规则包内容               | 3            |
 | S9   | 客户端：构建链 · slot 注册 · 面板 · remote                            | 4.5          |
 | S10  | 预设：补丁 · 人格 · 名录测试                                          | 0.5          |
-| S11  | 导出：md / txt / epub（内置 zlib）· 封面 SVG · 平台简介               | 2.5          |
+| S11  | 导出：md / txt / epub / outline / worldbook / proposal（内置 zlib）· 封面 SVG · 平台简介 | 2.5          |
 | S12  | 多项目注册表 · 切换 · 跨项目导入 · audit · diff · rollback            | 3.5          |
-| S13  | 测试收口：覆盖率达标 · dirty fixture · 12 条证伪测试 · e2e harness    | 4            |
+| S13  | 测试收口：覆盖率达标 · dirty fixture · 15 条证伪测试 · e2e harness    | 4            |
 | S14  | 文档 · README · 双语 · 发布门禁 · `pnpm pack` 验证                    | 3            |
 |      | **合计**                                                              | **≈ 52.5**   |
 
 > 52.5 人日是「一个人按测试先行节奏认真做完」的量；AI 辅助下日历时间约 12–18 天。节奏是**每片先写测试、再写实现**，宁可慢，不可错。
 
-### 14.2 导出的三个格式
+### 14.2 导出的六种格式
 
 | 格式    | 实现                                                                                 | 校验              |
 | ------- | ------------------------------------------------------------------------------------ | ----------------- |
 | `.md`   | 章节标题 + 正文拼接                                                                  | 字数与单章一致    |
 | `.txt`  | 同上，无 Markdown 装饰                                                               | 编码 UTF-8 无 BOM |
 | `.epub` | **自写 ZIP 容器**（`node:zlib` deflateRaw + 中央目录），`mimetype` 首条且 store 方式 | T-12 解压回读     |
+| `outline` | 书级大纲 Markdown 模板 | 可重新导入 |
+| `worldbook` | 世界观 Markdown | 条目完整 |
+| `proposal` | 书级提案 | 不输出空章节 |
 
 封面 SVG 由纯字符串模板生成（书名 + 类型 + 作者），不引 canvas；平台简介按模板 + 变量填充，文案可自定义。
 
-### 14.3 发布判据（0.1.3 Release Gate）
+### 14.3 发布判据（0.2.0 Release Gate）
 
-1. `docs/0.1.3-plan.md` 的五个切片（S1–S5）全部完成，且每片有对应测试。
+1. `docs/0.2.0-plan.md` 的全部切片完成，且每片有对应测试。
 2. **覆盖率四项全部 ≥ 门槛**（§13.3），CI 绿。
-3. **12 条证伪测试全绿**（§13.5）。
+3. **15 条证伪测试全绿**（§13.5）。
 4. 架构测试全绿（R1~R6 + 规则码唯一 + 面板只读）。
 5. 单章端到端样例：`init → plan → draft → review → revise → check → archive → export`，零手工改文件。
 6. 面板在真实宿主可用：`check:host` 验证未认证 401、认证后 200、预设可见；截图作为人工验收材料，不纳入自动门。
@@ -2165,13 +2235,13 @@ CI 不伪造这个解析结果。
 10. CHANGELOG 只列能力，不列「后续待办」。
 11. **自包含**：在未安装任何其他创作工具的干净 profile 里，`pnpm pack` 产物直接安装并跑通第 5 条端到端；构建期规则包完整性校验通过；运行时无包外路径读取（§8.4）。
 12. 30 章真实引擎闭环通过；第 21 章 handoff volume 仍为 1、act 为第五幕/1/5，不回落成第 2 卷或第一幕。
-13. 八个 ledger 的损坏读取、raw 读口与 amend 修复有自动化测试；journal 只允许不可读目标绕过 hash，其他外部改动仍 `ENGINE_TXN_ABORTED`。
+13. 八个 ledger、outline/worldbook 的损坏读取、raw 读口与 amend 修复有自动化测试；journal 只允许不可读目标绕过 hash，其他外部改动仍 `ENGINE_TXN_ABORTED`。
 14. `check:crash` 在真实子进程 SIGKILL 后恢复 pending journal；不是同进程模拟。
 15. `stableJson` 的 code-unit 顺序有测试；同一数据在 `LANG=C` 与 `LANG=zh_CN.UTF-8` 下 digest 相同。
 
 ### 14.4 发布动作纪律
 
-**发布纪律**：0.1.3 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
+**发布纪律**：0.2.0 只做本地构建、本地安装验证与全绿；`git push`、`npm publish`、GitHub Release 需单独授权。
 
 ---
 
@@ -2190,7 +2260,7 @@ CI 不伪造这个解析结果。
 | **D-09** | 功能范围与节奏     | 0.1.0 全量；0.1.x 只打磨；0.2 仅重大架构升级                       | 版本只承载缺陷与打磨                         |
 | **D-10** | 多项目             | 注册表 + 切换 + 设定包导入导出；实时共享留 0.2                     | 实时共享是架构级，需共享层与冲突裁决（§6.8） |
 | **D-11** | 是否带内置预设     | 交付「网文工坊」预设；工具挂根、预设只做身份与名录裁剪             | 根行必须挂面板，预设裁能力（§11.3）          |
-| **D-12** | 测试覆盖率         | 四项指标全局 ≥85%；domain 层 100%；分层门槛见 §13.3                | 治「大量输出但不可信」（§13）                |
+| **D-12** | 测试覆盖率         | 全局 statements/lines/functions ≥90%、branches ≥89%；domain 100%；分层门槛见 §13.3 | 治「大量输出但不可信」（§13）                |
 | **D-13** | 架构               | 六层 + `EngineService` 单一入口；工具/命令/面板/任务书皆为薄适配器 | 消灭四份实现漂移（§2）                       |
 | **D-14** | 独立性             | 不迁移、不共存；规则包随包发布，运行时不读包外路径                 | 插件自足（§1.6、§8.4）                       |
 
@@ -2204,13 +2274,13 @@ CI 不伪造这个解析结果。
 | ---------- | --------------------------------------------------------------- |
 | 见证书     | 正文 `chapters/*.md`，唯一权威                                  |
 | 影子       | 由正文派生的数据 `state/*.yaml`                                 |
-| 规划       | 0.2.0 的大纲 `outline/*.yaml`；0.1.3 没有读写路径，不是数据来源 |
+| 规划       | 0.2.0 的蓝图/大纲/世界观 `outline/*.yaml`，是规划输入与进度视图，不是第二真相 |
 | 阶段任务书 | 由 `novel_brief` 投递的阶段指令                                 |
-| 门控       | 阶段推进的硬性检查，PG-01~PG-12                                 |
+| 门控       | 阶段推进的硬性检查，PG-01~PG-13                                 |
 | 核销       | delta 逐实体声明，不可静默跳过                                  |
 | 事务       | `archiveChapter` 的原子归档                                     |
 | 阅读证明   | 可验证引用，PG-09                                               |
-| 服务操作   | 本引擎核心抽象，22 个                                           |
+| 服务操作   | 本引擎核心抽象，31 个                                           |
 
 ## 附录 B：与开发指南的对照
 
@@ -2253,7 +2323,7 @@ CI 不伪造这个解析结果。
 | 15  | 情感爆发章心理阈值 | 200 字                                                  | §5.5        |
 | 16  | 合格线             | 120（`config.quality.minScore`）                        | §7.8、§12.1 |
 
-三条结构性保证：门控是 12 条枚举（不存在第二套编号）；所有检查返回结构化 `violations`（空数组即真无问题）；未声明即拒绝（不存在「未声明按 no_change 登记」）。
+三条结构性保证：门控是 13 条枚举（不存在第二套编号）；所有检查返回结构化 `violations`（空数组即真无问题）；未声明即拒绝（不存在「未声明按 no_change 登记」）。
 
 ## 附录 D：十个常见实现坑与绕开方式
 
@@ -2281,7 +2351,7 @@ CI 不伪造这个解析结果。
 | 3   | `ctx.clock` 是否存在（本设计用自注入 `Clock`）       | 未确认，已按不依赖处理                     | S2                        |
 | 4   | EPUB 在 Readium / Apple Books 的兼容性               | 未测                                       | S11                       |
 | 5   | 面板在窄屏 / 深色主题下的真实表现                    | 未测                                       | S9 验收                   |
-| 6   | 18 个工具的 prompt 成本实测值                        | 估 1.5–2k，未测                            | S7 完成后用真实会话量一次 |
+| 6   | 27 个工具的 prompt 成本实测值                        | 估 3–4k，未测                              | 0.2.0 完成后用真实会话量一次 |
 | 7   | Windows 下 rename 语义与锁回收                       | 未测（本机 WSL）                           | S3 + CI matrix            |
 
 > 这张表的作用：把所有「我以为」标出来。没验证的，不写成已验证。

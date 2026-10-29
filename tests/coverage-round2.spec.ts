@@ -279,7 +279,7 @@ describe('P5 summary validation and P6 semantic completeness', () => {
     }
   })
 
-  it('fails P6 when the four semantic items are missing', async () => {
+  it('fails P6 when the five semantic items are missing', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })

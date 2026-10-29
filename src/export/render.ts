@@ -1,4 +1,4 @@
-import type { ChapterRecord, NovelProject } from '../types.js'
+import type { ChapterRecord, NovelProject, OutlineDocument, WorldbookDocument } from '../types.js'
 
 /** One rendered chapter, assembled by the engine before rendering. */
 export interface ExportChapter {
@@ -63,6 +63,71 @@ export function renderCover(project: NovelProject): string {
   <text x="300" y="700" fill="#f5e6c8" font-size="24" font-family="serif" text-anchor="middle">${author}</text>
 </svg>
 `
+}
+
+/** A book-level proposal for editors, platforms and the author's own pitch. */
+export function renderProposal(
+  project: NovelProject,
+  outline: OutlineDocument,
+  worldbook: WorldbookDocument,
+  chapters: readonly ChapterRecord[],
+): string {
+  const parts: string[] = [
+    `# ${project.title} · 书级提案`,
+    '',
+    `类型：${project.genre} · 平台：${project.platform}${project.author === '' ? '' : ` · 作者：${project.author}`}`,
+    `目标：${project.targets.words_per_chapter[0]}–${project.targets.words_per_chapter[1]} 字/章` +
+      (project.targets.total_chapters === null ? '' : ` · ${project.targets.total_chapters} 章`),
+    '',
+  ]
+  const section = (title: string, lines: readonly string[]): void => {
+    const content = lines.filter((line) => line.trim() !== '')
+    if (content.length === 0) return
+    parts.push(`## ${title}`, '', ...content, '')
+  }
+  section('一句话', [outline.book.logline === '' ? project.description : outline.book.logline])
+  section('前提', [outline.book.premise])
+  section('主题', [outline.book.themes.join('、')])
+  section('基调与视角', [
+    [
+      outline.book.tone === '' ? '' : `基调：${outline.book.tone}`,
+      outline.book.pov === '' ? '' : `视角：${outline.book.pov}`,
+    ]
+      .filter((value) => value !== '')
+      .join(' · '),
+  ])
+  section('读者', [outline.book.audience])
+  section(
+    '卖点',
+    outline.book.selling_points.map((point) => `- ${point}`),
+  )
+  section('结局', [outline.book.ending])
+  section(
+    '卷结构',
+    outline.volumes.map(
+      (volume) =>
+        `- **${volume.title}**（第${volume.start_chapter}-${volume.end_chapter}章）${
+          volume.goal === '' ? '' : `：${volume.goal}`
+        }`,
+    ),
+  )
+  section(
+    '主要角色',
+    worldbook.characters
+      .slice(0, 8)
+      .map((character) => `- **${character.name}**（${character.role}）：${character.description}`),
+  )
+  section(
+    '章节样例',
+    chapters
+      .slice(0, 3)
+      .map((chapter) => `- 第${chapter.num}章 ${chapter.title}：${chapter.summary.events.join('；')}`),
+  )
+  section(
+    '世界观',
+    [worldbook.premise, worldbook.setting].filter((value) => value !== ''),
+  )
+  return parts.join('\n')
 }
 
 /** XHTML chapter document for the EPUB package. */

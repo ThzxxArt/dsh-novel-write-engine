@@ -143,15 +143,20 @@ export class FsStore {
     const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     const temp = `${absolute}.${randomUUID()}.tmp`
-    const handle = await fs.open(temp, 'w')
     try {
-      await handle.writeFile(text, 'utf8')
-      await handle.sync()
-    } finally {
-      await handle.close()
+      const handle = await fs.open(temp, 'w')
+      try {
+        await handle.writeFile(text, 'utf8')
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await fs.rename(temp, absolute)
+      await syncDirectory(dirname(absolute))
+    } catch (error) {
+      await fs.rm(temp, { force: true }).catch(() => undefined)
+      throw error
     }
-    await fs.rename(temp, absolute)
-    await syncDirectory(dirname(absolute))
   }
 
   async writeDoc(relativePath: string, document: { schema_version?: number }): Promise<void> {
@@ -172,8 +177,14 @@ export class FsStore {
   async appendText(relativePath: string, text: string): Promise<void> {
     const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
-    const handle = await fs.open(absolute, 'a')
+    const handle = await fs.open(absolute, 'a+')
     try {
+      const info = await handle.stat()
+      if (info.size > 0) {
+        const last = Buffer.alloc(1)
+        await handle.read(last, 0, 1, info.size - 1)
+        if (last[0] !== 0x0a) await handle.write('\n')
+      }
       await handle.writeFile(text, 'utf8')
       await handle.sync()
     } finally {
@@ -196,15 +207,20 @@ export class FsStore {
     const absolute = await this.safePath(relativePath)
     await fs.mkdir(dirname(absolute), { recursive: true })
     const temp = `${absolute}.${randomUUID()}.tmp`
-    const handle = await fs.open(temp, 'w')
     try {
-      await handle.writeFile(bytes)
-      await handle.sync()
-    } finally {
-      await handle.close()
+      const handle = await fs.open(temp, 'w')
+      try {
+        await handle.writeFile(bytes)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await fs.rename(temp, absolute)
+      await syncDirectory(dirname(absolute))
+    } catch (error) {
+      await fs.rm(temp, { force: true }).catch(() => undefined)
+      throw error
     }
-    await fs.rename(temp, absolute)
-    await syncDirectory(dirname(absolute))
   }
 
   /** Content hash of a file, or null when missing. */

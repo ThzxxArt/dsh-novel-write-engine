@@ -6,10 +6,17 @@ const TEXT = [
   '他伸手压住，指腹沾了一点灰。',
   '走廊尽头传来脚步声，不快不慢。',
   '门被推开时带进一股凉气。',
+  '他站在原地，听见楼道里的灯一盏盏熄灭。',
 ].join('\n\n')
 
-/** Four disjoint 8-character quotes, one per paragraph. */
-const QUOTES = ['风从窗缝里挤进来', '他伸手压住，指腹', '走廊尽头传来脚步', '门被推开时带进一']
+/** Five disjoint 8-character quotes, one per sentence. */
+const QUOTES = [
+  '风从窗缝里挤进来',
+  '他伸手压住，指腹',
+  '走廊尽头传来脚步',
+  '门被推开时带进一',
+  '他站在原地，听见',
+]
 
 const item = (patch: Record<string, unknown> = {}): never =>
   ({ id: 'L2-1', verdict: 'pass', evidence: QUOTES[0], note: 'ok', ...patch }) as never
@@ -42,7 +49,7 @@ describe('semantic evidence validation', () => {
     expect(absent.blocking[0]).toMatchObject({ code: 'SEMANTIC_EVIDENCE_INVALID' })
   })
 
-  it('rejects four checks that quote the same sentence', () => {
+  it('rejects five checks that quote the same sentence', () => {
     const repeated = SEMANTIC_CHECK_IDS.map((id) => ({
       id,
       verdict: 'pass' as const,
@@ -55,7 +62,7 @@ describe('semantic evidence validation', () => {
     expect(result.blocking.map((entry) => entry.detail).join(' ')).toContain('distinct')
   })
 
-  it('rejects overlapping substrings of one sentence from counting as four checks', () => {
+  it('rejects overlapping substrings of one sentence from counting as five checks', () => {
     const sentence = '他站在雨里看着远处的灯火一言不发。'
     const overlapping = [
       '他站在雨里看着远处',
@@ -107,7 +114,7 @@ describe('semantic evidence validation', () => {
     expect(result.blocking[0]).toMatchObject({ code: 'SEMANTIC_CHECK_FAILED' })
   })
 
-  it('passes only when all four required checks carry distinct real quotes', () => {
+  it('passes only when all five required checks carry distinct real quotes', () => {
     const complete = SEMANTIC_CHECK_IDS.map((id, index) => ({
       id,
       verdict: 'pass' as const,

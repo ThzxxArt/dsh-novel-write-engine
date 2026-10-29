@@ -10,9 +10,9 @@ import { panelElement } from '../src/client/panel.js'
 import type { PanelPayloadDto } from '../src/client/dto.js'
 
 const payload = (): PanelPayloadDto => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   summary: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     panelId: 'novel-workshop',
     title: '测试之书',
     genre: '都市现代',
@@ -28,9 +28,35 @@ const payload = (): PanelPayloadDto => ({
     ],
     blocking: [{ code: 'PG-03', detail: '少了 200 字', hint: '再写一点' }],
     next: { tool: 'novel_revise', reason: '补足字数' },
+    book: {
+      premise: '旧案重启',
+      logline: '档案员入局',
+      strict: true,
+      target: 4,
+      outline: {
+        present: true,
+        total: 3,
+        planned: 2,
+        archived: 1,
+        coverage: 1,
+        volumes: [{ title: '第一卷 雨夜来信', start: 1, end: 3, planned: 2, archived: 1 }],
+      },
+      worldbook: {
+        present: true,
+        characters: 2,
+        locations: 1,
+        factions: 1,
+        rules: 1,
+        glossary: 0,
+        backstory: 0,
+      },
+    },
+    quality: { averageScore: 145, scores: [140, 145], trend: 5 },
+    health: { ok: false, blocking: 1, stateErrors: 0 },
+    activity: [{ at: '2026-10-28T10:00:00.000Z', op: 'archiveChapter', chapter: 1, status: 'committed' }],
   },
   chapters: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     panelId: 'novel-workshop',
     rows: [
       { num: 1, title: '开端之雨', wordCount: 2400, score: 145, stage: 'done', status: 'passed' },
@@ -38,7 +64,7 @@ const payload = (): PanelPayloadDto => ({
       { num: 3, title: '灯下之言', wordCount: 0, score: 0, stage: 'P3', status: 'blocked' },
     ],
   },
-  gates: { schemaVersion: 1, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
+  gates: { schemaVersion: 2, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
 })
 
 describe('panel view model', () => {
@@ -59,6 +85,69 @@ describe('panel view model', () => {
     expect(view.nextDetail).toBe('处理评审意见后提交修订。')
     expect(view.blocking[0]!.hint).toBe('再写一点')
     expect(view.next).toContain('novel_revise')
+    expect(view.book).toMatchObject({ strict: true, planned: 2, archivedCards: 1, coverage: 1 })
+    expect(view.book.volumes[0]).toMatchObject({ title: '第一卷 雨夜来信', range: '第1-3章' })
+    expect(view.quality).toMatchObject({ averageScore: 145, scores: [140, 145] })
+    expect(view.health).toMatchObject({ ok: false, blocking: 1 })
+    expect(view.activity).toHaveLength(1)
+  })
+
+  it('renders the planning, worldbook, quality and activity sections', () => {
+    const view = buildView(payload())
+    const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(html).toContain('全书规划')
+    expect(html).toContain('世界观')
+    expect(html).toContain('质量趋势')
+    expect(html).toContain('第一卷 雨夜来信')
+    expect(html).toContain('最近活动')
+    expect(html).toContain('archiveChapter')
+  })
+
+  it('renders an unset target without pretending the card count is the target', () => {
+    const bare = payload()
+    bare.summary.book!.target = null
+    bare.summary.book!.outline!.total = 0
+    bare.summary.book!.outline!.planned = 0
+    bare.summary.book!.outline!.archived = 0
+    bare.summary.book!.outline!.volumes = []
+    const view = buildView(bare)
+    const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(html).toContain('目标未设置')
+    expect(html).not.toContain('目标 0 章')
+  })
+
+  it('falls back to empty planning and quality blocks for older payloads', () => {
+    const bare = payload()
+    delete (bare.summary as { book?: unknown }).book
+    delete (bare.summary as { quality?: unknown }).quality
+    delete (bare.summary as { health?: unknown }).health
+    delete (bare.summary as { activity?: unknown }).activity
+    const view = buildView(bare)
+    expect(view.book).toMatchObject({
+      present: false,
+      planned: 0,
+      worldbook: { characters: 0, locations: 0, factions: 0, rules: 0, glossary: 0, backstory: 0 },
+    })
+    expect(view.quality).toMatchObject({ averageScore: 145, scores: [] })
+    expect(view.health).toMatchObject({ ok: false, blocking: 1 })
+    expect(view.activity).toEqual([])
+    const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(html).toContain('全书规划')
+    expect(html).not.toContain('最近活动')
+  })
+
+  it('renders unhealthy activity without a chapter and an empty blocking hint', () => {
+    const odd = payload()
+    odd.summary.health = { ok: false, blocking: 2, stateErrors: 1 }
+    odd.summary.blocking = [{ code: 'PG-13', detail: '缺卡', hint: '' }]
+    odd.summary.activity = [
+      { at: '2026-10-28T10:00:00.000Z', op: 'novel_doctor', chapter: 0, status: 'committed' },
+    ]
+    const view = buildView(odd)
+    const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(html).toContain('需要处理：2 条门控')
+    expect(html).toContain('novel_doctor')
+    expect(html).toContain('committed')
   })
 
   it('labels stage done as chapter archived unless the book target is finished', () => {

@@ -1,8 +1,17 @@
-import { STAGING_DIR, STATE_FILES, STATE_DIR } from '../constants.js'
+import { promises as fs } from 'node:fs'
+import { dirname } from 'node:path'
+import {
+  OUTLINE_FILE,
+  PROJECT_FILE,
+  STAGING_DIR,
+  STATE_FILES,
+  STATE_DIR,
+  WORLDBOOK_FILE,
+} from '../constants.js'
 import type { AuditRow } from '../types.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
 import type { FsStore } from './fs.js'
-import { joinRel } from './fs.js'
+import { joinRel, syncDirectory } from './fs.js'
 
 /** One JSONL line of the append-only journal. */
 export interface JournalRecord {
@@ -26,10 +35,22 @@ export interface JournalRead {
   records: JournalRecord[]
 }
 
+/** A journal that only contains lock-reclaim rows is not a project history. */
+export function hasCommittedJournal(records: readonly JournalRecord[]): boolean {
+  return records.some((record) => record.status === 'committed' && record.op !== 'lock_reclaimed')
+}
+
 const JOURNAL_PATH = joinRel(STATE_DIR, STATE_FILES.journal)
 
 /** Append one record. The journal is the only append-only file in the engine. */
-export async function appendJournal(store: FsStore, record: JournalRecord): Promise<void> {
+export async function appendJournal(
+  store: FsStore,
+  record: JournalRecord,
+  options: { repairTrailing?: boolean } = {},
+): Promise<void> {
+  // Lock reclamation runs before assertJournalConsistent; trim there first or
+  // the appended audit row would turn a torn tail into malformed middle text.
+  if (options.repairTrailing === true) await trimTrailingFragment(store)
   await store.appendText(JOURNAL_PATH, `${JSON.stringify(record)}\n`)
 }
 
@@ -124,10 +145,18 @@ export async function reconcileJournal(store: FsStore): Promise<{
   // transaction. A pipeline-only brief transaction would otherwise reset the
   // external-edit detector for every ledger written earlier.
   const expected = new Map<string, { txid: string; hash: string }>()
-  // The authoritative ledgers are checked here. Manuscripts, plans, reviews and
-  // checks have their own content-hash gates (PG-07/PG-09/PG-12); exports are
-  // derived artifacts, so an external edit there must not wedge project writes.
-  const tracked = (path: string): boolean => path === 'novel.yaml' || path.startsWith('state/')
+  // The authoritative ledgers and planning documents are checked here.
+  // Manuscripts, plans, reviews and checks have their own content-hash gates
+  // (PG-07/PG-09/PG-12); exports are derived artifacts, so an external edit
+  // there must not wedge project writes. `archive-digests.json` is a derived
+  // mirror of `chapters[].archive_digest`; a corrupt mirror must be rebuildable
+  // by the next archive instead of making every write unreachable.
+  const tracked = (path: string): boolean =>
+    (path === 'novel.yaml' ||
+      path.startsWith('state/') ||
+      path === OUTLINE_FILE ||
+      path === WORLDBOOK_FILE) &&
+    path !== 'state/archive-digests.json'
   for (const record of records) {
     if (record.status !== 'committed' || record.hashes === undefined) continue
     for (const [path, hash] of Object.entries(record.hashes)) {
@@ -199,6 +228,36 @@ export async function recoverPending(store: FsStore): Promise<void> {
 }
 
 /**
+ * A crash during append can leave one JSONL fragment without a newline. Since
+ * the pending row is appended before any target rename, such a fragment cannot
+ * describe renamed data; trim only that final incomplete line and let
+ * recoverPending handle the complete pending row before it. Malformed lines
+ * followed by more lines are historical corruption and stay fail-closed.
+ */
+async function trimTrailingFragment(store: FsStore): Promise<void> {
+  const text = await store.readText(JOURNAL_PATH)
+  if (text === null || text.endsWith('\n')) return
+  const cut = text.lastIndexOf('\n') + 1
+  const fragment = text.slice(cut)
+  if (fragment.trim() === '') return
+  try {
+    JSON.parse(fragment)
+    return
+  } catch {
+    // Incomplete final append; trim below.
+  }
+  const absolute = store.path(JOURNAL_PATH)
+  const handle = await fs.open(absolute, 'r+')
+  try {
+    await handle.truncate(Buffer.byteLength(text.slice(0, cut), 'utf8'))
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  await syncDirectory(dirname(absolute))
+}
+
+/**
  * Throw before a write when the journal or the last commit is inconsistent.
  *
  * `repairPaths` is used only by an explicit amend: a damaged ledger is by
@@ -210,23 +269,47 @@ export async function assertJournalConsistent(
   store: FsStore,
   repairPaths: readonly string[] = [],
 ): Promise<void> {
+  if ((await store.exists(PROJECT_FILE)) && !(await store.exists(JOURNAL_PATH))) {
+    throw new EngineFaultError(
+      ERROR_CODES.JOURNAL_MISSING,
+      'state/journal.jsonl is missing; journal integrity and crash recovery are unavailable',
+      'restore state/journal.jsonl from a backup before writing; a project with novel.yaml must have its audit journal',
+    )
+  }
+  await trimTrailingFragment(store)
   await recoverPending(store)
   // A crash after the committed row but before staging cleanup leaves an
   // orphan. The transaction is terminal, so its before-images are no longer a
   // recovery source; aborted/partial staging is deliberately kept.
-  const { records } = await readJournal(store)
+  const { records, malformed } = await readJournal(store)
+  if ((await store.exists(PROJECT_FILE)) && !hasCommittedJournal(records)) {
+    throw new EngineFaultError(
+      ERROR_CODES.JOURNAL_MISSING,
+      'state/journal.jsonl has no committed project transaction; the audit history was truncated or replaced',
+      'restore state/journal.jsonl from a backup before writing; a project with novel.yaml must have its committed history',
+    )
+  }
   const committed = new Set(
     records
       .filter((record) => record.status === 'committed' && record.op !== 'lock_reclaimed')
       .map((record) => record.txid),
   )
+  const knownTransactions = new Set(records.map((record) => record.txid))
   for (const entry of await store.list(STAGING_DIR)) {
     if (committed.has(entry)) {
       await store.removeTree(joinRel(STAGING_DIR, entry)).catch(() => undefined)
+      continue
+    }
+    // A crash before the pending row was appended leaves a staging directory
+    // with no transaction record and no renamed target. It is safe to remove
+    // only when every journal line parsed; a malformed line could be the
+    // missing pending record for a partially committed staging directory.
+    if (malformed === 0 && !knownTransactions.has(entry)) {
+      await store.removeTree(joinRel(STAGING_DIR, entry)).catch(() => undefined)
     }
   }
-  const { malformed, mismatches } = await reconcileJournal(store)
-  assertJournalHealthy(malformed)
+  const { malformed: malformedAfter, mismatches } = await reconcileJournal(store)
+  assertJournalHealthy(malformedAfter)
   const allowed = new Set(repairPaths)
   const fatal = mismatches.filter((mismatch) => !allowed.has(mismatch.path))
   if (fatal.length > 0) {

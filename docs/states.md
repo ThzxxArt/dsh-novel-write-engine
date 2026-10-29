@@ -14,13 +14,13 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 | 从                 | 操作                | 到                                                      | 门控                          |
 | ------------------ | ------------------- | ------------------------------------------------------- | ----------------------------- |
 | `idle` / `done`    | `submitWorldPlan`   | `P2`                                                    | 01,02                         |
-| `P2`               | `submitChapterPlan` | `P3`                                                    | 01,02                         |
-| `P3`               | `submitDraft`       | `P4`                                                    | 01,02,04,03,05,06             |
+| `P2`               | `submitChapterPlan` | `P3`                                                    | 01,02,13                      |
+| `P3`               | `submitDraft`       | `P4`                                                    | 01,02,04,03,05,06,13          |
 | `P4`               | `submitReview`      | `P5`（有 blocker）/ `P6`                                | 01,02,09,07,11                |
 | `P5`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,09,08,11       |
 | `P6`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,08,09,11       |
 | `P6`               | `runCheck`          | `ready_to_archive`（完整 scope）/ 停留 `P6`（单 scope） | 01,02,04,03,05,06,07,08,09,10,11 |
-| `ready_to_archive` | `archiveChapter`    | `done`                                                  | 01,02,04,03,05,06,07,08,10,12 |
+| `ready_to_archive` | `archiveChapter`    | `done`                                                  | 01,02,04,03,05,06,07,08,09,10,12,13 |
 
 `runCheck` 的 PG-03 字数下限与 PG-07 评审分数下限不随 `scope` 关闭：check 是归档前置，单 scope 只跳过硬性内容/连续性机检（PG-04/PG-10），不能用一个“integrity only”绕过字数或评分。
 
@@ -30,7 +30,7 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 ## 门控顺序
 
-`PG-01 → PG-02 → PG-04 → PG-03 → PG-05 → PG-06 → PG-09 → PG-07 → PG-08 → PG-10 → PG-11 → PG-12`
+`PG-01 → PG-02 → PG-04 → PG-03 → PG-05 → PG-06 → PG-13 → PG-09 → PG-07 → PG-08 → PG-10 → PG-11 → PG-12`
 
 格式先于字数：弯引号与破折号既计入字数又判违规，先判字数会奖励写错标点。
 
@@ -59,3 +59,13 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 - `novel_plan_chapter` 的 `cast` 是可选 1–8 人，名字必须来自 P1 世界计划或角色台账；旧 plan 仍可读。
 - `archiveChapter` 继承 handoff 的 volume/volume_name；`act`/`act_progress` 默认按幕内位置派生，handoff 可覆盖；`open_hooks` 最久未动优先。
 - 只跑 `content` 或 `integrity` 的 check 通过后停留 P6，返回 `CHECK_SCOPE_PARTIAL`，必须再跑完整 scope 才能归档。
+
+## 0.2.0 书级状态
+
+- `outline/outline.yaml` 与 `outline/worldbook.yaml` 是规划层，不属于 `pipeline.stage`；它们损坏时进入 `state_errors`（`OUTLINE_UNREADABLE` / `WORLDBOOK_UNREADABLE`），`novel_amend` 可修。读取走 `narrow`：未知顶层键、未知 book 键、错误 `schema_version` 都按损坏处理。
+- 卷区间必须不重叠且相邻卷首尾相接；章卡 `num` 唯一，标题为 4–8 字正文，`scene_type` 四选一，planned 卡的 `goal/conflict/hook` 非空，`target_words` 为正整数区间。
+- `novel_amend` 修 outline 时仍保护已归档卡的 title/scene/target_words/cast/word_count/score/archived_at；修 worldbook 时仍校验容量非负、名称/术语段内唯一、必填文本非空。
+- 严格大纲（`book.strict=true`）下，P2/P3 必须存在当前章章卡，且标题/场景类型/目标字数区间/cast 与章卡一致（PG-13）。非严格模式只校验已存在的章卡。
+- 归档事务回写章卡 `archived/archived_at/word_count/score`；严格模式缺卡由 PG-13 在 P2/P3 拦截，非严格模式归档时自动补卡。
+- `novel_reopen` 只允许紧邻的已归档章，且活动章尚未开始，`reason` 必填；它从该章归档事务的备份恢复索引/台账/handoff/正文，再把管线设为 `chapter=N / stage=P3`。备份缺失或 outline 损坏即拒绝。
+- P6 语义项为 5 条（新增 `L2-POV`），五条证据必须来自不同句子。

@@ -54,6 +54,72 @@ describe('journal reconciliation', () => {
 })
 
 describe('pending journal recovery', () => {
+  it('removes a staging directory left before the pending journal row', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('.staging/orphan-before-pending/state/world.yaml', world('STAGED'))
+      await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
+      expect(await store.exists('.staging/orphan-before-pending')).toBe(false)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('trims one torn trailing append without hiding historical corruption', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '写日志', genre: '都市现代', platform: 'fanqie', root })
+      const store = new FsStore(root)
+      await store.appendText('state/journal.jsonl', '{"txid":"torn","op":"amend","status":"comm')
+      await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
+      const journal = await readJournal(store)
+      expect(journal.malformed).toBe(0)
+      expect((await store.readText('state/journal.jsonl'))!.endsWith('\n')).toBe(true)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('keeps a complete JSON row that merely lacks a trailing newline', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '写日志', genre: '都市现代', platform: 'fanqie', root })
+      const store = new FsStore(root)
+      await store.appendText(
+        'state/journal.jsonl',
+        JSON.stringify({
+          txid: 'complete-without-newline',
+          at: new Date().toISOString(),
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: [],
+          status: 'committed',
+        }),
+      )
+      await expect(assertJournalConsistent(store)).resolves.toBeUndefined()
+      expect((await readJournal(store)).malformed).toBe(0)
+      await store.appendText(
+        'state/journal.jsonl',
+        JSON.stringify({
+          txid: 'after-no-newline',
+          at: new Date().toISOString(),
+          op: 'amend',
+          chapter: 1,
+          revision: 3,
+          files: [],
+          status: 'committed',
+        }),
+      )
+      const after = await readJournal(store)
+      expect(after.malformed).toBe(0)
+      expect(after.records.map((record) => record.txid)).toContain('after-no-newline')
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('promotes a pending transaction when every target already landed', async () => {
     const { root, cleanup } = await harness()
     try {

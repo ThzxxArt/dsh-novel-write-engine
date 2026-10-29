@@ -3,6 +3,7 @@ import { SCORE_DIMENSIONS } from '../src/domain/scoring.js'
 import {
   evaluateGates,
   applicableGates,
+  gateName,
   verifyReference,
   parseParagraphLocation,
   briefStageFor,
@@ -35,11 +36,14 @@ const review = (total = 150, delta = 0, patch: Partial<ReviewDocument> = {}): Re
   ...patch,
 })
 
-const proof = (): ReadingProof => ({
-  opening: { paragraph: 1, quote: text.split('\n')[0]!.slice(0, 14) },
-  middle: { paragraph: 2, quote: text.split('\n')[2]!.slice(0, 14) },
-  ending: { paragraph: 4, quote: text.split('\n')[6]!.slice(0, 14) },
-})
+const proof = (): ReadingProof => {
+  const paragraphs = text.split(/\n+/)
+  return {
+    opening: { paragraph: 1, quote: paragraphs[0]!.slice(0, 14) },
+    middle: { paragraph: 3, quote: paragraphs[2]!.slice(0, 14) },
+    ending: { paragraph: 5, quote: paragraphs[4]!.slice(0, 14) },
+  }
+}
 
 const input = (patch: Partial<GateInput> = {}): GateInput => ({
   operation: 'submitDraft',
@@ -97,7 +101,7 @@ const codes = (gateInput: GateInput): string[] =>
 
 describe('gate evaluation', () => {
   it('applies only the gates that belong to the operation', () => {
-    expect(applicableGates(input())).toEqual(['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06'])
+    expect(applicableGates(input())).toEqual(['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-13'])
     expect(applicableGates(input({ operation: 'submitReview' }))).toEqual([
       'PG-01',
       'PG-02',
@@ -126,6 +130,27 @@ describe('gate evaluation', () => {
     expect(briefStageFor('runCheck', 'P6')).toBe('P6')
     expect(briefStageFor('archiveChapter', 'ready_to_archive')).toBe('P8')
     expect(briefStageFor('getStatus', 'idle')).toBeNull()
+  })
+
+  it('covers gate-specific failure and metadata branches', () => {
+    expect(codes(input({ briefStage: null }))).toContain('PG-01')
+    expect(codes(input({ briefDigest: 'stale' }))).toContain('PG-01')
+    expect(codes(input({ operation: 'submitWorldPlan', stage: 'P3' }))).toContain('PG-02')
+    expect(codes(input({ summary: {} as never }))).toContain('PG-05')
+    expect(codes(input({ operation: 'submitReview', review: null }))).toContain('PG-07')
+    expect(
+      codes(
+        input({
+          operation: 'submitReview',
+          rounds: { review: 99, revise: 99, check: 99 },
+        }),
+      ),
+    ).toContain('PG-11')
+    expect(codes(input({ operation: 'archiveChapter', archive: null }))).toContain('PG-12')
+    expect(codes(input({ operation: 'runCheck', review: null }))).toContain('PG-07')
+    expect(gateName('PG-13')).toBe('OUTLINE_ALIGNMENT')
+    expect(parseParagraphLocation('not a paragraph')).toBeNull()
+    expect(verifyReference(text, {} as never)).toContain('not text')
   })
 
   it('PG-10 is skipped when runCheck excludes integrity', () => {
@@ -600,5 +625,36 @@ describe('gate evaluation', () => {
         archive: { chapterExists: false, checkPassed: true, hashMatches: true },
       }),
     ).toContain('PG-12')
+  })
+
+  it('reports summary field, scene and proof shape failures', () => {
+    for (const field of [
+      'events',
+      'characters_appeared',
+      'new_elements',
+      'resource_changes',
+      'opening',
+      'continuity',
+      'hook_strength',
+      'pleasure_points',
+      'plot_advancement',
+      'foreshadows',
+    ]) {
+      const summary = sampleSummary() as unknown as Record<string, unknown>
+      delete summary[field]
+      expect(codes(input({ summary: summary as never }))).toContain('PG-05')
+    }
+    expect(
+      codes(
+        input({
+          operation: 'submitReview',
+          proof: { opening: null, middle: null, ending: null } as never,
+          review: review(),
+        }),
+      ),
+    ).toContain('PG-09')
+    expect(codes(input({ operation: 'submitReview', review: review(100, 0, { dimensions: [] }) }))).toContain(
+      'PG-07',
+    )
   })
 })

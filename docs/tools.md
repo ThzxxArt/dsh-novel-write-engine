@@ -1,27 +1,36 @@
 # 工具面
 
-18 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
+27 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
 | 工具                 | 阶段     | 操作                                                                                                                                     | 写盘                                                                         |
 | -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `novel_init`         | —        | `initProject`                                                                                                                            | 是                                                                           |
-| `novel_status`       | 任意     | `getStatus`；`chapter` 仅用于字数查询，`active_chapter` 才是当前章；`state_errors` 暴露 plan/review/check 与八个 ledger 的损坏           | 否                                                                           |
+| `novel_status`       | 任意     | `getStatus`；`chapter` 仅用于字数查询，`active_chapter` 才是当前章；`state_errors` 暴露 plan/review/check、八个 ledger 与 outline/worldbook 的损坏           | 否                                                                           |
 | `novel_brief`        | P1~P6/P8 | `getBrief`；只签当前活跃章，返回 `fields`、`context`；`context.world_plan`、`context.context_meta` 与 `*_error` 在 `context`/`fields` 内 | 仅 `briefs`                                                                  |
 | `novel_plan_world`   | P1       | `submitWorldPlan`；数组/对象形状在服务边界窄化                                                                                           | 是                                                                           |
 | `novel_plan_chapter` | P2       | `submitChapterPlan`；标题长度读 rulepack、5–8 个节拍、narrator/opening/ending 非空；可选 `cast` 1–8 人                                   | 是                                                                           |
 | `novel_write_draft`  | P3       | `submitDraft`                                                                                                                            | 是                                                                           |
 | `novel_review`       | P4       | `submitReview`                                                                                                                           | 是（`total` 必填；issue 维度/段落校验；blocker 不可 waived）                 |
 | `novel_revise`       | P5/P6    | `submitRevision`                                                                                                                         | 是（blocker 不可降级或 waived；issue 只能改 status/evidence）                |
-| `novel_check`        | P6       | `runCheck`                                                                                                                               | 是（四个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
+| `novel_check`        | P6       | `runCheck`                                                                                                                               | 是（五个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
 | `novel_archive`      | 归档     | `archiveChapter`                                                                                                                         | 事务（必须带 `state_delta`；旧 review 无 digest 时拒绝）                     |
 | `novel_word_count`   | 任意     | `countWords`                                                                                                                             | 否                                                                           |
-| `novel_state`        | 任意     | `queryState`；chapters 默认紧凑索引，支持 `include_summary` / `chapter_range`；损坏 ledger 返回 raw                                      | 否                                                                           |
-| `novel_amend`        | 任意     | `amend`；支持 `novel.yaml` 元数据与八个 ledger，带不变量与单一目标 repair                                                                | 是                                                                           |
+| `novel_state`        | 任意     | `queryState`；chapters 默认紧凑索引，支持 `include_summary` / `chapter_range`；新增 outline/worldbook；损坏文档返回 raw                    | 否                                                                           |
+| `novel_amend`        | 任意     | `amend`；支持 `novel.yaml` 元数据、八个 ledger 与 outline/worldbook，带不变量、归档卡保护与单一目标 repair                              | 是                                                                           |
 | `novel_rollback`     | 任意     | `rollback`；只能退回当前阶段或更早                                                                                                       | 是                                                                           |
 | `novel_diff`         | 任意     | `diff`                                                                                                                                   | 否                                                                           |
-| `novel_export`       | 任意     | `export`                                                                                                                                 | 导出目录                                                                     |
+| `novel_export`       | 任意     | `export`；md/txt/epub/outline/worldbook/proposal                                                                                         | 导出目录                                                                     |
 | `novel_audit`        | 任意     | `auditHistory`                                                                                                                           | 否                                                                           |
 | `novel_pipeline`     | 任意     | `advise`                                                                                                                                 | 否                                                                           |
+| `novel_blueprint`    | 任意     | `submitBookPlan`                                                                                                                         | 是                                                                           |
+| `novel_outline`      | 任意     | `submitOutline`；严格模式、归档卡保护                                                                                                    | 是                                                                           |
+| `novel_outline_import` | 任意   | `importOutline`；Markdown/YAML/JSON，`dry_run` 预览                                                                                      | 可选                                                                         |
+| `novel_worldbook`    | 任意     | `submitWorldbook`；按段替换                                                                                                              | 是                                                                           |
+| `novel_search`       | 任意     | `search`；正文/摘要/大纲/世界观/台账                                                                                                     | 否                                                                           |
+| `novel_doctor`       | 任意     | `doctor`；项目/流水线/状态/journal/正文/大纲覆盖与漂移/阶段产物/锁/备份                                                                  | 否                                                                           |
+| `novel_report`       | 任意     | `report`；进度/质量/节奏/角色/伏笔/时间线/关系                                                                                           | 否                                                                           |
+| `novel_guide`        | 任意     | `guide`；六态引导（no-project/new/planning/writing/blocked/finished），无项目可用                                                        | 否                                                                           |
+| `novel_reopen`       | 已归档章 | `reopenChapter`；从归档备份恢复并重开 P3；`chapter` 与 `reason` 必填                                                                     | 事务                                                                         |
 
 ## 错误三分类
 
@@ -33,8 +42,8 @@
 
 ## 0.1.3 契约补充
 
-- 八个 ledger 损坏时 `state_errors` 的 code 为 `CHAPTERS_UNREADABLE`、`CHARACTERS_UNREADABLE`、`WORLD_UNREADABLE`、`LOCKS_UNREADABLE`、`TIMELINE_UNREADABLE`、`FORESHADOWS_UNREADABLE`、`RELATIONSHIPS_UNREADABLE`、`HANDOFF_UNREADABLE`，plan/review/check/worldPlan 有对应 `*_UNREADABLE`，`novel.yaml` 为 `PROJECT_UNREADABLE`。status/panel 仍可读，损坏 ledger/project 的 `next.tool = novel_amend`。
-- `novel_state` 对损坏 ledger/project/review/check 返回 `{error,message,path,raw}`；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters；损坏时接受完整项目文档。
+- 八个 ledger 损坏时 `state_errors` 的 code 为 `CHAPTERS_UNREADABLE`、`CHARACTERS_UNREADABLE`、`WORLD_UNREADABLE`、`LOCKS_UNREADABLE`、`TIMELINE_UNREADABLE`、`FORESHADOWS_UNREADABLE`、`RELATIONSHIPS_UNREADABLE`、`HANDOFF_UNREADABLE`，plan/review/check/worldPlan 有对应 `*_UNREADABLE`，`novel.yaml` 为 `PROJECT_UNREADABLE`，规划文档为 `OUTLINE_UNREADABLE` / `WORLDBOOK_UNREADABLE`。status/panel 仍可读，损坏 ledger/project/规划文档的 `next.tool = novel_amend`。
+- `novel_state` 对损坏 ledger/project/review/check/outline/worldbook 返回 `{error,message,path,raw}`；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters；损坏时接受完整项目文档。
 - `novel_plan_chapter.cast` 可选 1–8 人：`{name,entry_state?,goal?,knowledge?,exit_change?}`；名字必须来自 P1 世界计划或角色台账；标题不得自带 `第N章` 前缀。
 - P2/P3/P4/P5/P6 brief 的 `context.world_plan` 来自 P1；P3/P4 的 `context.characters` 是本章活跃卡，`other_characters` 是压缩索引；P6 的 `context.active_cast` 受预算保护。world_plan 的目标/约束受保护，角色/地点名单可裁剪。
 - `novel_state {kind:"chapters"}` 默认不含 summary；`include_summary:true` 或 `chapter_range:[start,end]` 按需取。panel 只返回最近 30 行。
@@ -51,8 +60,18 @@
 
 ## 命令
 
-`/novel [status|next|stats|export <kind>|admin]`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。
+`/novel [status|next|stats|outline|guide|report|doctor|search <词>|export <kind>|admin]`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。
 
 ## core 模式
 
-`toolsMode=core` 只注册 8 个高频工具：`init/status/brief/write_draft/review/revise/check/archive`。其余 10 个（`plan_world`、`plan_chapter`、`word_count`、`state`、`amend`、`rollback`、`diff`、`export`、`audit`、`pipeline`）通过 `/novel admin <op> <json>` 执行（例如 `/novel admin novel_state {"kind":"pipeline"}`），不是“仍可按名字调用”。多项目与设定包导入也只走命令入口：`novel_registry_list`、`novel_registry_register`、`novel_registry_activate`、`novel_registry_forget`、`novel_import`。
+`toolsMode=core` 只注册 10 个高频工具：`init/status/guide/brief/outline/write_draft/review/revise/check/archive`。其余 17 个通过 `/novel admin <op> <json>` 执行（例如 `/novel admin novel_state {"kind":"pipeline"}`），不是“仍可按名字调用”。多项目与设定包导入也只走命令入口：`novel_registry_list`、`novel_registry_register`、`novel_registry_activate`、`novel_registry_forget`、`novel_import`。
+
+## 0.2.0 契约补充
+
+- `novel_state` 新增 `kind: outline | worldbook`；损坏时返回 `{error,message,path,raw}`。
+- `novel_blueprint` / `novel_outline` / `novel_worldbook` 是书级写操作，不受阶段门控，但会推进 revision 与 journal；严格大纲首次提交默认开启，已有蓝图内容时尊重显式 `strict:false`。
+- `novel_amend` 允许修复 `outline/outline.yaml` 与 `outline/worldbook.yaml`；已归档卡的 title/scene/target_words/cast/word_count/score/archived_at 仍不可改。
+- `novel_doctor` 新增大纲覆盖率与当前阶段产物检查；`novel_report` 的 outline/worldbook `present` 以内容为准。
+- `novel_outline_import` 的 `dry_run=true` 不写盘；解析失败带 Markdown 行号。
+- `novel_export` 新增 `outline | worldbook | proposal`；`chapter` 只对 `md/txt/epub` 有效。
+- `novel_reopen` 必须传 `chapter` 与 `reason`；只允许紧邻的已归档章，活动章未开始；损坏的 outline 会拒绝重开，避免覆盖规划。

@@ -1,5 +1,6 @@
 import { GATE_ORDER, GATES, type GateId } from '../codes.js'
 import { LIMITS } from '../constants.js'
+import { stripChapterPrefix } from './book.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
 import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
@@ -275,6 +276,66 @@ const sceneType: Gate = (input) => {
   return problems.length === 0 ? [] : [block('PG-06', problems.join('; '), 'pick a different scene type')]
 }
 
+/**
+ * PG-13: once the book has a chapter card, the plan and draft must honour it.
+ * A strict outline also means "no card, no chapter"; a non-strict outline only
+ * checks the cards that exist.
+ */
+const outlineAlignment: Gate = (input) => {
+  const outline = input.outline
+  if (outline === undefined || outline === null) return []
+  const card = outline.chapters.find((candidate) => candidate.num === input.chapter)
+  if (card === undefined) {
+    if (!outline.book.strict) return []
+    return [
+      block(
+        'PG-13',
+        `chapter ${input.chapter} has no outline card while strict mode is on`,
+        'read novel_state {kind:"outline"}, then submit every existing card plus this one with novel_outline (full replacement); or turn strict off with novel_blueprint',
+      ),
+    ]
+  }
+  const problems: string[] = []
+  if (card.status === 'archived') {
+    problems.push(
+      `chapter ${input.chapter} is already archived but is still the active chapter; call novel_reopen first`,
+    )
+  }
+  const title = input.draftTitle === null ? null : stripChapterPrefix(input.draftTitle)
+  if (title !== null && title !== card.title) {
+    problems.push(`title "${title}" does not match the card "${card.title}"`)
+  }
+  if (input.sceneType !== null && input.sceneType !== card.scene_type) {
+    problems.push(`scene_type "${input.sceneType}" does not match the card "${card.scene_type}"`)
+  }
+  const planned = input.planTargetWords ?? input.project.targets.words_per_chapter
+  if (
+    planned !== null &&
+    planned !== undefined &&
+    Math.max(planned[0], card.target_words[0]) > Math.min(planned[1], card.target_words[1])
+  ) {
+    problems.push(
+      `target_words ${planned[0]}-${planned[1]} does not overlap the card ${card.target_words[0]}-${card.target_words[1]}`,
+    )
+  }
+  if (card.cast.length > 0) {
+    const cast = new Set(input.planCast ?? [])
+    const missing = card.cast.filter((name) => !cast.has(name))
+    if (missing.length > 0) {
+      problems.push(`cast is missing card member(s): ${missing.join(', ')}`)
+    }
+  }
+  return problems.length === 0
+    ? []
+    : [
+        block(
+          'PG-13',
+          problems.join('; '),
+          'update the outline card with novel_outline, or update the chapter plan; archived chapters need novel_reopen',
+        ),
+      ]
+}
+
 /** Parse "第 12 段" into 12; null when the location is not a paragraph reference. */
 export function parseParagraphLocation(location: string): number | null {
   const match = /第\s*(\d+)\s*段/.exec(location)
@@ -540,9 +601,10 @@ const GATE_FUNCTIONS: Readonly<Record<GateId, Gate>> = {
   'PG-10': consistency,
   'PG-11': rounds,
   'PG-12': archiveAtomic,
+  'PG-13': outlineAlignment,
 }
 
-/** Evaluate all twelve gates and return every blocking item, in canonical order. */
+/** Evaluate all thirteen gates and return every blocking item, in canonical order. */
 export function evaluateGates(input: GateInput, options: GateOptions): GateResult {
   const applicable = new Set(applicableGates(input))
   const blocking: BlockingItem[] = []
@@ -561,8 +623,10 @@ export function evaluateGates(input: GateInput, options: GateOptions): GateResul
 export function applicableGates(input: GateInput): GateId[] {
   const always: GateId[] = ['PG-01', 'PG-02']
   switch (input.operation) {
+    case 'submitChapterPlan':
+      return [...always, 'PG-13']
     case 'submitDraft':
-      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06']
+      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-13']
     case 'submitRevision':
       return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08', 'PG-11']
     case 'submitReview':
@@ -585,6 +649,7 @@ export function applicableGates(input: GateInput): GateId[] {
         'PG-09',
         'PG-10',
         'PG-12',
+        'PG-13',
       ]
     default:
       return always

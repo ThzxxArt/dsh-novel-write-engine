@@ -1,5 +1,6 @@
 import { LIMITS } from '../constants.js'
 import { compareText, stableJson as stableStringify } from '../domain/stable.js'
+import { bookBrief, emptyOutline, emptyWorldbook, outlineCard, worldbookBrief } from './book.js'
 import { projectHandoff } from './handoff.js'
 import type {
   ChapterCastMember,
@@ -52,6 +53,13 @@ export interface BriefContextInput {
   machine?: unknown
   previousText: string | null
   handoff: HandoffDocument | null
+  /** 0.2.0 planning layer; optional for older callers and tests. */
+  outline?: import('../types.js').OutlineDocument | null
+  outlinePresent?: boolean
+  outline_error?: string | null
+  worldbook?: import('../types.js').WorldbookDocument | null
+  worldbookPresent?: boolean
+  worldbook_error?: string | null
 }
 
 type Character = CharactersDocument['characters'][number]
@@ -258,6 +266,18 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
     })
     .map((character) => compactCharacter(character, appearances))
   const worldPlan = worldPlanBrief(input.worldPlan ?? null)
+  const epoch = '1970-01-01T00:00:00.000Z'
+  const outline = input.outline ?? emptyOutline(epoch)
+  const worldbook = input.worldbook ?? emptyWorldbook(epoch)
+  const mentioned = [
+    input.text ?? '',
+    input.project.description,
+    input.plan?.title ?? '',
+    ...(input.plan?.beats ?? []),
+    input.worldPlan?.objective ?? '',
+    ...(input.worldPlan?.constraints ?? []),
+    ...activeNames,
+  ].join('\n')
   const base: Record<string, unknown> = {
     project: {
       title: input.project.title,
@@ -269,6 +289,17 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
     stage: input.pipeline.stage,
     scene_distribution: sceneDistribution(input.chapters),
     previous_ending: previousEnding,
+    book_plan: bookBrief(outline, input.chapter),
+    outline_card: outlineCard(outline, input.chapter),
+    ...(input.stage === 'P1' || input.stage === 'P2' || input.stage === 'P3'
+      ? { worldbook: worldbookBrief(worldbook, mentioned, activeNames) }
+      : {}),
+    ...(input.outline_error === undefined || input.outline_error === null
+      ? {}
+      : { outline_error: input.outline_error }),
+    ...(input.worldbook_error === undefined || input.worldbook_error === null
+      ? {}
+      : { worldbook_error: input.worldbook_error }),
     ...(input.world_plan_error === undefined || input.world_plan_error === null
       ? {}
       : { world_plan_error: input.world_plan_error }),
@@ -444,6 +475,11 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
     'machine',
     'summary',
     'world_plan',
+    'book_plan',
+    'outline_card',
+    'worldbook',
+    'outline_error',
+    'worldbook_error',
     'active_cast',
     // P3–P5 are about this chapter's cast; trimming it first is the bug this
     // version exists to fix. P6 has active_cast as the protected subset and

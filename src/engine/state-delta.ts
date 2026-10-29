@@ -57,6 +57,17 @@ const requireReason = (value: { action: DeltaAction; reason?: string }, where: s
   }
 }
 
+const requireForeshadowFields = (value: ForeshadowDelta, where: string): void => {
+  if (value.title !== undefined && typeof value.title !== 'string') fail(`${where}.title must be a string`)
+  if (value.description !== undefined && typeof value.description !== 'string') {
+    fail(`${where}.description must be a string`)
+  }
+  if (value.note !== undefined && typeof value.note !== 'string') fail(`${where}.note must be a string`)
+  if (value.new_info !== undefined && typeof value.new_info !== 'boolean') {
+    fail(`${where}.new_info must be a boolean`)
+  }
+}
+
 const appearanceOf = (text: string, name: string, aliases: readonly string[] = []): string => {
   const paragraphs = splitParagraphs(text)
   const source =
@@ -167,6 +178,14 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     for (const field of ['profile', 'current_state', 'growth'] as const) {
       if (declared[field] !== undefined && !isRecord(declared[field])) {
         fail(`characters.${name}.${field} must be an object`)
+      }
+    }
+    if (declared.growth !== undefined) {
+      const growth = declared.growth as Record<string, unknown>
+      for (const field of ['change', 'status_change'] as const) {
+        if (typeof growth[field] !== 'string' || growth[field].trim() === '') {
+          fail(`characters.${name}.growth.${field} must be a non-empty string`)
+        }
       }
     }
     const existing = byName.get(name)
@@ -306,6 +325,15 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (declared.detail !== undefined && !isRecord(declared.detail)) {
       fail(`world.${name}.detail must be an object`)
     }
+    if (declared.detail !== undefined) {
+      if (declared.action !== 'created') {
+        for (const reserved of ['name', 'first_appearance', 'description'] as const) {
+          if (Object.hasOwn(declared.detail, reserved)) {
+            fail(`world.${name}.detail cannot rewrite the reserved field "${reserved}"`)
+          }
+        }
+      }
+    }
     const expected = expectedKind(name)
     if (expected !== null) {
       if (declared.action !== 'created') {
@@ -415,6 +443,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[plant.key], `foreshadows.${plant.key}`)
     requireReason(declared, `foreshadows.${plant.key}`)
+    requireForeshadowFields(declared, `foreshadows.${plant.key}`)
     if (declared.action !== 'created') fail(`foreshadows.${plant.key} is planted; its action must be created`)
     if (typeof plant.title !== 'string' || plant.title.trim() === '') {
       fail(`foreshadow "${plant.key}" has an empty summary title`)
@@ -455,6 +484,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[advance.key], `foreshadows.${advance.key}`)
     requireReason(declared, `foreshadows.${advance.key}`)
+    requireForeshadowFields(declared, `foreshadows.${advance.key}`)
     if (declared.action !== 'updated') {
       fail(`foreshadows.${advance.key} is advanced; its action must be updated`)
     }
@@ -478,6 +508,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     const declared = entry<ForeshadowDelta>(delta.foreshadows[key], `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
+    requireForeshadowFields(declared, `foreshadows.${key}`)
     if (declared.action !== 'updated') {
       fail(`foreshadows.${key} is resolved; its action must be updated`)
     }
@@ -500,6 +531,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (consumed.has(key)) continue
     const declared = entry<ForeshadowDelta>(raw, `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
+    requireForeshadowFields(declared, `foreshadows.${key}`)
     const item = byId.get(key)
     if (item === undefined) fail(`foreshadow "${key}" is not in the ledger`)
     if (declared.action === 'created') fail(`foreshadow "${key}" already exists`)
@@ -516,6 +548,13 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const declared = entry<TimelineDelta>(delta.timeline[key], `timeline.${key}`)
     if (declared.action !== 'created') {
       fail(`timeline.${key} is a new event; its action must be created`)
+    }
+    if (
+      declared.characters !== undefined &&
+      (!Array.isArray(declared.characters) ||
+        declared.characters.some((character) => typeof character !== 'string'))
+    ) {
+      fail(`timeline.${key}.characters must be a string array`)
     }
     const allocated = allocateIds('TE', timeline.next_seq, 1)
     const id = allocated.ids[0]!

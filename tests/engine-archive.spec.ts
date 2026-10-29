@@ -204,7 +204,7 @@ describe('archive state_delta reconciliation', () => {
       })
       expect((await readYaml(root, 'state/chapters.yaml')).chapters).toEqual([])
       // The helper's evidence remains valid when the check is not tampered with.
-      expect(sampleSemantic(text)).toHaveLength(4)
+      expect(sampleSemantic(text)).toHaveLength(5)
     } finally {
       await cleanup()
     }

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0
+
+- **整书生命周期**：新增 `outline/outline.yaml`（书级蓝图 + 卷 + 章卡）与 `outline/worldbook.yaml`（世界观设定集）。`novel_init` 自动建立两份空文档；旧项目缺少它们时按空规划读取，不报错。
+- 新增 9 个工具 / 9 个操作：`novel_blueprint`、`novel_outline`、`novel_outline_import`、`novel_worldbook`、`novel_search`、`novel_doctor`、`novel_report`、`novel_guide`、`novel_reopen`。工具总数 18 → 27，服务操作 22 → 31；`toolsMode=core` 10 个。
+- 大纲支持 Markdown / YAML / JSON 导入；`novel_outline_import` 可 `dry_run` 预览，关键字段缺失带行号报错。Markdown 模板与导出模板同形。
+- 新增 PG-13 `OUTLINE_ALIGNMENT`：严格模式下 P2/P3 与归档都必须有当前章卡，标题、场景类型、目标字数区间、cast 必须与章卡一致；已归档卡不可改，要改先 `novel_reopen`。非严格模式只校验已存在的章卡。
+- 归档事务同步回写章卡 `archived/archived_at/word_count/score`；非严格模式归档时自动补卡，大纲因此始终是完整进度视图。
+- P1/P2/P3 任务书与上下文包自动带入 `book_plan`、`outline_card` 与相关 `worldbook` 条目；P1 章卡 cast 必须在世界计划中登记。
+- 新增 `novel_reopen`：只允许紧邻的已归档章、活动章尚未开始时，从该章归档事务的备份恢复索引/台账/handoff/正文并把管线重开到 P3；备份缺失即拒绝。
+- P6 语义项从 4 条增至 5 条，新增 `L2-POV`（叙述视角与计划一致），五条证据必须来自不同句子。
+- 新增 `novel_report`（进度/大纲漂移/世界观/质量趋势/节奏/角色/伏笔/时间线/关系/活动）、`novel_doctor`（项目/流水线/状态/journal/正文 hash/孤立正文/大纲覆盖与漂移/当前阶段产物/锁/备份/目标进度/下一步）、`novel_search`（正文/摘要/大纲/世界观/台账）与 `novel_guide`（六态：no-project/new/planning/writing/blocked/finished）。
+- `novel_status` 增加书级摘要；`/novel stats` 与 `/novel-stats` 都输出大纲覆盖、蓝图就绪、世界观条目、严格模式与目标章数。
+- 导出扩展到 6 种：`md` / `txt` / `epub` / `outline` / `worldbook` / `proposal`；导出幂等键纳入大纲与世界观摘要。
+- 面板 payload v2：新增全书规划（进度条、卷列表最多 8 卷并提示剩余卷数）、世界观计数、质量趋势、项目健康、最近活动；旧版本面板提示刷新。面板保持只读。
+- 命令新增 `/novel outline|guide|report|doctor|search`，`/novel export` 与 `/novel-export` 支持 6 种 kind；`/novel admin` 暴露全部新增操作。
+- 事件新增 `novel/planned`、`novel/reopened`、`novel/exported`。
+- 修复：非活动章 `planWorld` 读取补 `validateWorldPlanShape`；大纲/世界观损坏进入 `state_errors` 并阻断依赖写操作；init 的“空目录”判定包含 outline/worldbook，避免覆盖只有规划文件的项目；`novel_report` 按章去重角色出场；`runTransaction` 的 committed journal 保留 pre-image hash 以支持 `novel_reopen`。
+- 规划与重开修复：outline/worldbook 读取改走 `narrow`（未知顶层键、schema 版本、book 未知键都拒绝）；`novel_amend` 对大纲先做完整语义校验并保护归档卡 cast/target_words/word_count/score/archived_at，worldbook 校验 capacity/必填文本；`novel_reopen` 改为 reason 必填、损坏 outline 拒绝覆盖、旧 journal 无 `before` 时从备份恢复；`novel_outline_import` 不再把已有蓝图/卷的 `strict:false` 强制翻成 true；列表/世界观/统计的 present 以内容为准；doctor 增加大纲覆盖率与当前阶段产物；panel 健康纳入 journal、质量均值只取最近 10 章、进度条改用目标章数；search 覆盖 world abilities/artifacts/factions/rules、locks 与 handoff；P1–P3 的 worldbook context 做硬截断。
+- 规划/归档一致性修复：损坏 outline/worldbook 不再被 blueprint/outline/import/worldbook 覆盖，outline/worldbook 纳入 journal 外部改动检测；chapters 不可读时禁止规划写并保护 amend 归档卡；`novel.yaml` 降低目标章数会校验现有卷/卡；`novel_reopen` 自动补卡、对齐归档 plan、提交前校验 outline；显式 `strict:false` 通过 `strict_explicit` 保留；Markdown 导出/导入保留前提、卷外卡不再被并入末卷、归档元数据给出明确警告；`novel_diff` 支持纯文本模式；`novel_worldbook` 返回逐段 counts；report 质量趋势/角色最后出场、guide 完成态、doctor journal 下一步与 0% 覆盖率口径修正；import 重算 preview 并拒绝过期 revision；panel 显示卷的计划/归档（最多 8 卷 + 剩余提示）与 0.2.0 工具中文标签。
+- 状态与日志恢复修复：replay 缓存按 revision 失效（export 按内容键跨无关 revision 幂等）；损坏的 `archive-digests.json` 从 chapter index 重建且不再拖垮 journal；缺失 journal fail-closed；尾部撕裂日志只裁剪最后一个无换行片段；崩溃前 pending 的 staging 目录清理；写临时文件失败清理 `.tmp`；worldbook `updated_at` 稳定；search 包含活动草稿并按 gate 段落口径编号；report/doctor 暴露损坏评审；reopen 拒绝覆盖归档后的 amend；规划写拒绝 projectError；卷迁移自动推导归档卡卷；时间线角色类型校验；文本 diff 可脱离项目；admin plan_chapter 不再注入非法默认值；stats 命令补齐新增字段。
+- 持久化与观测修复：卷范围重排时归档卡按新区间推导卷号；`novel_amend` 保护归档索引的标题/场景/字数/评语/摘要/评分/状态等派生事实；4 位章节文件名纳入孤立正文与归档卡校验；journal 只含 lock-reclaim/空文件时 fail-closed，stale lock 不再隐藏 journal 诊断；备份先写入 staging 再原子移入 backups，崩溃不再留下不可回收目录；PG-09 引用与 check 文档先窄化再落盘；hand-edited outline 可省略 nullable 归档字段；`novel_plan_chapter` 的 target_words 不再硬编码 2000–3000 且工具 schema 补齐必填；`/novel admin` 透传 warnings/replayed；volume-only Markdown 大纲可回导；面板/命令的 next reason 中文化；docs 的 report 字段、PG-13 码、工具计数与 P4 版本同步。
+- 发布前回归修复：`novel_plan_chapter` 的必填字段在工具 schema 与服务端重新对齐；`check:host` 改为先 build，再断言宿主声明全部 27 个工具，并校验预设名与面板空态/结构；README 文档链接改为 GitHub 绝对地址，修正 `toolsMode`、`novel_panel`、六种导出与工具计数等文档漂移；事务 abort 行追加前修复撕裂日志尾；同 pid 但非 live nonce 的锁按 stale 读取，不再伪装成活跃 writer；journal 对账与 `auditHistory` 在读取期间出现 writer 时丢弃半提交误报；lock reclaim 仅在原锁确实被移除时写审计行。
+- 真实模型验证：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在发布前最终构建的临时项目完成单章 P1→P8、归档、report/doctor/search/panel、六种导出、`novel_reopen` 与重新归档；P3 分别 931 字 / 898 字，均通过 P6，重开后无 state_errors。详见 `docs/0.2.0-real-model-evidence.md`。
+- 质量：新增 `tests/book-020.spec.ts`、`tests/book-domain.spec.ts`、`tests/insight-020.spec.ts`、`tests/coverage-020.spec.ts`、`tests/review-probe-020.spec.ts`、`tests/second-review-020.spec.ts` 与 `tests/third-review-020.spec.ts`；当前 71 个测试文件 / 622 条测试；覆盖率 93.87 / 89.16 / 98.30 / 93.87；门禁为全局 statements/lines/functions 90、branches 89，engine 90/85、commands 85、client 85、viewmodel 95，新增 `engine/book.ts`/`engine/insight.ts` 的 lines/statements/functions ≥95、branches ≥93。
+
 ## 0.1.3
 
 - 八个权威台账（chapters/characters/world/locks/timeline/foreshadows/relationships/handoff）以及 `novel.yaml` 损坏或丢失时不再拖垮 `novel_status`/panel；`state_errors` 暴露全部错误，`novel_state` 对 ledger、project、review、check 返回损坏文档的 `raw` 文本，`next` 指向 `novel_amend`。

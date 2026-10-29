@@ -38,6 +38,35 @@ export interface PanelSnapshot {
   averageScore?: number
   /** The nine-phase strip state, derived from the pipeline stage. */
   phases: Array<{ id: string; done: boolean; active: boolean }>
+  /** 0.2.0 book-level planning and health blocks. */
+  book?: PanelBook
+  quality?: { averageScore: number; scores: number[]; trend: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number }
+  activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+}
+
+export interface PanelBook {
+  premise: string
+  logline: string
+  strict: boolean
+  target: number | null
+  outline: {
+    present: boolean
+    total: number
+    planned: number
+    archived: number
+    coverage: number
+    volumes: Array<{ title: string; start: number; end: number; planned: number; archived: number }>
+  }
+  worldbook: {
+    present: boolean
+    characters: number
+    locations: number
+    factions: number
+    rules: number
+    glossary: number
+    backstory: number
+  }
 }
 
 export interface PanelSummaryDto {
@@ -62,6 +91,11 @@ export interface PanelSummaryDto {
   next?: { tool: string; reason: string }
   /** Absent for older payloads; false means the current chapter cycle is done. */
   finished?: boolean
+  /** 0.2.0 planning, quality, health and activity blocks. */
+  book?: PanelBook
+  quality?: { averageScore: number; scores: number[]; trend: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number }
+  activity?: Array<{ at: string; op: string; chapter: number; status: string }>
 }
 
 export interface PanelChapterRow {
@@ -160,6 +194,10 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     phases: snapshot.phases,
     blocking: snapshot.blocking,
     finished: snapshot.finished,
+    ...(snapshot.book === undefined ? {} : { book: snapshot.book }),
+    ...(snapshot.quality === undefined ? {} : { quality: snapshot.quality }),
+    ...(snapshot.health === undefined ? {} : { health: snapshot.health }),
+    ...(snapshot.activity === undefined ? {} : { activity: snapshot.activity }),
     ...(snapshot.next === undefined
       ? {}
       : { next: { tool: snapshot.next.tool, reason: snapshot.next.reason } }),

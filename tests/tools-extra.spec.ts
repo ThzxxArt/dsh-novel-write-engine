@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createNovelTools, emptySummary, toolNames } from '../src/tools/index.js'
 import type { EngineService } from '../src/engine/service.js'
-import { EngineBlockedError } from '../src/types.js'
+import { EngineBlockedError, EngineInputError } from '../src/types.js'
 
 const result = <T>(data: T): { data: T; revision: number; warnings: never[] } => ({
   data,
@@ -73,7 +73,7 @@ const tools = (fake: ReturnType<typeof engine>): Map<string, Tool> =>
   )
 
 describe('every tool executes one operation', () => {
-  it('passes arguments through for all eighteen tools', async () => {
+  it('passes arguments through for all twenty-seven tools', async () => {
     const fake = engine()
     const map = tools(fake)
     await map.get('novel_brief')!.execute({ stage: 'P1', chapter: 2 }, {})
@@ -105,6 +105,19 @@ describe('every tool executes one operation', () => {
     expect(fake.submitChapterPlan).toHaveBeenCalledWith(
       expect.objectContaining({ chapter: 0, target_words: [100, 200] }),
     )
+    await expect(
+      map.get('novel_plan_chapter')!.execute(
+        {
+          title: 't',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          beats: ['a', 'b', 'c', 'd', 'e'],
+          opening: 'o',
+          ending: 'e',
+        },
+        {},
+      ),
+    ).rejects.toThrow(/missing required property "target_words"/)
     await map.get('novel_review')!.execute({ chapter: 1, dimensions: [], total: 150, proof: {} }, {})
     expect(fake.submitReview).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, issues: [] }))
     await map.get('novel_revise')!.execute({ chapter: 1, content: 'x', issues: [], proof: {} }, {})
@@ -221,8 +234,80 @@ describe('every tool executes one operation', () => {
     expect(rendered[0]!.text).toContain('2 deductions')
   })
 
+  it('renders optional status, brief and warning branches', async () => {
+    const fake = engine()
+    const map = tools(fake)
+    const status = map.get('novel_status')!.output.render({}, {
+      data: {
+        project: { title: '状态书', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 2,
+        active_chapter: 1,
+        stage: 'P3',
+        blocking: [],
+        next: { tool: 'novel_write_draft', reason: 'write' },
+        book: {
+          outline: { total: 3, archived: 1, coverage: 0.5, current: null },
+          worldbook: { characters: 1, locations: 1, factions: 0, rules: 0 },
+        },
+      },
+      revision: 2,
+      warnings: [],
+    } as never)
+    expect(status[0]!.text).toContain('查询第 2 章')
+    expect(status[0]!.text).toContain('当前章卡：（无）')
+    expect(map.get('novel_review')!.output.render({}, 'plain' as never)).toBeTruthy()
+
+    const brief = map.get('novel_brief')!.output.render({}, {
+      data: { content: '任务书', digest: 'D', fields: { a: 1 }, context: { b: 2 } },
+      revision: 2,
+      warnings: [],
+    } as never)
+    expect(brief[0]!.text).toContain('fields:')
+    expect(brief[0]!.text).toContain('context:')
+    const bareBrief = map.get('novel_brief')!.output.render({}, {
+      data: { content: '任务书', digest: 'D' },
+      revision: 2,
+      warnings: [],
+    } as never)
+    expect(bareBrief[0]!.text).not.toContain('fields:')
+
+    const warnings = map.get('novel_review')!.output.render({}, {
+      data: { chapter: 1, round: 1, total: 145, open_blockers: 0, next_stage: 'P6' },
+      revision: 2,
+      warnings: ['plain warning', { message: 'missing code' }],
+    } as never)
+    expect(warnings[0]!.text).toContain('plain warning')
+    expect(warnings[0]!.text).toContain('WARNING')
+
+    fake.archiveChapter = vi.fn(async () => {
+      throw new EngineInputError('ENGINE_SCHEMA_INVALID', 'bad input')
+    }) as never
+    await expect(map.get('novel_archive')!.execute({ chapter: 1, state_delta: {} }, {})).rejects.toThrow(
+      /ENGINE_SCHEMA_INVALID/,
+    )
+    await expect(
+      map.get('novel_plan_world')!.execute({ objective: 'o', characters: '{' }, {}),
+    ).rejects.toThrow(/malformed JSON|JSON/)
+    await map.get('novel_plan_chapter')!.execute(
+      {
+        title: 't',
+        scene_type: '日常过渡章',
+        narrator: 'n',
+        beats: ['a', 'b', 'c', 'd', 'e'],
+        opening: 'o',
+        ending: 'e',
+        target_words: [100, 200],
+      },
+      {},
+    )
+    await map
+      .get('novel_state')!
+      .execute({ kind: 'chapters', include_summary: true, chapter_range: [1, 2] }, {})
+    await map.get('novel_state')!.execute({ kind: 'chapters' }, {})
+  })
+
   it('exposes tool names by mode and an empty revision summary', () => {
-    expect(toolNames('core')).toHaveLength(8)
+    expect(toolNames('core')).toHaveLength(10)
     expect(emptySummary()).toMatchObject({ hook_strength: 3, plot_advancement: 'mid', events: [] })
   })
 })

@@ -70,6 +70,7 @@ export const GATES = {
   'PG-10': 'CONSISTENCY',
   'PG-11': 'ROUNDS',
   'PG-12': 'ARCHIVE_ATOMIC',
+  'PG-13': 'OUTLINE_ALIGNMENT',
 } as const
 export type GateId = keyof typeof GATES
 
@@ -85,6 +86,7 @@ export const GATE_ORDER: readonly GateId[] = [
   'PG-03',
   'PG-05',
   'PG-06',
+  'PG-13',
   'PG-09',
   'PG-07',
   'PG-08',

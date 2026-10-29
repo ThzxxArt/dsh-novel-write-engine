@@ -187,6 +187,25 @@ const CSS = `
 .nwe-phase.is-active .nwe-dot { border-color: var(--nwe-gold); background: var(--nwe-gold); color: #19150d; box-shadow: 0 0 0 4px color-mix(in srgb, var(--nwe-gold) 16%, transparent); }
 .nwe-phase-label { overflow: hidden; max-width: 100%; color: var(--nwe-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .nwe-phase.is-active .nwe-phase-label { color: var(--nwe-ink); font-weight: 600; }
+.nwe-book-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+.nwe-book-card { padding: 14px 16px; border: 1px solid var(--nwe-border); border-radius: 14px; background: color-mix(in srgb, var(--nwe-surface) 92%, transparent); }
+.nwe-book-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.nwe-book-title { font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 14px; font-weight: 600; }
+.nwe-book-note { color: var(--nwe-muted); font-size: 10px; }
+.nwe-progress { overflow: hidden; height: 7px; margin-top: 10px; border-radius: 99px; background: var(--nwe-border); }
+.nwe-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--nwe-jade), var(--nwe-gold)); }
+.nwe-progress-legend { display: flex; justify-content: space-between; margin-top: 5px; color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.nwe-volume { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-volume strong { overflow: hidden; color: var(--nwe-ink); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.nwe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.nwe-chip { padding: 3px 8px; border: 1px solid var(--nwe-border); border-radius: 999px; color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.nwe-bars { display: flex; align-items: flex-end; gap: 5px; height: 54px; margin-top: 10px; }
+.nwe-bar { flex: 1 1 0; min-width: 4px; border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg, var(--nwe-gold), color-mix(in srgb, var(--nwe-gold) 35%, transparent)); }
+.nwe-health { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-health.is-bad { color: var(--nwe-rose); }
+.nwe-activity { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.nwe-activity li { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 8px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-activity code { color: var(--nwe-ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .nwe-next {
   display: flex;
   align-items: flex-start;
@@ -275,6 +294,7 @@ const CSS = `
   .nwe-hero { flex-direction: column; padding: 18px; }
   .nwe-refresh { width: 100%; justify-content: center; }
   .nwe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwe-book-grid { grid-template-columns: 1fr; }
   .nwe-phases { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; padding: 12px; }
   .nwe-phase:nth-child(3n)::after { display: none; }
   .nwe-chapter summary { grid-template-columns: 38px minmax(0, 1fr) 18px; gap: 10px; }
@@ -397,6 +417,194 @@ const phases = (view: PanelView): ReactElement =>
       ),
     ),
   )
+
+const bookSection = (view: PanelView): ReactElement => {
+  const total = view.book.outlineTotal
+  const target = view.book.target
+  const denominator = target ?? total
+  const percent =
+    denominator === 0 ? 0 : Math.min(100, Math.round((view.book.archivedCards / denominator) * 100))
+  const chips = [
+    ['角色', view.book.worldbook.characters],
+    ['地点', view.book.worldbook.locations],
+    ['势力', view.book.worldbook.factions],
+    ['规则', view.book.worldbook.rules],
+    ['术语', view.book.worldbook.glossary],
+    ['前史', view.book.worldbook.backstory],
+  ] as const
+  const bars = view.quality.scores.slice(-10)
+  return createElement(
+    'section',
+    { className: 'nwe-section', 'aria-label': '全书规划与质量' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '全书规划'),
+      createElement(
+        'span',
+        { className: 'nwe-section-note' },
+        view.book.present
+          ? `${view.book.strict ? '严格大纲' : '宽松大纲'} · 覆盖率 ${Math.round(view.book.coverage * 100)}%`
+          : '还没有章卡',
+      ),
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-book-grid' },
+      createElement(
+        'div',
+        { className: 'nwe-book-card' },
+        createElement(
+          'div',
+          { className: 'nwe-book-head' },
+          createElement(
+            'span',
+            { className: 'nwe-book-title' },
+            view.book.premise === '' ? '全书进度' : view.book.premise,
+          ),
+          createElement(
+            'span',
+            { className: 'nwe-book-note' },
+            `${view.book.planned} 计划 / ${view.book.archivedCards} 归档`,
+          ),
+        ),
+        createElement(
+          'div',
+          {
+            className: 'nwe-progress',
+            role: 'progressbar',
+            'aria-valuemin': 0,
+            'aria-valuemax': 100,
+            'aria-valuenow': percent,
+            'aria-label': '全书归档进度',
+          },
+          createElement('span', { style: { width: `${percent}%` } }),
+        ),
+        createElement(
+          'div',
+          { className: 'nwe-progress-legend' },
+          createElement(
+            'span',
+            null,
+            target === null ? `目标未设置 · 共 ${total} 张章卡` : `目标 ${target} 章 · 共 ${total} 张章卡`,
+          ),
+          createElement('span', null, `${percent}% 已归档`),
+        ),
+        ...view.book.volumes
+          .slice(0, 8)
+          .map((volume) =>
+            createElement(
+              'div',
+              { className: 'nwe-volume', key: `${volume.title}-${volume.range}` },
+              createElement('strong', null, volume.title),
+              createElement(
+                'span',
+                null,
+                `${volume.range} · ${volume.planned} 计划 / ${volume.archived} 归档`,
+              ),
+            ),
+          ),
+        ...(view.book.volumes.length > 8
+          ? [
+              createElement(
+                'div',
+                { className: 'nwe-volume' },
+                createElement('span', null, `还有 ${view.book.volumes.length - 8} 卷`),
+              ),
+            ]
+          : []),
+      ),
+      createElement(
+        'div',
+        { className: 'nwe-book-card' },
+        createElement(
+          'div',
+          { className: 'nwe-book-head' },
+          createElement('span', { className: 'nwe-book-title' }, '世界观'),
+          createElement(
+            'span',
+            { className: 'nwe-book-note' },
+            `${chips.reduce((sum, [, value]) => sum + value, 0)} 条`,
+          ),
+        ),
+        createElement(
+          'div',
+          { className: 'nwe-chips' },
+          ...chips.map(([label, value]) =>
+            createElement('span', { className: 'nwe-chip', key: label }, `${label} ${value}`),
+          ),
+        ),
+        createElement(
+          'div',
+          { className: 'nwe-book-head', style: { marginTop: 12 } },
+          createElement('span', { className: 'nwe-book-title' }, '质量趋势'),
+          createElement(
+            'span',
+            { className: 'nwe-book-note' },
+            bars.length === 0 ? '—' : `${view.quality.averageScore.toFixed(1)} 均分`,
+          ),
+        ),
+        createElement(
+          'div',
+          { className: 'nwe-bars', role: 'img', 'aria-label': '最近十章评分' },
+          ...bars.map((score, index) =>
+            createElement('span', {
+              key: `${index}-${score}`,
+              className: 'nwe-bar',
+              style: { height: `${Math.max(4, Math.round((score / 150) * 100))}%` },
+              title: `${score}/150`,
+            }),
+          ),
+        ),
+        createElement(
+          'div',
+          { className: `nwe-health${view.health.ok ? '' : ' is-bad'}` },
+          createElement('span', { 'aria-hidden': 'true' }, view.health.ok ? '✓' : '!'),
+          createElement(
+            'span',
+            null,
+            view.health.ok
+              ? '项目健康：没有阻塞或损坏状态'
+              : `需要处理：${view.health.blocking} 条门控 · ${view.health.stateErrors} 个损坏文档`,
+          ),
+        ),
+      ),
+    ),
+  )
+}
+
+const activitySection = (view: PanelView): ReactElement | null => {
+  if (view.activity.length === 0) return null
+  return createElement(
+    'section',
+    { className: 'nwe-section' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '最近活动'),
+      createElement('span', { className: 'nwe-section-note' }, '来自事务日志'),
+    ),
+    createElement(
+      'ul',
+      { className: 'nwe-activity' },
+      ...view.activity
+        .slice(-5)
+        .map((row, index) =>
+          createElement(
+            'li',
+            { key: `${row.at}-${row.op}-${index}` },
+            createElement('span', null, row.at.slice(0, 16).replace('T', ' ')),
+            createElement('code', null, row.op),
+            createElement(
+              'span',
+              null,
+              row.chapter === 0 ? row.status : `第 ${row.chapter} 章 · ${row.status}`,
+            ),
+          ),
+        ),
+    ),
+  )
+}
 
 const footer = (): ReactElement =>
   createElement(
@@ -523,6 +731,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
     view.state === 'error' || view.state === 'empty' || view.state === 'outdated'
       ? statePanel(view.state, view, loading, onRefresh)
       : null,
+    ready ? bookSection(view) : null,
     ready ? phases(view) : null,
     ready && view.nextTitle !== ''
       ? createElement(
@@ -611,6 +820,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
               ),
         )
       : null,
+    ready ? activitySection(view) : null,
     footer(),
   )
 }

@@ -25,6 +25,24 @@ export type EngineEvent =
       name: 'novel/amended'
       payload: { schemaVersion: 1; projectRoot: string; path: string; reason: string }
     }
+  | {
+      name: 'novel/planned'
+      payload: {
+        schemaVersion: 1
+        projectRoot: string
+        kind: 'blueprint' | 'outline' | 'worldbook'
+        chapters: number
+        volumes: number
+      }
+    }
+  | {
+      name: 'novel/reopened'
+      payload: { schemaVersion: 1; projectRoot: string; chapter: number; restore_txid: string }
+    }
+  | {
+      name: 'novel/exported'
+      payload: { schemaVersion: 1; projectRoot: string; kind: string; files: number }
+    }
 
 /** A pipeline document for a brand-new project. */
 export function emptyPipeline(

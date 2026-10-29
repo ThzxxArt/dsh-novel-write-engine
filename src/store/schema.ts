@@ -16,6 +16,8 @@ export type DocKind =
   | 'check'
   | 'worldPlan'
   | 'chapterPlan'
+  | 'outline'
+  | 'worldbook'
 
 type FieldType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'any'
 
@@ -125,6 +127,24 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     ending: req('string'),
     target_words: req('array'),
   },
+  outline: {
+    updated_at: req('string'),
+    book: req('object'),
+    volumes: req('array'),
+    chapters: req('array'),
+  },
+  worldbook: {
+    updated_at: req('string'),
+    premise: req('string'),
+    setting: req('string'),
+    rules: req('array'),
+    factions: req('array'),
+    locations: req('array'),
+    characters: req('array'),
+    glossary: req('array'),
+    backstory: req('array'),
+    themes: req('array'),
+  },
 }
 
 const invalid = (kind: DocKind, detail: string): never => {
@@ -172,6 +192,18 @@ const booleanAt = (kind: DocKind, value: unknown, path: string): boolean => {
 
 const optionalString = (kind: DocKind, value: unknown, path: string): void => {
   if (value !== undefined) stringAt(kind, value, path)
+}
+
+const nullableString = (kind: DocKind, value: unknown, path: string): void => {
+  if (value !== null && value !== undefined) stringAt(kind, value, path)
+}
+
+const nullableNumber = (kind: DocKind, value: unknown, path: string): void => {
+  if (value !== null && value !== undefined) numberAt(kind, value, path)
+}
+
+const nullableInteger = (kind: DocKind, value: unknown, path: string): void => {
+  if (value !== null && value !== undefined) integerAt(kind, value, path)
 }
 
 const validateRecords = (
@@ -333,6 +365,89 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         }
         stringAt(kind, row.evidence, `${path}.evidence`)
         if (row.note !== undefined) stringAt(kind, row.note, `${path}.note`)
+      })
+      return
+    }
+    case 'outline': {
+      const book = objectAt(kind, record.book, 'book')
+      for (const key of ['premise', 'logline', 'tone', 'pov', 'audience', 'ending'] as const) {
+        stringAt(kind, book[key], `book.${key}`)
+      }
+      booleanAt(kind, book.strict, 'book.strict')
+      if (book.strict_explicit !== undefined) {
+        booleanAt(kind, book.strict_explicit, 'book.strict_explicit')
+      }
+      for (const key of ['themes', 'selling_points'] as const) {
+        for (const [index, item] of listAt(kind, book[key], `book.${key}`).entries()) {
+          stringAt(kind, item, `book.${key}[${index}]`)
+        }
+      }
+      validateRecords(kind, record.volumes, 'volumes', (row, path) => {
+        for (const key of ['id', 'title', 'goal', 'arc', 'climax', 'status'] as const) {
+          stringAt(kind, row[key], `${path}.${key}`)
+        }
+        integerAt(kind, row.start_chapter, `${path}.start_chapter`)
+        integerAt(kind, row.end_chapter, `${path}.end_chapter`)
+      })
+      validateRecords(kind, record.chapters, 'chapters', (row, path) => {
+        integerAt(kind, row.num, `${path}.num`)
+        nullableInteger(kind, row.volume, `${path}.volume`)
+        for (const key of ['title', 'scene_type', 'goal', 'conflict', 'hook', 'notes', 'status'] as const) {
+          stringAt(kind, row[key], `${path}.${key}`)
+        }
+        if (!(SCENE_TYPES as readonly string[]).includes(row.scene_type as string)) {
+          invalid(kind, `${path}.scene_type must be one of ${SCENE_TYPES.join(', ')}`)
+        }
+        if (row.status !== 'planned' && row.status !== 'archived') {
+          invalid(kind, `${path}.status must be planned|archived`)
+        }
+        for (const [index, name] of listAt(kind, row.cast, `${path}.cast`).entries()) {
+          stringAt(kind, name, `${path}.cast[${index}]`)
+        }
+        const target = listAt(kind, row.target_words, `${path}.target_words`)
+        if (target.length !== 2) invalid(kind, `${path}.target_words must contain two integers`)
+        for (const [index, item] of target.entries()) {
+          integerAt(kind, item, `${path}.target_words[${index}]`)
+        }
+        nullableString(kind, row.archived_at, `${path}.archived_at`)
+        nullableNumber(kind, row.word_count, `${path}.word_count`)
+        nullableNumber(kind, row.score, `${path}.score`)
+      })
+      return
+    }
+    case 'worldbook': {
+      stringAt(kind, record.premise, 'premise')
+      stringAt(kind, record.setting, 'setting')
+      for (const key of ['themes'] as const) {
+        for (const [index, item] of listAt(kind, record[key], key).entries()) {
+          stringAt(kind, item, `${key}[${index}]`)
+        }
+      }
+      validateRecords(kind, record.rules, 'rules', (row, path) => {
+        stringAt(kind, row.name, `${path}.name`)
+        stringAt(kind, row.description, `${path}.description`)
+      })
+      validateRecords(kind, record.factions, 'factions', (row, path) => {
+        for (const key of ['name', 'description', 'goal'] as const) stringAt(kind, row[key], `${path}.${key}`)
+      })
+      validateRecords(kind, record.locations, 'locations', (row, path) => {
+        for (const key of ['name', 'description', 'layout'] as const) {
+          stringAt(kind, row[key], `${path}.${key}`)
+        }
+        numberAt(kind, row.capacity, `${path}.capacity`)
+      })
+      validateRecords(kind, record.characters, 'characters', (row, path) => {
+        for (const key of ['name', 'role', 'description', 'arc'] as const) {
+          stringAt(kind, row[key], `${path}.${key}`)
+        }
+      })
+      validateRecords(kind, record.glossary, 'glossary', (row, path) => {
+        stringAt(kind, row.term, `${path}.term`)
+        stringAt(kind, row.definition, `${path}.definition`)
+      })
+      validateRecords(kind, record.backstory, 'backstory', (row, path) => {
+        stringAt(kind, row.time, `${path}.time`)
+        stringAt(kind, row.event, `${path}.event`)
       })
       return
     }

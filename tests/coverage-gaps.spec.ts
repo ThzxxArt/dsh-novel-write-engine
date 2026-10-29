@@ -113,6 +113,15 @@ describe('adapter optional-argument branches', () => {
       export: async () => result({}),
       auditHistory: async () => result({}),
       advise: async () => result({}),
+      submitBookPlan: async () => result({}),
+      submitOutline: async () => result({}),
+      importOutline: async () => result({}),
+      submitWorldbook: async () => result({}),
+      search: async () => result({}),
+      doctor: async () => result({}),
+      report: async () => result({}),
+      guide: async () => result({}),
+      reopenChapter: async () => result({}),
     }
     const tools = new Map(
       createNovelTools(engine as unknown as EngineService).map((tool) => [tool.name, tool]),
@@ -127,7 +136,15 @@ describe('adapter optional-argument branches', () => {
     await run('novel_status', {})
     await run('novel_brief', { stage: 'P1' })
     await run('novel_plan_world', { objective: 'o' })
-    await run('novel_plan_chapter', { title: 't', scene_type: '日常过渡章', narrator: 'n' })
+    await run('novel_plan_chapter', {
+      title: 't',
+      scene_type: '日常过渡章',
+      narrator: 'n',
+      beats: ['a', 'b', 'c', 'd', 'e'],
+      opening: 'o',
+      ending: 'e',
+      target_words: [100, 200],
+    })
     await run('novel_review', { chapter: 1, dimensions: [], total: 150, proof: {} })
     await run('novel_revise', { chapter: 1, content: 'x', proof: {} })
     await run('novel_check', { chapter: 1, semantic: [] })
@@ -137,6 +154,15 @@ describe('adapter optional-argument branches', () => {
     await run('novel_diff', { chapter: 1 })
     await run('novel_export', { kind: 'md' })
     await run('novel_audit', {})
-    expect(tools.size).toBe(18)
+    await run('novel_blueprint', {})
+    await run('novel_outline', { chapters: [] })
+    await run('novel_outline_import', { format: 'markdown', content: 'x' })
+    await run('novel_worldbook', { premise: 'x' })
+    await run('novel_search', { query: 'x' })
+    await run('novel_doctor', {})
+    await run('novel_report', {})
+    await run('novel_guide', {})
+    await run('novel_reopen', { chapter: 1, reason: 'test' })
+    expect(tools.size).toBe(27)
   })
 })

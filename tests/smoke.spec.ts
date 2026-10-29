@@ -15,7 +15,7 @@ describe('plugin assembly', () => {
     expect(resolved.projectRoot).toBe('./novel')
   })
 
-  it('registers all eighteen tools, five commands, the skill and the panel route', () => {
+  it('registers all twenty-seven tools, five commands, the skill and the panel route', () => {
     const host = fakeHost()
     apply(host.ctx as never, config)
     expect(host.tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort())
@@ -121,7 +121,7 @@ describe('plugin assembly', () => {
     expect(denied.statusCode).toBe(503)
   })
 
-  it('registers only eight tools in core mode', () => {
+  it('registers only ten tools in core mode', () => {
     const host = fakeHost()
     apply(
       host.ctx as never,
@@ -144,7 +144,7 @@ describe('plugin assembly', () => {
   it('registers nothing when optional services are absent, and disposes cleanly', () => {
     const host = fakeHost(['tools'])
     apply(host.ctx as never, config)
-    expect(host.tools).toHaveLength(18)
+    expect(host.tools).toHaveLength(27)
     expect(host.commands).toHaveLength(0)
     expect(host.skills).toHaveLength(0)
     expect(host.routes).toHaveLength(0)
@@ -164,6 +164,6 @@ describe('plugin assembly', () => {
       host.ctx as never,
       (Config as unknown as (init: Record<string, unknown>) => never)({ projectRoot: '' }),
     )
-    expect(host.tools).toHaveLength(18)
+    expect(host.tools).toHaveLength(27)
   })
 })

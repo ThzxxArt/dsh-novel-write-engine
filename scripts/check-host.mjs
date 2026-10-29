@@ -56,6 +56,15 @@ const expectedNovelTools = [
   'novel_export',
   'novel_audit',
   'novel_pipeline',
+  'novel_blueprint',
+  'novel_outline',
+  'novel_outline_import',
+  'novel_worldbook',
+  'novel_search',
+  'novel_doctor',
+  'novel_report',
+  'novel_guide',
+  'novel_reopen',
 ]
 let packed
 let child
@@ -273,6 +282,22 @@ try {
     process.exit(2)
   }
 
+  // The host gate must exercise the artifact built from this worktree, not a
+  // stale lib/ left by an earlier run.
+  try {
+    execFileSync(npm, ['run', 'build'], {
+      cwd: root,
+      env,
+      encoding: 'utf8',
+      shell,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    throw new Error(
+      `host gate could not rebuild lib/: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+
   const raw = execFileSync(npm, ['pack', '--json'], { cwd: root, encoding: 'utf8', shell })
   const parsed = JSON.parse(raw)
   const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
@@ -288,6 +313,9 @@ try {
   }
   if (!installed.includes('id: preset-novel-write-engine')) {
     throw new Error('preset row is missing from --dump-config after install')
+  }
+  if (!installed.includes('name: 网文工坊')) {
+    throw new Error('preset row has no readable 网文工坊 name in --dump-config')
   }
 
   child = spawn(dsh, ['--profile', profile, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
@@ -318,7 +346,21 @@ try {
     throw new Error(`authenticated panel request should be 200, got ${authorized.status}`)
   }
   const body = await authorized.json()
-  if (body.schemaVersion !== 1) throw new Error('panel payload has no schemaVersion 1')
+  if (body.schemaVersion !== 2) throw new Error('panel payload has no schemaVersion 2')
+  if (body.empty === true) {
+    if (typeof body.error !== 'string' || body.error === '') {
+      throw new Error('empty panel payload has no explanatory error text')
+    }
+  } else if (
+    typeof body.summary !== 'object' ||
+    body.summary === null ||
+    typeof body.chapters !== 'object' ||
+    body.chapters === null ||
+    typeof body.gates !== 'object' ||
+    body.gates === null
+  ) {
+    throw new Error('panel payload is missing summary/chapters/gates')
+  }
   console.log(`host gate passed: plugin mounted, panel 401→200, preset present (${url})`)
 
   // Stop the Web process before booting a second profile against the same

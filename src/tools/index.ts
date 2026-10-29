@@ -119,7 +119,7 @@ const root = {
 }
 
 /**
- * The eighteen tools are thin adapters: narrow parameters, call one service
+ * The twenty-seven tools are thin adapters: narrow parameters, call one service
  * operation, render the canonical value. They never read a file.
  */
 export function createNovelTools(engine: EngineService): ReturnType<typeof defineTool>[] {
@@ -127,7 +127,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
   return [
     defineTool({
       name: 'novel_init',
-      description: 'Create a novel project at the project root (novel.yaml plus the state documents).',
+      description:
+        'Create a novel project at the project root: novel.yaml, state documents, an empty outline and an empty worldbook. Call novel_guide next.',
       parameters: {
         title: { type: 'string', required: true },
         genre: { type: 'string', required: true, enum: GENRES },
@@ -136,6 +137,15 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         description: { type: 'string' },
         words_per_chapter: { type: 'array', items: { type: 'integer' } },
         total_chapters: { type: 'integer' },
+        premise: { type: 'string', description: 'Optional one-sentence premise for the book plan.' },
+        logline: { type: 'string' },
+        themes: stringArray,
+        tone: { type: 'string' },
+        pov: { type: 'string' },
+        audience: { type: 'string' },
+        selling_points: stringArray,
+        ending: { type: 'string' },
+        strict_outline: { type: 'boolean' },
         project_root: root,
       },
       output: jsonOutput,
@@ -148,13 +158,23 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           description: args.description as string,
           words_per_chapter: args.words_per_chapter as [number, number],
           total_chapters: args.total_chapters as number,
+          premise: args.premise as string,
+          logline: args.logline as string,
+          themes: args.themes as string[],
+          tone: args.tone as string,
+          pov: args.pov as string,
+          audience: args.audience as string,
+          selling_points: args.selling_points as string[],
+          ending: args.ending as string,
+          strict_outline: args.strict_outline as boolean,
           root: args.project_root,
         }),
       ),
     }),
     defineTool({
       name: 'novel_status',
-      description: 'Read the project state: chapter, stage, rounds, blocking items and the next legal step.',
+      description:
+        'Read the project state: chapter, stage, rounds, blocking items, book-level outline/worldbook summary and the next legal step.',
       parameters: {
         chapter: { type: 'integer' },
         project_root: root,
@@ -170,6 +190,26 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
+            book?: {
+              strict: boolean
+              outline: {
+                total: number
+                archived: number
+                coverage: number
+                current: {
+                  num: number
+                  title: string
+                  scene_type: string
+                  target_words: [number, number]
+                } | null
+              }
+              worldbook: {
+                characters: number
+                locations: number
+                factions: number
+                rules: number
+              }
+            }
           }
           const active = value.active_chapter ?? value.chapter
           const where =
@@ -186,6 +226,16 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
                   ]),
               value.blocking.length === 0 ? '门控：全部通过' : `门控：${value.blocking.length} 条阻塞`,
               ...value.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
+              ...(value.book === undefined
+                ? []
+                : [
+                    `全书：大纲 ${value.book.outline.total} 张卡（已归档 ${value.book.outline.archived}，覆盖率 ${Math.round(value.book.outline.coverage * 100)}%）· 世界观 ${value.book.worldbook.characters} 角色 / ${value.book.worldbook.locations} 地点 / ${value.book.worldbook.factions} 势力 / ${value.book.worldbook.rules} 规则${value.book.strict ? ' · 严格大纲' : ''}`,
+                    `当前章卡：${
+                      value.book.outline.current === null
+                        ? '（无）'
+                        : `第${value.book.outline.current.num}章 ${value.book.outline.current.title} · ${value.book.outline.current.scene_type} · ${value.book.outline.current.target_words[0]}-${value.book.outline.current.target_words[1]} 字`
+                    }`,
+                  ]),
               `下一步：${value.next.tool} — ${value.next.reason}`,
             ].join('\n'),
           )
@@ -252,10 +302,10 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         title: { type: 'string', required: true },
         scene_type: { type: 'string', required: true, enum: SCENE_TYPES },
         narrator: { type: 'string', required: true },
-        beats: stringArray,
-        opening: { type: 'string' },
-        ending: { type: 'string' },
-        target_words: { type: 'array', items: { type: 'integer' } },
+        beats: { ...stringArray, required: true },
+        opening: { type: 'string', required: true },
+        ending: { type: 'string', required: true },
+        target_words: { type: 'array', items: { type: 'integer' }, required: true },
         cast: {
           type: 'json',
           description:
@@ -273,7 +323,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           beats: (args.beats as string[]) ?? [],
           opening: args.opening ?? '',
           ending: args.ending ?? '',
-          target_words: [args.target_words?.[0] ?? 2000, args.target_words?.[1] ?? 3000],
+          target_words: args.target_words as [number, number],
           ...(args.cast === undefined ? {} : { cast: asJson<never[]>(args.cast, 'cast') }),
           root: args.project_root,
         }),
@@ -375,7 +425,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         semantic: {
           type: 'json',
           required: true,
-          description: 'Exactly the four P6 semantic items, each with a verbatim evidence quote.',
+          description: 'Exactly the five P6 semantic items, each with a verbatim evidence quote.',
         },
         project_root: root,
       },
@@ -448,7 +498,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     }),
     defineTool({
       name: 'novel_state',
-      description: 'Read a state document (ledgers, plans, review, check) without touching the manuscript.',
+      description:
+        'Read a state document (ledgers, plans, review, check, outline, worldbook) without touching the manuscript.',
       parameters: {
         kind: {
           type: 'string',
@@ -468,6 +519,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             'novel',
             'planWorld',
             'planChapter',
+            'outline',
+            'worldbook',
           ] as const,
         },
         chapter: { type: 'integer' },
@@ -512,6 +565,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             'state/foreshadows.yaml',
             'state/relationships.yaml',
             'state/handoff.yaml',
+            'outline/outline.yaml',
+            'outline/worldbook.yaml',
           ] as const,
         },
         content: { type: 'json', required: true },
@@ -552,7 +607,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       name: 'novel_diff',
       description: 'Diff a chapter against its last archived backup, or between two supplied texts.',
       parameters: {
-        chapter: { type: 'integer', required: true },
+        chapter: { type: 'integer' },
         before: { type: 'string' },
         after: { type: 'string' },
         project_root: root,
@@ -569,9 +624,14 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     }),
     defineTool({
       name: 'novel_export',
-      description: 'Export the manuscript as Markdown, plain text, or a valid EPUB 3 archive.',
+      description:
+        'Export the manuscript as Markdown, plain text or EPUB 3, or export the whole-book outline, worldbook or proposal.',
       parameters: {
-        kind: { type: 'string', required: true, enum: ['md', 'txt', 'epub'] as const },
+        kind: {
+          type: 'string',
+          required: true,
+          enum: ['md', 'txt', 'epub', 'outline', 'worldbook', 'proposal'] as const,
+        },
         chapter: { type: 'integer' },
         project_root: root,
       },
@@ -594,6 +654,184 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       parameters: { project_root: root },
       output: jsonOutput,
       execute: guarded(async (args) => engine.advise({ root: args.project_root })),
+    }),
+    defineTool({
+      name: 'novel_blueprint',
+      description:
+        'Write the book-level blueprint: premise, logline, themes, tone, POV, audience, selling points, ending and volume structure. It does not require a chapter stage; call novel_outline next.',
+      parameters: {
+        premise: { type: 'string' },
+        logline: { type: 'string' },
+        themes: stringArray,
+        tone: { type: 'string' },
+        pov: { type: 'string' },
+        audience: { type: 'string' },
+        selling_points: stringArray,
+        ending: { type: 'string' },
+        strict: { type: 'boolean', description: 'Require a chapter card before P2/P3.' },
+        volumes: {
+          type: 'json',
+          description:
+            'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Replaces the current volumes.',
+        },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.submitBookPlan({
+          premise: args.premise as string,
+          logline: args.logline as string,
+          themes: args.themes as string[],
+          tone: args.tone as string,
+          pov: args.pov as string,
+          audience: args.audience as string,
+          selling_points: args.selling_points as string[],
+          ending: args.ending as string,
+          strict: args.strict as boolean,
+          volumes: asJson(args.volumes, 'volumes') as never,
+          root: args.project_root,
+        }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_outline',
+      description:
+        'Write volume/chapter cards. Archived cards are preserved and cannot be rewritten. On the first submission strict mode defaults on; with an existing card, PG-13 checks title, scene, target words and cast even in non-strict mode.',
+      parameters: {
+        book: { type: 'json', description: 'Optional partial book blueprint patch.' },
+        volumes: { type: 'json', description: 'Optional full volume list; omitted keeps current volumes.' },
+        chapters: {
+          type: 'json',
+          required: true,
+          description:
+            'Chapter cards: [{num,title,scene_type,goal,conflict,hook,cast?,target_words:[min,max],volume?,notes?}].',
+        },
+        strict: { type: 'boolean' },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.submitOutline({
+          book: asJson(args.book, 'book') as never,
+          volumes: asJson(args.volumes, 'volumes') as never,
+          chapters: asJson(args.chapters, 'chapters') as never,
+          strict: args.strict as boolean,
+          root: args.project_root,
+        }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_outline_import',
+      description:
+        'Import an existing outline from Markdown, YAML or JSON. Use dry_run to preview without writing; apply, then call novel_status.',
+      parameters: {
+        format: { type: 'string', required: true, enum: ['markdown', 'yaml', 'json'] as const },
+        content: { type: 'string', required: true },
+        dry_run: { type: 'boolean' },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.importOutline({
+          format: args.format,
+          content: args.content,
+          dry_run: args.dry_run,
+          root: args.project_root,
+        }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_worldbook',
+      description:
+        'Update the worldbuilding bible (setting, rules, factions, locations, characters, glossary, backstory). Only supplied sections are replaced.',
+      parameters: {
+        premise: { type: 'string' },
+        setting: { type: 'string' },
+        rules: { type: 'json' },
+        factions: { type: 'json' },
+        locations: { type: 'json' },
+        characters: { type: 'json' },
+        glossary: { type: 'json' },
+        backstory: { type: 'json' },
+        themes: stringArray,
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.submitWorldbook({
+          premise: args.premise as string,
+          setting: args.setting as string,
+          rules: asJson(args.rules, 'rules') as never,
+          factions: asJson(args.factions, 'factions') as never,
+          locations: asJson(args.locations, 'locations') as never,
+          characters: asJson(args.characters, 'characters') as never,
+          glossary: asJson(args.glossary, 'glossary') as never,
+          backstory: asJson(args.backstory, 'backstory') as never,
+          themes: args.themes as string[],
+          root: args.project_root,
+        }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_search',
+      description:
+        'Search manuscripts, summaries, outline, worldbook or ledgers; results carry chapter and paragraph.',
+      parameters: {
+        query: { type: 'string', required: true },
+        scope: {
+          type: 'string',
+          enum: ['all', 'chapters', 'summaries', 'outline', 'worldbook', 'ledgers'] as const,
+        },
+        limit: { type: 'integer' },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.search({
+          query: args.query,
+          scope: args.scope,
+          limit: args.limit,
+          root: args.project_root,
+        }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_doctor',
+      description:
+        'Run a read-only health check: project, pipeline, state, journal, manuscripts, outline coverage/drift, stage products, backups, lock and next step.',
+      parameters: { project_root: root },
+      output: jsonOutput,
+      execute: guarded(async (args) => engine.doctor({ root: args.project_root })),
+    }),
+    defineTool({
+      name: 'novel_report',
+      description:
+        'Whole-book report: progress, outline coverage/drift, worldbook counts, quality trend, pacing, cast, foreshadows, timeline, relationships and activity.',
+      parameters: { project_root: root },
+      output: jsonOutput,
+      execute: guarded(async (args) => engine.report({ root: args.project_root })),
+    }),
+    defineTool({
+      name: 'novel_guide',
+      description:
+        'Onboarding guide: what is done, what to do next, which tool to call and the relevant commands. Works before a project exists.',
+      parameters: { project_root: root },
+      output: jsonOutput,
+      execute: guarded(async (args) => engine.guide({ root: args.project_root })),
+    }),
+    defineTool({
+      name: 'novel_reopen',
+      description:
+        'Reopen the immediately preceding archived chapter from its archive backup, returning it to P3 so it can be revised and re-archived. A reason is mandatory and is recorded in the journal.',
+      parameters: {
+        chapter: { type: 'integer', required: true },
+        reason: { type: 'string', required: true },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.reopenChapter({ chapter: args.chapter, reason: args.reason, root: args.project_root }),
+      ),
     }),
   ]
 }

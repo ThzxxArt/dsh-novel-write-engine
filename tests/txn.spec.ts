@@ -51,6 +51,75 @@ describe('transaction compensation', () => {
     }
   })
 
+  it('repairs a torn pending append before writing the aborted row', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '事务之书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const original = store.appendText.bind(store)
+      let torn = false
+      store.appendText = async (path, text) => {
+        if (!torn && path.endsWith('journal.jsonl') && text.includes('"status":"pending"')) {
+          torn = true
+          await original(path, text.slice(0, -8))
+          throw new Error('simulated torn pending append')
+        }
+        return original(path, text)
+      }
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-torn-pending',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      const journal = await readJournal(store)
+      expect(journal.malformed).toBe(0)
+      expect(journal.rows.find((row) => row.txid === 'tx-torn-pending')?.status).toBe('aborted')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('removes a partially written marked backup when the pre-image write fails', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '事务之书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const original = store.writeBytes.bind(store)
+      store.writeBytes = async (path, bytes) => {
+        if (path.includes('/backup/')) throw new Error('simulated backup write failure')
+        return original(path, bytes)
+      }
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-backup-fail',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await store.exists('backups/tx-backup-fail')).toBe(false)
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('leaves targets untouched when the abort signal fires or afterVerify throws', async () => {
     const { root, engine, cleanup } = await harness()
     try {

@@ -573,4 +573,337 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     missing.relationships['甲|乙'] = { action: 'updated' }
     fails(sampleSummary({ events: [], characters_appeared: [] }), missing)
   })
+
+  it('rejects malformed summary and delta containers before dereferencing them', () => {
+    const noElements = sampleSummary() as unknown as Record<string, unknown>
+    delete noElements.new_elements
+    fails(noElements as never, empty())
+    const badLocations = sampleSummary()
+    badLocations.new_elements = { locations: 'x' as never, abilities: [], artifacts: [] }
+    fails(badLocations, empty())
+    const badResources = sampleSummary()
+    badResources.resource_changes = 'x' as never
+    fails(badResources, empty())
+    const badEvents = sampleSummary()
+    badEvents.events = 'x' as never
+    fails(badEvents, empty())
+    const badForeshadows = sampleSummary()
+    badForeshadows.foreshadows = { planted: 'x' as never, advanced: [], resolved: [] }
+    fails(badForeshadows, empty())
+    const badDelta = empty()
+    badDelta.characters['甲'] = null as never
+    fails(sampleSummary({ characters_appeared: ['甲'] }), badDelta)
+  })
+
+  it('rejects malformed character and resource declarations', () => {
+    const badProfile = empty()
+    badProfile.characters['甲'] = character('甲', { profile: [] })
+    fails(sampleSummary({ characters_appeared: ['甲'] }), badProfile)
+    const badGrowth = empty()
+    badGrowth.characters['甲'] = { action: 'updated', growth: 'x' }
+    const docs = base() as { characters: { characters: Array<Record<string, unknown>> } }
+    docs.characters.characters.push({ name: '甲', role: 'extra', updated_at: 1, growth: [] })
+    fails(sampleSummary({ characters_appeared: ['甲'] }), badGrowth, docs)
+    const badResource = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '', resource: '钱', delta: 1, reason: 'x' }],
+    })
+    const created = empty()
+    created.characters['甲'] = character('甲')
+    fails(badResource, created)
+    const zero = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: 0, reason: 'x' }],
+    })
+    fails(zero, created)
+    const noChange = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: 1, reason: 'x' }],
+    })
+    const noChangeDelta = empty()
+    noChangeDelta.characters['甲'] = { action: 'no_change', reason: '没有变化' }
+    fails(noChange, noChangeDelta, docs)
+  })
+
+  it('rejects malformed world declarations and applies a location update', () => {
+    const summary = sampleSummary({
+      characters_appeared: [],
+      new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+    })
+    const wrongKind = empty()
+    wrongKind.world['屋'] = { action: 'created', kind: 'ability' }
+    fails(summary, wrongKind)
+    const unknownKind = empty()
+    unknownKind.world['屋'] = { action: 'created', kind: 'unknown' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: [], abilities: [], artifacts: [] },
+      }),
+      unknownKind,
+    )
+    const notInText = empty()
+    notInText.world['桥'] = { action: 'created', kind: 'location' }
+    fails(summary, notInText)
+    const emptyName = empty()
+    emptyName.world[''] = { action: 'created', kind: 'location' }
+    fails(summary, emptyName)
+    const malformed = empty()
+    malformed.world['屋'] = { action: 'created', kind: 'location', capacity: -1, detail: [] as never }
+    fails(summary, malformed)
+
+    const createdSummary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+    })
+    const first = run(
+      createdSummary,
+      (() => {
+        const delta = empty()
+        delta.world['屋'] = { action: 'created', kind: 'location', description: '旧屋', capacity: 3 }
+        return delta
+      })(),
+    )
+    const update = empty()
+    update.world['屋'] = { action: 'updated', description: '新屋', layout: '院子', capacity: 5 }
+    const updated = run(
+      sampleSummary({ characters_appeared: [], events: [] }),
+      update,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(updated.world.locations[0]).toMatchObject({
+      description: '新屋',
+      layout: '院子',
+      capacity: 5,
+    })
+  })
+
+  it('rejects malformed timeline keys and foreshadow transitions', () => {
+    const missingTimeline = empty()
+    fails(sampleSummary({ characters_appeared: [], events: ['事件'] }), missingTimeline)
+    const wrongTimeline = empty()
+    wrongTimeline.timeline['0'] = { action: 'updated' }
+    fails(sampleSummary({ characters_appeared: [], events: ['事件'] }), wrongTimeline)
+    const badKey = empty()
+    badKey.timeline.extra = { action: 'created' }
+    fails(sampleSummary({ characters_appeared: [], events: [] }), badKey)
+
+    const emptyKey = empty()
+    emptyKey.foreshadows[''] = { action: 'created' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        foreshadows: { planted: [{ key: '', title: '旧信', description: '' }], advanced: [], resolved: [] },
+      }),
+      emptyKey,
+    )
+    const missingForeshadow = empty()
+    missingForeshadow.foreshadows['FS-001'] = { action: 'updated' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        foreshadows: { planted: [], advanced: [{ key: 'FS-999', note: 'x', new_info: true }], resolved: [] },
+      }),
+      missingForeshadow,
+    )
+    const resolvedMissing = empty()
+    resolvedMissing.foreshadows['FS-001'] = { action: 'updated' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        foreshadows: { planted: [], advanced: [], resolved: ['FS-999'] },
+      }),
+      resolvedMissing,
+    )
+  })
+
+  it('rejects malformed relationship declarations while accepting updates', () => {
+    const missing = empty()
+    missing.relationships['甲|甲'] = { action: 'created', type: '友' }
+    fails(sampleSummary({ characters_appeared: [], events: [] }), missing)
+    const unknown = empty()
+    unknown.relationships['甲|乙'] = { action: 'created', type: '友' }
+    fails(sampleSummary({ characters_appeared: [], events: [] }), unknown)
+    const noType = empty()
+    noType.relationships['甲|乙'] = { action: 'created' }
+    fails(
+      sampleSummary({ characters_appeared: ['甲', '乙'], events: [] }),
+      noType,
+      (() => {
+        const docs = base() as { characters: { characters: Array<Record<string, unknown>> } }
+        docs.characters.characters.push({ name: '甲', role: 'extra', updated_at: 1, growth: [] })
+        docs.characters.characters.push({ name: '乙', role: 'extra', updated_at: 1, growth: [] })
+        return docs
+      })(),
+    )
+  })
+
+  it('creates and updates ability, artifact, faction and rule entities', () => {
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      new_elements: { locations: [], abilities: ['术'], artifacts: ['风'] },
+    })
+    const delta = empty()
+    delta.world['术'] = { action: 'created', kind: 'ability', description: '术法' }
+    delta.world['风'] = { action: 'created', kind: 'artifact', description: '风器' }
+    delta.world['甲'] = { action: 'created', kind: 'faction', description: '势力' }
+    delta.world['乙'] = { action: 'created', kind: 'rule', description: '规则' }
+    const first = run(summary, delta)
+    expect(first.world.abilities).toHaveLength(1)
+    expect(first.world.artifacts).toHaveLength(1)
+    expect(first.world.factions).toHaveLength(1)
+    expect(first.world.rules).toHaveLength(1)
+
+    const update = empty()
+    update.world['术'] = { action: 'updated', description: '新术', detail: { level: 2 } }
+    update.world['风'] = { action: 'updated', detail: { level: 3 } }
+    update.world['甲'] = { action: 'updated', description: '新势力' }
+    update.world['乙'] = { action: 'updated', description: '新规则' }
+    const second = run(
+      sampleSummary({ characters_appeared: [], events: [] }),
+      update,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.world.abilities[0]).toMatchObject({ description: '新术', level: 2 })
+    expect(second.world.artifacts[0]).toMatchObject({ level: 3 })
+  })
+
+  it('plants, advances and resolves a foreshadow through the ledger', () => {
+    const plantSummary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      foreshadows: {
+        planted: [{ key: '旧信', title: '风', description: '旧信' }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const plant = empty()
+    plant.foreshadows['旧信'] = { action: 'created', title: '风' }
+    const first = run(plantSummary, plant)
+    expect(first.foreshadows.items[0]).toMatchObject({ id: 'FS-001', title: '风' })
+
+    const advance = empty()
+    advance.foreshadows['FS-001'] = { action: 'updated', note: '推进' }
+    const second = run(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        foreshadows: {
+          planted: [],
+          advanced: [{ key: 'FS-001', note: '推进', new_info: true }],
+          resolved: [],
+        },
+      }),
+      advance,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.foreshadows.items[0]).toMatchObject({ status: 'advanced' })
+
+    const resolve = empty()
+    resolve.foreshadows['FS-001'] = { action: 'updated' }
+    const third = run(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        foreshadows: { planted: [], advanced: [], resolved: ['FS-001'] },
+      }),
+      resolve,
+      second as unknown as Record<string, unknown>,
+      3,
+    )
+    expect(third.foreshadows.items[0]).toMatchObject({ status: 'resolved' })
+  })
+
+  it('creates and updates a relationship', () => {
+    const docs = base() as { characters: { characters: Array<Record<string, unknown>> } }
+    docs.characters.characters.push({ name: '甲', role: 'extra', updated_at: 1, growth: [] })
+    docs.characters.characters.push({ name: '乙', role: 'extra', updated_at: 1, growth: [] })
+    const create = empty()
+    create.relationships['甲|乙'] = {
+      action: 'created',
+      type: '旧识',
+      description: '认识',
+    }
+    const first = run(sampleSummary({ characters_appeared: [], events: [] }), create, docs)
+    expect(first.relationships.items[0]).toMatchObject({ type: '旧识' })
+    const update = empty()
+    update.relationships['甲|乙'] = { action: 'updated', type: '盟友', note: '结盟' }
+    const second = run(
+      sampleSummary({ characters_appeared: [], events: [] }),
+      update,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.relationships.items[0]).toMatchObject({ type: '盟友' })
+    expect(second.relationships.items[0]!.evolution[0]).toMatchObject({ chapter: 2 })
+  })
+
+  it('rejects malformed element arrays and resource details', () => {
+    const badAbility = sampleSummary()
+    badAbility.new_elements.abilities = 'x' as never
+    fails(badAbility, empty())
+    const badArtifact = sampleSummary()
+    badArtifact.new_elements.artifacts = [1] as never
+    fails(badArtifact, empty())
+    const badArtifactArray = sampleSummary()
+    badArtifactArray.new_elements.artifacts = 'x' as never
+    fails(badArtifactArray, empty())
+    const noKind = empty()
+    noKind.world['风'] = { action: 'created' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: [], abilities: [], artifacts: [] },
+      }),
+      noKind,
+    )
+    const implicitLocation = empty()
+    implicitLocation.world['风'] = { action: 'created', kind: 'location' }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: [], abilities: [], artifacts: [] },
+      }),
+      implicitLocation,
+    )
+    const nonInteger = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: 1.5, reason: 'x' }],
+    })
+    const created = empty()
+    created.characters['甲'] = character('甲')
+    fails(nonInteger, created)
+    const noReason = sampleSummary({
+      characters_appeared: ['甲'],
+      resource_changes: [{ character: '甲', resource: '钱', delta: 1, reason: '' }],
+    })
+    fails(noReason, created)
+    const badDescription = empty()
+    badDescription.world['屋'] = { action: 'created', kind: 'location', description: 1 }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+      }),
+      badDescription,
+    )
+    const badLayout = empty()
+    badLayout.world['屋'] = { action: 'created', kind: 'location', layout: 1 }
+    fails(
+      sampleSummary({
+        characters_appeared: [],
+        new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+      }),
+      badLayout,
+    )
+  })
 })

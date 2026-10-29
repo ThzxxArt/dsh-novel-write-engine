@@ -24,6 +24,29 @@ const fakeEngine = () => {
         rounds: { review: 0, revise: 0, check: 0 },
         blocking: [],
         metrics: null,
+        book: {
+          premise: 'p',
+          logline: 'l',
+          strict: true,
+          outline: {
+            present: true,
+            total: 1,
+            planned: 1,
+            archived: 0,
+            coverage: 0,
+            volumes: 0,
+            current: null,
+          },
+          worldbook: {
+            present: true,
+            characters: 1,
+            locations: 1,
+            factions: 0,
+            rules: 0,
+            glossary: 0,
+            backstory: 0,
+          },
+        },
         next: { tool: 'novel_plan_world', args: {}, reason: 'start' },
       }),
     ),
@@ -65,6 +88,58 @@ const fakeEngine = () => {
     advise: vi.fn(async () =>
       result({ stage: 'P3', chapter: 1, tool: 'novel_write_draft', args: {}, reason: 'write', blocking: [] }),
     ),
+    submitBookPlan: vi.fn(async () =>
+      result({ premise: '', logline: '', strict: true, volumes: 1, chapters: 1 }),
+    ),
+    submitOutline: vi.fn(async () => result({ planned: 1, archived: 0, total: 1, strict: true, volumes: 1 })),
+    importOutline: vi.fn(async () =>
+      result({
+        format: 'markdown',
+        planned: 1,
+        archived: 0,
+        total: 1,
+        warnings: [],
+        preview: '',
+        applied: true,
+      }),
+    ),
+    submitWorldbook: vi.fn(async () => result({ sections: ['rules'], entries: 1 })),
+    search: vi.fn(async (): Promise<any> =>
+      result({ query: 'x', scope: 'all', total: 0, truncated: false, results: [] }),
+    ),
+    doctor: vi.fn(async (): Promise<any> =>
+      result({ ok: true, root: '/tmp/x', checks: [], summary: { errors: 0, warnings: 0, infos: 0 } }),
+    ),
+    report: vi.fn(async (): Promise<any> =>
+      result({
+        progress: { archived: 1, target: 3, words: 100, percent: 33 },
+        outline: { planned: 1, archived: 1, drift: [] },
+        worldbook: { characters: 1 },
+        quality: { average: 145, median: 145, trend: 0 },
+        pacing: {},
+        cast: {},
+        foreshadows: { open: 0, overdue: 0 },
+        timeline: {},
+        relationships: {},
+        activity: [],
+        warnings: [],
+      }),
+    ),
+    guide: vi.fn(async () =>
+      result({
+        state: 'new',
+        title: 't',
+        steps: [],
+        next: { tool: 'novel_brief', args: {}, reason: 'r' },
+        commands: [],
+        tips: [],
+      }),
+    ),
+    reopenChapter: vi.fn(async () => result({ chapter: 1, stage: 'P3', restore_txid: 'tx' })),
+    listProjects: vi.fn(async () => ({ active: null, projects: [] })),
+    registerProject: vi.fn(async () => ({ active: '/tmp/x', projects: [] })),
+    setActiveProject: vi.fn(async () => ({ active: '/tmp/x' })),
+    forgetProject: vi.fn(async () => ({ active: null, projects: [] })),
     stats: vi.fn(async () => ({
       totalWords: 100,
       chapters: 1,
@@ -130,11 +205,11 @@ const tools = (engine: ReturnType<typeof fakeEngine>): Map<string, Tool> =>
   )
 
 describe('tool adapters', () => {
-  it('registers exactly eighteen tools and eight in core mode', () => {
-    expect(toolNames('all')).toHaveLength(18)
-    expect(toolNames('core')).toHaveLength(8)
+  it('registers exactly twenty-seven tools and ten in core mode', () => {
+    expect(toolNames('all')).toHaveLength(27)
+    expect(toolNames('core')).toHaveLength(10)
     const map = tools(fakeEngine())
-    expect(map.size).toBe(18)
+    expect(map.size).toBe(27)
   })
 
   it('renders the payload after the host passes execute() straight to output.render', async () => {
@@ -254,6 +329,33 @@ describe('tool adapters', () => {
   })
 })
 
+it('routes the 0.2.0 book tools to their service operations', async () => {
+  const engine = fakeEngine()
+  const map = tools(engine)
+  await map.get('novel_blueprint')!.execute({ premise: 'p', volumes: [] }, {})
+  expect(engine.submitBookPlan).toHaveBeenCalledWith(expect.objectContaining({ premise: 'p', volumes: [] }))
+  await map.get('novel_outline')!.execute({ chapters: [] }, {})
+  expect(engine.submitOutline).toHaveBeenCalledWith(expect.objectContaining({ chapters: [] }))
+  await map.get('novel_outline_import')!.execute({ format: 'markdown', content: 'x' }, {})
+  expect(engine.importOutline).toHaveBeenCalledWith(
+    expect.objectContaining({ format: 'markdown', content: 'x' }),
+  )
+  await map.get('novel_worldbook')!.execute({ rules: [] }, {})
+  expect(engine.submitWorldbook).toHaveBeenCalledWith(expect.objectContaining({ rules: [] }))
+  await map.get('novel_search')!.execute({ query: 'x' }, {})
+  expect(engine.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'x' }))
+  await map.get('novel_doctor')!.execute({}, {})
+  await map.get('novel_report')!.execute({}, {})
+  await map.get('novel_guide')!.execute({}, {})
+  expect(engine.doctor).toHaveBeenCalled()
+  expect(engine.report).toHaveBeenCalled()
+  expect(engine.guide).toHaveBeenCalled()
+  await map.get('novel_reopen')!.execute({ chapter: 1, reason: 'rewrite the ending' }, {})
+  expect(engine.reopenChapter).toHaveBeenCalledWith(
+    expect.objectContaining({ chapter: 1, reason: 'rewrite the ending' }),
+  )
+})
+
 describe('command adapters', () => {
   const invocation = (rawInput: string, signal = new AbortController().signal) => ({ rawInput, signal })
 
@@ -269,6 +371,16 @@ describe('command adapters', () => {
     expect((await novel.handler(invocation('export pdf'))).kind).toBe('error')
     expect((await novel.handler(invocation('admin'))).text).toContain('隐藏操作')
     expect((await novel.handler(invocation('nope'))).kind).toBe('error')
+    expect((await novel.handler(invocation('outline'))).kind).toBe('success')
+    expect((await novel.handler(invocation('guide'))).kind).toBe('success')
+    expect((await novel.handler(invocation('report'))).kind).toBe('success')
+    expect((await novel.handler(invocation('doctor'))).kind).toBe('success')
+    expect((await novel.handler(invocation('search 信封'))).kind).toBe('success')
+    expect((await novel.handler(invocation('search'))).kind).toBe('error')
+    expect((await novel.handler(invocation('export'))).kind).toBe('error')
+    expect((await novel.handler(invocation('admin novel_word_count {"text":"x"}'))).kind).toBe('success')
+    expect((await novel.handler(invocation('admin nope {}'))).kind).toBe('error')
+    expect((await novel.handler(invocation('export outline'))).kind).toBe('success')
     expect(engine.export).toHaveBeenCalledWith({ kind: 'epub' })
   })
 
@@ -285,6 +397,29 @@ describe('command adapters', () => {
     expect(reply.text).toContain('[X] bad — hint')
   })
 
+  it('renders admin warnings and replay markers', async () => {
+    const engine = fakeEngine()
+    const novel = createCommands(engine as unknown as EngineService).find(
+      (command) => command.name === 'novel',
+    )!
+    engine.search.mockResolvedValueOnce({
+      data: { query: 'x', scope: 'all', total: 0, truncated: false, results: [] },
+      revision: 1,
+      warnings: [{ code: 'OUTLINE_UNREADABLE', message: 'outline is corrupt' }],
+    } as never)
+    const searched = await novel.handler(invocation('admin novel_search {"query":"x"}'))
+    expect(searched.text).toContain('引擎警告')
+    expect(searched.text).toContain('OUTLINE_UNREADABLE')
+    engine.export.mockResolvedValueOnce({
+      data: { kind: 'md', files: ['exports/book.md'] },
+      revision: 1,
+      warnings: [],
+      replayed: true,
+    } as never)
+    const exported = await novel.handler(invocation('admin novel_export {"kind":"md"}'))
+    expect(exported.text).toContain('replayed: true')
+  })
+
   it('serves the four short commands', async () => {
     const engine = fakeEngine()
     const commands = createCommands(engine as unknown as EngineService)
@@ -294,6 +429,22 @@ describe('command adapters', () => {
     expect(
       (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
     ).toContain('default@1.0.0')
+    expect(
+      (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
+    ).toContain('revision 2')
+    engine.advise.mockResolvedValueOnce(
+      result({
+        stage: 'P2',
+        chapter: 1,
+        tool: 'novel_brief',
+        args: {},
+        reason: 'fetch the P2 brief before novel_plan_chapter',
+        blocking: [],
+      }),
+    )
+    expect(
+      (await commands.find((command) => command.name === 'novel-next')!.handler(invocation(''))).text,
+    ).toContain('先领取当前阶段的任务书')
     expect(
       (await commands.find((command) => command.name === 'novel-export')!.handler(invocation('txt'))).kind,
     ).toBe('success')
@@ -328,9 +479,7 @@ describe('command adapters', () => {
     expect(unknown.text).toContain('未知')
 
     await novel.handler(invocation('admin novel_plan_chapter {"title":"t"}'))
-    expect(engine.submitChapterPlan).toHaveBeenLastCalledWith(
-      expect.objectContaining({ target_words: [2000, 3000], beats: [] }),
-    )
+    expect(engine.submitChapterPlan).toHaveBeenLastCalledWith(expect.objectContaining({ title: 't' }))
     await novel.handler(
       invocation('admin novel_amend {"path":"state/world.yaml","content":{"note":"a  b"},"reason":"r"}'),
     )
@@ -340,7 +489,10 @@ describe('command adapters', () => {
 
     for (const [operation, args] of [
       ['novel_plan_world', '{"objective":"o"}'],
-      ['novel_plan_chapter', '{"title":"t"}'],
+      [
+        'novel_plan_chapter',
+        '{"title":"t","scene_type":"日常过渡章","narrator":"n","beats":["a","b","c","d","e"],"opening":"o","ending":"e","target_words":[100,200]}',
+      ],
       ['novel_word_count', '{"text":"x"}'],
       ['novel_amend', '{"path":"state/world.yaml","content":{},"reason":"r"}'],
       ['novel_diff', '{"chapter":1}'],
@@ -351,6 +503,93 @@ describe('command adapters', () => {
       const result = await novel.handler(invocation(`admin ${operation} ${args}`))
       expect(result.kind, operation).toBe('success')
     }
+  })
+
+  it('exposes every 0.2.0 admin operation and the registry helpers', async () => {
+    const engine = fakeEngine()
+    const novel = createCommands(engine as unknown as EngineService).find(
+      (command) => command.name === 'novel',
+    )!
+    for (const [operation, args] of [
+      ['novel_blueprint', '{}'],
+      ['novel_outline', '{"chapters":[]}'],
+      ['novel_outline_import', '{"format":"markdown","content":"x"}'],
+      ['novel_worldbook', '{"premise":"x"}'],
+      ['novel_search', '{"query":"x"}'],
+      ['novel_doctor', '{}'],
+      ['novel_report', '{}'],
+      ['novel_guide', '{}'],
+      ['novel_reopen', '{"chapter":1,"reason":"test"}'],
+    ] as const) {
+      const result = await novel.handler(invocation(`admin ${operation} ${args}`))
+      expect(result.kind, operation).toBe('success')
+    }
+    expect((await novel.handler(invocation('admin novel_registry_list {}'))).kind).toBe('success')
+    expect((await novel.handler(invocation('admin novel_registry_register {"root":"/tmp/x"}'))).kind).toBe(
+      'success',
+    )
+    expect((await novel.handler(invocation('admin novel_registry_activate {"root":"/tmp/x"}'))).kind).toBe(
+      'success',
+    )
+    expect((await novel.handler(invocation('admin novel_registry_forget {"root":"/tmp/x"}'))).kind).toBe(
+      'success',
+    )
+    expect((await novel.handler(invocation('admin novel_registry_register {}'))).kind).toBe('error')
+  })
+
+  it('covers the no-book fallback and non-empty report/doctor output', async () => {
+    const invocation = (rawInput: string) => ({ rawInput, signal: new AbortController().signal })
+    const engine = fakeEngine()
+    engine.getStatus = vi.fn(async () =>
+      result({
+        project: { title: 't', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        stage: 'idle',
+        rounds: { review: 0, revise: 0, check: 0 },
+        blocking: [],
+        metrics: null,
+        next: { tool: 'novel_plan_world', args: {}, reason: 'start' },
+      }),
+    )
+    engine.report = vi.fn(async () =>
+      result({
+        progress: { archived: 0, target: null, words: 0, percent: 0 },
+        outline: { planned: 0, archived: 0, drift: [] },
+        worldbook: { characters: 0 },
+        quality: { average: 0, median: 0, trend: 0 },
+        pacing: {},
+        cast: {},
+        foreshadows: { open: 0, overdue: 0 },
+        timeline: {},
+        relationships: {},
+        activity: [],
+        warnings: ['一条警告'],
+      }),
+    )
+    engine.doctor = vi.fn(async () =>
+      result({
+        ok: false,
+        root: '/tmp/x',
+        checks: [
+          { id: 'a', severity: 'ok', title: 'ok', detail: 'fine' },
+          { id: 'b', severity: 'error', title: 'bad', detail: 'broken' },
+        ],
+        summary: { errors: 1, warnings: 0, infos: 0 },
+      }),
+    ) as never
+    const novel = createCommands(engine as unknown as EngineService).find(
+      (command) => command.name === 'novel',
+    )!
+    const status = await novel.handler(invocation('status'))
+    expect(status.kind).toBe('success')
+    expect(status.text).not.toContain('全书：')
+    const outline = await novel.handler(invocation('outline'))
+    expect(outline.text).toContain('还没有书级规划数据')
+    const report = await novel.handler(invocation('report'))
+    expect(report.text).toContain('一条警告')
+    const doctor = await novel.handler(invocation('doctor'))
+    expect(doctor.text).toContain('[error] bad')
+    expect(doctor.text).not.toContain('[ok]')
   })
 
   it('rejects malformed admin arguments and supports the short command form', async () => {
@@ -370,6 +609,43 @@ describe('command adapters', () => {
     const plain = { advise: async () => 'plain' } as unknown as EngineService
     expect(await runAdminOperation(plain, 'novel_pipeline', '')).toContain('plain')
   })
+})
+
+it('surfaces non-engine command errors and search hits', async () => {
+  const invocation = (rawInput: string) => ({ rawInput, signal: new AbortController().signal })
+  const engine = fakeEngine()
+  const commands = createCommands(engine as unknown as EngineService)
+  const next = commands.find((command) => command.name === 'novel-next')!
+  engine.advise = vi.fn(async () => {
+    throw new Error('advise boom')
+  })
+  expect((await next.handler(invocation(''))).text).toContain('advise boom')
+  const stats = commands.find((command) => command.name === 'novel-stats')!
+  engine.stats = vi.fn(async () => {
+    throw new Error('stats boom')
+  })
+  expect((await stats.handler(invocation(''))).text).toContain('stats boom')
+  const exp = commands.find((command) => command.name === 'novel-export')!
+  engine.export = vi.fn(async () => {
+    throw new Error('export boom')
+  })
+  expect((await exp.handler(invocation('md'))).text).toContain('export boom')
+  const view = fakeEngine()
+  view.search = vi.fn(async () =>
+    result({
+      query: 'x',
+      scope: 'all',
+      total: 1,
+      truncated: false,
+      results: [{ kind: 'chapters', chapter: 1, snippet: 'hit' }],
+    }),
+  ) as never
+  const novel = createCommands(view as unknown as EngineService).find((command) => command.name === 'novel')!
+  const search = await novel.handler(invocation('search x'))
+  expect(search.kind).toBe('success')
+  expect(search.text).toContain('找到 1 条')
+  const empty = await novel.handler(invocation('search'))
+  expect(empty.kind).toBe('error')
 })
 
 describe('panel route', () => {
@@ -400,8 +676,8 @@ describe('panel route', () => {
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
-    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 1 })
-    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(1)
+    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 2 })
+    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(2)
 
     const head = response()
     await handler({ method: 'HEAD' }, head)

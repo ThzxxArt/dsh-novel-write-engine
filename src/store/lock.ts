@@ -48,6 +48,8 @@ const isLockRecord = (value: unknown): value is LockRecord =>
   typeof (value as LockRecord).startedAt === 'string' &&
   ((value as LockRecord).nonce === undefined || typeof (value as LockRecord).nonce === 'string')
 
+export { isLockRecord }
+
 const processAlive = (pid: number): boolean => {
   if (pid === process.pid) return true
   try {
@@ -56,6 +58,20 @@ const processAlive = (pid: number): boolean => {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+/**
+ * Whether a parsed lock record still belongs to a live holder. This is the
+ * read-side rule used by FileLock.tryReclaim: a same-pid record is live only
+ * while this process still tracks its nonce; a foreign record is live while
+ * its pid exists. A same-pid leftover from a failed unlink or pid reuse is
+ * stale, not an indefinitely held writer.
+ */
+export function lockRecordIsLive(record: LockRecord): boolean {
+  if (record.pid === process.pid) {
+    return record.nonce !== undefined && liveNonces.has(record.nonce)
+  }
+  return processAlive(record.pid)
 }
 
 /** Cross-process write lock: `O_EXCL` create, pid + timestamp, stale reclaim. */
@@ -81,16 +97,20 @@ export class FileLock {
           startedAt: new Date().toISOString(),
           nonce: randomUUID(),
         }
+        // Register the nonce before the bytes become visible. A concurrent read
+        // in this process then cannot mistake a freshly written lock for a
+        // same-pid leftover.
+        if (record.nonce !== undefined) liveNonces.add(record.nonce)
         try {
           await handle.writeFile(JSON.stringify(record))
+          await handle.close()
         } catch (error) {
           await handle.close().catch(() => undefined)
+          if (record.nonce !== undefined) liveNonces.delete(record.nonce)
           await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
           throw error
         }
-        await handle.close()
         this.held = record
-        if (record.nonce !== undefined) liveNonces.add(record.nonce)
         return
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -162,11 +182,7 @@ export class FileLock {
       // its nonce is in the process-local set; otherwise it is a leftover from
       // a crashed/restarted instance (pid reuse, container PID 1, or a release
       // that failed to unlink).
-      if (record.pid === process.pid) {
-        if (record.nonce !== undefined && liveNonces.has(record.nonce)) return false
-      } else if (processAlive(record.pid)) {
-        return false
-      }
+      if (lockRecordIsLive(record)) return false
     }
 
     // Claim with a hard link instead of rename: the live lock is never moved
@@ -204,7 +220,11 @@ export class FileLock {
           current.pid === record.pid &&
           current.startedAt === record.startedAt &&
           current.nonce === record.nonce
-    if (currentMatches) await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
+    if (!currentMatches) {
+      await fs.rm(claimPath, { force: true }).catch(() => undefined)
+      return false
+    }
+    await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
     await fs.rm(claimPath, { force: true }).catch(() => undefined)
     await this.onReclaim?.(record)
     return true

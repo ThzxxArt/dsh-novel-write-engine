@@ -1,4 +1,5 @@
 import { REMOTE_VERSION } from '../constants.js'
+import { NEXT_DETAILS } from '../next-reasons.js'
 import type { PanelPayloadDto } from './dto.js'
 
 /** One human-facing progress step. */
@@ -38,6 +39,28 @@ export interface PanelView {
   blocking: Array<{ code: string; scope: string; detail: string; hint: string }>
   blockingTitle: string
   stats: { chapters: number; words: number; averageScore: number; blocking: number }
+  book: {
+    present: boolean
+    strict: boolean
+    premise: string
+    target: number | null
+    planned: number
+    outlineTotal: number
+    archivedCards: number
+    coverage: number
+    volumes: Array<{ title: string; range: string; planned: number; archived: number }>
+    worldbook: {
+      characters: number
+      locations: number
+      factions: number
+      rules: number
+      glossary: number
+      backstory: number
+    }
+  }
+  quality: { averageScore: number; scores: number[]; trend: number }
+  health: { ok: boolean; blocking: number; stateErrors: number }
+  activity: Array<{ at: string; op: string; chapter: number; status: string }>
   nextTitle: string
   nextDetail: string
   nextTool: string
@@ -79,20 +102,18 @@ const PLATFORM_LABELS: Record<string, string> = {
   jinjiang: '晋江文学城',
 }
 
-const NEXT_DETAILS: Record<string, string> = {
-  novel_init: '先建立一本书的项目根目录。',
-  novel_plan_world: '为新章节写下世界观约束与角色关系。',
-  novel_plan_chapter: '把本章拆成可执行的节拍与断章点。',
-  novel_write_draft: '按任务书写出本章初稿。',
-  novel_review: '按十五维给本章打分并标出问题。',
-  novel_revise: '处理评审意见后提交修订。',
-  novel_check: '核对场景、角色、因果与声音一致性。',
-  novel_archive: '通过终审后归档本章。',
-}
-
 const TOOL_LABELS: Record<string, string> = {
   novel_init: '创建项目',
   novel_status: '查看状态',
+  novel_guide: '上手引导',
+  novel_blueprint: '书级蓝图',
+  novel_outline: '大纲章卡',
+  novel_outline_import: '导入大纲',
+  novel_worldbook: '世界观',
+  novel_search: '全书搜索',
+  novel_doctor: '项目体检',
+  novel_report: '全书报告',
+  novel_reopen: '重开章节',
   novel_brief: '领取任务书',
   novel_plan_world: '补全世界观',
   novel_plan_chapter: '规划本章',
@@ -123,6 +144,21 @@ const loading = (): PanelView => ({
   blocking: [],
   blockingTitle: '门控',
   stats: { chapters: 0, words: 0, averageScore: 0, blocking: 0 },
+  book: {
+    present: false,
+    strict: false,
+    premise: '',
+    target: null,
+    planned: 0,
+    outlineTotal: 0,
+    archivedCards: 0,
+    coverage: 0,
+    volumes: [],
+    worldbook: { characters: 0, locations: 0, factions: 0, rules: 0, glossary: 0, backstory: 0 },
+  },
+  quality: { averageScore: 0, scores: [], trend: 0 },
+  health: { ok: true, blocking: 0, stateErrors: 0 },
+  activity: [],
   nextTitle: '',
   nextDetail: '',
   nextTool: '',
@@ -233,6 +269,41 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       averageScore: Math.round(average * 10) / 10,
       blocking: blocking.length,
     },
+    book: {
+      present: summary.book?.outline.present === true,
+      strict: summary.book?.strict === true,
+      premise: summary.book?.premise ?? '',
+      target: summary.book?.target ?? null,
+      planned: summary.book?.outline.planned ?? 0,
+      outlineTotal: summary.book?.outline.total ?? 0,
+      archivedCards: summary.book?.outline.archived ?? 0,
+      coverage: summary.book?.outline.coverage ?? 0,
+      volumes: (summary.book?.outline.volumes ?? []).map((volume) => ({
+        title: volume.title,
+        range: `第${volume.start}-${volume.end}章`,
+        planned: volume.planned,
+        archived: volume.archived,
+      })),
+      worldbook: summary.book?.worldbook ?? {
+        characters: 0,
+        locations: 0,
+        factions: 0,
+        rules: 0,
+        glossary: 0,
+        backstory: 0,
+      },
+    },
+    quality: {
+      averageScore: summary.quality?.averageScore ?? average,
+      scores: summary.quality?.scores ?? [],
+      trend: summary.quality?.trend ?? 0,
+    },
+    health: {
+      ok: summary.health?.ok ?? blocking.length === 0,
+      blocking: summary.health?.blocking ?? blocking.length,
+      stateErrors: summary.health?.stateErrors ?? 0,
+    },
+    activity: summary.activity ?? [],
     nextTitle: finished ? '' : next === undefined ? '状态已同步' : toolLabel(next.tool),
     nextDetail: finished
       ? ''

@@ -34,6 +34,32 @@ export interface SummaryDto {
   next?: { tool: string; reason: string }
   /** True only when the book target is reached; done alone means the chapter is archived. */
   finished?: boolean
+  book?: {
+    premise: string
+    logline: string
+    strict: boolean
+    target: number | null
+    outline: {
+      present: boolean
+      total: number
+      planned: number
+      archived: number
+      coverage: number
+      volumes: Array<{ title: string; start: number; end: number; planned: number; archived: number }>
+    }
+    worldbook: {
+      present: boolean
+      characters: number
+      locations: number
+      factions: number
+      rules: number
+      glossary: number
+      backstory: number
+    }
+  }
+  quality?: { averageScore: number; scores: number[]; trend: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number }
+  activity?: Array<{ at: string; op: string; chapter: number; status: string }>
 }
 
 export interface ChapterRowDto {

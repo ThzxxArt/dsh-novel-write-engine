@@ -5,12 +5,14 @@ export const PLUGIN_NAME = 'dsh-novel-write-engine'
 export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
-export const REMOTE_VERSION = 1
+export const REMOTE_VERSION = 2
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
 /** Project-relative locations. Every write goes through these constants. */
 export const PROJECT_FILE = 'novel.yaml'
+export const OUTLINE_FILE = 'outline/outline.yaml'
+export const WORLDBOOK_FILE = 'outline/worldbook.yaml'
 export const STATE_DIR = 'state'
 export const CHAPTERS_DIR = 'chapters'
 export const PLAN_DIR = 'plans'
@@ -70,6 +72,14 @@ export const LIMITS = {
   maxWorldPlanObjectiveChars: 2_000,
   /** Cast plus summary may exceed eight, but not without a bound. */
   maxActiveCast: 12,
+  /** Outline and worldbook are protected context, so they need hard bounds. */
+  maxOutlineChapters: 2_000,
+  maxOutlineVolumes: 50,
+  maxOutlineTextFieldChars: 400,
+  maxOutlineNotesChars: 1_000,
+  maxWorldbookEntries: 200,
+  maxWorldbookTextChars: 2_000,
+  maxSearchQueryChars: 200,
 }
 
 /** Re-exported enums make adapter code readable without importing types twice. */
@@ -101,14 +111,25 @@ export const TOOL_NAMES = [
   'novel_export',
   'novel_audit',
   'novel_pipeline',
+  'novel_blueprint',
+  'novel_outline',
+  'novel_outline_import',
+  'novel_worldbook',
+  'novel_search',
+  'novel_doctor',
+  'novel_report',
+  'novel_guide',
+  'novel_reopen',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
-/** The eight high-frequency tools kept when `tools.mode = core`. */
+/** The ten high-frequency tools kept when `tools.mode = core`. */
 export const CORE_TOOLS: readonly ToolName[] = [
   'novel_init',
   'novel_status',
+  'novel_guide',
   'novel_brief',
+  'novel_outline',
   'novel_write_draft',
   'novel_review',
   'novel_revise',
