@@ -149,7 +149,8 @@ describe('maintenance operations', () => {
       const status = await engine.getStatus({ root })
       expect(status.data.rounds).toEqual({ review: 0, revise: 0, check: 0 })
       expect((await engine.advise({ root })).data.tool).toBe('novel_brief')
-      await engine.getBrief({ stage: 'P3', root })
+      const brief = await engine.getBrief({ stage: 'P3', root })
+      expect(brief.replayed).toBeUndefined()
       expect((await engine.advise({ root })).data.tool).toBe('novel_write_draft')
       expect(await readProjectFile(root, 'chapters/chapter-001.deprecated.md')).toBe(cleanText())
     } finally {
@@ -364,16 +365,21 @@ describe('revision paths', () => {
 })
 
 describe('archive ledger effects', () => {
-  it('reissues a brief after rollback instead of replaying a stale answer', async () => {
+  it('reuses a still-current brief after rollback instead of replaying stale state', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
       await writeDraft({ root, engine })
       await engine.rollback({ chapter: 1, toStage: 'P3', reason: '重写', root })
-      const brief = await engine.getBrief({ stage: 'P3', root })
-      expect(brief.replayed).not.toBe(true)
-      const state = await engine.queryState({ kind: 'pipeline', root })
-      expect((state.data as { briefs: Record<string, unknown> }).briefs.P3).toBeDefined()
+      await engine.getBrief({ stage: 'P3', root })
+      const repeat = await engine.getBrief({ stage: 'P3', root })
+      expect(repeat.replayed).toBe(true)
+      const receipts = await engine.queryState({ kind: 'briefs', root })
+      expect(
+        (receipts.data as { receipts: Array<{ stage: string }> }).receipts.some(
+          (receipt) => receipt.stage === 'P3',
+        ),
+      ).toBe(true)
       await engine.submitDraft({
         chapter: 1,
         content: cleanText(),

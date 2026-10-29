@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1
+
+- **面板可滚动**：`nwe-root` 改为 `height:100%; overflow-y:auto; overscroll-behavior:contain`，宿主 `overflow:hidden` 不再裁掉下方内容；教程弹框保持 fixed，Esc/遮罩/焦点返回不回归。教程弹框新增「续写下一章」可直接复制给 Agent 的话术：先 `novel_pipeline` 确认状态，缺章卡用全量 `novel_outline`，目标章数满了用 `novel_amend`，再按 P1→P8 推进并在归档前确认 `state_delta`。
+- **指标单一 owner**：`outlineSummary` 接收目标章数与已归档章号，输出规划覆盖、归档覆盖、缺卡数与逐章 `card_coverage`；`novel_status`、`novel_report`、`novel_doctor`、panel、`/novel outline` 全部消费同一结果，40/800 不再显示 100%。剩余字数按实际平均字数估算，并保留最小目标口径。
+- **字数说真话**：`WordMetrics` 新增 `punctuation_chars`；PG-03 失败消息并列汉字/标点/英文词/数字；brief 增加 `word_count_policy` 和 `dialogue_ratio_target`；中文弯引号、破折号、省略号归入中文标点，对话行按四种引号统计。
+- **失败可审计**：通过参数形状校验、进入项目锁后被 gate/delta/state 拒绝的写操作在 journal 写 `status:"aborted"`、`attempt:true` 行，带 `code/reason/hint/blocking`；事务提交失败与崩溃恢复的 aborted 行也带 `code`；锁前纯参数形状错误不写 journal。`AuditRow` 增加 `seq/code/reason/hint/stage/attempt/blocking`；`novel_audit` 支持 chapter/op/status/since/until/cursor。
+- **历史不再只活最后一份**：评审、校验、正文、废弃稿、P2 计划按 pipeline revision 写入 `history/`；`novel_state {kind:"history"}` 全量列出（`total`），按 chapter+正整数 revision 读取；`novel_report` 从历史评审聚合维度样本，`ChapterRecord` 保存 lifetime `rounds`（含 `rollbacks`）/`final_check`/`archived_at`，report 新增 `effort`；`novel_amend` 不能改写这些归档证据。
+- **备份可列可恢复**：事务备份写入 `manifest.json`；P2/P4/P6 在已有旧文件时也建备份，因此计划/评审/校验可从真实事务恢复。`novel_state {kind:"backups"}` 列出 op/chapter/revision/files；新增 `novel_restore`，只恢复活动章且不做 replay（外部再次改动后同一 txid 仍会真正恢复），已归档章先 `novel_reopen`，恢复本身再建备份。`novel_reopen` 的 journal/manifest 现在记录被重开的章节。
+- **计划与摘要分权**：P2 计划文件不再被 P3/P5 写入 summary；活动标题/场景/叙述者/摘要存入 `pipeline.draft`，旧项目回退读 plan.summary；P5 不再改写 P2 证据。归档前校验 `draft.content_hash` 与正文一致，正文被外部改动时拒绝封存（`DRAFT_STALE`/`ENGINE_TXN_ABORTED`）。
+- **修订成本**：`novel_revise` 支持 `patch:{expected_hash,edits}`；hash 不匹配、锚点不唯一/越界/重叠都会零写入拒绝。
+- **简报收据独立**：`state/briefs.yaml` 保存 receipt，pipeline.briefs 仅作旧项目回退；重复 digest 直接 replay，rollback 后不再无条件重签。
+- **伏笔标签与锚点**：`title` 可保留可读短语，新增 `anchor` 作为正文逐字校验证据，且至少 8 个字符（单字锚点不再能绕过）；无 anchor 时仍要求 title 出现在正文；P8 brief 给出规则和示例。
+- **质量门禁分层**：`check.machine.violations` 只放 blocker，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code。新增 `DIALOGUE_RATIO`、`NUMERIC_CONTRADICTION` 与 `NUMERIC_FACT_MISMATCH`；数字矛盾因无法判定主语固定为 advisory，数字事实只匹配“别名+数字+声明单位”的相邻写法；worldbook 支持声明式 `facts`，并进入计数、brief 上下文、搜索与 P6 检查。
+- **初始化与角色**：空 author/description 返回 warning；角色 role 从显式值、P1 计划、worldbook、narrator 推导，不再一律 extra；`insight` 的 cast/维度排序改用稳定 code-unit 比较。
+- **真实模型**：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在临时项目完成 P1→P8、归档、report/doctor/panel、六种导出、`novel_reopen` 与重新归档；P3 366 / 490 字，P2/P3 叙述者分别继承 P1 的林深/林渊；2.5 的 564 字在更早 600 字目标下被 PG-03 真实拒绝，本次 76 字由驱动脚本 300 字下限拦截（未进引擎）；详见 `docs/0.2.1-real-model-evidence.md`。
+- **发布前回归收口**：无 target 时 status/stats/panel 的 null 覆盖显示不再伪装 100%；report 对重复评审去重；novel_state pipeline 返回合并后的 briefs、briefs 查询保留 0.2.0 pipeline.briefs 回退；restore review/check 重算 blocking；archive 把 P2 计划纳入事务哈希，reopen 拒绝归档后被改动的计划；doctor 只推荐活动章可恢复备份；amend/rollback 不再用旧 revision 缓存吞掉外部改动；worldbook entries 计入 facts。
+- 版本升 0.2.1；panel payload v3；工具 27 → 28（新增 `novel_restore`），服务操作 31 → 32；文档、教程、任务书与测试同步。
+- 质量：72 个测试文件 / 667 条测试；覆盖率 93.86 / 89.04 / 97.81 / 93.86；per-file 门禁通过。
+
 ## 0.2.0
 
 - **整书生命周期**：新增 `outline/outline.yaml`（书级蓝图 + 卷 + 章卡）与 `outline/worldbook.yaml`（世界观设定集）。`novel_init` 自动建立两份空文档；旧项目缺少它们时按空规划读取，不报错。

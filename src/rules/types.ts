@@ -104,6 +104,13 @@ export interface RuleContext {
     world: import('../types.js').WorldDocument | null
     locks: import('../types.js').LocksDocument | null
   }
+  /** Project targets are optional so pre-0.2.1 tests that build a RuleContext still typecheck. */
+  targets?: {
+    words_per_chapter: [number, number]
+    dialogue_ratio: [number, number]
+  }
+  /** Declared numeric canon from the worldbook; empty means no fact check. */
+  facts?: Array<{ alias: string; value: number; unit: string; tolerance?: number }>
 }
 
 /** A rule implementation. Each code has exactly one owner. */

@@ -205,11 +205,11 @@ const tools = (engine: ReturnType<typeof fakeEngine>): Map<string, Tool> =>
   )
 
 describe('tool adapters', () => {
-  it('registers exactly twenty-seven tools and ten in core mode', () => {
-    expect(toolNames('all')).toHaveLength(27)
+  it('registers exactly twenty-eight tools and ten in core mode', () => {
+    expect(toolNames('all')).toHaveLength(28)
     expect(toolNames('core')).toHaveLength(10)
     const map = tools(fakeEngine())
-    expect(map.size).toBe(27)
+    expect(map.size).toBe(28)
   })
 
   it('renders the payload after the host passes execute() straight to output.render', async () => {
@@ -226,6 +226,15 @@ describe('tool adapters', () => {
       expect(rendered[0]!.text, name).not.toContain('undefined')
       expect(rendered[0]!.text, name).not.toContain('"data"')
     }
+  })
+
+  it('does not invent planning coverage when total_chapters is unset', async () => {
+    const map = tools(fakeEngine())
+    const tool = map.get('novel_status')!
+    const value = await tool.execute({ chapter: 1 }, {})
+    const rendered = tool.output!.render({ chapter: 1 }, value)
+    expect(rendered[0]!.text).toContain('规划覆盖 —')
+    expect(rendered[0]!.text).not.toContain('规划覆盖 100%')
   })
 
   it('forwards the host cancellation signal into the engine work', async () => {
@@ -382,6 +391,152 @@ describe('command adapters', () => {
     expect((await novel.handler(invocation('admin nope {}'))).kind).toBe('error')
     expect((await novel.handler(invocation('export outline'))).kind).toBe('success')
     expect(engine.export).toHaveBeenCalledWith({ kind: 'epub' })
+  })
+
+  it('renders a status with no book and with null coverage', async () => {
+    const engine = fakeEngine()
+    const commands = createCommands(engine as unknown as EngineService)
+    const novel = commands.find((command) => command.name === 'novel')!
+    engine.getStatus.mockResolvedValueOnce(
+      result({
+        project: { title: '空书', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        stage: 'idle',
+        rounds: { review: 0, revise: 0, check: 0 },
+        blocking: [],
+        metrics: null,
+        next: { tool: 'novel_init', args: {}, reason: 'start' },
+      }) as never,
+    )
+    const noBook = await novel.handler(invocation('status'))
+    expect(noBook.text).toContain('字数 —')
+    expect(noBook.text).not.toContain('全书：')
+    engine.getStatus.mockResolvedValueOnce(
+      result({
+        project: { title: '未知目标', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        stage: 'idle',
+        rounds: { review: 0, revise: 0, check: 0 },
+        blocking: [],
+        metrics: { total_word_count: 1, cjk_chars: 1, punctuation_chars: 0 },
+        book: {
+          premise: '',
+          logline: '',
+          strict: false,
+          outline: {
+            present: true,
+            total: 0,
+            planned: 0,
+            archived: 0,
+            target: null,
+            missing_cards: 0,
+            planned_coverage: null,
+            archived_coverage: null,
+            coverage: 0,
+            card_coverage: 1,
+            volumes: 0,
+            current: null,
+          },
+          worldbook: {
+            present: false,
+            characters: 0,
+            locations: 0,
+            factions: 0,
+            rules: 0,
+            glossary: 0,
+            backstory: 0,
+          },
+        },
+        next: { tool: 'novel_outline', args: {}, reason: 'plan' },
+      }) as never,
+    )
+    const noTarget = await novel.handler(invocation('status'))
+    expect(noTarget.text).toContain('规划覆盖 —')
+    expect(noTarget.text).toContain('归档覆盖 —')
+    engine.getStatus.mockResolvedValueOnce(
+      result({
+        project: { title: '已规划', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        stage: 'P2',
+        rounds: { review: 0, revise: 0, check: 0 },
+        blocking: [],
+        metrics: { total_word_count: 8, cjk_chars: 6, punctuation_chars: 2 },
+        book: {
+          premise: 'p',
+          logline: 'l',
+          strict: false,
+          outline: {
+            present: true,
+            total: 2,
+            planned: 2,
+            archived: 0,
+            target: 10,
+            missing_cards: 8,
+            planned_coverage: 0.2,
+            archived_coverage: 0,
+            coverage: 0.2,
+            card_coverage: 0,
+            volumes: 1,
+            current: {
+              num: 1,
+              title: '开端',
+              scene_type: '日常过渡章',
+              target_words: [600, 800],
+            },
+          },
+          worldbook: {
+            present: true,
+            characters: 1,
+            locations: 1,
+            factions: 0,
+            rules: 1,
+            glossary: 0,
+            backstory: 0,
+          },
+        },
+        next: { tool: 'novel_plan_chapter', args: {}, reason: 'plan' },
+      }) as never,
+    )
+    const withCard = await novel.handler(invocation('status'))
+    expect(withCard.text).toContain('当前章卡：第1章 开端')
+    expect(withCard.text).toContain('缺卡 8')
+  })
+
+  it('reports unreadable planning documents instead of claiming an empty outline', async () => {
+    const engine = fakeEngine()
+    const novel = createCommands(engine as unknown as EngineService).find(
+      (command) => command.name === 'novel',
+    )!
+    engine.getStatus.mockResolvedValueOnce(
+      result({
+        project: { title: '坏规划', genre: '都市现代', platform: 'fanqie', root: '/tmp/x' },
+        chapter: 1,
+        stage: 'idle',
+        rounds: { review: 0, revise: 0, check: 0 },
+        blocking: [],
+        state_errors: [
+          {
+            code: 'OUTLINE_UNREADABLE',
+            path: 'outline/outline.yaml',
+            message: 'invalid outline',
+          },
+          {
+            code: 'WORLDBOOK_UNREADABLE',
+            path: 'outline/worldbook.yaml',
+            message: 'invalid worldbook',
+          },
+          {
+            code: 'PROJECT_UNREADABLE',
+            path: 'novel.yaml',
+            message: 'invalid project',
+          },
+        ],
+        next: { tool: 'novel_init', args: {}, reason: 'repair' },
+      }) as never,
+    )
+    const reply = await novel.handler(invocation('outline'))
+    expect(reply.kind).toBe('error')
+    expect(reply.text).toContain('OUTLINE_UNREADABLE')
   })
 
   it('reports cancellation and failures', async () => {
@@ -676,8 +831,8 @@ describe('panel route', () => {
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
-    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 2 })
-    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(2)
+    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 3 })
+    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(3)
 
     const head = response()
     await handler({ method: 'HEAD' }, head)

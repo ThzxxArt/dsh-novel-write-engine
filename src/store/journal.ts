@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import {
+  BRIEF_RECEIPTS_FILE,
   OUTLINE_FILE,
   PROJECT_FILE,
   STAGING_DIR,
@@ -23,6 +24,11 @@ export interface JournalRecord {
   files: string[]
   status: 'pending' | 'committed' | 'aborted'
   reason?: string
+  code?: string
+  hint?: string
+  stage?: string
+  attempt?: boolean
+  blocking?: import('../types.js').BlockingItem[]
   /** Content hash per target, written before rename and again on commit. */
   hashes?: Record<string, string>
   /** Pre-commit hash per target; null means the target did not exist. */
@@ -79,6 +85,15 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
         status: raw.status,
       }
       if (typeof raw.reason === 'string') record.reason = raw.reason
+      if (typeof raw.code === 'string') record.code = raw.code
+      if (typeof raw.hint === 'string') record.hint = raw.hint
+      if (typeof raw.stage === 'string') record.stage = raw.stage
+      if (raw.attempt === true) record.attempt = true
+      if (Array.isArray(raw.blocking)) {
+        record.blocking = raw.blocking
+          .map((item) => (typeof item === 'object' && item !== null ? item : null))
+          .filter((item): item is import('../types.js').BlockingItem => item !== null)
+      }
       if (typeof raw.hashes === 'object' && raw.hashes !== null && !Array.isArray(raw.hashes)) {
         record.hashes = Object.fromEntries(
           Object.entries(raw.hashes as Record<string, unknown>).filter(
@@ -97,6 +112,7 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
       // Pending rows are recovery metadata, not user-visible audit entries.
       if (record.status !== 'pending') {
         rows.push({
+          seq: rows.length + 1,
           at: record.at,
           op: record.op,
           chapter: record.chapter,
@@ -104,6 +120,12 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
           txid: record.txid,
           status: record.status,
           files: record.files,
+          ...(record.code === undefined ? {} : { code: record.code }),
+          ...(record.reason === undefined ? {} : { reason: record.reason }),
+          ...(record.hint === undefined ? {} : { hint: record.hint }),
+          ...(record.stage === undefined ? {} : { stage: record.stage }),
+          ...(record.attempt === true ? { attempt: true } : {}),
+          ...(record.blocking === undefined ? {} : { blocking: record.blocking }),
         })
       }
     } catch {
@@ -151,12 +173,16 @@ export async function reconcileJournal(store: FsStore): Promise<{
   // there must not wedge project writes. `archive-digests.json` is a derived
   // mirror of `chapters[].archive_digest`; a corrupt mirror must be rebuildable
   // by the next archive instead of making every write unreachable.
+  // Brief receipts are append-only evidence with no amend surface or backup;
+  // treating a lost receipt file as journal corruption would make the project
+  // permanently read-only, so the next brief rewrites it from scratch.
   const tracked = (path: string): boolean =>
     (path === 'novel.yaml' ||
       path.startsWith('state/') ||
       path === OUTLINE_FILE ||
       path === WORLDBOOK_FILE) &&
-    path !== 'state/archive-digests.json'
+    path !== 'state/archive-digests.json' &&
+    path !== BRIEF_RECEIPTS_FILE
   for (const record of records) {
     if (record.status !== 'committed' || record.hashes === undefined) continue
     for (const [path, hash] of Object.entries(record.hashes)) {
@@ -215,6 +241,7 @@ export async function recoverPending(store: FsStore): Promise<void> {
     await appendJournal(store, {
       ...last,
       status: 'aborted',
+      code: ERROR_CODES.TXN_ABORTED,
       reason: 'recovered: the process stopped before the transaction renamed a target',
     })
     await store.removeTree(joinRel(STAGING_DIR, last.txid)).catch(() => undefined)

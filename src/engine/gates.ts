@@ -72,8 +72,8 @@ const wordCount: Gate = (input) => {
   return [
     block(
       'PG-03',
-      `text has ${metrics.total_word_count} words, minimum is ${min}`,
-      `write at least ${min - metrics.total_word_count} more words, then call novel_word_count to verify`,
+      `text has ${metrics.total_word_count} counted words (${metrics.cjk_chars} 汉字 + ${metrics.punctuation_chars} 标点 + ${metrics.english_words} 英文词 + ${metrics.numbers} 数字), minimum is ${min}`,
+      `the engine counts punctuation as words; write at least ${min - metrics.total_word_count} more counted words, then call novel_word_count to verify the same metric`,
     ),
   ]
 }

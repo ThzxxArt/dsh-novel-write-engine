@@ -408,6 +408,181 @@ export const slidingWindows = (text: string, size: number): string[] => {
   return windows
 }
 
+const dialogueRatio: Rule = (ctx) => {
+  const target = ctx.targets?.dialogue_ratio
+  if (target === undefined) return []
+  const ratio = countWordMetrics(ctx.text).dialogue_ratio
+  if (ratio >= target[0] && ratio <= target[1]) return []
+  return [
+    v(
+      SEMANTIC_RULES.DIALOGUE_RATIO,
+      'advisory',
+      1,
+      `dialogue ratio ${Math.round(ratio * 1000) / 10}% is outside target ${Math.round(target[0] * 1000) / 10}%..${Math.round(target[1] * 1000) / 10}% (quoted lines / non-empty lines)`,
+    ),
+  ]
+}
+
+const CN_DIGITS: Readonly<Record<string, number>> = {
+  零: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+}
+const CN_UNITS: Readonly<Record<string, number>> = { 十: 10, 百: 100, 千: 1000, 万: 10_000 }
+
+/** Parse a small Chinese/Arabic number; null means the token was not a number. */
+function parseSmallNumber(raw: string): number | null {
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw)
+  let total = 0
+  let section = 0
+  let digit: number | null = null
+  for (const char of raw) {
+    if (char in CN_DIGITS) {
+      digit = CN_DIGITS[char]!
+      continue
+    }
+    const unit = CN_UNITS[char]
+    if (unit === undefined) return null
+    if (unit === 10_000) {
+      section = (section + (digit ?? 0)) * unit
+      total += section
+      section = 0
+      digit = null
+    } else {
+      section += (digit ?? 1) * unit
+      digit = null
+    }
+  }
+  return total + section + (digit ?? 0)
+}
+
+const NUMBER_TOKEN = '[零一二两三四五六七八九十百千万]+|\\d+(?:\\.\\d+)?'
+const DISTANCE_RE = new RegExp(`(${NUMBER_TOKEN})\\s*(海里|公里|千米|米|里)`, 'g')
+const DURATION_RE = new RegExp(`(${NUMBER_TOKEN})\\s*个?\\s*(小时|钟头|分钟)`, 'g')
+const SPEED_RE = new RegExp(`(?:时速|每小时|速度(?:是|为)?)\\s*(${NUMBER_TOKEN})\\s*(海里|公里|千米|米)`, 'g')
+
+const METRES: Readonly<Record<string, number>> = {
+  米: 1,
+  里: 500,
+  公里: 1000,
+  千米: 1000,
+  海里: 1852,
+}
+const HOURS: Readonly<Record<string, number>> = { 分钟: 1 / 60, 小时: 1, 钟头: 1 }
+
+interface Quantity {
+  value: number
+  unit: string
+  index: number
+  raw: string
+}
+
+const collect = (text: string, pattern: RegExp, units: Readonly<Record<string, number>>): Quantity[] => {
+  const result: Quantity[] = []
+  for (const match of text.matchAll(pattern)) {
+    const value = parseSmallNumber(match[1] ?? '')
+    if (value === null || units[match[2] ?? ''] === undefined) continue
+    result.push({ value, unit: match[2]!, index: match.index ?? 0, raw: match[0] })
+  }
+  return result
+}
+
+const numericContradiction: Rule = (ctx) => {
+  // Explicit speed anchors do not need a distance/duration pair.
+  const explicit = collect(ctx.text, SPEED_RE, METRES).map((quantity) => ({
+    at: quantity.index,
+    kmh: (quantity.value * METRES[quantity.unit]!) / 1000,
+    raw: quantity.raw,
+  }))
+  const distances = collect(ctx.text, DISTANCE_RE, METRES)
+  const durations = collect(ctx.text, DURATION_RE, HOURS)
+  const speeds: Array<{ at: number; kmh: number; raw: string }> = []
+  if (distances.length > 0 && durations.length > 0) {
+    for (const distance of distances) {
+      const nearest = durations
+        .map((duration) => ({ duration, distance: Math.abs(duration.index - distance.index) }))
+        .sort((left, right) => left.distance - right.distance)[0]
+      if (nearest === undefined || nearest.distance > 60) continue
+      const metres = distance.value * METRES[distance.unit]!
+      const hours = nearest.duration.value * HOURS[nearest.duration.unit]!
+      if (hours <= 0) continue
+      speeds.push({
+        at: Math.min(distance.index, nearest.duration.index),
+        kmh: metres / 1000 / hours,
+        raw: `${distance.raw} / ${nearest.duration.raw}`,
+      })
+    }
+  }
+  // An explicit speed statement is a stronger anchor than an implied pair.
+  const anchors = explicit.length > 0 ? explicit : speeds
+  if (anchors.length < 2) return []
+  const positive = anchors.filter((anchor) => anchor.kmh > 0)
+  if (positive.length < 2) return []
+  const min = Math.min(...positive.map((anchor) => anchor.kmh))
+  const max = Math.max(...positive.map((anchor) => anchor.kmh))
+  if (max / Math.max(0.0001, min) < 1.5) return []
+  const firstNeedle = positive[0]!.raw.split(' / ')[0]!
+  const paragraphIndex = splitParagraphs(ctx.text).findIndex((paragraph) => paragraph.includes(firstNeedle))
+  return [
+    // Chinese prose rarely names the subject of two speed clauses, so this
+    // cannot distinguish a car at 60 km/h from a boat at 12 knots. It is a
+    // reading aid, never a hard archive gate.
+    v(
+      SEMANTIC_RULES.NUMERIC_CONTRADICTION,
+      'advisory',
+      Math.max(1, paragraphIndex + 1),
+      `numeric statements imply different speeds (${min.toFixed(1)}–${max.toFixed(1)} km/h): ${positive
+        .slice(0, 3)
+        .map((anchor) => anchor.raw)
+        .join('; ')}`,
+    ),
+  ]
+}
+
+const escapePattern = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const numericFactMismatch: Rule = (ctx) => {
+  if (ctx.facts === undefined || ctx.facts.length === 0) return []
+  const results: Violation[] = []
+  const paragraphs = splitParagraphs(ctx.text)
+  for (const fact of ctx.facts) {
+    if (fact.alias.trim() === '' || !Number.isFinite(fact.value)) continue
+    const tolerance = fact.tolerance ?? 0
+    // Require alias + optional copula/colon + number + the declared unit.
+    // A bare number anywhere in a ±40-char window is usually another noun
+    // (「数了三遍」 next to 「船价」), and ignoring the unit makes the advisory
+    // permanently noisy.
+    const pattern = new RegExp(
+      `${escapePattern(fact.alias)}\\s*(?:是|为|约|有|：|:)?\\s*(${NUMBER_TOKEN})\\s*${escapePattern(fact.unit)}`,
+      'g',
+    )
+    for (const match of ctx.text.matchAll(pattern)) {
+      const value = parseSmallNumber(match[1] ?? '')
+      if (value === null) continue
+      if (Math.abs(value - fact.value) <= tolerance) continue
+      const paragraph = paragraphs.findIndex((candidate) => candidate.includes(match[0]))
+      results.push(
+        v(
+          SEMANTIC_RULES.NUMERIC_FACT_MISMATCH,
+          'advisory',
+          Math.max(1, paragraph + 1),
+          `"${fact.alias}" declares ${fact.value}${fact.unit}, text shows ${value}${fact.unit}`,
+        ),
+      )
+      break
+    }
+  }
+  return results
+}
+
 const pleasureDensity: Rule = (ctx) => {
   const { min, keywords, window } = ctx.rulepack.semantics.pleasure_density
   if (keywords.length === 0) return []
@@ -778,6 +953,9 @@ export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
   [SEMANTIC_RULES.PLEASURE_DENSITY]: pleasureDensity,
   [SEMANTIC_RULES.SENSORY_DENSITY]: sensoryDensity,
   [SEMANTIC_RULES.WATER_WORDS]: waterWords,
+  [SEMANTIC_RULES.DIALOGUE_RATIO]: dialogueRatio,
+  [SEMANTIC_RULES.NUMERIC_CONTRADICTION]: numericContradiction,
+  [SEMANTIC_RULES.NUMERIC_FACT_MISMATCH]: numericFactMismatch,
   [CROSS_RULES.DUPLICATE_PARAGRAPH]: duplicateParagraph,
   [CROSS_RULES.FORESHADOW_DORMANT]: foreshadowDormant,
   [CROSS_RULES.FS_REVISITED_TOO_SOON]: revisitedTooSoon,

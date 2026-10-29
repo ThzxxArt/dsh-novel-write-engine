@@ -59,6 +59,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     rounds: req('object'),
     briefs: req('object'),
     blocking: req('array'),
+    draft: f('object'),
     review_digest: f('string'),
     last_action: f('any'),
   },
@@ -107,6 +108,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     content_hash: req('string'),
     machine: req('object'),
     semantic: req('object'),
+    acknowledged: f('array'),
     verdict: req('string', { enum: ['pass', 'fail'] }),
   },
   worldPlan: {
@@ -143,6 +145,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     characters: req('array'),
     glossary: req('array'),
     backstory: req('array'),
+    facts: f('array'),
     themes: req('array'),
   },
 }
@@ -250,6 +253,24 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
       if (targets.total_chapters !== null) integerAt(kind, targets.total_chapters, 'targets.total_chapters')
       return
     }
+    case 'pipeline': {
+      const rounds = objectAt(kind, record.rounds, 'rounds')
+      for (const key of ['review', 'revise', 'check'] as const) {
+        integerAt(kind, rounds[key], `rounds.${key}`)
+      }
+      if (rounds.rollbacks !== undefined) integerAt(kind, rounds.rollbacks, 'rounds.rollbacks')
+      if (record.draft !== undefined) {
+        const draft = objectAt(kind, record.draft, 'draft')
+        integerAt(kind, draft.chapter, 'draft.chapter')
+        stringAt(kind, draft.title, 'draft.title')
+        stringAt(kind, draft.scene_type, 'draft.scene_type')
+        stringAt(kind, draft.narrator, 'draft.narrator')
+        stringAt(kind, draft.content_hash, 'draft.content_hash')
+        stringAt(kind, draft.updated_at, 'draft.updated_at')
+        validateSummary(kind, draft.summary, 'draft.summary')
+      }
+      return
+    }
     case 'chapters':
       validateRecords(kind, record.chapters, 'chapters', (row, path) => {
         integerAt(kind, row.num, `${path}.num`)
@@ -266,6 +287,15 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         validateSummary(kind, row.summary, `${path}.summary`)
         if (row.assigned_ids !== undefined) objectAt(kind, row.assigned_ids, `${path}.assigned_ids`)
         optionalString(kind, row.archive_digest, `${path}.archive_digest`)
+        optionalString(kind, row.final_check, `${path}.final_check`)
+        optionalString(kind, row.archived_at, `${path}.archived_at`)
+        if (row.rounds !== undefined) {
+          const rounds = objectAt(kind, row.rounds, `${path}.rounds`)
+          for (const key of ['review', 'revise', 'check'] as const) {
+            integerAt(kind, rounds[key], `${path}.rounds.${key}`)
+          }
+          if (rounds.rollbacks !== undefined) integerAt(kind, rounds.rollbacks, `${path}.rounds.rollbacks`)
+        }
       })
       return
     case 'characters':
@@ -321,6 +351,7 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         integerAt(kind, row.last_touched, `${path}.last_touched`)
         stringAt(kind, row.status, `${path}.status`)
         stringAt(kind, row.description, `${path}.description`)
+        optionalString(kind, row.anchor, `${path}.anchor`)
         listAt(kind, row.advance_log, `${path}.advance_log`)
       })
       return

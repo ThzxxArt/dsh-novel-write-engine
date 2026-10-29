@@ -45,7 +45,12 @@ const CSS = `
   box-sizing: border-box;
   width: 100%;
   max-width: 1120px;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   margin: 0 auto;
   padding: clamp(18px, 3.2vw, 38px);
   color: var(--nwe-ink);
@@ -574,6 +579,15 @@ brief P6 → check → brief P8 → archive 的顺序推进。
 正文只通过 write_draft/revise 写；不要直接改 state/、chapters/ 或 outline/。
 每次提交前先领取当前阶段任务书，失败时按返回的 code 和 blocking 一次改完。`
 
+const TUTORIAL_NEXT_PROMPT = `继续写当前项目的下一章。先调用 novel_pipeline（或 novel_status）确认当前阶段、项目根目录和下一步工具，不要猜阶段。
+
+如果下一章还没有章卡：先用 novel_state {kind:"outline"} 取出全部章卡，再在末尾加上下一章的卡，用 novel_outline 整体提交；不要只提交新卡，也不要把已有 planned 卡丢掉。
+如果 targets.total_chapters 已经写满：先用 novel_amend 把 total_chapters 调到至少包含下一章，不能低于已归档章数。
+
+之后严格按：novel_brief P1 → novel_plan_world → brief P2 → novel_plan_chapter → brief P3 → novel_write_draft → brief P4 → novel_review →（有 blocker）brief P5 → novel_revise → 回 P4 → brief P6 → novel_check → brief P8 → novel_archive 的顺序推进。
+
+归档前把完整的 state_delta 给我确认；正文只通过 write_draft/revise 写，不要直接改 state/、chapters/ 或 outline/，不要跳过 brief。`
+
 const stat = (label: string, value: string, unit: string): ReactElement =>
   createElement(
     'div',
@@ -673,6 +687,7 @@ const bookSection = (view: PanelView): ReactElement => {
     ['规则', view.book.worldbook.rules],
     ['术语', view.book.worldbook.glossary],
     ['前史', view.book.worldbook.backstory],
+    ['数值事实', view.book.worldbook.facts ?? 0],
   ] as const
   const bars = view.quality.scores.slice(-10)
   return createElement(
@@ -686,7 +701,7 @@ const bookSection = (view: PanelView): ReactElement => {
         'span',
         { className: 'nwe-section-note' },
         view.book.present
-          ? `${view.book.strict ? '严格大纲' : '宽松大纲'} · 覆盖率 ${Math.round(view.book.coverage * 100)}%`
+          ? `${view.book.strict ? '严格大纲' : '宽松大纲'} · 规划 ${view.book.plannedCoverage === null ? '—' : `${Math.round(view.book.plannedCoverage * 1000) / 10}%`} · 归档 ${view.book.archivedCoverage === null ? '—' : `${Math.round(view.book.archivedCoverage * 1000) / 10}%`}${view.book.missingCards > 0 ? ` · 缺卡 ${view.book.missingCards}` : ''}`
           : '还没有章卡',
       ),
     ),
@@ -1198,6 +1213,17 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
         createElement(
           'section',
           { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '续写下一章时，直接复制这段给 Agent'),
+          createElement(
+            'p',
+            null,
+            '这段会先确认状态，再处理缺章卡和目标章数已满，最后按 P1→P8 推进；归档前会要求你确认 state_delta。',
+          ),
+          createElement('pre', { className: 'nwe-prompt' }, TUTORIAL_NEXT_PROMPT),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
           createElement('h3', null, '一章完成检查清单'),
           createElement(
             'ul',
@@ -1213,7 +1239,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.0 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.1 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )

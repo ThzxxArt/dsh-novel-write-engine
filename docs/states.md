@@ -39,7 +39,7 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 - 评审/修订/校验各上限 3 轮，由引擎自增，模型不能传轮次。
 - 超限 → `PG-11` 阻塞，提示 `novel_rollback`。
 - 回退只允许退到当前阶段或更早阶段（`idle → P2 → P3 → P4 → P5 → P6 → ready_to_archive → done`；`to_stage: P1` 落到 `idle`）；`P3 → P6` 这类前进跳过返回 `ENGINE_STAGE_ORDER`。
-- 回退保留正文，清空任务书签收与轮次。
+- 回退保留正文与当前 draft 摘要（P1/P2 除外），清空 pipeline 轮次；任务书收据留在 `state/briefs.yaml`，digest 仍匹配时可直接复用。
 
 ## 0.1.2 状态恢复（历史，仍适用）
 
@@ -58,13 +58,21 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 - `novel.yaml` 可改 title/author/description/targets.total_chapters；genre/platform/created_at/words_per_chapter/dialogue_ratio 不可变；total_chapters 不得低于已归档章数。`novel.yaml` 本身损坏时，amend 接受完整项目文档并优先从备份恢复不可变基线。
 - `novel_plan_chapter` 的 `cast` 是可选 1–8 人，名字必须来自 P1 世界计划或角色台账；旧 plan 仍可读。
 - `archiveChapter` 继承 handoff 的 volume/volume_name；`act`/`act_progress` 默认按幕内位置派生，handoff 可覆盖；`open_hooks` 最久未动优先。
+
+## 0.2.1 状态分权与证据
+
+- `pipeline.draft` 是活动章的标题/场景/叙述者/摘要/正文 hash 的唯一 owner；`plans/chNNN.chapter.yaml` 是 P2 不可变证据，不再被 P3/P5 写入 summary。旧项目没有 draft 时回退读 plan.summary。
+- `state/briefs.yaml` 保存任务书收据，`pipeline.briefs` 仅作旧项目回退；重复 digest 直接 replay，不重复写事务。
+- `history/` 保存历史评审/校验/正文/废弃稿/计划；`novel_state {kind:"history"}` 全量列出（带 `total`），按 chapter+正整数 revision 读取；`chapter.rounds`（含 lifetime `rollbacks`）/`final_check`/`archived_at` 在归档时写入，`novel_report.effort` 保留本章难度；amend 不能改写这些证据字段。
+- 通过参数形状校验、进入项目锁后被 gate/delta/state 拒绝的写操作追加 `aborted` + `attempt:true` journal 行，带 code；事务提交失败追加的 aborted 行也带 code；内容文件零写入。锁前的参数形状错误不写 journal。
+- 备份目录新增 `manifest.json`；`novel_state {kind:"backups"}` 可列；P2/P4/P6 在旧文件存在时也建备份，`novel_restore` 因此能恢复正文/计划/世界观计划/评审/校验。只恢复活动章，恢复本身再建备份且不 replay；旧版无 manifest 备份只可列出。
 - 只跑 `content` 或 `integrity` 的 check 通过后停留 P6，返回 `CHECK_SCOPE_PARTIAL`，必须再跑完整 scope 才能归档。
 
 ## 0.2.0 书级状态
 
 - `outline/outline.yaml` 与 `outline/worldbook.yaml` 是规划层，不属于 `pipeline.stage`；它们损坏时进入 `state_errors`（`OUTLINE_UNREADABLE` / `WORLDBOOK_UNREADABLE`），`novel_amend` 可修。读取走 `narrow`：未知顶层键、未知 book 键、错误 `schema_version` 都按损坏处理。
 - 卷区间必须不重叠且相邻卷首尾相接；章卡 `num` 唯一，标题为 4–8 字正文，`scene_type` 四选一，planned 卡的 `goal/conflict/hook` 非空，`target_words` 为正整数区间。
-- `novel_amend` 修 outline 时仍保护已归档卡的 title/scene/target_words/cast/word_count/score/archived_at；修 worldbook 时仍校验容量非负、名称/术语段内唯一、必填文本非空。
+- `novel_amend` 修 outline 时仍保护已归档卡的 title/scene/target_words/cast/word_count/score/archived_at；修 worldbook 时仍校验容量非负、名称/术语段内唯一、必填文本非空。`worldbook.facts` 校验 alias/value/unit/tolerance，参与计数、brief 上下文、搜索与 P6 数字事实检查。
 - 严格大纲（`book.strict=true`）下，P2/P3 必须存在当前章章卡，且标题/场景类型/目标字数区间/cast 与章卡一致（PG-13）。非严格模式只校验已存在的章卡。
 - 归档事务回写章卡 `archived/archived_at/word_count/score`；严格模式缺卡由 PG-13 在 P2/P3 拦截，非严格模式归档时自动补卡。
 - `novel_reopen` 只允许紧邻的已归档章，且活动章尚未开始，`reason` 必填；它从该章归档事务的备份恢复索引/台账/handoff/正文，再把管线设为 `chapter=N / stage=P3`。备份缺失或 outline 损坏即拒绝。

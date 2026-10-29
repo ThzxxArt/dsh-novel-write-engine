@@ -595,6 +595,7 @@ describe('gate evaluation', () => {
             numbers: 0,
             chinese_punct: 0,
             english_punct: 0,
+            punctuation_chars: 0,
             non_ws_chars: 1,
             total_lines: 1,
             non_empty_lines: 1,

@@ -50,21 +50,22 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 | `novel_report` | 全书报告 |
 | `novel_guide` | 上手引导与下一步 |
 | `novel_reopen` | 从归档备份重开紧邻的上一章 |
+| `novel_restore` | 从标记备份恢复活动章 |
 | `novel_brief` | 取阶段任务书与上下文 |
 | `novel_plan_world` | P1 世界观计划 |
 | `novel_plan_chapter` | P2 章节计划 |
 | `novel_write_draft` | P3 初稿 |
 | `novel_review` | P4 十五维评分 |
-| `novel_revise` | P5 修订 |
-| `novel_check` | P6 一致性校验 |
+| `novel_revise` | P5 修订（支持 exact patch） |
+| `novel_check` | P6 一致性校验（advisory 可 acknowledge） |
 | `novel_archive` | 归档事务 |
 | `novel_word_count` | 字数口径 |
-| `novel_state` | 只读台账/计划/评审 |
+| `novel_state` | 只读台账/计划/评审/history/backups/briefs |
 | `novel_amend` | 受控改状态文档 |
 | `novel_rollback` | 回退阶段 |
 | `novel_diff` | 与备份/文本对比 |
 | `novel_export` | md/txt/epub/outline/worldbook/proposal |
-| `novel_audit` | 事务审计 |
+| `novel_audit` | 事务与失败 attempt 审计 |
 | `novel_pipeline` | 推荐下一步与参数 |
 
 ## 工具怎么用

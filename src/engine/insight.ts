@@ -1,4 +1,5 @@
 import { bookPlanPresent, outlineDrift, outlineSummary, worldbookCounts } from './book.js'
+import { compareText } from '../domain/stable.js'
 import { splitParagraphs } from '../domain/text.js'
 import type {
   AuditRow,
@@ -122,7 +123,7 @@ export function buildBookReport(input: ReportInput): BookReport {
       (left, right) =>
         right.appearances - left.appearances ||
         right.last_seen - left.last_seen ||
-        left.name.localeCompare(right.name, 'zh-CN'),
+        compareText(left.name, right.name),
     )
     .slice(0, 10)
   const latestChapter = records.length === 0 ? 0 : records[records.length - 1]!.num
@@ -133,7 +134,21 @@ export function buildBookReport(input: ReportInput): BookReport {
   for (const relationship of input.relationships.items) {
     relationshipTypes[relationship.type] = (relationshipTypes[relationship.type] ?? 0) + 1
   }
-  const outline = outlineSummary(input.outline, records.length)
+  const outline = outlineSummary(
+    input.outline,
+    records.length,
+    input.targetChapters,
+    records.map((record) => record.num),
+  )
+  const averageWords = records.length === 0 ? 0 : Math.round(words / records.length)
+  const remainingChapters =
+    input.targetChapters === null ? null : Math.max(0, input.targetChapters - records.length)
+  const minimumRemaining =
+    remainingChapters === null ? null : remainingChapters * input.project.targets.words_per_chapter[0]
+  const averageRemaining =
+    remainingChapters === null
+      ? null
+      : remainingChapters * (records.length === 0 ? input.project.targets.words_per_chapter[0] : averageWords)
   const drift = outlineDrift(input.outline, records)
   const volumeCounts = input.outline.volumes.map((volume) => {
     const cards = input.outline.chapters.filter(
@@ -171,22 +186,29 @@ export function buildBookReport(input: ReportInput): BookReport {
       archived: records.length,
       target: input.targetChapters,
       words,
-      average_words: records.length === 0 ? 0 : Math.round(words / records.length),
+      average_words: averageWords,
       percent:
         input.targetChapters === null || input.targetChapters === 0
           ? 0
-          : Math.min(100, Math.round((records.length / input.targetChapters) * 100)),
-      remaining_words:
-        input.targetChapters === null
-          ? null
-          : Math.max(0, (input.targetChapters - records.length) * input.project.targets.words_per_chapter[0]),
+          : Math.min(100, Math.round((records.length / input.targetChapters) * 1000) / 10),
+      remaining_words: averageRemaining,
+      remaining_words_min: minimumRemaining,
+      remaining_words_average: averageRemaining,
+      remaining_words_basis:
+        input.targetChapters === null ? 'none' : records.length === 0 ? 'minimum_target' : 'actual_average',
     },
     outline: {
       present: outline.present,
       strict: input.outline.book.strict,
+      target: outline.target,
+      total: outline.total,
       planned: outline.planned,
       archived: outline.archived,
+      missing_cards: outline.missingCards,
+      planned_coverage: outline.plannedCoverage,
+      archived_coverage: outline.archivedCoverage,
       coverage: outline.coverage,
+      card_coverage: outline.cardCoverage,
       volumes: volumeCounts,
       drift,
     },
@@ -204,7 +226,22 @@ export function buildBookReport(input: ReportInput): BookReport {
           average: Math.round((value.total / value.samples) * 10) / 10,
           samples: value.samples,
         }))
-        .sort((left, right) => left.id.localeCompare(right.id, 'zh-CN')),
+        .sort((left, right) => compareText(left.id, right.id)),
+    },
+    effort: {
+      reviews: records.reduce((total, record) => total + (record.rounds?.review ?? 0), 0),
+      revisions: records.reduce((total, record) => total + (record.rounds?.revise ?? 0), 0),
+      checks: records.reduce((total, record) => total + (record.rounds?.check ?? 0), 0),
+      rollbacks: records.reduce((total, record) => total + (record.rounds?.rollbacks ?? 0), 0),
+      chapters: records.map((record) => ({
+        num: record.num,
+        reviews: record.rounds?.review ?? 0,
+        revisions: record.rounds?.revise ?? 0,
+        checks: record.rounds?.check ?? 0,
+        rollbacks: record.rounds?.rollbacks ?? 0,
+        final_check: record.final_check ?? null,
+        archived_at: record.archived_at ?? null,
+      })),
     },
     pacing: {
       scene_types: sceneTypes,
@@ -220,7 +257,7 @@ export function buildBookReport(input: ReportInput): BookReport {
       overdue: overdue.length,
       resolved: input.foreshadows.items.length - open.length,
       oldest: [...open]
-        .sort((left, right) => left.last_touched - right.last_touched || left.id.localeCompare(right.id))
+        .sort((left, right) => left.last_touched - right.last_touched || compareText(left.id, right.id))
         .slice(0, 5)
         .map((item) => ({
           id: item.id,
@@ -559,6 +596,10 @@ export function searchSnapshot(input: SearchInput): SearchReport {
       ...input.worldbook.backstory.map((entry) => ({
         title: entry.time,
         source: `${entry.time}\n${entry.event}`,
+      })),
+      ...(input.worldbook.facts ?? []).map((fact) => ({
+        title: fact.alias,
+        source: `${fact.alias}\n${fact.value} ${fact.unit}${fact.tolerance === undefined ? '' : ` ±${fact.tolerance}`}\n${fact.note ?? ''}`,
       })),
     ]
     for (const entry of entries) {

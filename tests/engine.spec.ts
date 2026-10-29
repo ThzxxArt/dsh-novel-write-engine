@@ -76,7 +76,7 @@ describe('engine lifecycle', () => {
     }
   })
 
-  it('blocks on a gate without writing a single file (T-01)', async () => {
+  it('blocks on a gate without writing content, recording only an attempt (T-01)', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await bootstrapToDraft({ root, engine })
@@ -95,6 +95,13 @@ describe('engine lifecycle', () => {
       ).rejects.toBeInstanceOf(EngineBlockedError)
       const after = await snapshotTree(root)
       expect(after).toEqual(before)
+      const audit = await engine.auditHistory({
+        status: 'aborted',
+        op: 'submitDraft',
+        chapter: 1,
+        root,
+      })
+      expect(audit.data).toHaveLength(1)
     } finally {
       await cleanup()
     }

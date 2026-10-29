@@ -54,6 +54,7 @@ describe('word count', () => {
     expect(metrics.chinese_punct).toBe(2)
     expect(metrics.english_punct).toBe(0)
     expect(metrics.total_word_count).toBe(6)
+    expect(metrics.punctuation_chars).toBe(2)
   })
 
   it('does not double count digits inside an identifier', () => {
@@ -64,10 +65,11 @@ describe('word count', () => {
     expect(countWordMetrics('ABC123').english_words).toBe(1)
   })
 
-  it('counts curly quotes and dashes as English punctuation (the documented trap)', () => {
+  it('counts curly quotes and dashes as Chinese punctuation', () => {
     const metrics = countWordMetrics('“你好”——……')
-    expect(metrics.english_punct).toBe(6)
-    expect(metrics.chinese_punct).toBe(0)
+    expect(metrics.english_punct).toBe(0)
+    expect(metrics.chinese_punct).toBe(6)
+    expect(metrics.punctuation_chars).toBe(6)
   })
 
   it('treats empty and whitespace text as zero', () => {

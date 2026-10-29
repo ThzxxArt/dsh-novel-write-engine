@@ -197,7 +197,7 @@ describe('0.2.0 whole-book lifecycle', () => {
       expect(after.data.book?.outline.coverage).toBe(1)
       const stats = await engine.stats({ root })
       expect(stats.plannedChapters).toBe(0)
-      expect(stats.outlineCoverage).toBe(1)
+      expect(stats.outlineCoverage).toBeNull()
     } finally {
       await cleanup()
     }

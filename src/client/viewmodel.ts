@@ -48,6 +48,10 @@ export interface PanelView {
     outlineTotal: number
     archivedCards: number
     coverage: number
+    missingCards: number
+    plannedCoverage: number | null
+    archivedCoverage: number | null
+    cardCoverage: number
     volumes: Array<{ title: string; range: string; planned: number; archived: number }>
     worldbook: {
       characters: number
@@ -56,6 +60,7 @@ export interface PanelView {
       rules: number
       glossary: number
       backstory: number
+      facts?: number
     }
   }
   quality: { averageScore: number; scores: number[]; trend: number }
@@ -114,6 +119,7 @@ const TOOL_LABELS: Record<string, string> = {
   novel_doctor: '项目体检',
   novel_report: '全书报告',
   novel_reopen: '重开章节',
+  novel_restore: '恢复备份',
   novel_brief: '领取任务书',
   novel_plan_world: '补全世界观',
   novel_plan_chapter: '规划本章',
@@ -153,6 +159,10 @@ const loading = (): PanelView => ({
     outlineTotal: 0,
     archivedCards: 0,
     coverage: 0,
+    missingCards: 0,
+    plannedCoverage: null,
+    archivedCoverage: null,
+    cardCoverage: 0,
     volumes: [],
     worldbook: { characters: 0, locations: 0, factions: 0, rules: 0, glossary: 0, backstory: 0 },
   },
@@ -278,6 +288,10 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       outlineTotal: summary.book?.outline.total ?? 0,
       archivedCards: summary.book?.outline.archived ?? 0,
       coverage: summary.book?.outline.coverage ?? 0,
+      missingCards: summary.book?.outline.missing_cards ?? 0,
+      plannedCoverage: summary.book?.outline.planned_coverage ?? null,
+      archivedCoverage: summary.book?.outline.archived_coverage ?? null,
+      cardCoverage: summary.book?.outline.card_coverage ?? 0,
       volumes: (summary.book?.outline.volumes ?? []).map((volume) => ({
         title: volume.title,
         range: `第${volume.start}-${volume.end}章`,
@@ -291,6 +305,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
         rules: 0,
         glossary: 0,
         backstory: 0,
+        facts: 0,
       },
     },
     quality: {

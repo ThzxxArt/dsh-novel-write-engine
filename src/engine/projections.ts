@@ -52,10 +52,15 @@ export interface PanelBook {
   target: number | null
   outline: {
     present: boolean
+    target: number | null
     total: number
     planned: number
     archived: number
+    missing_cards: number
+    planned_coverage: number | null
+    archived_coverage: number | null
     coverage: number
+    card_coverage: number
     volumes: Array<{ title: string; start: number; end: number; planned: number; archived: number }>
   }
   worldbook: {
@@ -66,6 +71,7 @@ export interface PanelBook {
     rules: number
     glossary: number
     backstory: number
+    facts?: number
   }
 }
 

@@ -5,7 +5,7 @@ export const PLUGIN_NAME = 'dsh-novel-write-engine'
 export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
-export const REMOTE_VERSION = 2
+export const REMOTE_VERSION = 3
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -20,6 +20,9 @@ export const REVIEW_DIR = 'reviews'
 export const CHECK_DIR = 'checks'
 export const EXPORT_DIR = 'exports'
 export const BACKUP_DIR = 'backups'
+export const HISTORY_DIR = 'history'
+/** Brief receipts are append-only evidence, separate from content transactions. */
+export const BRIEF_RECEIPTS_FILE = 'state/briefs.yaml'
 export const OUTLINE_DIR = 'outline'
 export const LOCK_FILE = '.engine.lock'
 export const STAGING_DIR = '.staging'
@@ -55,6 +58,22 @@ export const reviewFile = (chapter: number): string =>
   `${REVIEW_DIR}/ch${String(chapter).padStart(3, '0')}.review.yaml`
 export const checkFile = (chapter: number): string =>
   `${CHECK_DIR}/ch${String(chapter).padStart(3, '0')}.check.yaml`
+
+/** Immutable-ish prior versions; the primary paths always hold the current one. */
+const historyChapter = (chapter: number): string => `ch${String(chapter).padStart(3, '0')}`
+const historyRevision = (revision: number): string => `r${String(Math.max(0, revision)).padStart(4, '0')}`
+export const reviewHistoryFile = (chapter: number, revision: number): string =>
+  `${HISTORY_DIR}/reviews/${historyChapter(chapter)}.${historyRevision(revision)}.review.yaml`
+export const checkHistoryFile = (chapter: number, revision: number): string =>
+  `${HISTORY_DIR}/checks/${historyChapter(chapter)}.${historyRevision(revision)}.check.yaml`
+export const chapterHistoryFile = (chapter: number, revision: number): string =>
+  `${HISTORY_DIR}/chapters/${historyChapter(chapter)}.${historyRevision(revision)}.md`
+export const deprecatedHistoryFile = (chapter: number, revision: number): string =>
+  `${HISTORY_DIR}/deprecated/${historyChapter(chapter)}.${historyRevision(revision)}.md`
+export const planHistoryFile = (chapter: number, revision: number): string =>
+  `${HISTORY_DIR}/plans/${historyChapter(chapter)}.${historyRevision(revision)}.chapter.yaml`
+export const HISTORY_KINDS = ['reviews', 'checks', 'chapters', 'deprecated', 'plans'] as const
+export type HistoryKind = (typeof HISTORY_KINDS)[number]
 
 /** Limits that are structural, not taste. */
 export const LIMITS = {
@@ -120,6 +139,7 @@ export const TOOL_NAMES = [
   'novel_report',
   'novel_guide',
   'novel_reopen',
+  'novel_restore',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 

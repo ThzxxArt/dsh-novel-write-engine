@@ -114,7 +114,7 @@ describe('architecture rules', () => {
   it('R6: tools all live in the novel_ namespace and the names are unique', () => {
     expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length)
     for (const name of TOOL_NAMES) expect(name.startsWith('novel_')).toBe(true)
-    expect(TOOL_NAMES).toHaveLength(27)
+    expect(TOOL_NAMES).toHaveLength(28)
   })
 
   it('R7: no test is skipped, focused, or marked todo', async () => {

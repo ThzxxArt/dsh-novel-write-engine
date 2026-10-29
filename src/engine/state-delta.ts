@@ -57,8 +57,16 @@ const requireReason = (value: { action: DeltaAction; reason?: string }, where: s
   }
 }
 
+/** A one-character anchor is indistinguishable from a substring accident. */
+const ANCHOR_MIN_CHARS = 8
+const anchorIsStrong = (value: unknown): value is string =>
+  typeof value === 'string' && Array.from(value.trim()).length >= ANCHOR_MIN_CHARS
+
 const requireForeshadowFields = (value: ForeshadowDelta, where: string): void => {
   if (value.title !== undefined && typeof value.title !== 'string') fail(`${where}.title must be a string`)
+  if (value.anchor !== undefined && !anchorIsStrong(value.anchor)) {
+    fail(`${where}.anchor must be a verbatim quote of at least ${ANCHOR_MIN_CHARS} characters`)
+  }
   if (value.description !== undefined && typeof value.description !== 'string') {
     fail(`${where}.description must be a string`)
   }
@@ -106,6 +114,36 @@ export interface DeltaInput {
   relationships: RelationshipsDocument
   /** Plan narrator, used to resolve a first-person alias such as 「我」. */
   narrator?: string | null
+  /** Role hints from P1 / the worldbook, keyed by character name. */
+  roleHints?: Readonly<Record<string, string>>
+}
+
+const ROLE_ALIASES: Readonly<Record<string, string>> = {
+  主角: 'protagonist',
+  男主角: 'protagonist',
+  女主: 'protagonist',
+  女主角: 'protagonist',
+  男主: 'protagonist',
+  主人公: 'protagonist',
+  protagonist: 'protagonist',
+  配角: 'supporting',
+  重要配角: 'supporting',
+  男二: 'supporting',
+  女二: 'supporting',
+  supporting: 'supporting',
+  反派: 'antagonist',
+  antagonist: 'antagonist',
+  龙套: 'extra',
+  路人: 'extra',
+  extra: 'extra',
+}
+
+/** Keep one canonical role vocabulary instead of letting free text reach reports. */
+export const normalizeRole = (value: string | undefined, fallback: string): string => {
+  const canonicalFallback = ROLE_ALIASES[fallback] ?? 'extra'
+  const trimmed = value?.trim() ?? ''
+  if (trimmed === '') return canonicalFallback
+  return ROLE_ALIASES[trimmed] ?? canonicalFallback
 }
 
 /**
@@ -194,9 +232,13 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       if (!appeared.includes(name)) {
         fail(`character "${name}" is created but does not appear in characters_appeared`)
       }
+      const hinted = normalizeRole(
+        input.roleHints?.[name],
+        name === narratorName || name === narrator ? 'protagonist' : 'extra',
+      )
       const created = {
         name,
-        role: declared.role ?? 'extra',
+        role: normalizeRole(declared.role, hinted),
         first_appearance: chapter,
         profile: declared.profile ?? {},
         current_state: declared.current_state ?? {},
@@ -209,7 +251,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     if (existing === undefined) fail(`character "${name}" does not exist; created must be used first`)
     if (declared.action === 'updated') {
-      if (declared.role !== undefined) existing.role = declared.role
+      if (declared.role !== undefined) existing.role = normalizeRole(declared.role, existing.role)
       if (declared.profile !== undefined) existing.profile = { ...existing.profile, ...declared.profile }
       if (declared.current_state !== undefined) {
         existing.current_state = { ...existing.current_state, ...declared.current_state }
@@ -448,16 +490,33 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (typeof plant.title !== 'string' || plant.title.trim() === '') {
       fail(`foreshadow "${plant.key}" has an empty summary title`)
     }
-    if (!input.text.includes(plant.title)) {
-      fail(`planted foreshadow summary title "${plant.title}" does not appear in the manuscript`)
+    if (plant.anchor !== undefined && !anchorIsStrong(plant.anchor)) {
+      fail(
+        `foreshadow "${plant.key}" anchor must be a verbatim quote of at least ${ANCHOR_MIN_CHARS} characters`,
+      )
     }
     if (declared.title !== undefined && typeof declared.title !== 'string') {
       fail(`foreshadows.${plant.key}.title must be a string`)
     }
     const title = declared.title ?? plant.title
     if (title.trim() === '') fail(`foreshadow "${plant.key}" has an empty title`)
-    if (!input.text.includes(title)) {
-      fail(`planted foreshadow "${title}" does not appear in the manuscript`)
+    // `title` is the human-readable ledger label. Verification uses the
+    // explicit anchor when supplied; old chapters without anchors keep the
+    // previous "title must appear" rule, so both formats stay valid.
+    const anchor = declared.anchor ?? plant.anchor
+    if (anchor === undefined) {
+      if (!input.text.includes(plant.title)) {
+        fail(
+          `planted foreshadow summary title "${plant.title}" has no anchor and does not appear verbatim in the manuscript`,
+        )
+      }
+      if (!input.text.includes(title)) {
+        fail(
+          `planted foreshadow "${title}" has no anchor and does not appear verbatim in the manuscript; add a verbatim anchor or keep the title as text`,
+        )
+      }
+    } else if (!input.text.includes(anchor)) {
+      fail(`planted foreshadow "${title}" anchor "${anchor}" does not appear verbatim in the manuscript`)
     }
     const allocated = allocateIds('FS', foreshadows.next_seq, 1)
     const id = allocated.ids[0]!
@@ -471,6 +530,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       status: 'planted' as const,
       resolved_at: null,
       description: declared.description ?? plant.description,
+      ...(anchor === undefined ? {} : { anchor }),
       advance_log: [] as Array<{ chapter: number; note: string; new_info: boolean }>,
     }
     foreshadows.items.push(item)

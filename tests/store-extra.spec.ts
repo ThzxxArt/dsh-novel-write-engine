@@ -42,7 +42,7 @@ describe('store extras', () => {
         revision: 1,
         chapter: 1,
         stage: 'idle' as const,
-        rounds: {},
+        rounds: { review: 0, revise: 0, check: 0 },
         briefs: {},
         blocking: [],
         last_action: null,

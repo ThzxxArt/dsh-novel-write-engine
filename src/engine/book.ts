@@ -7,12 +7,14 @@ import type {
   Genre,
   OutlineChapter,
   OutlineDocument,
+  OutlineProgress,
   OutlineVolume,
   Platform,
   SceneType,
   WorldbookBackstory,
   WorldbookCharacter,
   WorldbookDocument,
+  WorldbookFact,
   WorldbookFaction,
   WorldbookGlossary,
   WorldbookLocation,
@@ -80,6 +82,7 @@ export interface WorldbookPatch {
   characters?: WorldbookCharacter[]
   glossary?: WorldbookGlossary[]
   backstory?: WorldbookBackstory[]
+  facts?: WorldbookFact[]
   themes?: string[]
 }
 
@@ -252,6 +255,7 @@ export function emptyWorldbook(now: string): WorldbookDocument {
     characters: [],
     glossary: [],
     backstory: [],
+    facts: [],
     themes: [],
   }
 }
@@ -265,22 +269,34 @@ export function outlineCard(document: OutlineDocument, chapter: number): Outline
 export function outlineSummary(
   document: OutlineDocument,
   archivedCount: number,
-): {
-  present: boolean
-  total: number
-  planned: number
-  archived: number
-  coverage: number
-  volumes: number
-} {
+  target: number | null = null,
+  /** Archived chapter numbers, so cardCoverage measures per-chapter matching. */
+  archivedNumbers?: readonly number[],
+): OutlineProgress {
   const planned = document.chapters.filter((card) => card.status === 'planned').length
   const archived = document.chapters.filter((card) => card.status === 'archived').length
+  const total = document.chapters.length
+  const missingCards = target === null ? 0 : Math.max(0, target - total)
+  const plannedCoverage = target === null || target === 0 ? null : Math.min(1, total / target)
+  const archivedCoverage = target === null || target === 0 ? null : Math.min(1, archived / target)
+  const archivedSet = archivedNumbers === undefined ? null : new Set(archivedNumbers)
+  const matchedCards =
+    archivedSet === null
+      ? archived
+      : document.chapters.filter((card) => card.status === 'archived' && archivedSet.has(card.num)).length
+  const archivedDenominator = archivedSet === null ? archivedCount : archivedSet.size
+  const cardCoverage = archivedDenominator === 0 ? 1 : Math.min(1, matchedCards / archivedDenominator)
   return {
-    present: bookPlanPresent(document.book) || document.volumes.length > 0 || document.chapters.length > 0,
-    total: document.chapters.length,
+    present: bookPlanPresent(document.book) || document.volumes.length > 0 || total > 0,
+    target,
+    total,
     planned,
     archived,
-    coverage: archivedCount === 0 ? 0 : Math.min(1, archived / archivedCount),
+    missingCards,
+    plannedCoverage,
+    archivedCoverage,
+    coverage: plannedCoverage ?? (archivedDenominator === 0 ? 0 : cardCoverage),
+    cardCoverage,
     volumes: document.volumes.length,
   }
 }
@@ -872,6 +888,7 @@ export function mergeWorldbook(
     characters: [...existing.characters],
     glossary: [...existing.glossary],
     backstory: [...existing.backstory],
+    facts: [...(existing.facts ?? [])],
     themes: [...existing.themes],
   }
   if (patch.premise !== undefined)
@@ -959,6 +976,38 @@ export function mergeWorldbook(
       event: text(raw.event, `backstory[${index}].event`, LIMITS.maxWorldbookTextChars),
     }))
   }
+  if (patch.facts !== undefined) {
+    result.facts = records(patch.facts, 'facts').map((raw, index) => {
+      const value = raw.value
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `facts[${index}].value must be a finite number`,
+        )
+      }
+      const tolerance = raw.tolerance ?? 0
+      if (typeof tolerance !== 'number' || !Number.isFinite(tolerance) || tolerance < 0) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `facts[${index}].tolerance must be a non-negative number`,
+        )
+      }
+      return {
+        alias: text(raw.alias, `facts[${index}].alias`, 120),
+        value,
+        unit: text(raw.unit, `facts[${index}].unit`, 40),
+        tolerance,
+        ...(raw.note === undefined ? {} : { note: optionalText(raw.note, `facts[${index}].note`) }),
+      }
+    })
+    const seenFacts = new Set<string>()
+    for (const fact of result.facts) {
+      if (seenFacts.has(fact.alias)) {
+        throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `facts contains duplicate "${fact.alias}"`)
+      }
+      seenFacts.add(fact.alias)
+    }
+  }
   return result
 }
 
@@ -985,6 +1034,7 @@ export function validateWorldbookDocument(value: unknown, now: string): Worldboo
       'characters',
       'glossary',
       'backstory',
+      'facts',
       'themes',
     ])
     for (const key of Object.keys(value)) {
@@ -1159,7 +1209,9 @@ export function worldbookCounts(document: WorldbookDocument): {
   rules: number
   glossary: number
   backstory: number
+  facts: number
 } {
+  const facts = document.facts?.length ?? 0
   return {
     present:
       document.premise !== '' ||
@@ -1170,13 +1222,15 @@ export function worldbookCounts(document: WorldbookDocument): {
       document.factions.length > 0 ||
       document.rules.length > 0 ||
       document.glossary.length > 0 ||
-      document.backstory.length > 0,
+      document.backstory.length > 0 ||
+      facts > 0,
     characters: document.characters.length,
     locations: document.locations.length,
     factions: document.factions.length,
     rules: document.rules.length,
     glossary: document.glossary.length,
     backstory: document.backstory.length,
+    facts,
   }
 }
 
@@ -1232,6 +1286,13 @@ export function worldbookBrief(
     backstory: document.backstory.slice(0, 3).map((entry) => ({
       time: entry.time,
       event: clip(entry.event, 160),
+    })),
+    facts: (document.facts ?? []).slice(0, 20).map((fact) => ({
+      alias: clip(fact.alias, 120),
+      value: fact.value,
+      unit: clip(fact.unit, 40),
+      tolerance: fact.tolerance ?? 0,
+      ...(fact.note === undefined ? {} : { note: clip(fact.note, 160) }),
     })),
   }
 }

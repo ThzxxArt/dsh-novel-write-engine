@@ -57,6 +57,8 @@ const makeGuarded =
     }
   }
 
+const percent = (value: number): string => `${Math.round(value * 1000) / 10}%`
+
 const text = (value: unknown): Array<{ type: 'text'; text: string }> => [
   { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) },
 ]
@@ -119,7 +121,7 @@ const root = {
 }
 
 /**
- * The twenty-seven tools are thin adapters: narrow parameters, call one service
+ * The twenty-eight tools are thin adapters: narrow parameters, call one service
  * operation, render the canonical value. They never read a file.
  */
 export function createNovelTools(engine: EngineService): ReturnType<typeof defineTool>[] {
@@ -190,12 +192,16 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
+            metrics?: { total_word_count: number; cjk_chars: number; punctuation_chars: number } | null
             book?: {
               strict: boolean
               outline: {
                 total: number
                 archived: number
+                missing_cards?: number
                 coverage: number
+                planned_coverage?: number | null
+                archived_coverage?: number | null
                 current: {
                   num: number
                   title: string
@@ -226,10 +232,15 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
                   ]),
               value.blocking.length === 0 ? '门控：全部通过' : `门控：${value.blocking.length} 条阻塞`,
               ...value.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
+              ...(value.metrics === null || value.metrics === undefined
+                ? []
+                : [
+                    `字数：${value.metrics.total_word_count}（汉字 ${value.metrics.cjk_chars} + 标点 ${value.metrics.punctuation_chars} + 英文词/数字，含标点）`,
+                  ]),
               ...(value.book === undefined
                 ? []
                 : [
-                    `全书：大纲 ${value.book.outline.total} 张卡（已归档 ${value.book.outline.archived}，覆盖率 ${Math.round(value.book.outline.coverage * 100)}%）· 世界观 ${value.book.worldbook.characters} 角色 / ${value.book.worldbook.locations} 地点 / ${value.book.worldbook.factions} 势力 / ${value.book.worldbook.rules} 规则${value.book.strict ? ' · 严格大纲' : ''}`,
+                    `全书：大纲 ${value.book.outline.total} 张卡（规划覆盖 ${value.book.outline.planned_coverage === null || value.book.outline.planned_coverage === undefined ? '—' : percent(value.book.outline.planned_coverage)} · 归档覆盖 ${value.book.outline.archived_coverage === null || value.book.outline.archived_coverage === undefined ? '—' : percent(value.book.outline.archived_coverage)}${(value.book.outline.missing_cards ?? 0) > 0 ? ` · 缺卡 ${value.book.outline.missing_cards}` : ''}）· 世界观 ${value.book.worldbook.characters} 角色 / ${value.book.worldbook.locations} 地点 / ${value.book.worldbook.factions} 势力 / ${value.book.worldbook.rules} 规则${value.book.strict ? ' · 严格大纲' : ''}`,
                     `当前章卡：${
                       value.book.outline.current === null
                         ? '（无）'
@@ -393,7 +404,15 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       description: 'Submit a P5 revision. Blockers must be fixed with evidence quoted from the new text.',
       parameters: {
         chapter: { type: 'integer', required: true },
-        content: { type: 'string', required: true },
+        content: {
+          type: 'string',
+          description: 'Full revised text; mutually exclusive with patch.',
+        },
+        patch: {
+          type: 'json',
+          description:
+            'Patch mode: {expected_hash, edits:[{old_text,new_text,occurrence?}]}; edits must be unique unless occurrence is set.',
+        },
         summary: { type: 'json' },
         issues: { type: 'json', description: 'Updated issue statuses and evidence for PG-08.' },
         proof: {
@@ -407,7 +426,8 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       execute: guarded(async (args) =>
         engine.submitRevision({
           chapter: args.chapter,
-          content: args.content,
+          ...(args.content === undefined ? {} : { content: args.content }),
+          ...(args.patch === undefined ? {} : { patch: asJson(args.patch, 'patch') as never }),
           summary: asJson(args.summary, 'summary') as never,
           issues: asJson(args.issues, 'issues') as never,
           proof: asJson(args.proof, 'proof') as never,
@@ -427,6 +447,11 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           required: true,
           description: 'Exactly the five P6 semantic items, each with a verbatim evidence quote.',
         },
+        acknowledge: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Advisory codes read and accepted; blockers cannot be acknowledged.',
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -435,6 +460,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           chapter: args.chapter,
           scope: args.scope as string[],
           semantic: asJson(args.semantic, 'semantic') as never[],
+          ...(args.acknowledge === undefined ? {} : { acknowledge: args.acknowledge }),
           root: args.project_root,
         }),
       ),
@@ -442,7 +468,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     defineTool({
       name: 'novel_archive',
       description:
-        'Archive the active chapter: all gates run, then one transaction writes the index, five ledgers and handoff.',
+        'Archive the active chapter: all gates run, then one transaction writes the index, eight ledgers and handoff.',
       parameters: {
         chapter: { type: 'integer', required: true },
         state_delta: { type: 'json', required: true },
@@ -499,7 +525,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     defineTool({
       name: 'novel_state',
       description:
-        'Read a state document (ledgers, plans, review, check, outline, worldbook) without touching the manuscript.',
+        'Read a state document (ledgers, plans, review, check, outline, worldbook), list brief receipts, revision history or backup manifests without touching the manuscript.',
       parameters: {
         kind: {
           type: 'string',
@@ -521,9 +547,13 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
             'planChapter',
             'outline',
             'worldbook',
+            'history',
+            'backups',
+            'briefs',
           ] as const,
         },
         chapter: { type: 'integer' },
+        revision: { type: 'integer' },
         include_summary: {
           type: 'boolean',
           description: 'For kind=chapters: include the full ten-field summary (default compact).',
@@ -540,6 +570,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         engine.queryState({
           kind: args.kind,
           chapter: args.chapter,
+          ...(args.revision === undefined ? {} : { revision: args.revision }),
           ...(args.include_summary === undefined ? {} : { include_summary: args.include_summary }),
           ...(args.chapter_range === undefined
             ? {}
@@ -643,10 +674,30 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
     defineTool({
       name: 'novel_audit',
       description:
-        'Read the append-only journal as an audit trail of every committed and aborted transaction.',
-      parameters: { limit: { type: 'integer' }, project_root: root },
+        'Read the append-only journal, including refused gate attempts, with chapter/op/status/time filters and a revision cursor.',
+      parameters: {
+        limit: { type: 'integer' },
+        cursor: { type: 'integer' },
+        chapter: { type: 'integer' },
+        op: { type: 'string' },
+        status: { type: 'string', enum: ['committed', 'aborted'] as const },
+        since: { type: 'string' },
+        until: { type: 'string' },
+        project_root: root,
+      },
       output: jsonOutput,
-      execute: guarded(async (args) => engine.auditHistory({ limit: args.limit, root: args.project_root })),
+      execute: guarded(async (args) =>
+        engine.auditHistory({
+          limit: args.limit,
+          cursor: args.cursor,
+          chapter: args.chapter,
+          op: args.op,
+          status: args.status,
+          since: args.since,
+          until: args.until,
+          root: args.project_root,
+        }),
+      ),
     }),
     defineTool({
       name: 'novel_pipeline',
@@ -753,6 +804,10 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         characters: { type: 'json' },
         glossary: { type: 'json' },
         backstory: { type: 'json' },
+        facts: {
+          type: 'json',
+          description: 'Declared numeric canon: [{alias,value,unit,tolerance?,note?}].',
+        },
         themes: stringArray,
         project_root: root,
       },
@@ -767,6 +822,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           characters: asJson(args.characters, 'characters') as never,
           glossary: asJson(args.glossary, 'glossary') as never,
           backstory: asJson(args.backstory, 'backstory') as never,
+          ...(args.facts === undefined ? {} : { facts: asJson(args.facts, 'facts') as never }),
           themes: args.themes as string[],
           root: args.project_root,
         }),
@@ -831,6 +887,31 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       output: jsonOutput,
       execute: guarded(async (args) =>
         engine.reopenChapter({ chapter: args.chapter, reason: args.reason, root: args.project_root }),
+      ),
+    }),
+    defineTool({
+      name: 'novel_restore',
+      description:
+        'Restore an active chapter file from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
+      parameters: {
+        txid: { type: 'string', required: true },
+        chapter: { type: 'integer' },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Project-relative chapter files; omitted restores every restorable chapter file that the backup manifest records.',
+        },
+        project_root: root,
+      },
+      output: jsonOutput,
+      execute: guarded(async (args) =>
+        engine.restoreBackup({
+          txid: args.txid,
+          chapter: args.chapter,
+          ...(args.paths === undefined ? {} : { paths: args.paths }),
+          root: args.project_root,
+        }),
       ),
     }),
   ]

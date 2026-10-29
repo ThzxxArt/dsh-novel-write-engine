@@ -65,6 +65,7 @@ const expectedNovelTools = [
   'novel_report',
   'novel_guide',
   'novel_reopen',
+  'novel_restore',
 ]
 let packed
 let child
@@ -346,7 +347,7 @@ try {
     throw new Error(`authenticated panel request should be 200, got ${authorized.status}`)
   }
   const body = await authorized.json()
-  if (body.schemaVersion !== 2) throw new Error('panel payload has no schemaVersion 2')
+  if (body.schemaVersion !== 3) throw new Error('panel payload has no schemaVersion 3')
   if (body.empty === true) {
     if (typeof body.error !== 'string' || body.error === '') {
       throw new Error('empty panel payload has no explanatory error text')

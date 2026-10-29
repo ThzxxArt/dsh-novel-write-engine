@@ -628,8 +628,10 @@ describe('0.2.0 review probes: coverage edges', () => {
       await readyToArchive({ root, engine })
       await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
       await rm(join(root, 'plans/ch001.chapter.yaml'))
+      // The archive now records the plan hash, so a missing/changed plan is
+      // caught as an archive-tamper abort before reopen can rebuild the card.
       await expect(engine.reopenChapter({ chapter: 1, reason: '重写', root })).rejects.toMatchObject({
-        code: 'ENGINE_SCHEMA_INVALID',
+        code: 'ENGINE_TXN_ABORTED',
       })
     } finally {
       await cleanup()

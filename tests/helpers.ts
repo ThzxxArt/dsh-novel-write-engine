@@ -139,15 +139,21 @@ export async function snapshotTree(root: string): Promise<Map<string, string>> {
   const walk = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const absolute = join(directory, entry.name)
+      const key = relative(root, absolute).replace(/\\/g, '/')
+      // Refused operations now append an aborted attempt to the journal as
+      // evidence. Content-state tests use this tree to prove no manuscript,
+      // plan, ledger or pipeline byte moved; the audit trail is checked
+      // separately by the attempt tests.
+      if (key === 'state/journal.jsonl') continue
       if (entry.isDirectory()) {
-        result.set(`${relative(root, absolute).replace(/\\/g, '/')}/`, 'directory')
+        result.set(`${key}/`, 'directory')
         await walk(absolute)
         continue
       }
       const content = await readFile(absolute)
       const metadata = await stat(absolute)
       result.set(
-        relative(root, absolute).replace(/\\/g, '/'),
+        key,
         `${metadata.mtimeMs}:${content.byteLength}:${createHash('sha256').update(content).digest('hex')}`,
       )
     }

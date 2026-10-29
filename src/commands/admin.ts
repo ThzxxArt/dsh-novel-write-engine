@@ -16,7 +16,7 @@ const rootArg = (args: Record<string, unknown>): string => {
 }
 
 /**
- * The seventeen tools hidden when `tools.mode=core`, plus the explicit
+ * The eighteen tools hidden when `tools.mode=core`, plus the explicit
  * registry/settings-pack operations that are command-only by design (§6.8).
  * They stay reachable through `/novel admin <operation> <json>`; the caller
  * supplies the same arguments the tool schema would have accepted.
@@ -45,6 +45,7 @@ const OPERATIONS: Record<string, Handler> = {
   novel_report: (engine, args) => engine.report(args as never),
   novel_guide: (engine, args) => engine.guide(args as never),
   novel_reopen: (engine, args) => engine.reopenChapter(args as never),
+  novel_restore: (engine, args) => engine.restoreBackup(args as never),
   novel_registry_list: (engine) => engine.listProjects(),
   novel_registry_register: (engine, args) => engine.registerProject({ root: rootArg(args) }),
   novel_registry_activate: (engine, args) => engine.setActiveProject({ root: rootArg(args) }),

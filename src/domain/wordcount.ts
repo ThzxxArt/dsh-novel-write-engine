@@ -4,8 +4,10 @@ import type { WordMetrics } from '../types.js'
 const CJK = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g
 const ENGLISH_WORD = /[A-Za-z]+/g
 const NUMBER = /(?<![A-Za-z0-9])[0-9]+(?![A-Za-z0-9])/g
-const CHINESE_PUNCT = /[\u3000-\u303f\uff00-\uffef]/g
-const ENGLISH_PUNCT = /[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef]/gu
+const CHINESE_PUNCT = /[\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014\u2026]/g
+const ENGLISH_PUNCT = /[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014\u2026]/gu
+/** A line participates in dialogue if it contains any of the four common quote pairs. */
+const DIALOGUE_MARKS = /["“”「」『』]/
 
 const matchCount = (text: string, pattern: RegExp): number => text.match(pattern)?.length ?? 0
 
@@ -24,16 +26,18 @@ export function countWordMetrics(text: string): WordMetrics {
   const numbers = matchCount(text, NUMBER)
   const chinesePunct = matchCount(text, CHINESE_PUNCT)
   const englishPunct = matchCount(text, ENGLISH_PUNCT)
-  const dialogueLines = nonEmptyLines.filter((line) => line.includes('"')).length
+  const dialogueLines = nonEmptyLines.filter((line) => DIALOGUE_MARKS.test(line)).length
   const paragraphs = splitParagraphs(text)
+  const punctuation = chinesePunct + englishPunct
 
   return {
-    total_word_count: cjkChars + englishWords + numbers + chinesePunct + englishPunct,
+    total_word_count: cjkChars + englishWords + numbers + punctuation,
     cjk_chars: cjkChars,
     english_words: englishWords,
     numbers,
     chinese_punct: chinesePunct,
     english_punct: englishPunct,
+    punctuation_chars: punctuation,
     non_ws_chars: matchCount(text, /\S/g),
     total_lines: lines.length,
     non_empty_lines: nonEmptyLines.length,

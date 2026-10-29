@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.0`                                                                                                  |
+| 插件版本 | `0.2.1`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -26,7 +26,7 @@
 | 门禁     | 13 条机器可判定的门控（PG-01~PG-13），任一不过即阻塞                  |
 | 规则引擎 | 字数、标点、格式、词表、节奏、跨章、一致性——约 30 条可机检规则        |
 | 事务器   | 归档是一次原子提交（暂存→校验→提交→读回），不是「写一堆文件祈祷成功」 |
-| 服务     | 31 个服务操作，同时被工具、命令、面板、任务书四条通道复用             |
+| 服务     | 32 个服务操作，同时被工具、命令、面板、任务书四条通道复用             |
 
 | 不是                 | 原因                                                |
 | -------------------- | --------------------------------------------------- |
@@ -41,7 +41,7 @@
 ```
 阶段        9 个（模型执行 6 个，事务执行 3 个）
 门控        13 条（PG-01 ~ PG-13）
-服务操作    31 个（27 工具 + 3 面板投影 + 1 统计投影）
+服务操作    32 个（28 工具 + 3 面板投影 + 1 统计投影）
 分层        6 层（L0 类型 / L1 领域 / L2 规则 / L3 存储 / L4 引擎 / L5 适配）
 评分        15 维 / 满分 150 / 合格 120
 语义项      5 条（场景/人物状态/因果/声音/视角）
@@ -50,7 +50,7 @@
 文件        YAML 12 个 + JSONL 1 个 + 正文 Markdown N 个 + 导出 N 个
 运行时依赖  1 个（yaml）
 斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 子命令）
-客户端半边  1 个面板（「网文工坊」v2）
+客户端半边  1 个面板（「网文工坊」v3）
 Agent 预设  1 个（「网文工坊」）
 覆盖率门禁  全局 90%，engine 90/85，纯函数层 100%
 ```
@@ -190,9 +190,9 @@ Agent 预设  1 个（「网文工坊」）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ L5 适配层   tools(18) · commands(5) · remote(3) · skill(1)   │ 薄壳：窄化 + 渲染
+│ L5 适配层   tools(28) · commands(5) · remote(3) · skill(1)   │ 薄壳：窄化 + 渲染
 ├─────────────────────────────────────────────────────────────┤
-│ L4 引擎     EngineService：31 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
+│ L4 引擎     EngineService：32 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
 ├─────────────────────────────────────────────────────────────┤
 │ L3 存储     FsStore：原子写 · 事务 · 锁 · 迁移 · 项目注册表    │ 唯一 IO
 ├─────────────────────────────────────────────────────────────┤
@@ -214,8 +214,8 @@ Agent 预设  1 个（「网文工坊」）
 | `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表        | types         | 否     | 纯单测 + 表驱动             |
 | `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度         | types, domain | 否     | 纯单测 + golden             |
 | `src/store/`    | 原子写、事务、锁、schema 加载、迁移、注册表、备份  | types         | **是** | 真实 tmpdir + 故障注入      |
-| `src/engine/`   | 31 个操作、门控、任务书、只读投影、journal         | 全部下层      | 间接   | 集成（真 store + 真 rules） |
-| `src/tools/`    | 27 个 `defineTool`：窄化 → 调 op → 规范值 → render | engine        | 否     | 假 engine（spy）            |
+| `src/engine/`   | 32 个操作、门控、任务书、只读投影、journal         | 全部下层      | 间接   | 集成（真 store + 真 rules） |
+| `src/tools/`    | 28 个 `defineTool`：窄化 → 调 op → 规范值 → render | engine        | 否     | 假 engine（spy）            |
 | `src/commands/` | 5 条斜杠命令                                       | engine        | 否     | 假 engine                   |
 | `src/remote/`   | 3 个只读投影 + DTO 版本                            | engine        | 否     | 假 engine + 形状断言        |
 | `src/skills/`   | 1 份入口技能正文                                   | —             | 否     | 快照 + 字数上限             |
@@ -267,7 +267,7 @@ export function apply(ctx: Context, config: Config) {
 | 清理 | `ctx.effect` 调用 `EngineService.dispose()` 清空内存缓存；文件锁在每个 `mutate` 的 `finally` 释放，引擎不持有文件句柄 |
 | 失败 | `apply` 只在**配置非法**时抛错；项目不存在是「操作错误」，不是装配错误                                                |
 
-### 2.5 服务操作契约（31 个）
+### 2.5 服务操作契约（32 个）
 
 **这是全系统的唯一入口**。工具、命令、面板、任务书都只能调这些操作。
 
@@ -275,8 +275,8 @@ export function apply(ctx: Context, config: Config) {
 | -------- | ------------------- | ---------------------------- | -------------------------------- | ----------------------------------------- |
 | 生命周期 | `initProject`       | 是                           | —                                | 项目根路径                                |
 |          | `archiveChapter`    | 是（事务）                   | PG-01~10/12/13（不含 PG-11）      | `(chapter, contentHash)`                  |
-|          | `amend`             | 是                           | PG-01                            | `(target, path, 期望 revision)`           |
-|          | `rollback`          | 是                           | —                                | `(chapter, toStage)`                      |
+|          | `amend`             | 是                           | PG-01                            | 无（修复不 replay）                       |
+|          | `rollback`          | 是                           | —                                | `(chapter, toStage, chapterHash)`         |
 | 提交     | `submitWorldPlan`   | 是                           | PG-01/02/11                      | `(chapter, digest)`                       |
 |          | `submitChapterPlan` | 是                           | PG-01/02/13                      | `(chapter, digest)`                       |
 |          | `submitDraft`       | 是                           | PG-01/02/03/04/05/06/13          | `(chapter, contentHash)`                  |
@@ -300,6 +300,7 @@ export function apply(ctx: Context, config: Config) {
 |          | `importOutline`     | 否（dry_run）/是             | —                                | `(content hash)`                          |
 |          | `submitWorldbook`   | 是                           | —                                | `(worldbook digest)`                      |
 |          | `reopenChapter`     | 是（事务）                   | 仅已归档且活动章未开始           | `(chapter, reason)`                       |
+|          | `restoreBackup`     | 是（事务）                   | 仅活动章；manifest 章号必须匹配  | 无（修复不 replay，每次恢复都再建备份）   |
 | 可观测   | `search`            | 否                           | —                                | —                                         |
 |          | `doctor`            | 否                           | —                                | —                                         |
 |          | `report`            | 否                           | —                                | —                                         |
@@ -330,7 +331,7 @@ interface OpResult<T> {
 
 | 适配器       | 做什么                                          | 不做什么                                     |
 | ------------ | ----------------------------------------------- | -------------------------------------------- |
-| Tool（27）   | 参数窄化 → 调 op → 组装规范值 → `render` 成卡片 | 不读文件、不做校验、不算字数                 |
+| Tool（28）   | 参数窄化 → 调 op → 组装规范值 → `render` 成卡片 | 不读文件、不做校验、不算字数                 |
 | Command（5） | 解析参数 → 调 op → 输出 Markdown                | 不引入第二数据路径                           |
 | Remote（3）  | 调投影 op → 组装 DTO（带 `schemaVersion`）      | **没有任何写方法**（接口层面就没有，INV-10） |
 | Skill（1）   | 一段 Markdown：何时用、怎么驱动、路由表         | 不含阶段知识（那由 `novel_brief` 投递）      |
@@ -520,7 +521,7 @@ dsh-novel-write-engine/
 
 | 原语                  | 用不用  | 说明                                                         |
 | --------------------- | ------- | ------------------------------------------------------------ |
-| `ctx.tools`           | ✅      | 27 个工具                                                    |
+| `ctx.tools`           | ✅      | 28 个工具                                                    |
 | `ctx.skills.register` | ✅ 1 个 | 入口技能                                                     |
 | `ctx.commands`        | ✅ 5 条 | 斜杠命令                                                     |
 | `ctx.subagents`       | ❌      | 不派发；由模型用原生 `subagent` 决定                         |
@@ -563,8 +564,11 @@ dsh-novel-write-engine/
 ├── plans/{chNNN.world.yaml, chNNN.chapter.yaml}
 ├── reviews/chNNN.review.yaml
 ├── checks/chNNN.check.yaml
+├── history/                      # 0.2.1 按 revision 保存的评审/校验/正文/废弃稿/计划
+│   ├── reviews/ checks/ chapters/ deprecated/ plans/
 ├── state/                        # 影子层（只有引擎能写）
-│   ├── pipeline.yaml             # 控制流 SSOT
+│   ├── pipeline.yaml             # 控制流 + 活动章 draft SSOT
+│   ├── briefs.yaml               # 任务书收据（PG-01 依据）
 │   ├── chapters.yaml             # 章节索引
 │   ├── characters.yaml
 │   ├── world.yaml
@@ -574,7 +578,7 @@ dsh-novel-write-engine/
 │   ├── relationships.yaml
 │   ├── handoff.yaml              # 续写交接
 │   └── journal.jsonl             # 追加式事务日志
-├── backups/<txid>/               # 归档前快照
+├── backups/<txid>/               # 归档前快照 + manifest.json
 └── .engine.lock                  # 写锁（pid + 时间戳）
 ```
 
@@ -639,8 +643,16 @@ revision: 42
 chapter: 3
 stage: P4
 rounds: { review: 1, revise: 0, check: 0 }
-briefs: # 任务书签收（PG-01 依据）
+briefs: # 旧项目回退；0.2.1 收据在 state/briefs.yaml
   P4: { issued_at: '...', digest: 'sha256:...' }
+draft: # 活动章；P2 计划文件不再写 summary
+  chapter: 3
+  title: '雨夜来信'
+  scene_type: '日常过渡章'
+  narrator: '他'
+  summary: { ... }
+  content_hash: 'sha256:...'
+  updated_at: '...'
 blocking: # 当前阻塞项（空数组 = 可推进）
   - { code: PG-07, scope: review, detail: 'score 118 < 120' }
 review_digest: 'sha256:...' # 最近一次 submitReview/submitRevision 写入的 review 内容摘要
@@ -1556,7 +1568,7 @@ ctx.skills.register({
 | 核心循环 | `status → brief → 做 → submit → status`                                    |
 | 六条铁律 | 不跳阶段、不伪造指标、不绕过门控、ID 由引擎分配、正文 SSOT、blocker 必须修 |
 | 路由表   | 「改情节」→ P3；「有 AI 味」→ P4；「前后矛盾」→ P6；「重写」→ P1           |
-| 工具速查 | 27 个工具一行一个                                                          |
+| 工具速查 | 28 个工具一行一个                                                          |
 | 失败处理 | 常见错误码 → 该做什么                                                      |
 
 **为什么不给 9 个阶段各注册一个技能**：那等于把 9 份阶段文档搬进上下文，token 成本高，且模型会在错误阶段加载错误文档。阶段知识由 `novel_brief` 精确投递。
@@ -1602,13 +1614,13 @@ ctx.skills.register({
 
 ## 9. 工具面与命令面
 
-### 9.1 二十七个工具（全部是 `EngineService` 的薄适配器）
+### 9.1 二十八个工具（全部是 `EngineService` 的薄适配器）
 
 | #   | 工具                 | 阶段     | 服务操作            | 写盘              |
 | --- | -------------------- | -------- | ------------------- | ----------------- |
 | 1   | `novel_init`         | —        | `initProject`       | 是                |
 | 2   | `novel_status`       | —        | `getStatus`         | 否                |
-| 3   | `novel_brief`        | P1~P6/P8 | `getBrief`          | 是（仅 `briefs`） |
+| 3   | `novel_brief`        | P1~P6/P8 | `getBrief`          | 是（`state/briefs.yaml`） |
 | 4   | `novel_plan_world`   | P1       | `submitWorldPlan`   | 是                |
 | 5   | `novel_plan_chapter` | P2       | `submitChapterPlan` | 是                |
 | 6   | `novel_write_draft`  | P3       | `submitDraft`       | 是                |
@@ -1633,6 +1645,7 @@ ctx.skills.register({
 | 25  | `novel_report`       | 任意     | `report`            | 否                |
 | 26  | `novel_guide`        | 任意     | `guide`             | 否                |
 | 27  | `novel_reopen`       | 已归档章 | `reopenChapter`     | 是（事务）        |
+| 28  | `novel_restore`      | 活动章   | `restoreBackup`     | 是（事务）        |
 
 ### 9.2 四个关键契约
 
@@ -1747,7 +1760,7 @@ relationships: { ['a|b']: string → { action, reason?, a?, b?, type?, descripti
 /novel next        → 下一步该调的工具与参数
 /novel stats       → 字数 / 评分 / 伏笔 / 词表命中统计
 /novel export      → 导出 md / txt / epub / outline / worldbook / proposal，附封面 SVG 与平台简介
-/novel admin <op>  → 触达未注册在高频面的 17 个工具（仅 toolsMode=core 时需要）
+/novel admin <op>  → 触达未注册在高频面的 18 个工具（仅 toolsMode=core 时需要）
 ```
 
 命令与工具共用同一套投影（§6.6），不引入第二条数据路径；命令是「少一次工具调用」的糖，不是新能力。
@@ -1860,12 +1873,12 @@ interface PresetDefinition {
 **为什么不把工具塞进预设**：
 
 1. **根行必须存在**：客户端半边只随「说明符恰好等于包名」的行挂载；只挂进预设，侧边栏根本不会出现。
-2. **会撞名**：同包两处挂载 = 两份实例，27 个工具重复注册。
+2. **会撞名**：同包两处挂载 = 两份实例，28 个工具重复注册。
 3. **能力不该随会话类型消失**：工具在根上，标准会话里 `/novel` 照样能用。
 
 | 层   | 挂什么                                                                                  | 目的                                |
 | ---- | --------------------------------------------------------------------------------------- | ----------------------------------- |
-| 根行 | `dsh-novel-write-engine` 整包                                                           | 27 工具 + 技能 + 面板，任何会话可用 |
+| 根行 | `dsh-novel-write-engine` 整包                                                           | 28 工具 + 技能 + 面板，任何会话可用 |
 | 预设 | persona、time-context、tool-skill、ask-user、todo、present、web、compaction、delegation | 身份 + 精简名录                     |
 
 **预设刻意不给**：`tool-bash`、`tool-pwsh`、`tool-fs`、`tool-fs-search`、`tool-jobs`、`tool-schedule`、`tool-goal`、`plan-mode`、`plugin-manager`。
@@ -1888,7 +1901,7 @@ interface PresetDefinition {
       config:
         id: novel-write-engine
         name: 网文工坊
-        description: 网文创作专用会话：27 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
+        description: 网文创作专用会话：28 个小说工具全开，无文件写权限，门控与字数由引擎裁决。
         order: 20
         plugins:
           - { id: persona, name: '@deepseek-ai/dsh-persona', config: { prefix: '（见 §11.5）' } }
@@ -1955,7 +1968,7 @@ interface PresetDefinition {
 
 三道防线：组合测试（`entryListProblem()` 校验名录 + 嵌套 id/isolate 断言）、发布门禁 `pnpm check:preset`（在真实 bundle root 上 `require.resolve` 每个非 group name）、最小引用面（只引 9 个顶层行）。`apply()` 不读宿主预设内部结构，也不做启动自检。
 
-验收：预设卡片显示且排序在标准之后；会话头显示名字；对话开始后切换被拒且提示可见；该会话含 27 个 `novel_*` 且**不含** bash/pwsh/fs/fs-search；标准会话里 `novel_*` 仍在但无主笔人格；面板在任何预设下都在；卸载后无残留。
+验收：预设卡片显示且排序在标准之后；会话头显示名字；对话开始后切换被拒且提示可见；该会话含 28 个 `novel_*` 且**不含** bash/pwsh/fs/fs-search；标准会话里 `novel_*` 仍在但无主笔人格；面板在任何预设下都在；卸载后无残留。
 
 ---
 
@@ -1988,10 +2001,10 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 
 ### 12.2 工具面预算
 
-27 个工具常驻所有会话，估算 prompt 成本约 3–4k tokens。提供一个逃生门：
+28 个工具常驻所有会话，估算 prompt 成本约 3–4k tokens。提供一个逃生门：
 
-- `toolsMode = 'all'`（默认）：27 个全注册。
-- `toolsMode = 'core'`：只注册 10 个高频工具（`init/status/guide/brief/outline/write_draft/review/revise/check/archive`），其余 17 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。多项目注册表与设定包导入（§6.8）也只走 `/novel admin`：`novel_registry_list/register/activate/forget`、`novel_import`。
+- `toolsMode = 'all'`（默认）：28 个全注册。
+- `toolsMode = 'core'`：只注册 10 个高频工具（`init/status/guide/brief/outline/write_draft/review/revise/check/archive`），其余 18 个通过 `/novel admin <op>` 命令触达（命令不占 prompt）。多项目注册表与设定包导入（§6.8）也只走 `/novel admin`：`novel_registry_list/register/activate/forget`、`novel_import`。
 
 **为什么能做到**：工具与命令共用 `EngineService`（§2.6），所以「隐藏工具」不损失能力——这正是单一入口带来的额外收益。
 
@@ -2068,8 +2081,8 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | 2   | 规则单测   | rules：每条规则的命中/不命中/严重度/豁免            | 构造文本片段                 | ~180   |
 | 3   | 规则包单测 | 编译器六条断言、平台/类型覆盖顺序、互斥去重         | 合法/非法包 fixture          | ~40    |
 | 4   | 存储测试   | 原子写、事务七步、锁回收、journal、迁移             | 真实 tmpdir + 故障注入       | ~90    |
-| 5   | 引擎集成   | 31 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~180   |
-| 6   | 适配器契约 | 27 工具 + 5 命令 + 3 remote 的规范值/渲染/错误映射  | 假 engine（spy）             | ~150   |
+| 5   | 引擎集成   | 32 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~180   |
+| 6   | 适配器契约 | 28 工具 + 5 命令 + 3 remote 的规范值/渲染/错误映射  | 假 engine（spy）             | ~150   |
 | 7   | 架构测试   | 六条依赖规则、规则码唯一、面板只读                  | 静态扫描源码                 | ~20    |
 | 8   | 端到端     | 一个 3 章样例项目跑完整流程                         | 宿主替身 harness             | ~10    |
 
@@ -2195,8 +2208,8 @@ CI 不伪造这个解析结果。
 | S3   | 存储层：FsStore · 原子写 · 事务七步 · 锁 · journal · schema · migrate | 4            |
 | S4   | 规则层：编译器 · 注册表 · 求值流水线 · 八类规则                       | 6            |
 | S5   | 门控层：13 门控 · 求值器 · 证据模型                                   | 4            |
-| S6   | 引擎服务：31 操作 · 幂等 · 4 个投影                                   | 7            |
-| S7   | 适配层：27 工具 · 5 命令 · 3 remote                                   | 5            |
+| S6   | 引擎服务：32 操作 · 幂等 · 4 个投影                                   | 7            |
+| S7   | 适配层：28 工具 · 5 命令 · 3 remote                                   | 5            |
 | S8   | 知识层：入口技能 · 7 份任务书 · 类型与平台 · 规则包内容               | 3            |
 | S9   | 客户端：构建链 · slot 注册 · 面板 · remote                            | 4.5          |
 | S10  | 预设：补丁 · 人格 · 名录测试                                          | 0.5          |
@@ -2280,7 +2293,7 @@ CI 不伪造这个解析结果。
 | 核销       | delta 逐实体声明，不可静默跳过                                  |
 | 事务       | `archiveChapter` 的原子归档                                     |
 | 阅读证明   | 可验证引用，PG-09                                               |
-| 服务操作   | 本引擎核心抽象，31 个                                           |
+| 服务操作   | 本引擎核心抽象，32 个                                           |
 
 ## 附录 B：与开发指南的对照
 
@@ -2351,7 +2364,7 @@ CI 不伪造这个解析结果。
 | 3   | `ctx.clock` 是否存在（本设计用自注入 `Clock`）       | 未确认，已按不依赖处理                     | S2                        |
 | 4   | EPUB 在 Readium / Apple Books 的兼容性               | 未测                                       | S11                       |
 | 5   | 面板在窄屏 / 深色主题下的真实表现                    | 未测                                       | S9 验收                   |
-| 6   | 27 个工具的 prompt 成本实测值                        | 估 3–4k，未测                              | 0.2.0 完成后用真实会话量一次 |
+| 6   | 28 个工具的 prompt 成本实测值                        | 估 3–4k，未测                              | 0.2.0 完成后用真实会话量一次 |
 | 7   | Windows 下 rename 语义与锁回收                       | 未测（本机 WSL）                           | S3 + CI matrix            |
 
 > 这张表的作用：把所有「我以为」标出来。没验证的，不写成已验证。

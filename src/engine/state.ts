@@ -40,6 +40,10 @@ export type EngineEvent =
       payload: { schemaVersion: 1; projectRoot: string; chapter: number; restore_txid: string }
     }
   | {
+      name: 'novel/restored'
+      payload: { schemaVersion: 1; projectRoot: string; txid: string; chapter: number; paths: string[] }
+    }
+  | {
       name: 'novel/exported'
       payload: { schemaVersion: 1; projectRoot: string; kind: string; files: number }
     }

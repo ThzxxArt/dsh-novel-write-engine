@@ -74,6 +74,7 @@ export const OPERATIONS = [
   'panelChapters',
   'panelGates',
   'stats',
+  'restoreBackup',
 ] as const
 export type Operation = (typeof OPERATIONS)[number]
 
@@ -241,10 +242,12 @@ export interface CheckDocument {
   chapter: number
   scope: string[]
   content_hash: string
-  machine: { violations: Violation[]; metrics: WordMetrics }
+  machine: { violations: Violation[]; advisories?: Violation[]; metrics: WordMetrics }
   semantic: {
     items: Array<{ id: string; verdict: 'pass' | 'fail'; evidence: string; note: string }>
   }
+  /** Advisory codes the author has explicitly acknowledged for this content. */
+  acknowledged?: string[]
   verdict: 'pass' | 'fail'
 }
 
@@ -281,6 +284,8 @@ export interface WordMetrics {
   numbers: number
   chinese_punct: number
   english_punct: number
+  /** All punctuation counted by the engine; total = cjk + words + numbers + punctuation. */
+  punctuation_chars: number
   non_ws_chars: number
   total_lines: number
   non_empty_lines: number
@@ -304,6 +309,10 @@ export interface ChapterRecord {
   status: 'draft' | 'reviewed'
   content_hash: string
   summary: ChapterSummary
+  /** How hard this chapter was before it was archived. */
+  rounds?: RoundCounters
+  final_check?: 'pass' | 'fail'
+  archived_at?: string
   /** Keys allocated by the archive transaction; lets a cross-process retry replay. */
   assigned_ids?: Record<string, string>
   /** Digest of the archive request that produced this row. */
@@ -315,7 +324,7 @@ export interface ChapterSummary {
   events: string[]
   characters_appeared: string[]
   foreshadows: {
-    planted: Array<{ key: string; title: string; description: string }>
+    planted: Array<{ key: string; title: string; description: string; anchor?: string }>
     advanced: Array<{ key: string; note: string; new_info: boolean }>
     resolved: string[]
   }
@@ -333,6 +342,8 @@ export interface RoundCounters {
   review: number
   revise: number
   check: number
+  /** Lifetime rollback count on a chapter record; never stored in the live pipeline. */
+  rollbacks?: number
 }
 
 /** How one ledger entity changed in this chapter. */
@@ -364,6 +375,8 @@ export interface ForeshadowDelta {
   action: DeltaAction
   reason?: string
   title?: string
+  /** Verbatim manuscript quote used for verification; title stays a readable label. */
+  anchor?: string
   description?: string
   note?: string
   new_info?: boolean
@@ -411,6 +424,31 @@ export interface ArchiveHandoff {
   act_progress?: string
 }
 
+/** One issued task-book receipt; the brief itself is rendered on demand. */
+export interface BriefReceipt {
+  chapter: number
+  stage: BriefStage
+  digest: string
+  issued_at: string
+}
+
+/** `state/briefs.yaml`: append-only task-book evidence outside content transactions. */
+export interface BriefReceiptsDocument {
+  schema_version: 1
+  receipts: BriefReceipt[]
+}
+
+/** The active draft's own metadata; P2 plan stays immutable after submission. */
+export interface DraftState {
+  chapter: number
+  title: string
+  scene_type: SceneType
+  narrator: string
+  summary: ChapterSummary
+  content_hash: string
+  updated_at: string
+}
+
 /** Pipeline document (`state/pipeline.yaml`). */
 export interface PipelineState {
   schema_version: 1
@@ -420,6 +458,8 @@ export interface PipelineState {
   rounds: RoundCounters
   briefs: Record<string, { issued_at: string; digest: string }>
   blocking: BlockingItem[]
+  /** Current draft summary/title; never written into the P2 plan file. */
+  draft?: DraftState
   /** Hash of the review document last written by submitReview/submitRevision. */
   review_digest?: string
   last_action: { op: string; at: string; digest: string } | null
@@ -483,6 +523,7 @@ export interface ForeshadowsDocument {
     status: 'planted' | 'dormant' | 'advanced' | 'resolved'
     resolved_at: number | null
     description: string
+    anchor?: string
     advance_log: Array<{ chapter: number; note: string; new_info: boolean }>
   }>
 }
@@ -677,6 +718,15 @@ export interface WorldbookBackstory {
   event: string
 }
 
+/** One declared numeric canon, checked against the manuscript on request. */
+export interface WorldbookFact {
+  alias: string
+  value: number
+  unit: string
+  tolerance?: number
+  note?: string
+}
+
 /** Worldbuilding plan, persisted in `outline/worldbook.yaml`. */
 export interface WorldbookDocument {
   schema_version: 1
@@ -689,6 +739,8 @@ export interface WorldbookDocument {
   characters: WorldbookCharacter[]
   glossary: WorldbookGlossary[]
   backstory: WorldbookBackstory[]
+  /** Optional numeric canon; old documents omit it. */
+  facts?: WorldbookFact[]
   themes: string[]
 }
 
@@ -727,6 +779,23 @@ export interface DoctorReport {
   summary: { errors: number; warnings: number; infos: number }
 }
 
+/** One canonical outline-progress calculation shared by every adapter. */
+export interface OutlineProgress {
+  present: boolean
+  target: number | null
+  total: number
+  planned: number
+  archived: number
+  missingCards: number
+  plannedCoverage: number | null
+  archivedCoverage: number | null
+  /** Compatibility alias: planned coverage when a target exists, otherwise card coverage. */
+  coverage: number
+  /** Fraction of archived chapters that have a matching archived card. */
+  cardCoverage: number
+  volumes: number
+}
+
 /** Book-wide quality, outline, cast and pacing aggregates. */
 export interface BookReport {
   progress: {
@@ -736,13 +805,22 @@ export interface BookReport {
     average_words: number
     percent: number
     remaining_words: number | null
+    remaining_words_min: number | null
+    remaining_words_average: number | null
+    remaining_words_basis: 'actual_average' | 'minimum_target' | 'none'
   }
   outline: {
     present: boolean
     strict: boolean
+    target: number | null
+    total: number
     planned: number
     archived: number
+    missing_cards: number
+    planned_coverage: number | null
+    archived_coverage: number | null
     coverage: number
+    card_coverage: number
     volumes: Array<{ title: string; start: number; end: number; planned: number; archived: number }>
     drift: Array<{ chapter: number; field: string; planned: string; actual: string }>
   }
@@ -754,6 +832,7 @@ export interface BookReport {
     rules: number
     glossary: number
     backstory: number
+    facts?: number
   }
   quality: {
     average: number
@@ -763,6 +842,22 @@ export interface BookReport {
     last_five: number[]
     trend: number
     dimensions: Array<{ id: string; average: number; samples: number }>
+  }
+  /** Per-chapter effort survives archive (pipeline rounds are reset). */
+  effort: {
+    reviews: number
+    revisions: number
+    checks: number
+    rollbacks: number
+    chapters: Array<{
+      num: number
+      reviews: number
+      revisions: number
+      checks: number
+      rollbacks: number
+      final_check: 'pass' | 'fail' | null
+      archived_at: string | null
+    }>
   }
   pacing: {
     scene_types: Record<string, number>
@@ -827,10 +922,25 @@ export interface ReviewInput {
   proof: ReadingProof
 }
 
+/** One exact, unique replacement used by patch-mode revisions. */
+export interface RevisionEdit {
+  old_text: string
+  new_text: string
+  /** 1-based occurrence; defaults to requiring exactly one match. */
+  occurrence?: number
+}
+
+/** Patch-mode revision; content and patch are mutually exclusive. */
+export interface RevisionPatch {
+  expected_hash: string
+  edits: RevisionEdit[]
+}
+
 /** Revision submission payload. */
 export interface RevisionInput {
   chapter: number
-  content: string
+  content?: string
+  patch?: RevisionPatch
   summary: ChapterSummary
 }
 
@@ -928,10 +1038,15 @@ export interface StatusReport {
     strict: boolean
     outline: {
       present: boolean
+      target: number | null
       total: number
       planned: number
       archived: number
+      missing_cards: number
+      planned_coverage: number | null
+      archived_coverage: number | null
       coverage: number
+      card_coverage: number
       volumes: number
       current: OutlineChapter | null
     }
@@ -943,6 +1058,7 @@ export interface StatusReport {
       rules: number
       glossary: number
       backstory: number
+      facts?: number
     }
   }
   next: { tool: string; args: Record<string, unknown>; reason: string }
@@ -961,6 +1077,8 @@ export interface AdviceReport {
 
 /** One history row derived from the journal. */
 export interface AuditRow {
+  /** Stable chronological cursor; absent only on hand-built test rows. */
+  seq?: number
   at: string
   op: string
   chapter: number
@@ -968,6 +1086,14 @@ export interface AuditRow {
   txid: string
   status: 'committed' | 'aborted'
   files: string[]
+  /** Machine code and human reason for a refused attempt. */
+  code?: string
+  reason?: string
+  hint?: string
+  stage?: string
+  /** True when no transaction started: the gate/input refused the call. */
+  attempt?: boolean
+  blocking?: BlockingItem[]
 }
 
 /** One diff hunk between two revisions of a chapter. */

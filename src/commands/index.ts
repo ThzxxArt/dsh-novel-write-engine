@@ -30,19 +30,24 @@ const failure = (error: unknown): CommandResultShape =>
     ? bad(`[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}`)
     : bad(String(error))
 
+const formatPercent = (value: number | null | undefined): string =>
+  value === null || value === undefined ? '—' : `${Math.round(value * 1000) / 10}%`
+
 const statusText = async (engine: EngineService): Promise<string> => {
   const { data } = await engine.getStatus({})
   const lines = [
     `《${data.project.title}》 ${data.project.genre} · ${data.project.platform}`,
     `第 ${data.chapter} 章 · 阶段 ${data.stage}`,
     `轮次 评审 ${data.rounds.review} / 修订 ${data.rounds.revise} / 校验 ${data.rounds.check}`,
-    data.metrics === null ? '字数 —' : `字数 ${data.metrics.total_word_count}`,
+    data.metrics === null
+      ? '字数 —'
+      : `字数 ${data.metrics.total_word_count}（汉字 ${data.metrics.cjk_chars} + 标点 ${data.metrics.punctuation_chars}，含标点）`,
     data.blocking.length === 0 ? '门控 全部通过' : `门控 ${data.blocking.length} 条阻塞：`,
     ...data.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
     ...(data.book === undefined
       ? []
       : [
-          `全书：大纲 ${data.book.outline.total} 张卡（已归档 ${data.book.outline.archived}，覆盖率 ${Math.round(data.book.outline.coverage * 100)}%）· 世界观 ${data.book.worldbook.characters} 角色 / ${data.book.worldbook.locations} 地点 / ${data.book.worldbook.factions} 势力 / ${data.book.worldbook.rules} 规则${data.book.strict ? ' · 严格大纲' : ''}`,
+          `全书：大纲 ${data.book.outline.total} 张卡（规划覆盖 ${formatPercent(data.book.outline.planned_coverage)} · 归档覆盖 ${formatPercent(data.book.outline.archived_coverage)}${data.book.outline.missing_cards > 0 ? ` · 缺卡 ${data.book.outline.missing_cards}` : ''}）· 世界观 ${data.book.worldbook.characters} 角色 / ${data.book.worldbook.locations} 地点 / ${data.book.worldbook.factions} 势力 / ${data.book.worldbook.rules} 规则${data.book.strict ? ' · 严格大纲' : ''}`,
           ...(data.book.outline.current === null
             ? ['当前章卡：（无）']
             : [
@@ -96,7 +101,7 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
         case 'stats': {
           const stats = await engine.stats({})
           return ok(
-            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.plannedChapters} 卡（覆盖 ${Math.round(stats.outlineCoverage * 100)}%）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
           )
         }
         case 'outline': {
@@ -121,7 +126,7 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
           return ok(
             [
               `蓝图：${book.premise === '' ? '（空）' : book.premise}`,
-              `大纲：${book.outline.total} 张卡 · 已归档 ${book.outline.archived} · 覆盖率 ${Math.round(book.outline.coverage * 100)}% · 严格模式 ${book.strict ? '开' : '关'}`,
+              `大纲：${book.outline.total} 张卡 · 规划覆盖 ${formatPercent(book.outline.planned_coverage)} · 归档覆盖 ${formatPercent(book.outline.archived_coverage)}${book.outline.missing_cards > 0 ? ` · 缺卡 ${book.outline.missing_cards}` : ''} · 严格模式 ${book.strict ? '开' : '关'}`,
               `当前章卡：${book.outline.current === null ? '（无）' : `第${book.outline.current.num}章 ${book.outline.current.title} / ${book.outline.current.scene_type}`}`,
               `世界观：${book.worldbook.characters} 角色 · ${book.worldbook.locations} 地点 · ${book.worldbook.factions} 势力 · ${book.worldbook.rules} 规则`,
             ].join('\n'),
@@ -229,7 +234,7 @@ export function createCommands(engine: EngineService): CommandDefinition[] {
         try {
           const stats = await engine.stats({})
           return ok(
-            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.plannedChapters} 卡（覆盖 ${Math.round(stats.outlineCoverage * 100)}%）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
           )
         } catch (error) {
           return failure(error)

@@ -10,9 +10,9 @@ import { panelElement } from '../src/client/panel.js'
 import type { PanelPayloadDto } from '../src/client/dto.js'
 
 const payload = (): PanelPayloadDto => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   summary: {
-    schemaVersion: 2,
+    schemaVersion: 3,
     panelId: 'novel-workshop',
     title: '测试之书',
     genre: '都市现代',
@@ -38,7 +38,12 @@ const payload = (): PanelPayloadDto => ({
         total: 3,
         planned: 2,
         archived: 1,
-        coverage: 1,
+        target: 4,
+        missing_cards: 1,
+        planned_coverage: 0.75,
+        archived_coverage: 0.25,
+        coverage: 0.75,
+        card_coverage: 1,
         volumes: [{ title: '第一卷 雨夜来信', start: 1, end: 3, planned: 2, archived: 1 }],
       },
       worldbook: {
@@ -56,7 +61,7 @@ const payload = (): PanelPayloadDto => ({
     activity: [{ at: '2026-10-28T10:00:00.000Z', op: 'archiveChapter', chapter: 1, status: 'committed' }],
   },
   chapters: {
-    schemaVersion: 2,
+    schemaVersion: 3,
     panelId: 'novel-workshop',
     rows: [
       { num: 1, title: '开端之雨', wordCount: 2400, score: 145, stage: 'done', status: 'passed' },
@@ -64,7 +69,7 @@ const payload = (): PanelPayloadDto => ({
       { num: 3, title: '灯下之言', wordCount: 0, score: 0, stage: 'P3', status: 'blocked' },
     ],
   },
-  gates: { schemaVersion: 2, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
+  gates: { schemaVersion: 3, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
 })
 
 describe('panel view model', () => {
@@ -85,7 +90,13 @@ describe('panel view model', () => {
     expect(view.nextDetail).toBe('处理评审意见后提交修订。')
     expect(view.blocking[0]!.hint).toBe('再写一点')
     expect(view.next).toContain('novel_revise')
-    expect(view.book).toMatchObject({ strict: true, planned: 2, archivedCards: 1, coverage: 1 })
+    expect(view.book).toMatchObject({
+      strict: true,
+      planned: 2,
+      archivedCards: 1,
+      coverage: 0.75,
+      missingCards: 1,
+    })
     expect(view.book.volumes[0]).toMatchObject({ title: '第一卷 雨夜来信', range: '第1-3章' })
     expect(view.quality).toMatchObject({ averageScore: 145, scores: [140, 145] })
     expect(view.health).toMatchObject({ ok: false, blocking: 1 })
@@ -132,6 +143,10 @@ describe('panel view model', () => {
       expect(container.textContent).toContain('novel_archive')
       expect(container.textContent).toContain('L2-POV')
       expect(container.textContent).toContain('可以直接复制给模型的起手话术')
+      expect(container.textContent).toContain('续写下一章时，直接复制这段给 Agent')
+      expect(container.textContent).toContain('novel_pipeline')
+      expect(container.textContent).toContain('targets.total_chapters')
+      expect(container.textContent).toContain('完整的 state_delta')
       expect(help!.getAttribute('aria-expanded')).toBe('true')
       expect(document.body.style.overflow).toBe('hidden')
       expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭使用教程')
@@ -428,7 +443,12 @@ describe('client registration and rendering', () => {
     expect(ready).toContain('《测试之书》')
     expect(ready).toContain('开端之雨')
     expect(ready).toContain('待处理 1 项')
+    expect(ready).toContain('规划 75%')
+    expect(ready).toContain('缺卡 1')
     expect(ready).toContain('nwe-root')
+    expect(ready).toContain('overflow-y: auto')
+    expect(ready).toContain('height: 100%')
+    expect(ready).toContain('overscroll-behavior: contain')
     expect(ready).toContain('平均评分')
     expect(ready).toContain('NEXT MOVE')
     expect(ready).toContain('role="progressbar"')

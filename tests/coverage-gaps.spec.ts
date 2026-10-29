@@ -122,6 +122,7 @@ describe('adapter optional-argument branches', () => {
       report: async () => result({}),
       guide: async () => result({}),
       reopenChapter: async () => result({}),
+      restoreBackup: async () => result({}),
     }
     const tools = new Map(
       createNovelTools(engine as unknown as EngineService).map((tool) => [tool.name, tool]),
@@ -163,6 +164,7 @@ describe('adapter optional-argument branches', () => {
     await run('novel_report', {})
     await run('novel_guide', {})
     await run('novel_reopen', { chapter: 1, reason: 'test' })
-    expect(tools.size).toBe(27)
+    await run('novel_restore', { txid: '00000000-0000-0000-0000-000000000000' })
+    expect(tools.size).toBe(28)
   })
 })

@@ -1,10 +1,10 @@
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { BACKUP_DIR, STAGING_DIR } from '../constants.js'
-import { ERROR_CODES, EngineFaultError } from '../types.js'
+import { ERROR_CODES, EngineError, EngineFaultError } from '../types.js'
 import { FsStore, joinRel, sha256, syncDirectory } from './fs.js'
 import { appendJournal } from './journal.js'
-import { BACKUP_MARKER, pruneBackups } from './backup.js'
+import { BACKUP_MARKER, BACKUP_MANIFEST, pruneBackups } from './backup.js'
 
 /** One file scheduled inside a transaction: text or binary, exactly one. */
 export interface StagedFile {
@@ -155,6 +155,25 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
         await store.writeBytes(joinRel(stagingBackup, file.path), existing)
       }
       await store.writeText(joinRel(stagingBackup, BACKUP_MARKER), '1')
+      await store.writeText(
+        joinRel(stagingBackup, BACKUP_MANIFEST),
+        `${JSON.stringify(
+          {
+            schema_version: 1,
+            txid: input.txid,
+            op: input.op,
+            chapter: input.chapter,
+            revision: input.revision,
+            at: new Date().toISOString(),
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            files: input.files
+              .filter((file) => before.get(file.path) !== null && before.get(file.path) !== undefined)
+              .map((file) => file.path),
+          },
+          null,
+          2,
+        )}\n`,
+      )
       const targetBackup = store.path(backupDir(input.txid))
       await fs.mkdir(dirname(targetBackup), { recursive: true })
       await fs.rename(store.path(stagingBackup), targetBackup)
@@ -256,6 +275,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
           revision: input.revision,
           files: input.files.map((file) => file.path),
           status: 'aborted',
+          code: error instanceof EngineError ? error.code : ERROR_CODES.TXN_ABORTED,
           reason: error instanceof Error ? error.message : String(error),
         },
         // The pending append that just failed may have left a torn line. If the

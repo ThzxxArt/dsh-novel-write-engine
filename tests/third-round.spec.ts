@@ -161,20 +161,24 @@ describe('0.1.3 third-round review regressions', () => {
     }
   })
 
-  it('reports PG-05 at archive preflight when the stored summary becomes malformed', async () => {
+  it('keeps the P2 plan immutable when only its legacy summary is damaged', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine })
       const planPath = join(root, 'plans', 'ch001.chapter.yaml')
       const plan = parseYaml((await readFile(planPath, 'utf8'))!) as {
-        summary: { events: string[] }
+        summary?: Record<string, unknown>
       }
-      plan.summary.events = []
+      plan.summary = { ...sampleSummary(), events: ['伪造的旧摘要'] }
       await writeFile(planPath, stringifyYaml(plan), 'utf8')
       await engine.getBrief({ stage: 'P8', root })
       const status = await engine.getStatus({ root })
-      expect(status.data.blocking).toContainEqual(expect.objectContaining({ code: 'PG-05' }))
-      expect(status.data.next).toMatchObject({ tool: 'novel_rollback', args: { to_stage: 'P3' } })
+      expect(status.data.blocking).not.toContainEqual(expect.objectContaining({ code: 'PG-05' }))
+      // The live summary lives in pipeline.draft; the P2 plan file is evidence.
+      await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
+      expect((await engine.queryState({ kind: 'chapters', root })).data).toMatchObject({
+        chapters: [expect.objectContaining({ num: 1 })],
+      })
     } finally {
       await cleanup()
     }
