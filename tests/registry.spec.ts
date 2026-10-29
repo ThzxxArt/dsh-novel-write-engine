@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { runAdminOperation } from '../src/commands/admin.js'
 import { FsStore } from '../src/store/fs.js'
 import { ProjectRegistry } from '../src/store/registry.js'
@@ -11,19 +11,21 @@ describe('project registry', () => {
   it('tracks rows without becoming authoritative', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'novel-registry-'))
     try {
+      const rootA = resolve('/a')
+      const rootB = resolve('/b')
       const registry = new ProjectRegistry(new FsStore(dir))
       expect(await registry.read()).toEqual({ schema_version: 1, active: null, projects: [] })
-      await registry.register({ root: '/a', title: 'A', created_at: '2026-10-01T00:00:00.000Z' })
-      await registry.register({ root: '/b', title: 'B', created_at: '2026-10-02T00:00:00.000Z' })
+      await registry.register({ root: rootA, title: 'A', created_at: '2026-10-01T00:00:00.000Z' })
+      await registry.register({ root: rootB, title: 'B', created_at: '2026-10-02T00:00:00.000Z' })
       const afterTwo = await registry.register({
-        root: '/a',
+        root: rootA,
         title: 'A2',
         created_at: '2026-10-01T00:00:00.000Z',
       })
       expect(afterTwo.projects.map((entry) => entry.title)).toEqual(['A2', 'B'])
       expect(afterTwo.projects[0]?.created_at).toBe('2026-10-01T00:00:00.000Z')
-      expect((await registry.setActive('/b')).active).toBe('/b')
-      const forgotten = await registry.forget('/b')
+      expect((await registry.setActive(rootB)).active).toBe(rootB)
+      const forgotten = await registry.forget(rootB)
       expect(forgotten.projects).toHaveLength(1)
       expect(forgotten.active).toBeNull()
       await writeFile(join(dir, 'projects.yaml'), 'not an object')
@@ -56,12 +58,13 @@ describe('project registry', () => {
           '\n',
         ),
       )
+      const rootOld = resolve('/old')
       const registry = new ProjectRegistry(new FsStore(dir))
       const legacy = await registry.read()
-      expect(legacy.active).toBe('/old')
-      expect(legacy.projects[0]).toEqual({ root: '/old', title: '旧书', updated_at: '' })
+      expect(legacy.active).toBe(rootOld)
+      expect(legacy.projects[0]).toEqual({ root: rootOld, title: '旧书', updated_at: '' })
       const upgraded = await registry.register({
-        root: '/old',
+        root: rootOld,
         title: '旧书',
         created_at: '2026-10-01T00:00:00.000Z',
       })

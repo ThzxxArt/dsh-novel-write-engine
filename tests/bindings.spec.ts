@@ -1,36 +1,39 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FsStore } from '../src/store/fs.js'
 import { SessionBindings } from '../src/store/bindings.js'
 
 const tempState = async (): Promise<string> => mkdtemp(join(tmpdir(), 'novel-bindings-'))
+const novelRoot = (name: string): string => resolve('/novels', name)
 
 describe('session bindings', () => {
   it('persists one binding per session and survives a new instance', async () => {
     const dir = await tempState()
     try {
+      const rootA = novelRoot('a')
+      const rootB = novelRoot('b')
       const store = new FsStore(dir)
       const bindings = new SessionBindings(store)
       expect(await bindings.read()).toEqual({ schema_version: 1, bindings: [] })
       await bindings.bind({
         session_id: 'session-a',
-        root: '/novels/a',
+        root: rootA,
         title: 'A 书',
         project_created_at: '2026-10-01T00:00:00.000Z',
         source: 'explicit',
       })
       await bindings.bind({
         session_id: 'session-b',
-        root: '/novels/b',
+        root: rootB,
         title: 'B 书',
         project_created_at: '2026-10-02T00:00:00.000Z',
         source: 'command',
       })
       expect(await bindings.get('session-a')).toMatchObject({
         session_id: 'session-a',
-        root: '/novels/a',
+        root: rootA,
         title: 'A 书',
         project_created_at: '2026-10-01T00:00:00.000Z',
         source: 'explicit',
@@ -41,7 +44,7 @@ describe('session bindings', () => {
       ])
 
       const reopened = new SessionBindings(new FsStore(dir))
-      expect((await reopened.list()).map((entry) => entry.root).sort()).toEqual(['/novels/a', '/novels/b'])
+      expect((await reopened.list()).map((entry) => entry.root).sort()).toEqual([rootA, rootB].sort())
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -156,7 +159,7 @@ describe('session bindings', () => {
       expect(rows).toHaveLength(1)
       expect(rows[0]).toMatchObject({
         session_id: 'good',
-        root: '/novels/good',
+        root: novelRoot('good'),
         title: '',
         project_created_at: '',
         source: 'explicit',
@@ -211,7 +214,7 @@ describe('session bindings', () => {
       )
       const rows = await new SessionBindings(new FsStore(dir)).list()
       expect(rows).toHaveLength(1)
-      expect(rows[0]?.root).toBe('/novels/second')
+      expect(rows[0]?.root).toBe(novelRoot('second'))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

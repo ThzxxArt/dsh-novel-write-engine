@@ -102,11 +102,18 @@ describe('FsStore', () => {
     try {
       const store = new FsStore(root)
       await writeFile(join(root, 'blocked'), 'x')
-      await expect(store.writeText('blocked/child', 'x')).rejects.toMatchObject({ code: 'ENOTDIR' })
-      await expect(store.writeBytes('blocked/child', Buffer.from([1]))).rejects.toMatchObject({
-        code: 'ENOTDIR',
+      // Windows reports ENOENT when a child is opened beneath a regular file;
+      // POSIX reports ENOTDIR. Both mean the parent is not a directory.
+      const notDirectoryCode = process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR'
+      await expect(store.writeText('blocked/child', 'x')).rejects.toMatchObject({
+        code: notDirectoryCode,
       })
-      await expect(store.appendText('blocked/journal', 'x')).rejects.toMatchObject({ code: 'ENOTDIR' })
+      await expect(store.writeBytes('blocked/child', Buffer.from([1]))).rejects.toMatchObject({
+        code: notDirectoryCode,
+      })
+      await expect(store.appendText('blocked/journal', 'x')).rejects.toMatchObject({
+        code: notDirectoryCode,
+      })
     } finally {
       await rm(root, { recursive: true, force: true })
     }
