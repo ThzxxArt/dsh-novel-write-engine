@@ -1,4 +1,15 @@
-import { createElement, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import {
+  Fragment,
+  createElement,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  type RefObject,
+} from 'react'
 import { PANEL_CHAPTER_LIMIT, PANEL_ROUTE } from '../constants.js'
 import { buildView, fetchPanel, type PanelChapter, type PanelView } from './viewmodel.js'
 import type { PanelPayloadDto } from './dto.js'
@@ -116,7 +127,119 @@ const CSS = `
 }
 .nwe-refresh:hover:not(:disabled) { border-color: color-mix(in srgb, var(--nwe-gold) 65%, var(--nwe-border)); transform: translateY(-1px); }
 .nwe-refresh:disabled { cursor: wait; opacity: .55; }
+.nwe-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.nwe-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nwe-raised) 76%, transparent);
+  color: var(--nwe-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color .18s ease, color .18s ease, transform .18s ease;
+}
+.nwe-help:hover { border-color: color-mix(in srgb, var(--nwe-gold) 60%, var(--nwe-border)); color: var(--nwe-ink); transform: translateY(-1px); }
+.nwe-help svg { flex: 0 0 auto; }
 .nwe-root :focus-visible { outline: 2px solid var(--nwe-gold); outline-offset: 3px; }
+.nwe-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(12px, 3.5vw, 42px);
+  background: color-mix(in srgb, #080a0d 76%, transparent);
+  backdrop-filter: blur(7px);
+}
+.nwe-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: min(88vh, 920px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--nwe-gold) 24%, var(--nwe-border));
+  border-radius: 20px;
+  background: var(--nwe-surface);
+  box-shadow: 0 30px 90px -24px #000;
+}
+.nwe-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex: 0 0 auto;
+  padding: 21px 24px 17px;
+  border-bottom: 1px solid var(--nwe-border);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--nwe-gold) 10%, var(--nwe-raised)), var(--nwe-surface) 72%);
+}
+.nwe-modal-heading { min-width: 0; }
+.nwe-modal-title {
+  margin: 7px 0 5px;
+  font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
+  font-size: clamp(21px, 2.5vw, 27px);
+  font-weight: 600;
+  line-height: 1.25;
+}
+.nwe-modal-sub { margin: 0; color: var(--nwe-muted); font-size: 12px; line-height: 1.6; }
+.nwe-modal-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--nwe-raised) 82%, transparent);
+  color: var(--nwe-muted);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nwe-modal-close:hover { border-color: color-mix(in srgb, var(--nwe-gold) 55%, var(--nwe-border)); color: var(--nwe-ink); }
+.nwe-modal-body { overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 26px; }
+.nwe-tutorial-intro { padding: 13px 15px; border: 1px solid color-mix(in srgb, var(--nwe-jade) 28%, var(--nwe-border)); border-radius: 12px; background: color-mix(in srgb, var(--nwe-jade) 6%, transparent); }
+.nwe-tutorial-intro p { margin: 0; font-size: 13px; line-height: 1.75; }
+.nwe-tutorial-intro p + p { margin-top: 7px; }
+.nwe-tutorial-block { margin-top: 22px; }
+.nwe-tutorial-block h3 {
+  margin: 0 0 9px;
+  font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
+  font-size: 16px;
+  font-weight: 600;
+}
+.nwe-tutorial-block > p { margin: 0 0 10px; color: var(--nwe-muted); font-size: 12px; line-height: 1.7; }
+.nwe-tutorial-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.nwe-tutorial-card { padding: 11px 12px; border: 1px solid var(--nwe-border); border-radius: 11px; background: color-mix(in srgb, var(--nwe-raised) 52%, transparent); }
+.nwe-tutorial-card strong { display: block; color: var(--nwe-gold); font-size: 12px; }
+.nwe-tutorial-card span { display: block; margin-top: 4px; color: var(--nwe-muted); font-size: 11px; line-height: 1.65; }
+.nwe-steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.nwe-step { padding: 12px 14px; border: 1px solid var(--nwe-border); border-left: 2px solid color-mix(in srgb, var(--nwe-gold) 58%, var(--nwe-border)); border-radius: 11px; background: color-mix(in srgb, var(--nwe-surface) 86%, var(--nwe-raised) 14%); }
+.nwe-step-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.nwe-step-no { color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; letter-spacing: .06em; }
+.nwe-step h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.nwe-step-tool { margin-left: auto; padding: 2px 6px; border: 1px solid var(--nwe-border); border-radius: 5px; color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; white-space: nowrap; }
+.nwe-step p { margin: 6px 0 0; color: var(--nwe-muted); font-size: 12px; line-height: 1.7; }
+.nwe-step p strong { color: var(--nwe-ink); font-weight: 600; }
+.nwe-tutorial-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; background: color-mix(in srgb, var(--nwe-gold) 8%, transparent); color: var(--nwe-muted); font-size: 11px; line-height: 1.7; }
+.nwe-tutorial-note strong { color: var(--nwe-gold); }
+.nwe-faq { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.nwe-faq li { padding: 10px 12px; border: 1px solid var(--nwe-border); border-radius: 10px; }
+.nwe-faq strong { display: block; color: var(--nwe-ink); font-size: 12px; }
+.nwe-faq p { margin: 4px 0 0; color: var(--nwe-muted); font-size: 12px; line-height: 1.65; }
+.nwe-prompt { overflow-x: auto; margin: 0; padding: 12px 14px; border: 1px solid var(--nwe-border); border-radius: 10px; background: color-mix(in srgb, #080a0d 24%, var(--nwe-surface)); color: var(--nwe-ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.75; white-space: pre-wrap; }
+.nwe-checklist { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.nwe-checklist li { display: flex; gap: 7px; color: var(--nwe-muted); font-size: 12px; line-height: 1.6; }
+.nwe-checklist li::before { content: "✓"; color: var(--nwe-jade); font-weight: 700; }
+.nwe-modal-foot { flex: 0 0 auto; padding: 10px 24px; border-top: 1px solid var(--nwe-border); color: var(--nwe-muted); font-size: 10px; }
+.nwe-help-label { white-space: nowrap; }
 .nwe-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -292,7 +415,16 @@ const CSS = `
 @media (max-width: 760px) {
   .nwe-root { padding: 14px; }
   .nwe-hero { flex-direction: column; padding: 18px; }
-  .nwe-refresh { width: 100%; justify-content: center; }
+  .nwe-actions { width: 100%; }
+  .nwe-refresh { flex: 1; justify-content: center; }
+  .nwe-help { flex: 0 0 auto; }
+  .nwe-modal-backdrop { align-items: flex-end; padding: 8px; }
+  .nwe-modal { width: 100%; max-height: 92vh; border-radius: 16px; }
+  .nwe-modal-head { padding: 17px 18px 14px; }
+  .nwe-modal-body { padding: 16px 18px 22px; }
+  .nwe-modal-foot { padding: 9px 18px; }
+  .nwe-tutorial-cards { grid-template-columns: 1fr; }
+  .nwe-step-tool { margin-left: 0; }
   .nwe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .nwe-book-grid { grid-template-columns: 1fr; }
   .nwe-phases { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; padding: 12px; }
@@ -331,6 +463,116 @@ const refreshIcon = (): ReactElement =>
 const arrowIcon = (): ReactElement => icon(14, 'M5 12h13M13 6l6 6-6 6')
 const stateIcon = (): ReactElement =>
   icon(22, 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z')
+const helpIcon = (): ReactElement =>
+  createElement(
+    'svg',
+    { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': 'true' },
+    createElement('circle', {
+      cx: 12,
+      cy: 12,
+      r: 8.6,
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+    }),
+    createElement('path', {
+      d: 'M9.7 9.1a2.5 2.5 0 0 1 4.8.8c0 1.8-2.4 2-2.4 3.8M12 16.8v.1',
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  )
+
+interface TutorialStep {
+  title: string
+  tool: string
+  body: string
+  note: string
+}
+
+const TUTORIAL_STEPS: readonly TutorialStep[] = [
+  {
+    title: '建一本书的项目',
+    tool: 'novel_init',
+    body: '在对话里说清书名、类型、平台、作者、每章字数区间、总章数和项目根目录；模型会调用 novel_init。项目根目录建议用绝对路径，例如 /home/me/novels/星海。',
+    note: '类型是固定的 12 类，平台只能是 fanqie / qidian / qimao / jinjiang。有多个项目时显式传 project_root，避免把新书写进旧书目录。',
+  },
+  {
+    title: '写书级蓝图与卷结构',
+    tool: 'novel_blueprint',
+    body: '让模型先定 premise（故事前提）、logline（一句话卖点）、themes（主题）、tone（基调）、pov（视角）、audience（读者）、selling_points（卖点）、ending（结局方向）和 volumes（每卷起止章、目标、弧线、高潮）。',
+    note: '蓝图不是正文，可以后补。严格大纲是可选开关：strict:true 时每章必须先有章卡；不开启也能先写，但章卡一旦存在，标题、场景、目标字数和 cast 仍会校验。',
+  },
+  {
+    title: '排章卡，或导入现成大纲',
+    tool: 'novel_outline / novel_outline_import',
+    body: '逐章写卡：num、title、scene_type、goal、conflict、hook、cast、target_words。手里已有 Markdown、YAML 或 JSON 大纲时，先用 novel_outline_import 的 dry_run:true 预览，再正式导入。',
+    note: '章卡是 P2/P3 的合同。卡被归档后不能直接改；要重写已归档章，先 novel_reopen 并给出 reason。',
+  },
+  {
+    title: '建世界观设定集',
+    tool: 'novel_worldbook',
+    body: '写 setting（时代/地点）、rules（世界规则）、factions（势力）、locations（地点）、characters（角色）、glossary（术语）、backstory（前史）。可以按段增量更新，不必一次填满。',
+    note: '人物名、地点名和规则名要前后一致。P1/P2 的角色卡与会话上下文会从这里取；不要手工改 state/ 里的台账。',
+  },
+  {
+    title: 'P1：领取世界观任务书，写本章约束',
+    tool: 'novel_brief {stage:"P1"} → novel_plan_world',
+    body: '先领取 P1 任务书，再提交本章 objective（目标）、constraints（限制）、characters（候选角色）、locations（候选地点）、continuity_notes（连续性说明）。',
+    note: '每个阶段提交前都要先领当前任务书；任务书 digest 过期时 PG-01 会挡住。不要跳过 brief 直接写。',
+  },
+  {
+    title: 'P2：领取章节任务书，拆本章节拍',
+    tool: 'novel_brief {stage:"P2"} → novel_plan_chapter',
+    body: '写 title、scene_type、narrator、5–8 个 beats（节拍）、opening（开场）、ending（收束）、target_words（目标字数区间），可选 cast（1–8 人）。',
+    note: 'beats 要能落到动作和冲突上，不要写“推进剧情”这类空话。章卡存在时，标题、场景、目标字数和 cast 会按卡校验。',
+  },
+  {
+    title: 'P3：领取初稿任务书，写正文',
+    tool: 'novel_brief {stage:"P3"} → novel_write_draft',
+    body: '按任务书写正文，并提交 chapter_title、scene_type、narrator 和 summary。summary 要覆盖事件、出场人物、伏笔、新设定、资源变化、开头、衔接、钩子强度、爽点和推进度。',
+    note: '正文只有 novel_write_draft 和 novel_revise 两个写入口；novel_amend 只修状态文档。字数以引擎返回为准，不要自己估算或复述旧数字。',
+  },
+  {
+    title: 'P4：领取评审任务书，做十五维评审',
+    tool: 'novel_brief {stage:"P4"} → novel_review',
+    body: '按十五个维度打分，total 必须等于 150 减去全部扣分；issues 每条写清维度、具体段落、问题和修法；proof 提交开头、中段、结尾三段逐字引用。',
+    note: '有 blocker 时不能进 P6，要先走 P5 修订；没有 blocker 才能继续。不要为了过关乱填总分或引用。',
+  },
+  {
+    title: 'P5：只修 blocker 和有价值的意见',
+    tool: 'novel_brief {stage:"P5"} → novel_revise',
+    body: '按 P4 的问题清单修正文，保留 issue 的状态与证据，提交修订后的正文和三段新引用。修订后回到 P4 重新评审。',
+    note: 'blocker 不能 waived 或降级；正文一改，旧评审和旧 check 就失效，必须重走 P4/P6。',
+  },
+  {
+    title: 'P6：机检 + 五个语义项',
+    tool: 'novel_brief {stage:"P6"} → novel_check',
+    body: '引擎先跑格式/完整性机检，模型再提交五个语义项：L2-SCENE-ANCHOR、L2-CHARACTER-STATE、L2-CAUSALITY、L2-VOICE、L2-POV；每项都要有正文逐字证据。',
+    note: '五条证据必须来自不同句子，不能共用同一段。只跑 content 或 integrity 一个 scope 不算完整通过，不能归档。',
+  },
+  {
+    title: 'P8：领取终审任务书，一次事务归档',
+    tool: 'novel_brief {stage:"P8"} → novel_archive',
+    body: '归档必须带 state_delta：本章出现的每个角色、世界元素、伏笔、时间线事件和关系，都要声明 created、updated 或 no_change；no_change 也要有原因。',
+    note: '归档是引擎的一次事务，成功后面板才会出现已归档章节。下一章仍从 P1 开始；total_chapters 全部归档后，全书才算完成。',
+  },
+  {
+    title: '循环下一章，最后导出全书',
+    tool: 'novel_report / novel_doctor / novel_export',
+    body: '每章重复 P1→P8。随时用 novel_report 看进度和质量，novel_doctor 体检，novel_search 查正文/大纲/台账；完成后导出 md、txt、epub、outline、worldbook 或 proposal。',
+    note: '改已归档章要先 novel_reopen；项目坏了先 novel_state 看 raw，再按 next 用 novel_amend 修，不要手改 chapters/ 或 state/。',
+  },
+]
+
+const TUTORIAL_PROMPT = `请用「网文工坊」引擎写一本小说：
+书名《星海旧梦》，都市现代，番茄平台，每章 2200–2800 字，共 120 章，项目根目录用绝对路径。
+先做书级蓝图、第一卷章卡和世界观设定，再写第一章。
+每章严格按 novel_brief P1 → plan_world → brief P2 → plan_chapter →
+brief P3 → write_draft → brief P4 → review → 有 blocker 就修订 →
+brief P6 → check → brief P8 → archive 的顺序推进。
+正文只通过 write_draft/revise 写；不要直接改 state/、chapters/ 或 outline/。
+每次提交前先领取当前阶段任务书，失败时按返回的 code 和 blocking 一次改完。`
 
 const stat = (label: string, value: string, unit: string): ReactElement =>
   createElement(
@@ -668,6 +910,370 @@ const statePanel = (
   )
 }
 
+const tutorialStep = (step: TutorialStep, index: number): ReactElement =>
+  createElement(
+    'li',
+    { className: 'nwe-step', key: step.title },
+    createElement(
+      'div',
+      { className: 'nwe-step-head' },
+      createElement('span', { className: 'nwe-step-no' }, String(index + 1).padStart(2, '0')),
+      createElement('h4', null, step.title),
+      createElement('code', { className: 'nwe-step-tool' }, step.tool),
+    ),
+    createElement('p', null, step.body),
+    createElement('p', null, createElement('strong', null, '注意：'), step.note),
+  )
+
+const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonElement | null>): ReactElement =>
+  createElement(
+    'div',
+    {
+      className: 'nwe-modal-backdrop',
+      onMouseDown: (event: ReactMouseEvent<HTMLDivElement>): void => {
+        if (event.target === event.currentTarget) onClose()
+      },
+    },
+    createElement(
+      'div',
+      {
+        className: 'nwe-modal',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': 'nwe-help-title',
+        'aria-describedby': 'nwe-help-sub',
+        tabIndex: -1,
+        onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+          if (event.key !== 'Tab') return
+          const focusable = Array.from(
+            event.currentTarget.querySelectorAll<HTMLElement>(
+              'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+            ),
+          )
+          if (focusable.length === 0) return
+          const first = focusable[0]!
+          const last = focusable[focusable.length - 1]!
+          if (event.shiftKey && globalThis.document?.activeElement === first) {
+            event.preventDefault()
+            last.focus()
+          } else if (!event.shiftKey && globalThis.document?.activeElement === last) {
+            event.preventDefault()
+            first.focus()
+          }
+        },
+      },
+      createElement(
+        'div',
+        { className: 'nwe-modal-head' },
+        createElement(
+          'div',
+          { className: 'nwe-modal-heading' },
+          createElement('div', { className: 'nwe-eyebrow' }, 'USER GUIDE · 插件教程'),
+          createElement(
+            'h2',
+            { className: 'nwe-modal-title', id: 'nwe-help-title' },
+            '从开书到导出：完整走一遍',
+          ),
+          createElement(
+            'p',
+            { className: 'nwe-modal-sub', id: 'nwe-help-sub' },
+            '这是网文工坊的状态机教程。照着做，不需要记文件名，也不需要自己维护状态。',
+          ),
+        ),
+        createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'nwe-modal-close',
+            ref: closeRef,
+            onClick: onClose,
+            'aria-label': '关闭使用教程',
+          },
+          createElement('span', { 'aria-hidden': 'true' }, '×'),
+        ),
+      ),
+      createElement(
+        'div',
+        { className: 'nwe-modal-body' },
+        createElement(
+          'div',
+          { className: 'nwe-tutorial-intro' },
+          createElement(
+            'p',
+            null,
+            '网文工坊不是一个“帮你想剧情”的按钮，而是一台有状态的写作引擎：你提供内容，引擎负责阶段、字数、门控、评审、归档和文件。',
+          ),
+          createElement(
+            'p',
+            null,
+            '每一步都先领取当前阶段的任务书，再提交；提交后看引擎返回的 blocking 与下一步。面板只读，真正的写操作都在对话里的工具调用中。',
+          ),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '开始前：记住三件事'),
+          createElement(
+            'div',
+            { className: 'nwe-tutorial-cards' },
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '只用引擎入口写'),
+              createElement(
+                'span',
+                null,
+                '正文只走 novel_write_draft / novel_revise；状态只走工具。手改 chapters/、state/、outline/ 会破坏事务与校验。',
+              ),
+            ),
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '每一步先领 brief'),
+              createElement(
+                'span',
+                null,
+                '任务书携带当前上下文和 digest；跳过它会撞 PG-01。任务书过期就重新领取，不要复用旧上下文。',
+              ),
+            ),
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '失败先读 code'),
+              createElement(
+                'span',
+                null,
+                '参数错改参数，门控没过改正文，系统故障查目录/稍后重试。blocking 会一次列全，一次改完再交。',
+              ),
+            ),
+          ),
+          createElement(
+            'p',
+            { className: 'nwe-tutorial-note' },
+            createElement('strong', null, '用哪个会话：'),
+            ' 想获得完整的引擎保证，请新开一个「网文工坊」预设会话；普通会话里模型可能还挂着文件工具，能绕过引擎直接改稿。',
+          ),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '一本书的完整流程'),
+          createElement(
+            'p',
+            null,
+            '前四步是开书准备，后面是每章循环。第一次先按顺序走完一章，熟悉后再批量推进整本。',
+          ),
+          createElement(
+            'ol',
+            { className: 'nwe-steps' },
+            ...TUTORIAL_STEPS.map((step, index) => tutorialStep(step, index)),
+          ),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '面板怎么看'),
+          createElement(
+            'div',
+            { className: 'nwe-tutorial-cards' },
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '顶部统计'),
+              createElement(
+                'span',
+                null,
+                '已归档章、总字数、平均分、待处理门控。数字来自引擎，不是正文估算。',
+              ),
+            ),
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '九阶段轨与下一步'),
+              createElement('span', null, '亮起的阶段是当前进度，“下一步”卡会直接给出该调用的工具名。'),
+            ),
+            createElement(
+              'div',
+              { className: 'nwe-tutorial-card' },
+              createElement('strong', null, '章节与门控'),
+              createElement(
+                'span',
+                null,
+                '章节卡展开可看字数、评分与状态；门控区按 code/detail/hint 列出所有阻塞。',
+              ),
+            ),
+          ),
+          createElement(
+            'p',
+            { className: 'nwe-tutorial-note' },
+            createElement('strong', null, '刷新：'),
+            ' 面板每 15 秒静默同步一次，也可以点右上角刷新。它是只读投影；不会替你改稿、归档或修状态。',
+          ),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '卡住时先看这里'),
+          createElement(
+            'ul',
+            { className: 'nwe-faq' },
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '为什么一直让我先领 brief？'),
+              createElement(
+                'p',
+                null,
+                '这是正常门控。任务书决定当前阶段可用的字段与上下文 digest；先按返回值调用 novel_brief，再继续。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '门控失败，改一条还是全改？'),
+              createElement(
+                'p',
+                null,
+                '一次看完所有 blocking，再一起改。逐条试会反复烧掉阶段轮次；错误里的 code 会告诉你属于参数、门控还是系统故障。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '字数和评分为什么对不上？'),
+              createElement(
+                'p',
+                null,
+                '字数以 engine 返回为准，可用 novel_word_count 核对；review 的 total 必须等于 150 减全部扣分，不能另算一套。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, 'P4/P6 过不去怎么办？'),
+              createElement(
+                'p',
+                null,
+                'P4 有 blocker 就领 P5 任务书修订，再回 P4 重评；P6 失败同样回修订。不要 waive blocker，也不要只跑半个 scope 就归档。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '想改已经归档的章节？'),
+              createElement(
+                'p',
+                null,
+                '先 novel_reopen，带非空 reason。它会从归档备份恢复，重开后重新走 P3→P8；不要直接编辑归档卡或正文文件。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '状态文档坏了能手工修吗？'),
+              createElement(
+                'p',
+                null,
+                '先用 novel_state 看 raw 和 next；需要修复时用 novel_amend，并在 reason 写清原因。手改 YAML 会丢失事务保护。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '有多个项目，面板看的是哪本？'),
+              createElement(
+                'p',
+                null,
+                '面板跟随最近一次工具调用的项目。调用时显式传 project_root；切换活跃项目用 /novel admin novel_registry_activate。',
+              ),
+            ),
+          ),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '可以直接复制给模型的起手话术'),
+          createElement('pre', { className: 'nwe-prompt' }, TUTORIAL_PROMPT),
+        ),
+        createElement(
+          'section',
+          { className: 'nwe-tutorial-block' },
+          createElement('h3', null, '一章完成检查清单'),
+          createElement(
+            'ul',
+            { className: 'nwe-checklist' },
+            createElement('li', null, '本章 P1/P2 计划已提交，P3 正文已通过格式与字数门控。'),
+            createElement('li', null, 'P4 评审 total 对账无误，没有未修 blocker。'),
+            createElement('li', null, 'P6 五个语义项都有不同句子的正文引用，完整 scope 通过。'),
+            createElement('li', null, 'P8 任务书当前，novel_archive 带完整 state_delta 成功。'),
+            createElement('li', null, '面板出现已归档章节，门控区没有新的阻塞。'),
+          ),
+        ),
+      ),
+      createElement(
+        'div',
+        { className: 'nwe-modal-foot' },
+        '教程基于 0.2.0 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+      ),
+    ),
+  )
+
+const NovelHelp = (): ReactElement => {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const closeRef = useRef<HTMLButtonElement | null>(null)
+  const wasOpen = useRef(false)
+  const close = useCallback((): void => setOpen(false), [])
+
+  useEffect(() => {
+    const doc = globalThis.document
+    if (doc === undefined) return
+    if (!open) {
+      if (wasOpen.current) {
+        wasOpen.current = false
+        triggerRef.current?.focus()
+      }
+      return
+    }
+    wasOpen.current = true
+    const previousOverflow = doc.body.style.overflow
+    doc.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setOpen(false)
+      }
+    }
+    doc.addEventListener('keydown', onKeyDown)
+    closeRef.current?.focus()
+    return () => {
+      doc.removeEventListener('keydown', onKeyDown)
+      doc.body.style.overflow = previousOverflow
+    }
+  }, [open])
+
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'nwe-help',
+        ref: triggerRef,
+        onClick: (): void => setOpen(true),
+        'aria-label': '打开插件使用教程',
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open,
+        title: '插件使用教程',
+      },
+      helpIcon(),
+      createElement('span', { className: 'nwe-help-label' }, '教程'),
+    ),
+    open ? tutorialDialog(close, closeRef) : null,
+  )
+}
+
 /**
  * Pure view: given a view model, return the element tree. Keeping the hooks in
  * `NovelPanel` makes every visual state renderable without a browser.
@@ -705,16 +1311,21 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
         ),
       ),
       createElement(
-        'button',
-        {
-          type: 'button',
-          className: 'nwe-refresh',
-          onClick: onRefresh,
-          disabled: loading,
-          'aria-label': '刷新项目状态',
-        },
-        refreshIcon(),
-        loading ? '刷新中…' : '刷新',
+        'div',
+        { className: 'nwe-actions' },
+        createElement(NovelHelp),
+        createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'nwe-refresh',
+            onClick: onRefresh,
+            disabled: loading,
+            'aria-label': '刷新项目状态',
+          },
+          refreshIcon(),
+          loading ? '刷新中…' : '刷新',
+        ),
       ),
     ),
     ready

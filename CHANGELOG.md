@@ -14,6 +14,7 @@
 - `novel_status` 增加书级摘要；`/novel stats` 与 `/novel-stats` 都输出大纲覆盖、蓝图就绪、世界观条目、严格模式与目标章数。
 - 导出扩展到 6 种：`md` / `txt` / `epub` / `outline` / `worldbook` / `proposal`；导出幂等键纳入大纲与世界观摘要。
 - 面板 payload v2：新增全书规划（进度条、卷列表最多 8 卷并提示剩余卷数）、世界观计数、质量趋势、项目健康、最近活动；旧版本面板提示刷新。面板保持只读。
+- 面板右上角新增「教程」帮助入口：可访问的弹框按开书准备、P1–P8 单章流水线、下一章循环与导出给出完整步骤，并包含面板说明、常见排错、起手话术和完成清单；支持 Esc、遮罩关闭、焦点返回与移动端滚动。
 - 命令新增 `/novel outline|guide|report|doctor|search`，`/novel export` 与 `/novel-export` 支持 6 种 kind；`/novel admin` 暴露全部新增操作。
 - 事件新增 `novel/planned`、`novel/reopened`、`novel/exported`。
 - 修复：非活动章 `planWorld` 读取补 `validateWorldPlanShape`；大纲/世界观损坏进入 `state_errors` 并阻断依赖写操作；init 的“空目录”判定包含 outline/worldbook，避免覆盖只有规划文件的项目；`novel_report` 按章去重角色出场；`runTransaction` 的 committed journal 保留 pre-image hash 以支持 `novel_reopen`。
@@ -23,7 +24,7 @@
 - 持久化与观测修复：卷范围重排时归档卡按新区间推导卷号；`novel_amend` 保护归档索引的标题/场景/字数/评语/摘要/评分/状态等派生事实；4 位章节文件名纳入孤立正文与归档卡校验；journal 只含 lock-reclaim/空文件时 fail-closed，stale lock 不再隐藏 journal 诊断；备份先写入 staging 再原子移入 backups，崩溃不再留下不可回收目录；PG-09 引用与 check 文档先窄化再落盘；hand-edited outline 可省略 nullable 归档字段；`novel_plan_chapter` 的 target_words 不再硬编码 2000–3000 且工具 schema 补齐必填；`/novel admin` 透传 warnings/replayed；volume-only Markdown 大纲可回导；面板/命令的 next reason 中文化；docs 的 report 字段、PG-13 码、工具计数与 P4 版本同步。
 - 发布前回归修复：`novel_plan_chapter` 的必填字段在工具 schema 与服务端重新对齐；`check:host` 改为先 build，再断言宿主声明全部 27 个工具，并校验预设名与面板空态/结构；README 文档链接改为 GitHub 绝对地址，修正 `toolsMode`、`novel_panel`、六种导出与工具计数等文档漂移；事务 abort 行追加前修复撕裂日志尾；同 pid 但非 live nonce 的锁按 stale 读取，不再伪装成活跃 writer；journal 对账与 `auditHistory` 在读取期间出现 writer 时丢弃半提交误报；lock reclaim 仅在原锁确实被移除时写审计行。
 - 真实模型验证：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在发布前最终构建的临时项目完成单章 P1→P8、归档、report/doctor/search/panel、六种导出、`novel_reopen` 与重新归档；P3 分别 931 字 / 898 字，均通过 P6，重开后无 state_errors。详见 `docs/0.2.0-real-model-evidence.md`。
-- 质量：新增 `tests/book-020.spec.ts`、`tests/book-domain.spec.ts`、`tests/insight-020.spec.ts`、`tests/coverage-020.spec.ts`、`tests/review-probe-020.spec.ts`、`tests/second-review-020.spec.ts` 与 `tests/third-review-020.spec.ts`；当前 71 个测试文件 / 624 条测试；覆盖率 93.87 / 89.16 / 98.30 / 93.87；门禁为全局 statements/lines/functions 90、branches 89，engine 90/85、commands 85、client 85、viewmodel 95，新增 `engine/book.ts`/`engine/insight.ts` 的 lines/statements/functions ≥95、branches ≥93。
+- 质量：新增 `tests/book-020.spec.ts`、`tests/book-domain.spec.ts`、`tests/insight-020.spec.ts`、`tests/coverage-020.spec.ts`、`tests/review-probe-020.spec.ts`、`tests/second-review-020.spec.ts` 与 `tests/third-review-020.spec.ts`；当前 71 个测试文件 / 625 条测试；覆盖率 93.94 / 89.16 / 98.02 / 93.94；门禁为全局 statements/lines/functions 90、branches 89，engine 90/85、commands 85、client 85、viewmodel 95，新增 `engine/book.ts`/`engine/insight.ts` 的 lines/statements/functions ≥95、branches ≥93。
 
 ## 0.1.3
 

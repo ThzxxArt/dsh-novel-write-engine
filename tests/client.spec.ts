@@ -103,6 +103,54 @@ describe('panel view model', () => {
     expect(html).toContain('archiveChapter')
   })
 
+  it('renders a help entry and opens the complete tutorial dialog accessibly', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    document.body.style.overflow = ''
+    const container = document.createElement('div')
+    document.body.append(container)
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => payload(),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      const help = container.querySelector<HTMLButtonElement>('button[aria-label="打开插件使用教程"]')
+      expect(help).not.toBeNull()
+      expect(help!.getAttribute('aria-expanded')).toBe('false')
+      await act(async () => {
+        help!.click()
+      })
+      const dialog = container.querySelector('[role="dialog"]')
+      expect(dialog).not.toBeNull()
+      expect(dialog!.getAttribute('aria-modal')).toBe('true')
+      expect(container.textContent).toContain('一本书的完整流程')
+      expect(container.textContent).toContain('novel_archive')
+      expect(container.textContent).toContain('L2-POV')
+      expect(container.textContent).toContain('可以直接复制给模型的起手话术')
+      expect(help!.getAttribute('aria-expanded')).toBe('true')
+      expect(document.body.style.overflow).toBe('hidden')
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭使用教程')
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      expect(container.querySelector('[role="dialog"]')).toBeNull()
+      expect(document.body.style.overflow).toBe('')
+      expect(help!.getAttribute('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(help)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
   it('renders an unset target without pretending the card count is the target', () => {
     const bare = payload()
     bare.summary.book!.target = null
