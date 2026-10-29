@@ -100,9 +100,54 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
   let journaledCommitted = false
   let backupMarked = false
   let backupComplete = false
+  let rootDisappeared = false
+  let rootIdentity: string | null = null
+
+  const rootKey = (info: { dev: number; ino: number; birthtimeMs: number }): string =>
+    `${info.dev}:${info.ino}:${info.birthtimeMs}`
+
+  const rootUnavailable = async (): Promise<boolean> => {
+    try {
+      const info = await store.statRoot()
+      return info === null || !info.directory || (rootIdentity !== null && rootKey(info) !== rootIdentity)
+    } catch {
+      // An unreadable root is not proof it was replaced; keep the normal
+      // failure/compensation path.
+      return false
+    }
+  }
+
+  const assertRootPresent = async (): Promise<void> => {
+    const info = await store.statRoot()
+    if (info === null || !info.directory) {
+      rootDisappeared = true
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_ABORTED,
+        'the project root disappeared during the transaction',
+        'restore the directory/mount and retry; the engine will not recreate a deleted project',
+      )
+    }
+    const key = rootKey(info)
+    if (rootIdentity === null) {
+      rootIdentity = key
+      return
+    }
+    if (key !== rootIdentity) {
+      rootDisappeared = true
+      throw new EngineFaultError(
+        ERROR_CODES.TXN_ABORTED,
+        'the project root was replaced during the transaction',
+        'restore the original directory/mount and retry; the engine will not write into a replacement project',
+      )
+    }
+  }
 
   try {
+    await assertRootPresent()
     for (const file of input.files) {
+      // Staging writes create parent directories; re-check identity before each
+      // one so a root replaced between writes is never populated.
+      await assertRootPresent()
       const target = joinRel(staging, file.path)
       if (file.bytes !== undefined) await store.writeBytes(target, file.bytes)
       else await store.writeText(target, file.text ?? '')
@@ -129,6 +174,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     }
 
     if (input.afterVerify !== undefined) await input.afterVerify()
+    await assertRootPresent()
 
     // Capture every target's pre-commit bytes before the first rename. This is
     // the compensation log; it exists even when the user-facing backup is off.
@@ -181,6 +227,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       backupMarked = true
       backupComplete = true
     }
+    await assertRootPresent()
 
     // A crash after this row but before the committed row is recoverable: the
     // pending hashes tell startup whether every rename landed. Without it, the
@@ -209,6 +256,10 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     })
 
     for (const [index, file] of input.files.entries()) {
+      // A disappeared root must be caught before mkdir: fs.mkdir(...,
+      // {recursive:true}) would silently recreate it and turn a deleted
+      // project into a new empty directory.
+      await assertRootPresent()
       const from = await store.safePath(joinRel(staging, file.path))
       const to = await store.safePath(file.path)
       await fs.mkdir(dirname(to), { recursive: true })
@@ -217,6 +268,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       renamed.push(file.path)
       if (input.afterRename !== undefined) await input.afterRename(file.path, index)
     }
+    await assertRootPresent()
     for (const directory of targetDirectories) await syncDirectory(directory)
 
     for (const file of input.files) {
@@ -253,18 +305,23 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     }
     await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
   } catch (error) {
-    const rollbackProblem = await restoreTargets(store, renamed, before)
+    // A root can disappear or be replaced after the last explicit assert (for
+    // example between the final rename and readback). Re-check before
+    // compensation: restoring through FsStore would otherwise recreate the
+    // deleted directory tree or write into a replacement project.
+    if (!rootDisappeared) rootDisappeared = await rootUnavailable()
+    const rollbackProblem = rootDisappeared ? null : await restoreTargets(store, renamed, before)
     // If compensation was incomplete, keep the staging before/ images: they are
     // the only remaining source for manual recovery.
-    if (rollbackProblem === null) {
+    if (!rootDisappeared && rollbackProblem === null) {
       await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
     }
-    if (input.backup && (!backupMarked || (!backupComplete && renamed.length === 0))) {
+    if (!rootDisappeared && input.backup && (!backupMarked || (!backupComplete && renamed.length === 0))) {
       // An unmarked directory, or a marked copy that failed before any rename,
       // is not a recovery source; remove our own partial copy.
       await store.removeTree(backupDir(input.txid)).catch(() => undefined)
     }
-    if (!journaledCommitted) {
+    if (!journaledCommitted && !rootDisappeared) {
       await appendJournal(
         store,
         {

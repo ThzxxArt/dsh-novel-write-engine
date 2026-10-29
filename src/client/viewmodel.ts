@@ -25,11 +25,39 @@ export interface PanelChapter {
   stageLabel: string
 }
 
+export interface PanelProject {
+  root: string
+  title: string
+  label: string
+  active: boolean
+  registered: boolean
+  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+  selected: boolean
+}
+
+export interface PanelMissing {
+  root: string
+  title: string
+  code: string
+  reason: string
+  hint: string
+}
+
 /** Everything the panel renders, derived from the wire payload alone. */
 export interface PanelView {
-  state: 'ready' | 'loading' | 'empty' | 'error' | 'outdated'
+  state: 'ready' | 'loading' | 'empty' | 'error' | 'outdated' | 'choose' | 'missing'
   title: string
   subtitle: string
+  /** Absolute root of the selected project, when there is one. */
+  root: string
+  projects: PanelProject[]
+  selectedRoot: string | null
+  selection: { root: string | null; source: string }
+  missing?: PanelMissing
+  resumeText: string
+  /** True when the selected project exists but its definition is damaged. */
+  damaged: boolean
+  volumeNumber?: number
   stageLabel: string
   /** The whole book reached its configured target; stage `done` alone is only one chapter. */
   finished: boolean
@@ -142,6 +170,12 @@ const loading = (): PanelView => ({
   state: 'loading',
   title: '网文工坊',
   subtitle: '正在整理书稿…',
+  root: '',
+  projects: [],
+  selectedRoot: null,
+  selection: { root: null, source: 'none' },
+  resumeText: '',
+  damaged: false,
   stageLabel: '读取中',
   finished: false,
   revisionLabel: '',
@@ -185,11 +219,53 @@ const errorView = (message: string): PanelView => ({
   stageLabel: '连接异常',
 })
 
+const pathTail = (root: string): string => {
+  const parts = root.split(/[\\/]/).filter((part) => part !== '')
+  return parts[parts.length - 1] ?? root
+}
+
+const projectViews = (payload: PanelPayloadDto): PanelProject[] => {
+  const selected = payload.selection.root
+  const titleCounts = new Map<string, number>()
+  for (const project of payload.projects ?? []) {
+    titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1)
+  }
+  return (payload.projects ?? []).map((project) => {
+    const duplicate = (titleCounts.get(project.title) ?? 0) > 1
+    const state =
+      project.state === 'ok'
+        ? ''
+        : project.state === 'damaged'
+          ? '（待修复）'
+          : project.state === 'missing'
+            ? '（目录不存在）'
+            : '（不可读）'
+    return {
+      root: project.root,
+      title: project.title,
+      label: `《${project.title}》${duplicate ? ` — ${pathTail(project.root)}` : ''}${state}`,
+      active: project.active,
+      registered: project.registered,
+      state: project.state,
+      selected: selected === project.root,
+    }
+  })
+}
+
+const baseProjection = (
+  payload: PanelPayloadDto,
+): Pick<PanelView, 'projects' | 'selectedRoot' | 'selection' | 'root'> => ({
+  projects: projectViews(payload),
+  selectedRoot: payload.selection.root,
+  selection: payload.selection,
+  root: payload.selection.root ?? '',
+})
+
 const phaseLabel = (id: string): string => PHASE_LABELS[id] ?? id
 const stageLabel = (stage: string): string => STAGE_LABELS[stage] ?? stage
 const platformLabel = (platform: string): string => PLATFORM_LABELS[platform] ?? platform
 const toolLabel = (tool: string): string => TOOL_LABELS[tool] ?? '继续'
-const volumeLabel = (summary: PanelPayloadDto['summary']): string => {
+const volumeLabel = (summary: NonNullable<PanelPayloadDto['summary']>): string => {
   if (summary.volume === undefined) return ''
   const volume = summary.volume_name === undefined ? `第${summary.volume}卷` : summary.volume_name
   const act =
@@ -215,22 +291,61 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       stageLabel: '需要刷新',
     }
   }
+  const base = baseProjection(payload)
+  if (payload.missing !== undefined) {
+    return {
+      ...loading(),
+      ...base,
+      state: 'missing',
+      title: payload.missing.reason === 'unreadable' ? '项目不可读' : '项目不在了',
+      subtitle: `${payload.missing.title} · ${payload.missing.root}`,
+      stageLabel: '不可用',
+      missing: {
+        root: payload.missing.root,
+        title: payload.missing.title,
+        code: payload.missing.code,
+        reason: payload.missing.reason,
+        hint: payload.missing.hint,
+      },
+    }
+  }
   if (payload.empty === true) {
     return {
       ...loading(),
+      ...base,
+      state: 'empty',
+      subtitle: payload.error ?? '还没有项目。调用 novel_init 开始第一本书。',
+      stageLabel: '等待创建',
+    }
+  }
+  if (payload.selection.root === null || payload.summary === undefined) {
+    if (base.projects.length > 0) {
+      return {
+        ...loading(),
+        ...base,
+        state: 'choose',
+        title: '选择一本项目',
+        subtitle: '发现多本书，先选一本；面板只改变查看对象，不改变任何会话的写作绑定。',
+        stageLabel: '待选择',
+      }
+    }
+    return {
+      ...loading(),
+      ...base,
       state: 'empty',
       subtitle: payload.error ?? '还没有项目。调用 novel_init 开始第一本书。',
       stageLabel: '等待创建',
     }
   }
   const summary = payload.summary
+  const chapterRows = payload.chapters?.rows ?? []
   const blocking = summary.blocking.map((item) => ({
     code: item.code,
     scope: item.scope ?? '',
     detail: item.detail,
     hint: item.hint ?? '',
   }))
-  const rows: PanelChapter[] = payload.chapters.rows.map((row) => {
+  const rows: PanelChapter[] = chapterRows.map((row) => {
     const scoreValue = Number.isFinite(row.score) ? Math.max(0, Math.min(150, row.score)) : 0
     return {
       num: String(row.num),
@@ -257,9 +372,15 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
   const finished = summary.finished === true
   const doneLabel =
     summary.stage === 'done' ? (finished ? '全书完成' : '本章已归档') : stageLabel(summary.stage)
+  const selected = base.projects.find((project) => project.selected)
   return {
+    ...base,
     state: 'ready',
     title: `《${summary.title}》`,
+    root: summary.root === '' ? base.root : summary.root,
+    damaged: selected?.state === 'damaged',
+    resumeText: payload.resume?.text ?? '',
+    volumeNumber: summary.volume,
     subtitle:
       summary.stage === 'done'
         ? `${summary.genre} · ${platformLabel(summary.platform)} · ${

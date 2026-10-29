@@ -47,8 +47,30 @@ const OPERATIONS: Record<string, Handler> = {
   novel_reopen: (engine, args) => engine.reopenChapter(args as never),
   novel_restore: (engine, args) => engine.restoreBackup(args as never),
   novel_registry_list: (engine) => engine.listProjects(),
-  novel_registry_register: (engine, args) => engine.registerProject({ root: rootArg(args) }),
-  novel_registry_activate: (engine, args) => engine.setActiveProject({ root: rootArg(args) }),
+  novel_registry_register: async (engine, args) => {
+    const result = await engine.registerProject({ root: rootArg(args) })
+    return {
+      ...result,
+      ...(result.replaced
+        ? {
+            message:
+              '原路径已换成另一本书；登记行已更新。已有会话绑定仍会按 created_at 拒绝，请重新 /novel use。',
+          }
+        : {}),
+    }
+  },
+  novel_registry_activate: async (engine, args) => {
+    const result = await engine.setActiveProject({ root: rootArg(args) })
+    return {
+      ...result,
+      message: 'active 只影响面板默认；当前会话没有切换。写作请用 /novel use 或显式 project_root。',
+      ...(result.replaced
+        ? {
+            replacement: '原路径已换成另一本书；登记行已更新，旧会话绑定仍需重新 /novel use。',
+          }
+        : {}),
+    }
+  },
   novel_registry_forget: (engine, args) => engine.forgetProject({ root: rootArg(args) }),
   novel_import: (engine, args) => engine.importPack(args as never),
 }

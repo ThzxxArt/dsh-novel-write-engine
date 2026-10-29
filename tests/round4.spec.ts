@@ -43,18 +43,22 @@ it('resolves an omitted root through the active registry project', async () => {
   }
 })
 
-it('makes the panel follow the project a tool call just touched', async () => {
+it('does not make the panel follow the project a tool call just touched', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
   const other = await mkdtemp(join(tmpdir(), 'novel-panel-other-'))
   const { root, engine, cleanup } = await harness({ stateDir })
   try {
     await engine.initProject({ title: '面板甲', genre: '都市现代', platform: 'fanqie', root })
     await engine.initProject({ title: '面板乙', genre: '都市现代', platform: 'fanqie', root: other })
+    const choose = await engine.panelBundle({})
+    expect(choose.selection).toEqual({ root: null, source: 'none' })
+    expect(choose.summary).toBeUndefined()
+
+    await engine.setActiveProject({ root })
+    expect((await engine.panelBundle({})).summary!.title).toBe('面板甲')
     await engine.getStatus({ root: other })
-    expect((await engine.panelBundle({})).summary.title).toBe('面板乙')
-    await engine.getStatus({ root })
-    expect((await engine.panelBundle({})).summary.title).toBe('面板甲')
-    expect((await engine.panelBundle({})).chapters.rows).toHaveLength(1)
+    expect((await engine.panelBundle({})).summary!.title).toBe('面板甲')
+    expect((await engine.panelBundle({ root: other })).summary!.title).toBe('面板乙')
   } finally {
     await cleanup()
     await rm(stateDir, { recursive: true, force: true })

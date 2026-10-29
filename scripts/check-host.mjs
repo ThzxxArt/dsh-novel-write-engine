@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 if (process.platform === 'win32') {
@@ -37,36 +37,7 @@ const keep = process.env.DSH_KEEP_HOST === '1'
 const temporary = await mkdtemp(join(tmpdir(), 'nwe-host-'))
 const env = { ...process.env, DSH_HOME: temporary, NO_COLOR: '1', DSH_TELEMETRY_DISABLED: '1' }
 const smokeProject = join(temporary, 'host-smoke-project')
-const expectedNovelTools = [
-  'novel_init',
-  'novel_status',
-  'novel_brief',
-  'novel_plan_world',
-  'novel_plan_chapter',
-  'novel_write_draft',
-  'novel_review',
-  'novel_revise',
-  'novel_check',
-  'novel_archive',
-  'novel_word_count',
-  'novel_state',
-  'novel_amend',
-  'novel_rollback',
-  'novel_diff',
-  'novel_export',
-  'novel_audit',
-  'novel_pipeline',
-  'novel_blueprint',
-  'novel_outline',
-  'novel_outline_import',
-  'novel_worldbook',
-  'novel_search',
-  'novel_doctor',
-  'novel_report',
-  'novel_guide',
-  'novel_reopen',
-  'novel_restore',
-]
+let expectedNovelTools = []
 let packed
 let child
 let mock
@@ -347,7 +318,28 @@ try {
     throw new Error(`authenticated panel request should be 200, got ${authorized.status}`)
   }
   const body = await authorized.json()
-  if (body.schemaVersion !== 3) throw new Error('panel payload has no schemaVersion 3')
+  if (body.schemaVersion !== 4) throw new Error('panel payload has no schemaVersion 4')
+  if (
+    typeof body.selection !== 'object' ||
+    body.selection === null ||
+    typeof body.selection.source !== 'string' ||
+    !Array.isArray(body.projects)
+  ) {
+    throw new Error('panel payload is missing projects/selection shape')
+  }
+  for (const project of body.projects) {
+    if (
+      typeof project !== 'object' ||
+      project === null ||
+      typeof project.root !== 'string' ||
+      typeof project.title !== 'string' ||
+      typeof project.active !== 'boolean' ||
+      typeof project.registered !== 'boolean' ||
+      !['ok', 'damaged', 'missing', 'unreadable'].includes(project.state)
+    ) {
+      throw new Error('panel project option is missing v4 fields')
+    }
+  }
   if (body.empty === true) {
     if (typeof body.error !== 'string' || body.error === '') {
       throw new Error('empty panel payload has no explanatory error text')
@@ -355,12 +347,16 @@ try {
   } else if (
     typeof body.summary !== 'object' ||
     body.summary === null ||
+    typeof body.summary.root !== 'string' ||
     typeof body.chapters !== 'object' ||
     body.chapters === null ||
     typeof body.gates !== 'object' ||
     body.gates === null
   ) {
-    throw new Error('panel payload is missing summary/chapters/gates')
+    throw new Error('panel payload is missing v4 summary.root/chapters/gates')
+  }
+  if (body.resume !== undefined && typeof body.resume?.text !== 'string') {
+    throw new Error('panel resume field is not text')
   }
   console.log(`host gate passed: plugin mounted, panel 401→200, preset present (${url})`)
 
@@ -371,8 +367,16 @@ try {
   child = undefined
 
   // A panel route proves the bundle mounted, not that the host registered the
-  // tools. Run the real headless app against a local Messages peer and require
-  // one actual novel_init call plus a final answer.
+  // tools. Derive the expected names from the freshly built artifact instead of
+  // duplicating them here; a hardcoded list silently drifts when a tool is
+  // added or removed.
+  const built = await import(pathToFileURL(join(root, 'lib/index.js')).href)
+  expectedNovelTools = [...built.TOOL_NAMES]
+  if (expectedNovelTools.length !== 28) {
+    throw new Error(`expected 28 TOOL_NAMES in the built artifact, got ${expectedNovelTools.length}`)
+  }
+  // Run the real headless app against a local Messages peer and require one
+  // actual novel_init call plus a final answer.
   mock = await startMessagesMock()
   run(['--profile', headlessProfile, '--from-default-profile', 'headless', '--dump-config'])
   run(['plugin', '--profile', headlessProfile, 'add', packed])
@@ -424,8 +428,15 @@ try {
       if (typeof tool?.name === 'string') declared.add(tool.name)
     }
   }
-  for (const tool of expectedNovelTools) {
-    if (!declared.has(tool)) throw new Error(`headless request never declared tool ${tool}`)
+  const declaredNovel = [...declared].filter((name) => name.startsWith('novel_')).sort()
+  const expectedNovel = [...expectedNovelTools].sort()
+  if (
+    declaredNovel.length !== expectedNovel.length ||
+    declaredNovel.some((name, index) => name !== expectedNovel[index])
+  ) {
+    throw new Error(
+      `headless declared ${declaredNovel.length} novel tools, expected ${expectedNovel.length}: ${declaredNovel.join(', ')}`,
+    )
   }
   const toolResults = mock.requests.flatMap((request) =>
     Array.isArray(request.messages)

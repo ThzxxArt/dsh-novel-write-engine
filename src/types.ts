@@ -41,7 +41,7 @@ export type SceneType = (typeof SCENE_TYPES)[number]
 /** A violation is blocking unless the rule pack declares it advisory. */
 export type Severity = 'blocker' | 'advisory'
 
-/** All thirty-one service operations (22 inherited from 0.1.x, 9 book-level). */
+/** All thirty-two service operations (22 inherited + 9 book-level + restoreBackup). */
 export const OPERATIONS = [
   'initProject',
   'archiveChapter',
@@ -118,6 +118,9 @@ export interface ReadingProof {
 /** Error families map one-to-one to the three repair actions a caller can take. */
 export const ERROR_CODES = {
   PROJECT_NOT_FOUND: 'ENGINE_PROJECT_NOT_FOUND',
+  PROJECT_AMBIGUOUS: 'ENGINE_PROJECT_AMBIGUOUS',
+  PROJECT_MISSING: 'ENGINE_PROJECT_MISSING',
+  PROJECT_IDENTITY_MISMATCH: 'ENGINE_PROJECT_IDENTITY_MISMATCH',
   PROJECT_EXISTS: 'ENGINE_PROJECT_EXISTS',
   STAGE_ORDER: 'ENGINE_STAGE_ORDER',
   GATE_BLOCKED: 'ENGINE_GATE_BLOCKED',
@@ -1013,9 +1016,22 @@ export interface ChapterStatusRow {
   passed: boolean
 }
 
+/** Where an omitted project root came from. */
+export type SelectionSource = 'explicit' | 'session' | 'workspace' | 'active' | 'config' | 'single'
+
+/** One resolved project choice, before the project is loaded. */
+export interface Selection {
+  root: string
+  source: SelectionSource
+  title?: string
+  created_at?: string
+}
+
 /** The `getStatus` payload. */
 export interface StatusReport {
   project: { title: string; genre: Genre; platform: Platform; root: string }
+  /** Why this project was chosen; lets the model notice a wrong book. */
+  selection?: { source: SelectionSource; root: string }
   /** The chapter requested for metrics; may be historical. */
   chapter: number
   /** The chapter the pipeline is currently working on. */

@@ -80,7 +80,7 @@ it('does not remember a failed explicit project root', async () => {
     })
     const status = await engine.getStatus({})
     expect((status.data as { project: { title: string } }).project.title).toBe('仍在这里')
-    expect((await engine.panelBundle({})).summary.title).toBe('仍在这里')
+    expect((await engine.panelBundle({})).summary!.title).toBe('仍在这里')
   } finally {
     await cleanup()
   }

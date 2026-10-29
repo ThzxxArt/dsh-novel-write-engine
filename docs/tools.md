@@ -5,7 +5,7 @@
 | 工具                 | 阶段     | 操作                                                                                                                                     | 写盘                                                                         |
 | -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `novel_init`         | —        | `initProject`                                                                                                                            | 是                                                                           |
-| `novel_status`       | 任意     | `getStatus`；`chapter` 仅用于字数查询，`active_chapter` 才是当前章；`state_errors` 暴露 plan/review/check、八个 ledger 与 outline/worldbook 的损坏           | 否                                                                           |
+| `novel_status`       | 任意     | `getStatus`；`chapter` 仅用于字数查询，`active_chapter` 才是当前章；`selection` 暴露 root/source；`state_errors` 暴露 plan/review/check、八个 ledger 与 outline/worldbook 的损坏 | 项目正文否；显式 `project_root` 成功会写会话绑定 |
 | `novel_brief`        | P1~P6/P8 | `getBrief`；只签当前活跃章，返回 `fields`、`context`；`context.world_plan`、`context.context_meta` 与 `*_error` 在 `context`/`fields` 内 | 仅 `state/briefs.yaml`                                                        |
 | `novel_plan_world`   | P1       | `submitWorldPlan`；数组/对象形状在服务边界窄化                                                                                           | 是                                                                           |
 | `novel_plan_chapter` | P2       | `submitChapterPlan`；标题长度读 rulepack、5–8 个节拍、narrator/opening/ending 非空；可选 `cast` 1–8 人                                   | 是                                                                           |
@@ -14,11 +14,11 @@
 | `novel_revise`       | P5/P6    | `submitRevision`；`content` 与 `patch:{expected_hash,edits}` 二选一                                                                       | 是（blocker 不可降级或 waived；issue 只能改 status/evidence）                |
 | `novel_check`        | P6       | `runCheck`；`acknowledge` 只能列 advisory code，blocker 不可被知悉放行                                                                   | 是（五个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
 | `novel_archive`      | 归档     | `archiveChapter`                                                                                                                         | 事务（必须带 `state_delta`；旧 review 无 digest 时拒绝）                     |
-| `novel_word_count`   | 任意     | `countWords`                                                                                                                             | 否                                                                           |
+| `novel_word_count`   | 任意     | `countWords`；纯文本模式不读项目，`project_root` 仅用于项目模式                                                                           | 项目正文否；项目模式显式 `project_root` 会写会话绑定                          |
 | `novel_state`        | 任意     | `queryState`；chapters 默认紧凑索引，支持 `include_summary` / `chapter_range`；`history` / `backups` / `briefs` 只读；损坏文档返回 raw     | 否                                                                           |
 | `novel_amend`        | 任意     | `amend`；支持 `novel.yaml` 元数据、八个 ledger 与 outline/worldbook，带不变量、归档卡保护与单一目标 repair                              | 是                                                                           |
 | `novel_rollback`     | 任意     | `rollback`；只能退回当前阶段或更早                                                                                                       | 是                                                                           |
-| `novel_diff`         | 任意     | `diff`                                                                                                                                   | 否                                                                           |
+| `novel_diff`         | 任意     | `diff`；`before`+`after` 文本模式不读项目，`project_root` 仅用于项目模式                                                                  | 项目正文否；项目模式显式 `project_root` 会写会话绑定                          |
 | `novel_export`       | 任意     | `export`；md/txt/epub/outline/worldbook/proposal                                                                                         | 导出目录                                                                     |
 | `novel_audit`        | 任意     | `auditHistory`；含被拒 attempt，支持 chapter/op/status/since/until/cursor                                                    | 否                                                                           |
 | `novel_pipeline`     | 任意     | `advise`                                                                                                                                 | 否                                                                           |
@@ -61,7 +61,9 @@
 
 ## 命令
 
-`/novel [status|next|stats|outline|guide|report|doctor|search <词>|export <kind>|admin]`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。
+`/novel [status|next|stats|outline|guide|report|doctor|search <词>|export <kind>|projects|current|use <path|title|.>|unbind|scan [--register]|resume|admin]`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。
+
+`scan`/`resume` 只是 `/novel` 子命令，不进入工具 schema；工具仍 28 个、服务操作仍 32 个。
 
 ## core 模式
 
@@ -76,6 +78,18 @@
 - `novel_outline_import` 的 `dry_run=true` 不写盘；解析失败带 Markdown 行号。
 - `novel_export` 新增 `outline | worldbook | proposal`；`chapter` 只对 `md/txt/epub` 有效。
 - `novel_reopen` 必须传 `chapter` 与 `reason`；只允许紧邻的已归档章，活动章未开始；损坏的 outline 会拒绝重开，避免覆盖规划。
+
+## 0.2.2 契约补充
+
+- 所有工具的 `project_root` 语义：**项目模式下显式传入成功后绑定当前 DSH 会话并持久化**；省略时按「会话绑定 → cwd 唯一项目 → 唯一注册项目/配置 `projectRoot`」解析。多项目无法唯一确定时返回 `ENGINE_PROJECT_AMBIGUOUS`，不会用 `active` 猜。例外：`novel_word_count` 的纯文本模式与 `novel_diff` 的 `before`+`after` 文本模式不读项目、不绑定会话，schema 已单独标注。
+- 读取路径的绑定/登记写入是 best-effort：显式 `project_root` 的读取不因元数据文件损坏或不可写而失败；省略 root 的解析仍对损坏绑定 fail-closed。写事务提交后才更新元数据，失败只回 `SESSION_BINDING_FAILED` warning。
+- `novel_init` 是例外：省略 `project_root` 时只落配置 `projectRoot`，不读会话绑定/工作区/active；创建成功后才绑定当前会话。
+- `novel_status` 文本新增「项目根 … · 选择来源 …」一行；JSON 的 `selection` 为 `{source, root}`。
+- 新增错误码：`ENGINE_PROJECT_AMBIGUOUS`（列候选，要求显式选择）、`ENGINE_PROJECT_MISSING`（会话绑定目录不存在，保留绑定）、`ENGINE_PROJECT_IDENTITY_MISMATCH`（原路径换成另一本书，禁止写入）。
+- `/novel scan` 只扫 `cwd`、`cwd/novel`、直接子目录；最多 50 个候选，不递归、不跟随符号链接；普通模式只读，`--register` 只登记 `ok`，不改 active/绑定。
+- `/novel use` 成功绑定后 best-effort 登记项目，便于随后在 `/novel projects` 与面板看到；不改 active。损坏项目（`novel.yaml` 不可读）不绑定、不登记，先用显式 `project_root` 修复。
+- `/novel resume` 只读，要求 Agent 会话；文本由 `formatResumePrompt` 生成，与面板复制按钮同源，包含书名、绝对 root、章节、阶段、下一步和首调用显式 `project_root` 的约束。
+- 面板 payload v4：`projects[]`、`selection`、`summary.root`、`missing`、`resume`；选择器只改 GET `?root=` 与 `localStorage`，不写会话绑定。
 
 ## 0.2.1 契约补充
 

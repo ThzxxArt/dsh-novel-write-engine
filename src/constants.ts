@@ -5,7 +5,7 @@ export const PLUGIN_NAME = 'dsh-novel-write-engine'
 export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
-export const REMOTE_VERSION = 3
+export const REMOTE_VERSION = 4
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -27,6 +27,9 @@ export const OUTLINE_DIR = 'outline'
 export const LOCK_FILE = '.engine.lock'
 export const STAGING_DIR = '.staging'
 export const REGISTRY_FILE = 'projects.yaml'
+export const SESSION_BINDINGS_FILE = 'session-bindings.yaml'
+export const METADATA_LOCK_FILE = '.metadata.lock'
+export const ARCHIVE_DIGESTS_FILE = 'state/archive-digests.json'
 
 /** Files owned by the engine under `state/`. */
 export const STATE_FILES = {

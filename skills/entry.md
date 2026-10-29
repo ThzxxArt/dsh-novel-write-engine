@@ -16,6 +16,13 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 5. **不编设定。** 人物、地点、伏笔、资源状态拿不准就 `novel_state` 查。
 6. **归档是一次事务，且必须核销。** `novel_archive` 必须带 `state_delta`：本章每个角色/伏笔/事件/新设定/关系逐条声明 `created|updated|no_change`；不要手工拼章节索引或交接文件。
 
+## 项目选择（0.2.2）
+
+- 第一次调用先 `novel_status`，看 `selection.root` 与 `selection.source`；不要凭记忆猜项目。
+- 没有绑定且工作区/注册表有多本书时，引擎返回 `ENGINE_PROJECT_AMBIGUOUS` 并列出候选；这时显式传一次绝对 `project_root`，成功后它会成为当前会话的持久绑定，后续省略即沿用。不要用全局 `active` 猜。
+- 用户要切换时，用 `/novel use <路径|书名|.>`；`/novel current` 查绑定，`/novel unbind` 只清会话绑定，`/novel scan` 只发现/登记、不选择。
+- `novel_word_count` 的纯文本模式与 `novel_diff` 的 `before`+`after` 文本模式不读项目、不绑定；项目模式才传 `project_root`。
+
 ## 书级规划（0.2.0）
 
 新项目先 `novel_guide`；推荐但不强制：`novel_blueprint`（蓝图/卷）→ `novel_outline`（章卡）→ `novel_worldbook`（设定集）。已有大纲可用 `novel_outline_import` 导入 Markdown/YAML/JSON。只要存在章卡，P2/P3 就按章卡校验标题、场景、字数与 cast；严格模式还要求章卡必须存在。要改已归档章先 `novel_reopen`（必须带 reason）。

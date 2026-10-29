@@ -481,7 +481,7 @@ describe('review probes', () => {
         )
         const raw = await engine.queryState({ kind: name, root })
         expect(raw.data).toMatchObject({ error: code, raw: 'broken: [unclosed\n' })
-        expect((await engine.panelBundle({ root })).summary.title).toBe('八台账')
+        expect((await engine.panelBundle({ root })).summary!.title).toBe('八台账')
         await engine.amend({
           path: `state/${name}.yaml`,
           content: replacement as never,
@@ -542,7 +542,7 @@ describe('review probes', () => {
         path: 'checks/ch001.check.yaml',
         raw: 'verdict: [unclosed\n',
       })
-      expect((await engine.panelBundle({ root })).summary.blocking.length).toBeGreaterThan(0)
+      expect((await engine.panelBundle({ root })).summary!.blocking.length).toBeGreaterThan(0)
     } finally {
       await cleanup()
     }

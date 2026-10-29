@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { CORE_TOOLS, PANEL_ID, type ToolName } from './constants.js'
 import { EngineService } from './engine/service.js'
 import type { EngineConfig, EngineEvent } from './engine/state.js'
-import { createNovelTools } from './tools/index.js'
+import { createNovelTools, type WorkingDirectoryLike } from './tools/index.js'
 import { createCommands } from './commands/index.js'
 import { createSkill } from './skills/index.js'
 import { panelRoute, type PanelGuard } from './remote/index.js'
@@ -84,7 +84,13 @@ export function apply(ctx: Context, config: Config): void {
   const provider = ctx as unknown as { provide?: (name: string, value: unknown) => void }
   provider.provide?.('novelEngine', engine)
 
-  for (const tool of createNovelTools(engine)) {
+  const serviceOf = (ctx as unknown as { get?: (name: string) => unknown }).get
+  const workingDirectory =
+    typeof serviceOf === 'function'
+      ? (serviceOf.call(ctx, 'workingDirectory') as WorkingDirectoryLike | undefined)
+      : undefined
+
+  for (const tool of createNovelTools(engine, { workingDirectory })) {
     if (toolsMode === 'core' && !CORE_TOOLS.includes(tool.name as ToolName)) continue
     ctx.tools.register(tool)
   }
@@ -94,7 +100,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   optional.inject(['commands'], (commandsCtx) => {
-    for (const command of createCommands(engine)) {
+    for (const command of createCommands(engine, { workingDirectory })) {
       commandsCtx.effect(() => commandsCtx.commands.register(command), `${name}: command ${command.name}`)
     }
   })
@@ -152,6 +158,7 @@ function connectionFence(scope: unknown): ConnectionFence | undefined {
 }
 
 export { EngineService, EngineError, loadRulepack }
+export * from './constants.js'
 export * from './types.js'
 export * from './engine/projections.js'
 export * from './engine/gates.js'

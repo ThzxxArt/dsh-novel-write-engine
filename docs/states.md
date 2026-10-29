@@ -59,6 +59,16 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 - `novel_plan_chapter` 的 `cast` 是可选 1–8 人，名字必须来自 P1 世界计划或角色台账；旧 plan 仍可读。
 - `archiveChapter` 继承 handoff 的 volume/volume_name；`act`/`act_progress` 默认按幕内位置派生，handoff 可覆盖；`open_hooks` 最久未动优先。
 
+## 0.2.2 会话选择与项目身份
+
+- `stateDir/projects.yaml` 仍是 v1；项目行新增可选 `created_at`，`root` 为规范化绝对路径，同一路径一行。`active` 只作为面板默认与无 Agent 调用的默认项。
+- `stateDir/session-bindings.yaml` 按 DSH `SessionId` 保存 `{root,title,project_created_at,bound_at,source}`；显式 `project_root`、`/novel use`、成功 `novel_init` 才写。它不是项目状态，不属于项目目录，删掉不会删书。
+- 无显式 root 的解析遇到绑定损坏返回 `ENGINE_SCHEMA_INVALID`；显式 root 读取 best-effort、不更新损坏绑定。坏行（缺 session_id/root）过滤；同一 session 只保留一行；同一 root + `created_at` 的等价绑定不重写。
+- `project_created_at` 是身份校验：路径存在但 `novel.yaml.created_at` 不同时返回 `ENGINE_PROJECT_IDENTITY_MISMATCH`，禁止写入；空 `created_at` 的旧项目降级为路径弱身份，不硬判。
+- 绑定目录消失返回 `ENGINE_PROJECT_MISSING`，保留绑定与登记；路径存在但没有 novel/state 返回 `PROJECT_NOT_FOUND`；`novel.yaml` 损坏但 state 仍在仍可加载为 damaged。
+- `/novel scan --register` 只写 `projects.yaml`，不写项目、不写绑定、不改 active；同 root 不同 `created_at` 只标 `identity_changed`，不覆盖登记行。
+- 面板的 `?root=` 只接受注册表/active/配置路径；面板选择与复制都不写项目、注册表或会话绑定。
+
 ## 0.2.1 状态分权与证据
 
 - `pipeline.draft` 是活动章的标题/场景/叙述者/摘要/正文 hash 的唯一 owner；`plans/chNNN.chapter.yaml` 是 P2 不可变证据，不再被 P3/P5 写入 summary。旧项目没有 draft 时回退读 plan.summary。

@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FsStore } from '../src/store/fs.js'
 import { readJournal } from '../src/store/journal.js'
@@ -190,6 +193,232 @@ describe('transaction compensation', () => {
       await expect(runTransaction(store, input)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
       expect(await snapshotFiles(store, FILES)).toEqual(before)
       expect(await rowsFor(store, 'tx-readback-fail')).toEqual(['aborted'])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed without recreating a root deleted after the first rename', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录在提交中删除',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      let removed = false
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-root-deleted-after-rename',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+          afterRename: async () => {
+            if (removed) return
+            removed = true
+            await rm(root, { recursive: true, force: true })
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed without recreating a root deleted while staging', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录在暂存中删除',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const original = store.writeText.bind(store)
+      let removed = false
+      store.writeText = async (path, text) => {
+        const result = await original(path, text)
+        if (!removed && path.startsWith('.staging/')) {
+          removed = true
+          await rm(root, { recursive: true, force: true })
+        }
+        return result
+      }
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-root-deleted-while-staging',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed when the root is replaced during staging', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录在暂存中替换',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const original = store.writeText.bind(store)
+      let replaced = false
+      store.writeText = async (path, text) => {
+        const result = await original(path, text)
+        if (!replaced && path.startsWith('.staging/')) {
+          replaced = true
+          await rm(root, { recursive: true, force: true })
+          await mkdir(root, { recursive: true })
+        }
+        return result
+      }
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-root-replaced-while-staging',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      expect(await new FsStore(root).list('state')).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed instead of writing into a replacement root', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录在提交中替换',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      let replaced = false
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-root-replaced-after-rename',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+          afterRename: async () => {
+            if (replaced) return
+            replaced = true
+            await rm(root, { recursive: true, force: true })
+            await mkdir(root, { recursive: true })
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      const replacement = new FsStore(root)
+      expect(await replacement.list('state')).toEqual([])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects duplicate targets and mixed representations before touching the project', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '事务输入校验',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const base = {
+        txid: 'tx-invalid-input',
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        backup: false,
+      }
+      await expect(
+        runTransaction(store, {
+          ...base,
+          files: [
+            { path: 'state/chapters.yaml', text: 'one' },
+            { path: 'state/chapters.yaml', text: 'two' },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(
+        runTransaction(store, {
+          ...base,
+          files: [{ path: 'state/chapters.yaml', text: 'one', bytes: new Uint8Array([1]) }],
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed at the first root probe when the root is already gone', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'novel-txn-missing-'))
+    const root = join(parent, 'gone')
+    try {
+      await expect(
+        runTransaction(new FsStore(root), {
+          txid: 'tx-root-missing',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: false,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed without recreating a project root deleted after staging', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录删除了',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const input = {
+        txid: 'tx-root-deleted',
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        files: files(),
+        backup: true,
+        afterVerify: async () => {
+          await rm(root, { recursive: true, force: true })
+        },
+      } as TransactionInput
+      await expect(runTransaction(store, input)).rejects.toMatchObject({
+        code: 'ENGINE_TXN_ABORTED',
+      })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await cleanup()
     }

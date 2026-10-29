@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
 import { REGISTRY_FILE } from '../constants.js'
 import { compareText } from '../domain/stable.js'
@@ -8,10 +9,12 @@ import { FsStore } from './fs.js'
 export interface RegistryEntry {
   root: string
   title: string
+  /** Project identity; absent on registries written by 0.2.1 and earlier. */
+  created_at?: string
   updated_at: string
 }
 
-interface RegistryDocument {
+export interface RegistryDocument {
   schema_version: 1
   active: string | null
   projects: RegistryEntry[]
@@ -51,26 +54,59 @@ export class ProjectRegistry {
         `${REGISTRY_FILE} has an unsupported schema_version`,
       )
     }
+    const projects: RegistryEntry[] = []
+    const indexes = new Map<string, number>()
+    if (record.projects !== undefined && !Array.isArray(record.projects)) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${REGISTRY_FILE}.projects must be an array`,
+        'fix or delete the registry file; projects on disk are unaffected',
+      )
+    }
+    if (Array.isArray(record.projects)) {
+      for (const value of record.projects) {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+        const entry = value as unknown as Record<string, unknown>
+        if (typeof entry.root !== 'string' || entry.root === '') continue
+        if (typeof entry.title !== 'string') continue
+        const normalized: RegistryEntry = {
+          root: resolve(entry.root),
+          title: entry.title,
+          ...(typeof entry.created_at === 'string' && entry.created_at !== ''
+            ? { created_at: entry.created_at }
+            : {}),
+          updated_at: typeof entry.updated_at === 'string' ? entry.updated_at : '',
+        }
+        const existing = indexes.get(normalized.root)
+        if (existing === undefined) {
+          indexes.set(normalized.root, projects.length)
+          projects.push(normalized)
+        } else {
+          projects[existing] = normalized
+        }
+      }
+    }
     return {
       schema_version: 1,
-      active: typeof record.active === 'string' ? record.active : null,
-      projects: Array.isArray(record.projects)
-        ? record.projects.filter(
-            (entry): entry is RegistryEntry =>
-              typeof entry === 'object' &&
-              entry !== null &&
-              typeof (entry as RegistryEntry).root === 'string' &&
-              typeof (entry as RegistryEntry).title === 'string',
-          )
-        : [],
+      active:
+        typeof record.active === 'string' && record.active.trim() !== '' ? resolve(record.active) : null,
+      projects,
     }
   }
 
   /** Insert or update one project row. */
   async register(entry: Omit<RegistryEntry, 'updated_at'>): Promise<RegistryDocument> {
     const document = await this.read()
-    const row: RegistryEntry = { ...entry, updated_at: new Date().toISOString() }
-    const rows = document.projects.filter((candidate) => candidate.root !== entry.root)
+    const root = resolve(entry.root)
+    const previous = document.projects.find((candidate) => candidate.root === root)
+    const created_at = entry.created_at ?? previous?.created_at
+    const row: RegistryEntry = {
+      root,
+      title: entry.title,
+      ...(created_at === undefined || created_at === '' ? {} : { created_at }),
+      updated_at: new Date().toISOString(),
+    }
+    const rows = document.projects.filter((candidate) => candidate.root !== root)
     rows.push(row)
     const next: RegistryDocument = {
       ...document,
@@ -83,7 +119,7 @@ export class ProjectRegistry {
   /** Mark a project as the default one; an unregistered root is still accepted. */
   async setActive(root: string): Promise<RegistryDocument> {
     const document = await this.read()
-    const next: RegistryDocument = { ...document, active: root }
+    const next: RegistryDocument = { ...document, active: resolve(root) }
     await this.write(next)
     return next
   }
@@ -91,10 +127,11 @@ export class ProjectRegistry {
   /** Drop a row; the project on disk is untouched. */
   async forget(root: string): Promise<RegistryDocument> {
     const document = await this.read()
+    const target = resolve(root)
     const next: RegistryDocument = {
       ...document,
-      projects: document.projects.filter((entry) => entry.root !== root),
-      active: document.active === root ? null : document.active,
+      projects: document.projects.filter((entry) => entry.root !== target),
+      active: document.active === target ? null : document.active,
     }
     await this.write(next)
     return next

@@ -209,7 +209,7 @@ describe('0.1.2 recoverable state', () => {
         args: { chapter: 1, to_stage: 'P2' },
       })
       const panel = await engine.panelBundle({ root })
-      expect(panel.chapters.rows.find((row) => row.num === 1)?.status).toBe('blocked')
+      expect(panel.chapters!.rows.find((row) => row.num === 1)?.status).toBe('blocked')
     } finally {
       await cleanup()
     }

@@ -98,6 +98,76 @@ export class FsStore {
     }
   }
 
+  /**
+   * Directory entries without following symlinks. Used by bounded workspace
+   * discovery so a symlinked child is never mistaken for a project.
+   */
+  async entries(
+    relativeDir: string,
+  ): Promise<Array<{ name: string; directory: boolean; symbolicLink: boolean }>> {
+    try {
+      const absolute = relativeDir === '.' ? resolve(this.root) : await this.safePath(relativeDir)
+      const entries = await fs.readdir(absolute, { withFileTypes: true })
+      return entries
+        .map((entry) => ({
+          name: entry.name,
+          directory: entry.isDirectory(),
+          symbolicLink: entry.isSymbolicLink(),
+        }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    } catch (error) {
+      if (isMissing(error)) return []
+      throw error
+    }
+  }
+
+  /**
+   * Metadata for a path without following the final symlink. A scandir probe
+   * only needs to know that a candidate is a real directory; it must not read
+   * through a link to decide that.
+   */
+  async lstat(
+    relativePath: string,
+  ): Promise<{ directory: boolean; symbolicLink: boolean; file: boolean } | null> {
+    try {
+      const info = await fs.lstat(relativePath === '.' ? resolve(this.root) : this.path(relativePath))
+      return {
+        directory: info.isDirectory(),
+        symbolicLink: info.isSymbolicLink(),
+        file: info.isFile(),
+      }
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw error
+    }
+  }
+
+  /**
+   * Follow a project-root symlink when classifying the root itself. Child
+   * discovery still uses lstat/entries, so a symlinked *subdirectory* remains
+   * out of workspace scans. The device/inode pair lets a transaction detect a
+   * root that was deleted and recreated under the same path.
+   */
+  async statRoot(): Promise<{
+    directory: boolean
+    dev: number
+    ino: number
+    birthtimeMs: number
+  } | null> {
+    try {
+      const info = await fs.stat(resolve(this.root))
+      return {
+        directory: info.isDirectory(),
+        dev: info.dev,
+        ino: info.ino,
+        birthtimeMs: info.birthtimeMs,
+      }
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw error
+    }
+  }
+
   async readText(relativePath: string): Promise<string | null> {
     try {
       return await fs.readFile(await this.safePath(relativePath), 'utf8')
@@ -138,10 +208,34 @@ export class FsStore {
     return narrow(kind, document) as ReturnType<typeof narrow<K>>
   }
 
+  /**
+   * Create missing directories below the store root without ever recreating the
+   * root itself. `mkdir(..., {recursive:true})` silently recreates a deleted
+   * project directory; walking one segment at a time makes the first missing
+   * root fail with ENOENT and keeps deleted projects deleted.
+   */
+  private async ensureParent(absolutePath: string): Promise<void> {
+    const root = resolve(this.root)
+    const parent = dirname(absolutePath)
+    const rel = relative(root, parent)
+    if (rel === '' || rel === '.') return
+    let current = root
+    for (const segment of rel.split(sep)) {
+      if (segment === '') continue
+      current = join(current, segment)
+      try {
+        await fs.mkdir(current)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+        throw error
+      }
+    }
+  }
+
   /** Write text atomically: temp file, fsync, rename, directory fsync. */
   async writeText(relativePath: string, text: string): Promise<void> {
     const absolute = await this.safePath(relativePath)
-    await fs.mkdir(dirname(absolute), { recursive: true })
+    await this.ensureParent(absolute)
     const temp = `${absolute}.${randomUUID()}.tmp`
     try {
       const handle = await fs.open(temp, 'w')
@@ -176,7 +270,7 @@ export class FsStore {
   /** Raw append used only by the journal (JSONL is append-only by design). */
   async appendText(relativePath: string, text: string): Promise<void> {
     const absolute = await this.safePath(relativePath)
-    await fs.mkdir(dirname(absolute), { recursive: true })
+    await this.ensureParent(absolute)
     const handle = await fs.open(absolute, 'a+')
     try {
       const info = await handle.stat()
@@ -205,7 +299,7 @@ export class FsStore {
 
   async writeBytes(relativePath: string, bytes: Uint8Array): Promise<void> {
     const absolute = await this.safePath(relativePath)
-    await fs.mkdir(dirname(absolute), { recursive: true })
+    await this.ensureParent(absolute)
     const temp = `${absolute}.${randomUUID()}.tmp`
     try {
       const handle = await fs.open(temp, 'w')

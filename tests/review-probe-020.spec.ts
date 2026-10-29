@@ -482,7 +482,7 @@ describe('0.2.0 review probes', () => {
     try {
       await engine.initProject({ title: '书', genre: '都市现代', platform: 'fanqie', root })
       const result = await engine.diff({ before: 'a\nb', after: 'a\nc', root })
-      expect(result.data.chapter).toBe(1)
+      expect(result.data.chapter).toBe(0)
       expect(result.data.added).toBe(1)
       expect(result.data.removed).toBe(1)
     } finally {

@@ -15,6 +15,8 @@ export interface BlockingDto {
 export interface SummaryDto {
   schemaVersion: number
   panelId: string
+  /** Absolute project root, so a stale title cannot hide a wrong book. */
+  root: string
   title: string
   genre: string
   platform: string
@@ -92,11 +94,36 @@ export interface GatesDto {
   explanations: string[]
 }
 
+export interface ProjectOptionDto {
+  root: string
+  title: string
+  active: boolean
+  registered: boolean
+  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+}
+
+export interface PanelSelectionDto {
+  root: string | null
+  source: 'query' | 'active' | 'single' | 'config' | 'none'
+}
+
+export interface PanelMissingDto {
+  root: string
+  title: string
+  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND'
+  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable'
+  hint: string
+}
+
 export interface PanelPayloadDto {
   schemaVersion: number
-  summary: SummaryDto
-  chapters: ChaptersDto
-  gates: GatesDto
+  projects: ProjectOptionDto[]
+  selection: PanelSelectionDto
+  summary?: SummaryDto
+  chapters?: ChaptersDto
+  gates?: GatesDto
+  resume?: { text: string }
+  missing?: PanelMissingDto
   error?: string
   empty?: true
 }

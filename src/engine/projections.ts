@@ -78,6 +78,8 @@ export interface PanelBook {
 export interface PanelSummaryDto {
   schemaVersion: number
   panelId: string
+  /** Absolute project root, so a stale title cannot hide a wrong book. */
+  root: string
   title: string
   genre: string
   platform: string
@@ -130,6 +132,60 @@ export interface PanelGatesDto {
   explanations: string[]
 }
 
+/** One selectable project in the panel; state is cheap, not a full load. */
+export interface PanelProjectOption {
+  root: string
+  title: string
+  active: boolean
+  registered: boolean
+  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+}
+
+export interface PanelSelection {
+  root: string | null
+  source: 'query' | 'active' | 'single' | 'config' | 'none'
+}
+
+export interface PanelMissing {
+  root: string
+  title: string
+  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND'
+  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable'
+  hint: string
+}
+
+export interface PanelBundle {
+  projects: PanelProjectOption[]
+  selection: PanelSelection
+  summary?: PanelSummaryDto
+  chapters?: PanelChaptersDto
+  gates?: PanelGatesDto
+  resume?: { text: string }
+  missing?: PanelMissing
+  empty?: true
+  error?: string
+}
+
+export interface ResumePromptInput {
+  title: string
+  root: string
+  chapter: number | string
+  stage: string
+  nextTool: string
+}
+
+/** One shared prompt template for `/novel resume` and the panel copy button. */
+export function formatResumePrompt(input: ResumePromptInput): string {
+  return [
+    `请继续《${input.title}》。`,
+    `项目根：${input.root}（第一次工具调用必须显式传 project_root=${input.root}）。`,
+    `当前第 ${input.chapter} 章，阶段 ${input.stage}。`,
+    `下一步：${input.nextTool}。`,
+    '先调用 novel_status 核对项目根与书名，再按 novel_pipeline 的下一步执行；',
+    '只操作这个项目，不要读取或写入其他书。',
+  ].join('\n')
+}
+
 const STAGE_TO_PHASE: Record<Stage, string> = {
   idle: 'P1',
   P2: 'P2',
@@ -180,6 +236,7 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
   return {
     schemaVersion: REMOTE_VERSION,
     panelId: PANEL_ID,
+    root: snapshot.root,
     title: snapshot.title,
     genre: snapshot.genre,
     platform: snapshot.platform,

@@ -132,7 +132,22 @@ const CSS = `
 }
 .nwe-refresh:hover:not(:disabled) { border-color: color-mix(in srgb, var(--nwe-gold) 65%, var(--nwe-border)); transform: translateY(-1px); }
 .nwe-refresh:disabled { cursor: wait; opacity: .55; }
-.nwe-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.nwe-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; }
+.nwe-project { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.nwe-project-label { color: var(--nwe-muted); font-size: 11px; white-space: nowrap; }
+.nwe-project-select {
+  max-width: 260px;
+  min-height: 36px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 10px;
+  background: var(--nwe-raised);
+  color: var(--nwe-ink);
+  font: inherit;
+  font-size: 12px;
+}
+.nwe-rootline { margin-top: 5px; color: var(--nwe-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; overflow-wrap: anywhere; }
+.nwe-damaged { margin-top: 10px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--nwe-rose) 36%, var(--nwe-border)); border-radius: 10px; color: var(--nwe-rose); background: color-mix(in srgb, var(--nwe-rose) 7%, transparent); font-size: 12px; }
 .nwe-help {
   display: inline-flex;
   align-items: center;
@@ -323,8 +338,13 @@ const CSS = `
 .nwe-progress { overflow: hidden; height: 7px; margin-top: 10px; border-radius: 99px; background: var(--nwe-border); }
 .nwe-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--nwe-jade), var(--nwe-gold)); }
 .nwe-progress-legend { display: flex; justify-content: space-between; margin-top: 5px; color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.nwe-volumes { max-height: 190px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
 .nwe-volume { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--nwe-muted); font-size: 11px; }
 .nwe-volume strong { overflow: hidden; color: var(--nwe-ink); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.nwe-volume.is-current strong { color: var(--nwe-gold); }
+.nwe-copy { margin-top: 8px; padding: 6px 10px; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-raised); color: var(--nwe-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.nwe-copy:hover { border-color: color-mix(in srgb, var(--nwe-gold) 65%, var(--nwe-border)); color: var(--nwe-ink); }
+.nwe-resume-fallback { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--nwe-border); border-radius: 8px; background: color-mix(in srgb, #080a0d 24%, var(--nwe-surface)); color: var(--nwe-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
 .nwe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .nwe-chip { padding: 3px 8px; border: 1px solid var(--nwe-border); border-radius: 999px; color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .nwe-bars { display: flex; align-items: flex-end; gap: 5px; height: 54px; margin-top: 10px; }
@@ -403,6 +423,10 @@ const CSS = `
 .nwe-state-title { font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 19px; }
 .nwe-state-text { max-width: 460px; margin-top: 6px; color: var(--nwe-muted); font-size: 13px; }
 .nwe-command { display: inline-block; margin-top: 14px; padding: 7px 12px; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-raised); color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.nwe-project-choices { display: flex; flex-direction: column; gap: 8px; width: min(560px, 100%); margin-top: 16px; }
+.nwe-project-choice { display: flex; flex-direction: column; gap: 3px; padding: 10px 13px; border: 1px solid var(--nwe-border); border-radius: 10px; background: var(--nwe-raised); color: var(--nwe-ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.nwe-project-choice:hover { border-color: color-mix(in srgb, var(--nwe-gold) 65%, var(--nwe-border)); }
+.nwe-project-choice span { overflow-wrap: anywhere; color: var(--nwe-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .nwe-skeleton { display: grid; gap: 10px; margin-top: 12px; }
 .nwe-skeleton-line { height: 16px; border-radius: 8px; background: linear-gradient(90deg, var(--nwe-border), color-mix(in srgb, var(--nwe-border) 40%, transparent), var(--nwe-border)); background-size: 200% 100%; animation: nwe-shimmer 1.6s linear infinite; }
 .nwe-skeleton-line.is-wide { height: 72px; }
@@ -421,6 +445,8 @@ const CSS = `
   .nwe-root { padding: 14px; }
   .nwe-hero { flex-direction: column; padding: 18px; }
   .nwe-actions { width: 100%; }
+  .nwe-project { width: 100%; order: 3; }
+  .nwe-project-select { flex: 1; max-width: none; }
   .nwe-refresh { flex: 1; justify-content: center; }
   .nwe-help { flex: 0 0 auto; }
   .nwe-modal-backdrop { align-items: flex-end; padding: 8px; }
@@ -500,7 +526,7 @@ const TUTORIAL_STEPS: readonly TutorialStep[] = [
     title: '建一本书的项目',
     tool: 'novel_init',
     body: '在对话里说清书名、类型、平台、作者、每章字数区间、总章数和项目根目录；模型会调用 novel_init。项目根目录建议用绝对路径，例如 /home/me/novels/星海。',
-    note: '类型是固定的 12 类，平台只能是 fanqie / qidian / qimao / jinjiang。有多个项目时显式传 project_root，避免把新书写进旧书目录。',
+    note: '类型是固定的 12 类，平台只能是 fanqie / qidian / qimao / jinjiang。0.2.2 起显式 project_root 会绑定当前会话；多项目先用 /novel scan 发现，再用 /novel use 切换。',
   },
   {
     title: '写书级蓝图与卷结构',
@@ -565,8 +591,8 @@ const TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     title: '循环下一章，最后导出全书',
     tool: 'novel_report / novel_doctor / novel_export',
-    body: '每章重复 P1→P8。随时用 novel_report 看进度和质量，novel_doctor 体检，novel_search 查正文/大纲/台账；完成后导出 md、txt、epub、outline、worldbook 或 proposal。',
-    note: '改已归档章要先 novel_reopen；项目坏了先 novel_state 看 raw，再按 next 用 novel_amend 修，不要手改 chapters/ 或 state/。',
+    body: '每章重复 P1→P8。随时用 /novel scan 发现项目（加 --register 只登记、不切换），/novel use 切换当前会话、/novel resume 或面板“复制续写指令”接续下一章；novel_report 看进度，novel_doctor 体检，novel_search 查正文/大纲/台账，最后导出 md、txt、epub、outline、worldbook 或 proposal。',
+    note: '改已归档章要先 novel_reopen；项目坏了先 novel_state 看 raw，再按 next 用 novel_amend 修，不要手改 chapters/ 或 state/。项目目录被删时绑定会保留并报 missing，不会自动换书；选错书先用 /novel current 确认，再用 /novel use 切回，或 /novel unbind 清掉当前会话绑定。',
   },
 ]
 
@@ -580,6 +606,8 @@ brief P6 → check → brief P8 → archive 的顺序推进。
 每次提交前先领取当前阶段任务书，失败时按返回的 code 和 blocking 一次改完。`
 
 const TUTORIAL_NEXT_PROMPT = `继续写当前项目的下一章。先调用 novel_pipeline（或 novel_status）确认当前阶段、项目根目录和下一步工具，不要猜阶段。
+如果当前会话还没绑定或不确定是哪本书：先用 /novel current 看会话绑定，再调用 novel_status 看 selection；需要切换时用 /novel use <路径|书名|.>，不要靠 active 猜。
+第一次调用带 project_root 时，它会成为当前会话的持久绑定；后续无 root 调用会继续这本书。
 
 如果下一章还没有章卡：先用 novel_state {kind:"outline"} 取出全部章卡，再在末尾加上下一章的卡，用 novel_outline 整体提交；不要只提交新卡，也不要把已有 planned 卡丢掉。
 如果 targets.total_chapters 已经写满：先用 novel_amend 把 total_chapters 调到至少包含下一章，不能低于已归档章数。
@@ -747,29 +775,27 @@ const bookSection = (view: PanelView): ReactElement => {
           ),
           createElement('span', null, `${percent}% 已归档`),
         ),
-        ...view.book.volumes
-          .slice(0, 8)
-          .map((volume) =>
-            createElement(
+        view.book.volumes.length === 0
+          ? createElement('div', { className: 'nwe-volume' }, createElement('span', null, '还没有卷'))
+          : createElement(
               'div',
-              { className: 'nwe-volume', key: `${volume.title}-${volume.range}` },
-              createElement('strong', null, volume.title),
-              createElement(
-                'span',
-                null,
-                `${volume.range} · ${volume.planned} 计划 / ${volume.archived} 归档`,
+              { className: 'nwe-volumes', 'aria-label': '卷列表' },
+              ...view.book.volumes.map((volume, index) =>
+                createElement(
+                  'div',
+                  {
+                    className: `nwe-volume${view.volumeNumber === index + 1 ? ' is-current' : ''}`,
+                    key: `${volume.title}-${volume.range}`,
+                  },
+                  createElement('strong', null, volume.title),
+                  createElement(
+                    'span',
+                    null,
+                    `${volume.range} · ${volume.planned} 计划 / ${volume.archived} 归档`,
+                  ),
+                ),
               ),
             ),
-          ),
-        ...(view.book.volumes.length > 8
-          ? [
-              createElement(
-                'div',
-                { className: 'nwe-volume' },
-                createElement('span', null, `还有 ${view.book.volumes.length - 8} 卷`),
-              ),
-            ]
-          : []),
       ),
       createElement(
         'div',
@@ -887,6 +913,122 @@ const loadingState = (): ReactElement =>
     ),
     createElement('div', { className: 'nwe-section-note', style: { marginTop: 12 } }, '正在读取项目状态…'),
   )
+
+const projectSelector = (view: PanelView, onSelect: (root: string | null) => void): ReactElement | null => {
+  if (view.projects.length === 0) return null
+  return createElement(
+    'div',
+    { className: 'nwe-project' },
+    createElement('label', { className: 'nwe-project-label', htmlFor: 'nwe-project-select' }, '项目'),
+    createElement(
+      'select',
+      {
+        id: 'nwe-project-select',
+        className: 'nwe-project-select',
+        'aria-label': '切换项目',
+        value: view.selectedRoot ?? '',
+        onChange: (event: { target: { value: string } }): void => {
+          onSelect(event.target.value === '' ? null : event.target.value)
+        },
+      },
+      view.selectedRoot === null ? createElement('option', { value: '' }, '选择项目…') : null,
+      ...view.projects.map((project) =>
+        createElement('option', { key: project.root, value: project.root }, project.label),
+      ),
+    ),
+  )
+}
+
+const choosePanel = (view: PanelView, onSelect: (root: string | null) => void): ReactElement =>
+  createElement(
+    'div',
+    { className: 'nwe-state', role: 'status' },
+    createElement('div', { className: 'nwe-state-icon' }, stateIcon()),
+    createElement('div', { className: 'nwe-state-title' }, '发现多本书，先选一本'),
+    createElement('div', { className: 'nwe-state-text' }, view.subtitle),
+    createElement(
+      'div',
+      { className: 'nwe-project-choices' },
+      ...view.projects.map((project) =>
+        createElement(
+          'button',
+          {
+            key: project.root,
+            type: 'button',
+            className: 'nwe-project-choice',
+            onClick: (): void => onSelect(project.root),
+          },
+          project.label,
+          createElement('span', null, project.root),
+        ),
+      ),
+    ),
+  )
+
+const missingPanel = (view: PanelView): ReactElement =>
+  createElement(
+    'div',
+    { className: 'nwe-state', role: 'alert' },
+    createElement('div', { className: 'nwe-state-icon' }, stateIcon()),
+    createElement(
+      'div',
+      { className: 'nwe-state-title' },
+      view.missing?.reason === 'unreadable' ? '项目不可读' : '项目不在了',
+    ),
+    createElement('div', { className: 'nwe-state-text' }, view.missing?.hint ?? view.subtitle),
+    view.missing === undefined
+      ? null
+      : createElement(
+          'div',
+          { className: 'nwe-state-text' },
+          createElement(
+            'code',
+            { className: 'nwe-command' },
+            `${view.missing.code} · ${view.missing.reason}`,
+          ),
+          createElement('div', { className: 'nwe-rootline' }, view.missing.root),
+        ),
+  )
+
+const CopyResumeButton = ({ text }: { text: string }): ReactElement | null => {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  useEffect(() => {
+    setStatus('idle')
+  }, [text])
+  useEffect(() => {
+    if (status !== 'copied') return
+    const timer = setTimeout(() => setStatus('idle'), 2000)
+    return () => clearTimeout(timer)
+  }, [status])
+  if (text === '') return null
+  const copy = async (): Promise<void> => {
+    try {
+      const clipboard = (
+        globalThis as { navigator?: { clipboard?: { writeText?: (value: string) => Promise<void> } } }
+      ).navigator?.clipboard
+      if (typeof clipboard?.writeText !== 'function') throw new Error('clipboard unavailable')
+      await clipboard.writeText(text)
+      setStatus('copied')
+    } catch {
+      setStatus('failed')
+    }
+  }
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'nwe-copy',
+        'aria-label': '复制当前项目的续写指令',
+        onClick: (): void => void copy(),
+      },
+      status === 'copied' ? '已复制' : '复制续写指令',
+    ),
+    status === 'failed' ? createElement('pre', { className: 'nwe-resume-fallback' }, text) : null,
+  )
+}
 
 const statePanel = (
   state: 'empty' | 'error' | 'outdated',
@@ -1124,6 +1266,12 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
             createElement('strong', null, '刷新：'),
             ' 面板每 15 秒静默同步一次，也可以点右上角刷新。它是只读投影；不会替你改稿、归档或修状态。',
           ),
+          createElement(
+            'p',
+            { className: 'nwe-tutorial-note' },
+            createElement('strong', null, '项目状态：'),
+            '选择器里 choose 表示发现多本书、还没选；项目不在了表示目录缺失，绑定仍会保留；项目不可读表示权限或 IO 错误，先修权限或换一本。面板选择只影响查看，不改变任何会话的写作绑定。',
+          ),
         ),
         createElement(
           'section',
@@ -1199,7 +1347,27 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
               createElement(
                 'p',
                 null,
-                '面板跟随最近一次工具调用的项目。调用时显式传 project_root；切换活跃项目用 /novel admin novel_registry_activate。',
+                '面板用顶部项目选择器切换查看对象；选择只改 ?root= 和浏览器 localStorage，不调用 activate、不写会话绑定。写作项目请用 /novel use 或显式 project_root。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '选错书、想清掉绑定怎么办？'),
+              createElement(
+                'p',
+                null,
+                '先用 /novel current 看当前会话绑定；要换书用 /novel use <路径|书名|.>，要清掉只影响当前会话的绑定用 /novel unbind。不要靠 active 猜，也不要手改 state/session-bindings.yaml。',
+              ),
+            ),
+            createElement(
+              'li',
+              null,
+              createElement('strong', null, '扫描到了，为什么还没切过去？'),
+              createElement(
+                'p',
+                null,
+                'scan 只读发现；scan --register 只登记项目，不选择、不改 active、不绑会话。真正切换写作项目要用 /novel use，或第一次调用显式传 project_root。',
               ),
             ),
           ),
@@ -1239,7 +1407,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.1 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.2 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )
@@ -1304,8 +1472,18 @@ const NovelHelp = (): ReactElement => {
  * Pure view: given a view model, return the element tree. Keeping the hooks in
  * `NovelPanel` makes every visual state renderable without a browser.
  */
-export function panelElement(view: PanelView, loading: boolean, onRefresh: () => void): ReactElement {
+export function panelElement(
+  view: PanelView,
+  loading: boolean,
+  onRefresh: () => void,
+  onSelectProject: (root: string | null) => void = () => undefined,
+): ReactElement {
   const ready = view.state === 'ready'
+  const selectable =
+    ready ||
+    view.state === 'choose' ||
+    view.state === 'missing' ||
+    (view.state === 'loading' && view.projects.length > 0)
   return createElement(
     'section',
     {
@@ -1334,11 +1512,16 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
           ready ? createElement('span', null, view.subtitle) : null,
           ready ? createElement('span', { 'aria-hidden': 'true' }, '·') : null,
           ready ? createElement('span', null, view.revisionLabel) : null,
+          view.state === 'choose' || view.state === 'missing' || view.state === 'loading'
+            ? createElement('span', null, view.subtitle)
+            : null,
         ),
+        ready && view.root !== '' ? createElement('div', { className: 'nwe-rootline' }, view.root) : null,
       ),
       createElement(
         'div',
         { className: 'nwe-actions' },
+        selectable ? projectSelector(view, onSelectProject) : null,
         createElement(NovelHelp),
         createElement(
           'button',
@@ -1354,6 +1537,13 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
         ),
       ),
     ),
+    ready && view.damaged
+      ? createElement(
+          'div',
+          { className: 'nwe-damaged', role: 'status' },
+          '项目定义不可读；先用 novel_state 查看，再用 novel_amend 按 next 修复。面板不会把它伪装成正常项目。',
+        )
+      : null,
     ready
       ? createElement(
           'div',
@@ -1365,6 +1555,8 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
         )
       : null,
     view.state === 'loading' ? loadingState() : null,
+    view.state === 'choose' ? choosePanel(view, onSelectProject) : null,
+    view.state === 'missing' ? missingPanel(view) : null,
     view.state === 'error' || view.state === 'empty' || view.state === 'outdated'
       ? statePanel(view.state, view, loading, onRefresh)
       : null,
@@ -1381,6 +1573,7 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
             createElement('div', { className: 'nwe-next-kicker' }, 'NEXT MOVE'),
             createElement('div', { className: 'nwe-next-title' }, view.nextTitle),
             createElement('div', { className: 'nwe-next-detail' }, view.nextDetail),
+            createElement(CopyResumeButton, { text: view.resumeText }),
           ),
           view.nextTool === '' ? null : createElement('code', { className: 'nwe-next-tool' }, view.nextTool),
         )
@@ -1462,38 +1655,145 @@ export function panelElement(view: PanelView, loading: boolean, onRefresh: () =>
   )
 }
 
+const PANEL_ROOT_KEY = 'nwe.panel-root.v1'
+
+interface PanelStorage {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+  removeItem: (key: string) => void
+}
+
+const storage = (): PanelStorage | undefined => (globalThis as { localStorage?: PanelStorage }).localStorage
+
+const readStoredRoot = (): string | null => {
+  try {
+    const value = storage()?.getItem(PANEL_ROOT_KEY)
+    return value === undefined || value === null || value === '' ? null : value
+  } catch {
+    return null
+  }
+}
+
+const storeRoot = (root: string | null): void => {
+  try {
+    const target = storage()
+    if (target === undefined) return
+    if (root === null) target.removeItem(PANEL_ROOT_KEY)
+    else target.setItem(PANEL_ROOT_KEY, root)
+  } catch {
+    // Private mode/quota: the panel still works without persistence.
+  }
+}
+
+const panelPath = (root: string | null): string => {
+  const base = PANEL_ROUTE.replace(/^\/+/, '')
+  return root === null ? base : `${base}?root=${encodeURIComponent(root)}`
+}
+
 /** Stateful wrapper: fetch once, refresh on demand and after returning to the tab. */
 export function NovelPanel(): ReactElement {
   const [view, setView] = useState<PanelView>(() => buildView(null))
   const [loading, setLoading] = useState(true)
+  const [switching, setSwitching] = useState(false)
+  const [selectedRoot, setSelectedRoot] = useState<string | null>(() => readStoredRoot())
   const alive = useRef(true)
-  const inFlight = useRef(false)
+  const requestId = useRef(0)
+  const visibleRequest = useRef(0)
+  const controllerRef = useRef<AbortController | null>(null)
+  const queryRootRef = useRef<string | null>(selectedRoot)
+  const loadRef = useRef<(silent?: boolean, root?: string | null) => Promise<void>>(async () => undefined)
 
-  const load = useCallback(async (silent = false) => {
-    if (inFlight.current) return
-    inFlight.current = true
-    if (!silent) setLoading(true)
+  const load = useCallback(async (silent = false, root = queryRootRef.current) => {
+    // A background poll/focus must never abort a user-visible refresh and leave
+    // the loading state owned by a request that will be discarded.
+    if (silent && visibleRequest.current !== 0) return
+    const id = ++requestId.current
+    controllerRef.current?.abort()
+    const controller = new AbortController()
+    controllerRef.current = controller
+    if (!silent) {
+      visibleRequest.current = id
+      setLoading(true)
+    }
+    const timeout =
+      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(10_000)
+        : undefined
+    const any =
+      typeof AbortSignal === 'undefined'
+        ? undefined
+        : (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any?.bind(AbortSignal)
+    const anySignal =
+      timeout === undefined
+        ? controller.signal
+        : typeof any === 'function'
+          ? any([controller.signal, timeout])
+          : controller.signal
+    // AbortSignal.any() is newer than AbortSignal.timeout(). If only timeout()
+    // exists, do not silently lose the deadline; a hung fetch would otherwise
+    // keep visibleRequest non-zero forever and disable every later refresh.
+    const timeoutTimer =
+      timeout === undefined || typeof any !== 'function'
+        ? setTimeout(() => controller.abort(), 10_000)
+        : undefined
     try {
-      // The host serves the panel under the document root; a leading slash would
-      // bypass a documented --public-url prefix mount. A hung panel request must
-      // not wedge the refresh button and every poll forever.
-      const timeout =
-        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-          ? AbortSignal.timeout(10_000)
-          : undefined
-      const result = await fetchPanel(fetch, PANEL_ROUTE.replace(/^\/+/, ''), timeout)
-      if (!alive.current) return
+      const result = await fetchPanel(fetch, panelPath(root), anySignal)
+      if (!alive.current || id !== requestId.current) return
+      const payload = result.payload as PanelPayloadDto | null
+      if (payload !== null && payload.missing?.reason === 'not_registered' && root !== null) {
+        // A stale localStorage preference must not wedge the panel. Clear it and
+        // retry once without a query root; the same response's projects remain
+        // available for the selector.
+        queryRootRef.current = null
+        storeRoot(null)
+        setSelectedRoot(null)
+        await loadRef.current(false, null)
+        return
+      }
+      if (payload !== null) {
+        setSelectedRoot(payload.selection.root)
+      }
       setView((previous) => {
-        const next = buildView(result.payload as PanelPayloadDto | null, result.error)
+        const next = buildView(payload, result.error)
         // A brief background failure must not wipe a readable panel.
         if (silent && result.error !== null && previous.state === 'ready') return previous
         return next
       })
     } finally {
-      inFlight.current = false
-      if (!silent && alive.current) setLoading(false)
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
+      if (!silent && visibleRequest.current === id) visibleRequest.current = 0
+      if (id === requestId.current && !silent && alive.current) {
+        setLoading(false)
+        setSwitching(false)
+      }
     }
   }, [])
+  loadRef.current = load
+
+  const selectProject = useCallback(
+    (root: string | null): void => {
+      queryRootRef.current = root
+      storeRoot(root)
+      setSelectedRoot(root)
+      setSwitching(true)
+      // Do not keep A's ready data under B's selector while the request is in
+      // flight. Preserve the project list so the selector stays usable.
+      setView((previous) => ({
+        ...previous,
+        state: 'loading',
+        title: '切换项目…',
+        subtitle: root === null ? '正在读取默认项目…' : `正在读取 ${root}…`,
+        stageLabel: '读取中',
+        selectedRoot: root,
+        selection: { root, source: 'query' },
+        resumeText: '',
+        damaged: false,
+        finished: false,
+      }))
+      void load(false, root)
+    },
+    [load],
+  )
 
   useEffect(() => {
     alive.current = true
@@ -1509,13 +1809,19 @@ export function NovelPanel(): ReactElement {
     doc.addEventListener('visibilitychange', refreshWhenVisible)
     return () => {
       alive.current = false
+      controllerRef.current?.abort()
       win.clearInterval(timer)
       win.removeEventListener('focus', refreshWhenVisible)
       doc.removeEventListener('visibilitychange', refreshWhenVisible)
     }
   }, [load])
 
-  return panelElement(view, loading, () => void load())
+  return panelElement(
+    { ...view, selectedRoot },
+    loading || switching,
+    () => void load(false, queryRootRef.current),
+    selectProject,
+  )
 }
 
 /** Sidebar icon: a small book mark, inheriting the current text colour. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FsStore, joinRel, sha256 } from '../src/store/fs.js'
@@ -79,6 +79,39 @@ describe('schema narrowing', () => {
 })
 
 describe('FsStore', () => {
+  it('never recreates a missing store root on write or append', async () => {
+    const parent = await temp()
+    const root = join(parent, 'gone')
+    try {
+      const store = new FsStore(root)
+      await expect(store.writeText('state/a.yaml', 'x')).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(store.writeBytes('state/b.bin', Buffer.from([1]))).rejects.toMatchObject({
+        code: 'ENOENT',
+      })
+      await expect(store.appendText('state/journal.jsonl', 'x\n')).rejects.toMatchObject({
+        code: 'ENOENT',
+      })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('cleans up temp files when a parent path is not a directory', async () => {
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await writeFile(join(root, 'blocked'), 'x')
+      await expect(store.writeText('blocked/child', 'x')).rejects.toMatchObject({ code: 'ENOTDIR' })
+      await expect(store.writeBytes('blocked/child', Buffer.from([1]))).rejects.toMatchObject({
+        code: 'ENOTDIR',
+      })
+      await expect(store.appendText('blocked/journal', 'x')).rejects.toMatchObject({ code: 'ENOTDIR' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('writes atomically, reads back and hashes', async () => {
     const root = await temp()
     try {

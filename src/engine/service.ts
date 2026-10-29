@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
 import {
+  ARCHIVE_DIGESTS_FILE,
   BACKUP_DIR,
   BRIEF_RECEIPTS_FILE,
   CHAPTERS_DIR,
   EXPORT_DIR,
   LIMITS,
   LOCK_FILE,
+  METADATA_LOCK_FILE,
   OUTLINE_FILE,
   PROJECT_FILE,
   STATE_DIR,
@@ -41,6 +43,7 @@ import {
   sha256,
   shortDigest,
   ProjectRegistry,
+  SessionBindings,
   type RegistryEntry,
   type StagedFile,
 } from '../store/index.js'
@@ -102,15 +105,32 @@ import { evaluateSemantic } from './semantic.js'
 import { briefStageFor, evaluateGates, gateName, parseParagraphLocation } from './gates.js'
 import { advanceHandoff, parseActProgress, projectHandoff } from './handoff.js'
 import {
+  formatResumePrompt,
   phaseStrip,
   projectChapters,
   projectGates,
   projectSummary,
+  type PanelBundle,
   type PanelChaptersDto,
   type PanelGatesDto,
+  type PanelProjectOption,
+  type PanelSelection,
   type PanelSnapshot,
   type PanelSummaryDto,
 } from './projections.js'
+import {
+  ambiguousError,
+  describeCandidates,
+  discoverWorkspace,
+  hasProjectState,
+  identityMismatchError,
+  inspectProject,
+  missingProjectError,
+  projectNotFoundError,
+  scanWorkspace,
+  type ProjectInspection,
+  type ProjectState,
+} from './project-selection.js'
 import {
   ENGINE_PROJECT_INITIAL,
   emptyDocuments,
@@ -152,6 +172,7 @@ import {
   type RevisionInput,
   type RoundCounters,
   type ScoreDimension,
+  type Selection,
   type SemanticItem,
   type Stage,
   type StateDelta,
@@ -364,8 +385,16 @@ export interface GuideInput {
   root?: string
 }
 
+/** Session/workspace context of one tool or command call. */
+export interface EngineCaller {
+  sessionId?: string
+  cwd?: string
+}
+
 interface Snapshot {
   root: string
+  /** How this project was chosen; never persisted in the project itself. */
+  selection: Selection
   project: NovelProject
   /** Set when novel.yaml exists but cannot be parsed/narrowed. */
   projectError: string | null
@@ -424,7 +453,7 @@ const STAGE_RANK: Record<Stage, number> = {
 }
 
 /** Internal, journal-tracked archive idempotency ledger; not a user state doc. */
-const ARCHIVE_DIGESTS = joinRel(STATE_DIR, 'archive-digests.json')
+const ARCHIVE_DIGESTS = ARCHIVE_DIGESTS_FILE
 
 const LEDGER_PATHS: Readonly<Record<string, string>> = {
   chapters: joinRel(STATE_DIR, STATE_FILES.chapters),
@@ -464,8 +493,8 @@ export class EngineService {
   private readonly briefContextCache = new WeakMap<Snapshot, Map<string, Record<string, unknown>>>()
   private readonly briefs: BriefLibrary
   private readonly now: () => Date
-  /** The project this process last touched; the panel follows it without a workspace hint. */
-  private lastRoot: string | null = null
+  private readonly metadataMutex = new KeyedMutex()
+  private readonly callerContext = new AsyncLocalStorage<EngineCaller | undefined>()
 
   constructor(
     private readonly config: EngineConfig,
@@ -494,7 +523,6 @@ export class EngineService {
     this.disposed = true
     this.stores.clear()
     this.replay.clear()
-    this.lastRoot = null
     this.compiled = null
   }
 
@@ -511,29 +539,217 @@ export class EngineService {
     return this.signalContext.run(signal, task)
   }
 
+  /** Bind the calling Agent session and cwd to every engine operation in `task`. */
+  withCaller<T>(caller: EngineCaller | undefined, task: () => Promise<T>): Promise<T> {
+    return this.callerContext.run(caller, task)
+  }
+
+  private caller(): EngineCaller | undefined {
+    return this.callerContext.getStore()
+  }
+
   /** The configured default project root. */
   defaultRoot(): string {
     return resolve(this.config.projectRoot)
   }
 
+  /** Resolve a caller-supplied root against the session cwd, like /novel use. */
+  private resolveProjectPath(root: string): string {
+    const caller = this.caller()
+    return resolve(caller?.cwd ?? process.cwd(), root)
+  }
+
+  /** The resolved metadata directory; resolves relative config once per call. */
+  private stateRoot(): string {
+    return this.config.stateDir === ''
+      ? resolve(homedir(), '.dsh', 'novel-write-engine')
+      : resolve(this.config.stateDir)
+  }
+
+  private stateStore(): FsStore {
+    return new FsStore(this.stateRoot())
+  }
+
+  private bindings(): SessionBindings {
+    return new SessionBindings(this.stateStore(), { now: this.now })
+  }
+
   /**
-   * Resolve an omitted root through the cross-project registry. The registry is
-   * convenience state, so a corrupt or unreadable registry falls back to the
-   * configured root instead of making every call fail.
+   * Serialize metadata read-modify-write across sessions and processes. The
+   * project manuscript lock is a different lock; a slow write never blocks a
+   * registry update.
    */
-  private async resolveRoot(root?: string): Promise<string> {
-    if (root !== undefined) return resolve(root)
-    // A live tool call is the strongest signal for the panel: it runs in the
-    // same engine process as the read route. The registry is the cold-start
-    // fallback, then the configured root.
-    if (this.lastRoot !== null) return this.lastRoot
+  withMetadataLock<T>(task: () => Promise<T>): Promise<T> {
+    const directory = this.stateRoot()
+    return this.metadataMutex.run(directory, async () => {
+      ensureDirAt(directory)
+      const lock = new FileLock(join(directory, METADATA_LOCK_FILE))
+      try {
+        await lock.acquire()
+      } catch (error) {
+        if (error instanceof EngineFaultError && error.code === ERROR_CODES.LOCK_TIMEOUT) {
+          throw new EngineFaultError(
+            ERROR_CODES.LOCK_TIMEOUT,
+            'timed out waiting for the project metadata lock',
+            'another DSH instance is writing project registration or session bindings; retry after it finishes',
+            { cause: error },
+          )
+        }
+        throw error
+      }
+      try {
+        return await task()
+      } finally {
+        await lock.release()
+      }
+    })
+  }
+
+  private async inspectConfigRoot(): Promise<ProjectInspection | null> {
     try {
-      const document = await this.registry().read()
-      if (document.active !== null) return resolve(document.active)
-    } catch {
-      // Convenience metadata must not take the project down with it.
+      const inspection = await inspectProject(this.defaultRoot())
+      return inspection.state === 'ok' || inspection.state === 'damaged' || inspection.state === 'unreadable'
+        ? inspection
+        : null
+    } catch (error) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `cannot inspect the configured projectRoot ${this.defaultRoot()}: ${errorMessage(error)}`,
+        'fix the configured path or permissions; no project was selected',
+        { cause: error },
+      )
     }
-    return resolve(this.config.projectRoot)
+  }
+
+  /**
+   * Resolve the four-layer choice: explicit, session binding, bounded workspace
+   * discovery, then registry/config defaults. There is deliberately no
+   * process-global "last project" layer.
+   */
+  /** Doctor/guide may run before any project exists; that is not a failure. */
+  private async resolveRootForInspection(root?: string): Promise<Selection> {
+    let selection: Selection
+    try {
+      selection = await this.resolveRoot(root)
+    } catch (error) {
+      if (
+        root === undefined &&
+        error instanceof EngineError &&
+        error.code === ERROR_CODES.PROJECT_NOT_FOUND
+      ) {
+        return { root: this.defaultRoot(), source: 'config' }
+      }
+      throw error
+    }
+    // Doctor/guide may inspect a fresh install, but a bound project that is
+    // gone must stay MISSING. Returning the generic "no project yet" payload
+    // would invite a model to call novel_init over a lost binding.
+    if (root === undefined && selection.source === 'session') {
+      const inspection = await inspectProject(selection.root)
+      if (inspection.state === 'missing') {
+        throw missingProjectError({
+          selection,
+          lastTitle: selection.title,
+          movedTo: await this.movedProjectHint(selection),
+        })
+      }
+      if (inspection.state === 'not-project') throw projectNotFoundError(selection.root)
+      if (inspection.state === 'unreadable') {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `the project bound to this session is unreadable: ${inspection.error ?? selection.root}`,
+          'fix the directory permissions, or explicitly rebind with /novel use after the project is readable',
+        )
+      }
+    }
+    return selection
+  }
+
+  private async resolveRoot(root?: string): Promise<Selection> {
+    if (root !== undefined) return { root: this.resolveProjectPath(root), source: 'explicit' }
+    const caller = this.caller()
+    if (caller?.sessionId !== undefined) {
+      const binding = await this.bindings().get(caller.sessionId)
+      if (binding !== undefined) {
+        return {
+          root: binding.root,
+          source: 'session',
+          title: binding.title,
+          created_at: binding.project_created_at,
+        }
+      }
+      if (caller.cwd !== undefined && caller.cwd !== '') {
+        const found = await discoverWorkspace(caller.cwd)
+        if (found.kind === 'one') return { root: found.root, source: 'workspace' }
+        if (found.kind === 'many') {
+          throw ambiguousError(
+            await Promise.all(
+              found.roots.map(async (candidate) => {
+                const inspection = await inspectProject(candidate)
+                return {
+                  root: inspection.root,
+                  title: inspection.title,
+                  state: inspection.state,
+                }
+              }),
+            ),
+          )
+        }
+      }
+    }
+
+    const document = await this.registry().read()
+    const candidates = document.projects.map((entry) => ({
+      root: entry.root,
+      title: entry.title,
+    }))
+    const ambiguous = async (): Promise<EngineInputError> => {
+      const described = await Promise.all(
+        document.projects.map(async (entry) => {
+          const inspection = await inspectProject(entry.root).catch(() => null)
+          return {
+            root: entry.root,
+            title: entry.title,
+            ...(inspection === null ? {} : { state: inspection.state }),
+          }
+        }),
+      )
+      return ambiguousError(described)
+    }
+    if (caller?.sessionId !== undefined) {
+      if (candidates.length === 1) return { root: candidates[0]!.root, source: 'single' }
+      if (candidates.length > 1) throw await ambiguous()
+      const config = await this.inspectConfigRoot()
+      if (config !== null) {
+        if (config.state === 'unreadable') {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `the configured projectRoot is unreadable: ${config.error ?? this.defaultRoot()}`,
+            'fix the configured path or permissions',
+          )
+        }
+        return { root: config.root, source: 'config' }
+      }
+      throw projectNotFoundError(this.defaultRoot())
+    }
+
+    if (document.active !== null) {
+      return { root: document.active, source: 'active' }
+    }
+    const config = await this.inspectConfigRoot()
+    if (config !== null) {
+      if (config.state === 'unreadable') {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `the configured projectRoot is unreadable: ${config.error ?? this.defaultRoot()}`,
+          'fix the configured path or permissions',
+        )
+      }
+      return { root: config.root, source: 'config' }
+    }
+    if (candidates.length === 1) return { root: candidates[0]!.root, source: 'single' }
+    if (candidates.length > 1) throw await ambiguous()
+    throw projectNotFoundError(this.defaultRoot())
   }
 
   private storeFor(root?: string): FsStore {
@@ -543,6 +759,151 @@ export class EngineService {
     const store = new FsStore(absolute)
     this.stores.set(absolute, store)
     return store
+  }
+
+  /** Persist one explicit choice for this DSH session. */
+  private async bindSelection(
+    root: string,
+    title: string,
+    projectCreatedAt: string,
+    source: 'explicit' | 'init' | 'command',
+  ): Promise<void> {
+    const caller = this.caller()
+    if (caller?.sessionId === undefined) return
+    const existing = await this.bindings().get(caller.sessionId)
+    if (
+      existing !== undefined &&
+      existing.root === resolve(root) &&
+      existing.title === title &&
+      existing.project_created_at === projectCreatedAt
+    ) {
+      // A repeated explicit read must not take the cross-process metadata write
+      // lock or refresh bound_at when the binding is already exact.
+      return
+    }
+    await this.withMetadataLock(() =>
+      this.bindings().bind({
+        session_id: caller.sessionId!,
+        root,
+        title,
+        project_created_at: projectCreatedAt,
+        source,
+      }),
+    )
+  }
+
+  /**
+   * Best-effort discovery bookkeeping. A metadata failure must never turn a
+   * successful project read/write into a failure; the registry is convenience.
+   */
+  private async autoRegister(snapshot: Snapshot): Promise<void> {
+    if (snapshot.projectError !== null) return
+    try {
+      const registry = this.registry()
+      const current = await registry.read()
+      const known = current.projects.find((entry) => entry.root === snapshot.root)
+      const sameRow =
+        known !== undefined &&
+        known.title === snapshot.project.title &&
+        (known.created_at ?? '') === (snapshot.project.created_at ?? '')
+      const differentIdentity =
+        known !== undefined &&
+        known.created_at !== undefined &&
+        known.created_at !== '' &&
+        known.created_at !== snapshot.project.created_at
+      if (sameRow || differentIdentity) {
+        // Already registered, or the path now holds another book. Neither case
+        // needs the cross-process metadata write lock.
+        return
+      }
+      await this.withMetadataLock(async () => {
+        const lockedRegistry = this.registry()
+        const document = await lockedRegistry.read()
+        const existing = document.projects.find((entry) => entry.root === snapshot.root)
+        if (existing !== undefined) {
+          if (
+            existing.created_at !== undefined &&
+            existing.created_at !== '' &&
+            existing.created_at !== snapshot.project.created_at
+          ) {
+            // The path now holds another book, or the replacement has no
+            // created_at at all. Never let a read silently replace the
+            // registered identity; explicit register/activate owns that
+            // decision.
+            return
+          }
+          if (
+            existing.title === snapshot.project.title &&
+            (existing.created_at ?? '') === (snapshot.project.created_at ?? '')
+          ) {
+            return
+          }
+        }
+        await lockedRegistry.register({
+          root: snapshot.root,
+          title: snapshot.project.title,
+          created_at: snapshot.project.created_at,
+        })
+      })
+    } catch {
+      // Convenience metadata only.
+    }
+  }
+
+  /** Record the session binding/registration implied by a successful selection. */
+  private async recordSelection(
+    selection: Selection,
+    snapshot: Snapshot,
+    options: {
+      bind?: boolean
+      bindSource?: 'explicit' | 'init' | 'command'
+      register?: boolean
+    } = {},
+  ): Promise<void> {
+    const caller = this.caller()
+    if (caller?.sessionId === undefined) return
+    const shouldBind = options.bind ?? (options.bindSource !== undefined || selection.source === 'explicit')
+    // A damaged project has a placeholder title and no trustworthy identity.
+    // Reading it for repair must not overwrite the existing binding; the
+    // explicit root remains usable for status/amend until the definition is
+    // repaired.
+    if (shouldBind && snapshot.projectError === null) {
+      await this.bindSelection(
+        snapshot.root,
+        snapshot.project.title,
+        snapshot.project.created_at,
+        options.bindSource ?? 'explicit',
+      )
+    }
+    const shouldRegister =
+      options.register ?? (selection.source === 'explicit' || selection.source === 'workspace')
+    if (shouldRegister) await this.autoRegister(snapshot)
+  }
+
+  /**
+   * Read paths may record convenience metadata, but a corrupt or read-only
+   * state directory must not turn a successful explicit-root read into a
+   * failure. Resolution without an explicit root still reads the binding
+   * fail-closed; writes use recordSelection directly and report a committed
+   * mutation with a warning if its metadata update fails.
+   */
+  private async recordSelectionBestEffort(selection: Selection, snapshot: Snapshot): Promise<void> {
+    try {
+      await this.recordSelection(selection, snapshot)
+    } catch {
+      // The project snapshot is authoritative; session bindings and the
+      // registry are convenience state and are never required to read a book.
+    }
+  }
+
+  /** Registration/activation/use need a readable project identity. */
+  private assertProjectHealthy(snapshot: Snapshot, operation: string): void {
+    if (snapshot.projectError === null) return
+    throw new EngineFaultError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `${operation} requires a readable novel.yaml: ${snapshot.projectError}`,
+      'repair the project definition with novel_status + novel_amend using an explicit project_root; the registry/binding was not changed',
+    )
   }
 
   /* ------------------------------------------------------------- lifecycle */
@@ -610,10 +971,16 @@ export class EngineService {
         )
       }
     }
-    return this.mutate({
-      root: input.root,
+    const selection: Selection = {
+      root: input.root === undefined ? this.defaultRoot() : this.resolveProjectPath(input.root),
+      source: input.root === undefined ? 'config' : 'explicit',
+    }
+    const result = await this.mutate({
+      selection,
       op: 'initProject',
-      key: () => `init:${resolve(input.root ?? this.config.projectRoot)}`,
+      bindOnSuccess: false,
+      registerOnSuccess: false,
+      key: () => `init:${selection.root}`,
       run: async (_snapshot, context) => {
         if (await context.store.exists(PROJECT_FILE)) {
           throw new EngineInputError(
@@ -708,6 +1075,19 @@ export class EngineService {
       },
       emptyAllowed: true,
     })
+    const created = await this.loadAt({ root: result.data.root, source: 'explicit' })
+    await this.autoRegister(created)
+    try {
+      await this.bindSelection(created.root, created.project.title, created.project.created_at, 'init')
+    } catch (error) {
+      // The project transaction already committed. A metadata failure must be
+      // visible, not reported as a failed init that invites a duplicate create.
+      result.warnings.push({
+        code: 'SESSION_BINDING_FAILED',
+        message: `project was created, but the session binding could not be written: ${errorMessage(error)}`,
+      })
+    }
+    return result
   }
 
   /* ---------------------------------------------------------- 0.2.0 book ops */
@@ -1735,7 +2115,15 @@ export class EngineService {
   async getStatus(input: StatusInput = {}): Promise<OpResult<StatusReport>> {
     if (input.chapter !== undefined) this.assertChapterParameter(input.chapter)
     const snapshot = await this.load(input.root)
-    const chapter = input.chapter ?? snapshot.pipeline.chapter
+    return this.statusFor(snapshot, input.chapter ?? snapshot.pipeline.chapter)
+  }
+
+  /**
+   * Build a status report from an already-loaded snapshot. This deliberately
+   * has no selection side effect: read-only callers such as /novel resume must
+   * not register or bind the project just by reading it.
+   */
+  private async statusFor(snapshot: Snapshot, chapter: number): Promise<OpResult<StatusReport>> {
     const metrics = await this.metricsFor(snapshot, chapter)
     const journal = await this.journalBlocking(snapshot)
     const next =
@@ -1759,6 +2147,7 @@ export class EngineService {
       rounds: { ...snapshot.pipeline.rounds },
       blocking: [...this.effectiveBlocking(snapshot), ...journal],
       state_errors: this.stateErrors(snapshot),
+      selection: { source: snapshot.selection.source, root: snapshot.selection.root },
       metrics,
       ...(snapshot.handoff === null
         ? {}
@@ -1779,7 +2168,8 @@ export class EngineService {
 
   async countWords(input: WordCountInput = {}): Promise<OpResult<WordMetrics>> {
     // The counting rule is pure: callers may count arbitrary text before a
-    // project exists, so do not make this tool require a project file.
+    // project exists. project_root is ignored in text mode (and documented as
+    // such on the tool schema); it does not create a session binding.
     if (input.text !== undefined) {
       return { data: countWordMetrics(input.text), revision: 1, warnings: [] }
     }
@@ -2195,13 +2585,14 @@ export class EngineService {
   }
 
   async doctor(input: DoctorInput = {}): Promise<OpResult<DoctorReport>> {
-    const root = await this.resolveRoot(input.root)
+    const selection = await this.resolveRootForInspection(input.root)
+    const root = selection.root
     const store = this.storeFor(root)
     const checks: DoctorCheck[] = []
     const add = (check: DoctorCheck): void => {
       checks.push(check)
     }
-    if (!(await store.exists(PROJECT_FILE)) && !(await this.projectStateExists(store))) {
+    if (!(await store.exists(PROJECT_FILE)) && !(await hasProjectState(store))) {
       add({
         id: 'project',
         severity: 'error',
@@ -2222,7 +2613,8 @@ export class EngineService {
     }
     let snapshot: Snapshot
     try {
-      snapshot = await this.load(root)
+      snapshot = await this.loadAt(selection)
+      await this.recordSelectionBestEffort(selection, snapshot)
     } catch (error) {
       add({
         id: 'load',
@@ -2639,9 +3031,10 @@ export class EngineService {
   }
 
   async guide(input: GuideInput = {}): Promise<OpResult<GuideReport>> {
-    const root = await this.resolveRoot(input.root)
+    const selection = await this.resolveRootForInspection(input.root)
+    const root = selection.root
     const store = this.storeFor(root)
-    if (!(await store.exists(PROJECT_FILE)) && !(await this.projectStateExists(store))) {
+    if (!(await store.exists(PROJECT_FILE)) && !(await hasProjectState(store))) {
       const guide = buildGuide({
         projectPresent: false,
         chapter: 1,
@@ -2692,7 +3085,8 @@ export class EngineService {
       })
       return { data: guide, revision: 1, warnings: [] }
     }
-    const snapshot = await this.load(root)
+    const snapshot = await this.loadAt(selection)
+    await this.recordSelectionBestEffort(selection, snapshot)
     const target = snapshot.project.targets.total_chapters
     const finished =
       snapshot.pipeline.stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
@@ -4128,7 +4522,8 @@ export class EngineService {
     if (typeof input.content !== 'object' || input.content === null || Array.isArray(input.content)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend content must be an object')
     }
-    const resolvedRoot = await this.resolveRoot(input.root)
+    const selection = await this.resolveRoot(input.root)
+    const resolvedRoot = selection.root
     const store = this.storeFor(resolvedRoot)
     const absolute = store.path(input.path)
     const kind = Object.hasOwn(MUTABLE_STATE, input.path) ? MUTABLE_STATE[input.path] : undefined
@@ -4148,7 +4543,11 @@ export class EngineService {
       if (await this.stateDocIsUnreadable(store, path, docKind)) repairPaths.push(path)
     }
     return this.mutate({
-      root: resolvedRoot,
+      // Preserve the resolved source and identity. Re-resolving a plain root
+      // here would turn a session-bound path into an explicit switch and skip
+      // the created_at check, which is exactly the cross-book write 0.2.2 must
+      // prevent.
+      selection,
       op: 'amend',
       reason: input.reason,
       ...(repairPaths.length === 0 ? {} : { repairPaths }),
@@ -4459,20 +4858,12 @@ export class EngineService {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'diff after must be a string')
     }
     if (input.before !== undefined && input.after !== undefined) {
-      // Text-to-text diff is independent of a project by contract. If a project
-      // happens to exist, still report its active chapter and revision so the
-      // existing project-scoped callers keep their chapter number.
-      let chapter = input.chapter
-      let revision = 1
-      if (chapter === undefined) {
-        try {
-          const snapshot = await this.load(input.root)
-          chapter = snapshot.pipeline.chapter
-          revision = snapshot.pipeline.revision
-        } catch {
-          chapter = 0
-        }
-      }
+      // Text-to-text diff is independent of a project by contract. Do not
+      // resolve a project even when project_root is supplied: a pure utility
+      // call must never bind a session or read an unrelated book. Callers that
+      // need the active chapter can pass it explicitly.
+      const chapter = input.chapter ?? 0
+      const revision = 1
       const report = diffLines(input.before, input.after)
       return {
         data: {
@@ -4760,17 +5151,221 @@ export class EngineService {
     return projectGates(await this.panelSnapshot(input.root))
   }
 
-  /** One snapshot, three projections: the panel never mixes revisions. */
-  async panelBundle(input: { root?: string } = {}): Promise<{
-    summary: PanelSummaryDto
-    chapters: PanelChaptersDto
-    gates: PanelGatesDto
-  }> {
-    const snapshot = await this.panelSnapshot(input.root)
+  /**
+   * Build the read-only panel payload. The query root is accepted only when it
+   * is registered, active or the configured root; arbitrary paths never reach
+   * the filesystem from the panel route.
+   */
+  async panelBundle(input: { root?: string } = {}): Promise<PanelBundle> {
+    const registry = await this.registry().read()
+    const active = registry.active
+    const rows = new Map<string, PanelProjectOption>()
+    const add = (option: PanelProjectOption): void => {
+      if (!rows.has(option.root)) rows.set(option.root, option)
+    }
+    const optionFor = async (
+      root: string,
+      registered: boolean,
+      fallbackTitle?: string,
+      expectedCreatedAt?: string,
+    ): Promise<PanelProjectOption> => {
+      const inspection = await inspectProject(root)
+      const state: PanelProjectOption['state'] =
+        inspection.state === 'ok'
+          ? 'ok'
+          : inspection.state === 'damaged'
+            ? 'damaged'
+            : inspection.state === 'unreadable'
+              ? 'unreadable'
+              : 'missing'
+      const sameIdentity =
+        expectedCreatedAt === undefined ||
+        expectedCreatedAt === '' ||
+        inspection.created_at === expectedCreatedAt
+      const title =
+        inspection.state === 'ok' && inspection.title !== '' && sameIdentity
+          ? inspection.title
+          : fallbackTitle !== undefined && fallbackTitle !== ''
+            ? fallbackTitle
+            : inspection.title
+      return {
+        root: inspection.root,
+        title,
+        active: active === inspection.root,
+        registered,
+        state,
+      }
+    }
+    for (const entry of registry.projects) {
+      add(await optionFor(entry.root, true, entry.title, entry.created_at))
+    }
+    if (active !== null && !rows.has(active)) {
+      const known = registry.projects.find((entry) => entry.root === active)
+      add(await optionFor(active, known !== undefined, known?.title, known?.created_at))
+    }
+    const configured = this.defaultRoot()
+    if (!rows.has(configured)) {
+      const option = await optionFor(configured, false)
+      // A never-created ./novel should not look like a broken project on a
+      // fresh install; an active/config path that actually has evidence does.
+      if (option.state !== 'missing' || active === configured) add(option)
+    }
+    const selectedRoot = input.root === undefined ? undefined : resolve(input.root)
+    // The configured projectRoot is a trusted query target even when it is
+    // currently missing or not registered; it must report `missing`, not
+    // `not_registered`, so a restored mount can keep the same preference. Add
+    // it before the projects array is materialized so the selector can still
+    // show the chosen root.
+    if (selectedRoot !== undefined && !rows.has(selectedRoot) && selectedRoot === configured) {
+      add(await optionFor(configured, false))
+    }
+    const projects = [...rows.values()].sort((left, right) => compareText(left.root, right.root))
+    let selection: PanelSelection
+    if (selectedRoot !== undefined) {
+      if (!rows.has(selectedRoot)) {
+        return {
+          projects,
+          selection: { root: selectedRoot, source: 'query' },
+          missing: {
+            root: selectedRoot,
+            title: '（未登记的项目）',
+            code: ERROR_CODES.PROJECT_NOT_FOUND,
+            reason: 'not_registered',
+            hint: '用 /novel scan --register 或 /novel admin novel_registry_register 登记后刷新；面板不会读取任意路径。',
+          },
+        }
+      }
+      selection = { root: selectedRoot, source: 'query' }
+    } else if (active !== null) {
+      selection = { root: active, source: 'active' }
+    } else if (registry.projects.length === 1) {
+      selection = { root: registry.projects[0]!.root, source: 'single' }
+    } else if (rows.has(configured) && !registry.projects.some((entry) => entry.root === configured)) {
+      selection = { root: configured, source: 'config' }
+    } else {
+      selection = { root: null, source: 'none' }
+    }
+
+    if (selection.root === null) {
+      return {
+        projects,
+        selection,
+        ...(projects.length === 0
+          ? { empty: true as const, error: '还没有项目：调用 novel_init 创建。' }
+          : {}),
+      }
+    }
+    // Every selection source above is materialized into `rows`; a missing row
+    // would be a resolver bug, not a user-recoverable state.
+    const option = rows.get(selection.root)!
+    const inspection = await inspectProject(selection.root)
+    if (option.state === 'missing' || option.state === 'unreadable' || inspection.state === 'not-project') {
+      return {
+        projects,
+        selection,
+        missing: {
+          root: selection.root,
+          title: option.title,
+          code:
+            inspection.state === 'not-project' ? ERROR_CODES.PROJECT_NOT_FOUND : ERROR_CODES.PROJECT_MISSING,
+          reason:
+            inspection.state === 'not-project'
+              ? 'not-project'
+              : inspection.state === 'unreadable'
+                ? 'unreadable'
+                : 'missing',
+          hint:
+            inspection.state === 'not-project'
+              ? '目录存在，但没有 novel.yaml 或项目状态；请恢复项目定义，或改选其他项目。'
+              : inspection.state === 'unreadable'
+                ? '目录不可读；请修复权限或 IO 错误后刷新，登记行和面板偏好会保留。'
+                : '项目目录不在了；请恢复目录或挂载后刷新，登记行和面板偏好会保留。',
+        },
+      }
+    }
+    let snapshot: PanelSnapshot
+    try {
+      snapshot = await this.panelSnapshot(selection.root)
+    } catch (error) {
+      // The directory can disappear between the cheap option inspection and the
+      // full read. Keep the project list/selector and report the same missing
+      // state instead of letting the route collapse to an empty payload.
+      if (
+        error instanceof EngineError &&
+        (error.code === ERROR_CODES.PROJECT_MISSING || error.code === ERROR_CODES.PROJECT_NOT_FOUND)
+      ) {
+        return {
+          projects,
+          selection,
+          missing: {
+            root: selection.root,
+            title: option.title,
+            code:
+              error.code === ERROR_CODES.PROJECT_MISSING
+                ? ERROR_CODES.PROJECT_MISSING
+                : ERROR_CODES.PROJECT_NOT_FOUND,
+            reason: 'missing',
+            hint: error.hint ?? '项目目录不在了；请恢复目录或挂载后刷新，登记行和面板偏好会保留。',
+          },
+        }
+      }
+      throw error
+    }
+    const summary = projectSummary(snapshot)
+    const resume =
+      summary.next === undefined
+        ? undefined
+        : {
+            text: formatResumePrompt({
+              title: summary.title,
+              root: summary.root,
+              chapter: summary.chapter,
+              stage: summary.stage,
+              nextTool: summary.next.tool,
+            }),
+          }
     return {
-      summary: projectSummary(snapshot),
+      projects,
+      selection,
+      summary,
       chapters: projectChapters(snapshot),
       gates: projectGates(snapshot),
+      ...(resume === undefined ? {} : { resume }),
+    }
+  }
+
+  /** Read-only resume text shared with the panel copy button. */
+  async resumePrompt(
+    input: { root?: string } = {},
+  ): Promise<OpResult<{ text: string | null; selection: StatusReport['selection'] }>> {
+    if (this.caller()?.sessionId === undefined) {
+      throw new EngineInputError(
+        ERROR_CODES.CONFIG_INVALID,
+        'resume requires an Agent session',
+        'run /novel resume from an Agent conversation',
+      )
+    }
+    // Resume is a prompt formatter, not a selection event: use loadAt directly
+    // so a workspace/cwd fallback cannot auto-register, and an explicit root
+    // cannot persist a new session binding.
+    const selection = await this.resolveRoot(input.root)
+    const snapshot = await this.loadAt(selection)
+    const status = await this.statusFor(snapshot, snapshot.pipeline.chapter)
+    const nextTool = status.data.next?.tool
+    const text =
+      nextTool === undefined
+        ? null
+        : formatResumePrompt({
+            title: status.data.project.title,
+            root: status.data.project.root,
+            chapter: status.data.chapter,
+            stage: status.data.stage,
+            nextTool,
+          })
+    return {
+      data: { text, selection: status.data.selection },
+      revision: status.revision,
+      warnings: [],
     }
   }
 
@@ -4835,42 +5430,383 @@ export class EngineService {
   /* ------------------------------------------------------- multi-project ops */
 
   private registry(): ProjectRegistry {
-    const dir =
-      this.config.stateDir === '' ? join(homedir(), '.dsh', 'novel-write-engine') : this.config.stateDir
-    return new ProjectRegistry(new FsStore(dir))
+    return new ProjectRegistry(this.stateStore())
   }
 
-  /** List known projects (convenience only; a project opens without a row). */
-  async listProjects(): Promise<{ active: string | null; projects: RegistryEntry[] }> {
+  /** List known projects with a cheap directory state for the panel/command. */
+  async listProjects(): Promise<{
+    active: string | null
+    projects: Array<RegistryEntry & { state: ProjectState }>
+  }> {
     const document = await this.registry().read()
-    return { active: document.active, projects: document.projects }
+    const projects = await Promise.all(
+      document.projects.map(async (entry) => {
+        const inspection = await inspectProject(entry.root)
+        const sameIdentity =
+          entry.created_at === undefined ||
+          entry.created_at === '' ||
+          inspection.created_at === entry.created_at
+        return {
+          ...entry,
+          // A readable novel.yaml is fresher than a registry row written before
+          // the title was amended, but only while the registry and disk still
+          // describe the same project identity. Missing/damaged rows keep the
+          // last known title instead of replacing it with a placeholder.
+          ...(inspection.state === 'ok' && inspection.title !== '' && sameIdentity
+            ? { title: inspection.title }
+            : {}),
+          state: inspection.state,
+        }
+      }),
+    )
+    return { active: document.active, projects }
   }
 
-  /** Record the current project in the registry. */
-  async registerProject(
-    input: { root?: string } = {},
-  ): Promise<{ active: string | null; projects: RegistryEntry[] }> {
-    const snapshot = await this.load(input.root)
-    const document = await this.registry().register({ root: snapshot.root, title: snapshot.project.title })
-    return { active: document.active, projects: document.projects }
+  /**
+   * Record an explicit project row. An unchanged duplicate is a no-op; a path
+   * reused by another project updates the row and reports `replaced`.
+   */
+  async registerProject(input: { root?: string } = {}): Promise<{
+    active: string | null
+    projects: RegistryEntry[]
+    replaced: boolean
+  }> {
+    const selection =
+      input.root === undefined
+        ? await this.resolveRoot(undefined)
+        : { root: this.resolveProjectPath(input.root), source: 'explicit' as const }
+    const snapshot = await this.loadAt(selection)
+    this.assertProjectHealthy(snapshot, 'novel_registry_register')
+    return this.withMetadataLock(async () => {
+      const registry = this.registry()
+      const document = await registry.read()
+      const previous = document.projects.find((entry) => entry.root === snapshot.root)
+      const replaced =
+        previous !== undefined &&
+        previous.created_at !== undefined &&
+        previous.created_at !== '' &&
+        previous.created_at !== snapshot.project.created_at
+      if (
+        !replaced &&
+        previous !== undefined &&
+        previous.title === snapshot.project.title &&
+        (previous.created_at ?? '') === (snapshot.project.created_at ?? '')
+      ) {
+        return { active: document.active, projects: document.projects, replaced: false }
+      }
+      const next = await registry.register({
+        root: snapshot.root,
+        title: snapshot.project.title,
+        created_at: snapshot.project.created_at,
+      })
+      return { active: next.active, projects: next.projects, replaced }
+    })
   }
 
-  /** Choose the default project for future convenience calls. */
-  async setActiveProject(input: { root: string }): Promise<{ active: string | null }> {
-    const document = await this.registry().setActive(resolve(input.root))
-    this.lastRoot = document.active === null ? null : resolve(document.active)
-    return { active: document.active }
+  /** Choose the panel/default project. This never binds the current session. */
+  async setActiveProject(input: { root: string }): Promise<{ active: string | null; replaced: boolean }> {
+    const selection: Selection = { root: this.resolveProjectPath(input.root), source: 'explicit' }
+    const snapshot = await this.loadAt(selection)
+    this.assertProjectHealthy(snapshot, 'novel_registry_activate')
+    return this.withMetadataLock(async () => {
+      const registry = this.registry()
+      const document = await registry.read()
+      const previous = document.projects.find((entry) => entry.root === snapshot.root)
+      const replaced =
+        previous !== undefined &&
+        previous.created_at !== undefined &&
+        previous.created_at !== '' &&
+        previous.created_at !== snapshot.project.created_at
+      await registry.register({
+        root: snapshot.root,
+        title: snapshot.project.title,
+        created_at: snapshot.project.created_at,
+      })
+      const active = await registry.setActive(snapshot.root)
+      return { active: active.active, replaced }
+    })
   }
 
-  /** Forget a registry row; the project directory is never touched. */
+  /** Forget a registry row; the project directory and bindings are never touched. */
   async forgetProject(input: {
     root: string
   }): Promise<{ active: string | null; projects: RegistryEntry[] }> {
-    const document = await this.registry().forget(resolve(input.root))
-    if (this.lastRoot === resolve(input.root)) {
-      this.lastRoot = document.active === null ? null : resolve(document.active)
+    return this.withMetadataLock(async () => {
+      const document = await this.registry().forget(this.resolveProjectPath(input.root))
+      return { active: document.active, projects: document.projects }
+    })
+  }
+
+  /**
+   * Bounded workspace scan. Normal mode is read-only; `register` updates only
+   * healthy, newly discovered rows, never active or session bindings.
+   */
+  async scanProjects(input: { cwd: string; register?: boolean }): Promise<{
+    cwd: string
+    candidates: Array<
+      ProjectInspection & { registered: boolean; identity_changed?: boolean; reason?: string }
+    >
+    truncated: boolean
+    added: string[]
+    already: string[]
+    skipped: Array<{ root: string; reason: string }>
+    identity_changed: string[]
+  }> {
+    const cwd = resolve(input.cwd)
+    const scan = await scanWorkspace(cwd)
+    const before = await this.registry().read()
+    const registeredRoots = new Set(before.projects.map((entry) => entry.root))
+    const candidates: Array<
+      ProjectInspection & { registered: boolean; identity_changed?: boolean; reason?: string }
+    > = scan.candidates.map((candidate) => ({
+      ...candidate,
+      registered: registeredRoots.has(candidate.root),
+    }))
+    if (input.register !== true) {
+      return {
+        cwd,
+        candidates,
+        truncated: scan.truncated,
+        added: [],
+        already: [],
+        skipped: [],
+        identity_changed: [],
+      }
     }
-    return { active: document.active, projects: document.projects }
+
+    const loaded = new Map<string, Snapshot>()
+    const skipped: Array<{ root: string; reason: string }> = []
+    for (const candidate of candidates) {
+      if (candidate.state !== 'ok') {
+        skipped.push({
+          root: candidate.root,
+          reason:
+            candidate.state === 'damaged'
+              ? `damaged: ${candidate.error ?? 'novel.yaml is missing/unreadable'}`
+              : candidate.state === 'unreadable'
+                ? `unreadable: ${candidate.error ?? 'permission or IO error'}`
+                : `not a project (${candidate.state})`,
+        })
+        continue
+      }
+      // Existing rows already have an identity. The scan header is enough to
+      // refresh a title; building a full Snapshot for every registered book
+      // would make a large workspace scan unnecessarily expensive.
+      if (registeredRoots.has(candidate.root)) continue
+      try {
+        const snapshot = await this.loadAt({ root: candidate.root, source: 'explicit' })
+        if (snapshot.projectError !== null) {
+          skipped.push({
+            root: candidate.root,
+            reason: `damaged: ${snapshot.projectError}`,
+          })
+          continue
+        }
+        loaded.set(candidate.root, snapshot)
+      } catch (error) {
+        skipped.push({ root: candidate.root, reason: errorMessage(error) })
+      }
+    }
+
+    const added: string[] = []
+    const already: string[] = []
+    const identityChanged: string[] = []
+    await this.withMetadataLock(async () => {
+      const registry = this.registry()
+      const document = await registry.read()
+      for (const candidate of candidates) {
+        if (candidate.state !== 'ok') continue
+        const existing = document.projects.find((entry) => entry.root === candidate.root)
+        if (existing !== undefined) {
+          candidate.registered = true
+          already.push(candidate.root)
+          const previousCreatedAt = existing.created_at ?? ''
+          const currentCreatedAt = candidate.created_at ?? ''
+          if (previousCreatedAt !== '' && previousCreatedAt !== currentCreatedAt) {
+            identityChanged.push(candidate.root)
+            candidate.identity_changed = true
+            candidate.reason =
+              'registered under a different created_at (or the replacement has none); not overwritten. Run explicit register/activate to confirm the replacement.'
+            continue
+          }
+          if (
+            candidate.title !== '' &&
+            (existing.title !== candidate.title || previousCreatedAt !== currentCreatedAt)
+          ) {
+            try {
+              await registry.register({
+                root: candidate.root,
+                title: candidate.title,
+                created_at: candidate.created_at,
+              })
+            } catch (error) {
+              // The row already existed, so keep it in `already`; the failed
+              // refresh is reported separately instead of aborting the batch.
+              skipped.push({
+                root: candidate.root,
+                reason: `registry update failed: ${errorMessage(error)}`,
+              })
+            }
+          }
+          continue
+        }
+        const snapshot = loaded.get(candidate.root)
+        if (snapshot === undefined) continue
+        try {
+          await registry.register({
+            root: snapshot.root,
+            title: snapshot.project.title,
+            created_at: snapshot.project.created_at,
+          })
+          added.push(candidate.root)
+          candidate.registered = true
+          candidate.title = snapshot.project.title
+          candidate.created_at = snapshot.project.created_at
+        } catch (error) {
+          skipped.push({
+            root: candidate.root,
+            reason: `registry write failed: ${errorMessage(error)}`,
+          })
+        }
+      }
+    })
+
+    return {
+      cwd,
+      candidates,
+      truncated: scan.truncated,
+      added,
+      already,
+      skipped,
+      identity_changed: identityChanged,
+    }
+  }
+
+  /** Current session binding, or the inferred fallback when none is set. */
+  async currentProject(): Promise<{
+    selection: Selection | null
+    bound: boolean
+    state?: ProjectState
+    error?: string
+  }> {
+    const caller = this.caller()
+    if (caller?.sessionId === undefined) {
+      throw new EngineInputError(
+        ERROR_CODES.CONFIG_INVALID,
+        'currentProject requires an Agent session',
+        'run /novel current from an Agent conversation',
+      )
+    }
+    const binding = await this.bindings().get(caller.sessionId)
+    if (binding !== undefined) {
+      const inspection = await inspectProject(binding.root).catch(() => null)
+      return {
+        selection: {
+          root: binding.root,
+          source: 'session',
+          title: binding.title,
+          created_at: binding.project_created_at,
+        },
+        bound: true,
+        ...(inspection === null ? {} : { state: inspection.state }),
+      }
+    }
+    try {
+      return { selection: await this.resolveRoot(undefined), bound: false }
+    } catch (error) {
+      return { selection: null, bound: false, error: errorMessage(error) }
+    }
+  }
+
+  /** Explicitly switch this session; failure leaves the old binding untouched. */
+  async useProject(input: { target: string }): Promise<{
+    selection: Selection
+    title: string
+    created_at: string
+  }> {
+    const caller = this.caller()
+    if (caller?.sessionId === undefined) {
+      throw new EngineInputError(
+        ERROR_CODES.CONFIG_INVALID,
+        'useProject requires an Agent session',
+        'run /novel use from an Agent conversation',
+      )
+    }
+    const target = input.target.trim().replace(/^(["'])(.*)\1$/u, '$2')
+    if (target === '') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'use requires a path, title or "."')
+    }
+    let root: string | undefined
+    if (target === '.') {
+      if (caller.cwd === undefined || caller.cwd === '') {
+        throw new EngineInputError(
+          ERROR_CODES.CONFIG_INVALID,
+          'use "." requires a working directory',
+          'run the command from a project workspace, or pass an explicit path',
+        )
+      }
+      const found = await discoverWorkspace(caller.cwd)
+      if (found.kind === 'many') {
+        throw ambiguousError(found.roots.map((candidate) => ({ root: candidate })))
+      }
+      if (found.kind === 'none') throw projectNotFoundError(caller.cwd)
+      root = found.root
+    } else {
+      const candidate = resolve(caller.cwd ?? process.cwd(), target)
+      const inspection = await inspectProject(candidate).catch(() => null)
+      if (inspection !== null && inspection.state !== 'not-project' && inspection.state !== 'missing') {
+        root = candidate
+      } else {
+        const document = await this.registry().read()
+        const matches = document.projects.filter((entry) => entry.title === target)
+        if (matches.length > 1) {
+          throw new EngineInputError(
+            ERROR_CODES.PROJECT_AMBIGUOUS,
+            `multiple registered projects are named "${target}":\n${describeCandidates(matches)}`,
+            'use the full project path instead of the title',
+          )
+        }
+        root = matches[0]?.root
+      }
+    }
+    if (root === undefined) {
+      throw new EngineInputError(
+        ERROR_CODES.PROJECT_NOT_FOUND,
+        `no registered project or readable directory matches "${target}"`,
+        'run /novel projects or /novel scan to see available projects',
+      )
+    }
+    const selection: Selection = { root, source: 'explicit' }
+    const snapshot = await this.loadAt(selection)
+    this.assertProjectHealthy(snapshot, 'novel_use')
+    await this.bindSelection(snapshot.root, snapshot.project.title, snapshot.project.created_at, 'command')
+    // /novel use is an explicit project choice; make it visible in the panel
+    // and project list just like an explicit project_root read.
+    await this.autoRegister(snapshot)
+    return {
+      selection: {
+        root: snapshot.root,
+        source: 'explicit',
+        title: snapshot.project.title,
+        created_at: snapshot.project.created_at,
+      },
+      title: snapshot.project.title,
+      created_at: snapshot.project.created_at,
+    }
+  }
+
+  /** Clear only this session's choice; never touches a project or registry row. */
+  async unbindProject(): Promise<{ cleared: boolean }> {
+    const caller = this.caller()
+    if (caller?.sessionId === undefined) {
+      throw new EngineInputError(
+        ERROR_CODES.CONFIG_INVALID,
+        'unbindProject requires an Agent session',
+        'run /novel unbind from an Agent conversation',
+      )
+    }
+    const result = await this.withMetadataLock(() => this.bindings().clear(caller.sessionId!))
+    return { cleared: result.changed }
   }
 
   /**
@@ -5093,7 +6029,11 @@ export class EngineService {
   }
 
   private async panelSnapshot(root?: string): Promise<PanelSnapshot> {
-    const snapshot = await this.load(root)
+    // The panel is a read-only projection. Use loadAt rather than load() so an
+    // explicit query root or a workspace fallback can never write a session
+    // binding or auto-register a project as a side effect of viewing it.
+    const selection = await this.resolveRoot(root)
+    const snapshot = await this.loadAt(selection)
     const archived = snapshot.chapters.chapters
     const archivedCurrent = archived.some((chapter) => chapter.num === snapshot.pipeline.chapter)
     const target = snapshot.project.targets.total_chapters
@@ -6262,31 +7202,6 @@ export class EngineService {
     }
   }
 
-  /** True when anything survives in the project directory besides novel.yaml. */
-  private async projectStateExists(store: FsStore): Promise<boolean> {
-    const stateFiles = [
-      STATE_FILES.pipeline,
-      STATE_FILES.chapters,
-      STATE_FILES.characters,
-      STATE_FILES.world,
-      STATE_FILES.locks,
-      STATE_FILES.timeline,
-      STATE_FILES.foreshadows,
-      STATE_FILES.relationships,
-      STATE_FILES.handoff,
-    ].map((file) => joinRel(STATE_DIR, file))
-    stateFiles.push(joinRel(STATE_DIR, STATE_FILES.journal), ARCHIVE_DIGESTS, BRIEF_RECEIPTS_FILE)
-    return (
-      (await Promise.all(stateFiles.map((path) => store.exists(path)))).some(Boolean) ||
-      (await store.list(CHAPTERS_DIR)).length > 0 ||
-      (await store.list('plans')).length > 0 ||
-      (await store.list('reviews')).length > 0 ||
-      (await store.list('checks')).length > 0 ||
-      (await store.exists(OUTLINE_FILE)) ||
-      (await store.exists(WORLDBOOK_FILE))
-    )
-  }
-
   /** A live writer lock makes a read-only snapshot potentially torn. */
   private async lockIsLive(store: FsStore): Promise<boolean> {
     const text = await store.readText(LOCK_FILE)
@@ -6302,8 +7217,51 @@ export class EngineService {
     return info !== null && Date.now() - info.mtimeMs < 1_000
   }
 
-  private async load(root?: string, retries = 1, allowLock = false): Promise<Snapshot> {
-    const store = this.storeFor(await this.resolveRoot(root))
+  /** Resolve a selection, load it, then persist the explicit choice (best effort). */
+  private async load(root?: string): Promise<Snapshot> {
+    const selection = await this.resolveRoot(root)
+    const snapshot = await this.loadAt(selection)
+    await this.recordSelectionBestEffort(selection, snapshot)
+    return snapshot
+  }
+
+  /** Load exactly one already-resolved selection; never writes a binding. */
+  private async movedProjectHint(selection: Selection): Promise<string | undefined> {
+    if (selection.created_at === undefined || selection.created_at === '') return undefined
+    try {
+      const registry = await this.registry().read()
+      return registry.projects.find(
+        (entry) =>
+          entry.root !== selection.root &&
+          entry.created_at !== undefined &&
+          entry.created_at === selection.created_at,
+      )?.root
+    } catch {
+      // A damaged registry must not hide the more actionable missing bind.
+      return undefined
+    }
+  }
+
+  private async loadAt(selection: Selection, retries = 1, allowLock = false): Promise<Snapshot> {
+    const store = this.storeFor(selection.root)
+    if (selection.source === 'session') {
+      const inspection = await inspectProject(selection.root)
+      if (inspection.state === 'missing') {
+        throw missingProjectError({
+          selection,
+          lastTitle: selection.title,
+          movedTo: await this.movedProjectHint(selection),
+        })
+      }
+      if (inspection.state === 'not-project') throw projectNotFoundError(selection.root)
+      if (inspection.state === 'unreadable') {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `the project bound to this session is unreadable: ${inspection.error ?? selection.root}`,
+          'fix the directory permissions, or explicitly rebind with /novel use after the project is readable',
+        )
+      }
+    }
     if (!allowLock && (await this.lockIsLive(store))) {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25))
@@ -6318,16 +7276,21 @@ export class EngineService {
       }
     }
     const projectExists = await store.exists(PROJECT_FILE)
-    if (!projectExists && !(await this.projectStateExists(store))) {
-      throw new EngineInputError(
-        ERROR_CODES.PROJECT_NOT_FOUND,
-        `no novel project at ${store.root}`,
-        'call novel_init to create one, or pass the correct project root',
-      )
+    if (!projectExists && !(await hasProjectState(store))) {
+      // The directory can disappear between the session preflight above and
+      // this read. A bound root that vanished must stay PROJECT_MISSING so the
+      // caller never treats it as a fresh uninitialized path.
+      if (selection.source === 'session') {
+        throw missingProjectError({ selection, lastTitle: selection.title })
+      }
+      throw projectNotFoundError(store.root)
     }
     let project: NovelProject = {
       ...ENGINE_PROJECT_INITIAL,
       title: '（项目文件不可读）',
+      // A damaged definition has no trustworthy identity. Never let the
+      // initial project's epoch timestamp become a binding or registry value.
+      created_at: '',
     }
     let projectError: string | null = projectExists ? null : `${PROJECT_FILE} is missing`
     if (projectExists) {
@@ -6348,6 +7311,18 @@ export class EngineService {
           throw error
         }
         projectError = errorMessage(error)
+      }
+    }
+    if (projectError === null && selection.created_at !== undefined && selection.created_at !== '') {
+      // A bound project that lost its created_at is not the same identity. The
+      // old code skipped the check when the disk value was empty, which let a
+      // repaired/replaced project silently take over the binding.
+      if (project.created_at === '' || project.created_at !== selection.created_at) {
+        throw identityMismatchError({
+          selection,
+          actualCreatedAt: project.created_at,
+          actualTitle: project.title,
+        })
       }
     }
     const pipeline = (await store.readDoc(
@@ -6568,7 +7543,7 @@ export class EngineService {
       'pipeline',
     )) as unknown as PipelineState | null
     if (latest === null || latest.revision !== pipeline.revision) {
-      if (retries > 0) return this.load(store.root, retries - 1, allowLock)
+      if (retries > 0) return this.loadAt(selection, retries - 1, allowLock)
       throw new EngineFaultError(
         ERROR_CODES.TXN_ABORTED,
         'the project changed while its snapshot was being read',
@@ -6579,18 +7554,16 @@ export class EngineService {
     // returning: otherwise this read can see new ledgers with the old pipeline
     // while the writer is still before its pipeline rename.
     if (!allowLock && (await this.lockIsLive(store))) {
-      if (retries > 0) return this.load(store.root, retries - 1, false)
+      if (retries > 0) return this.loadAt(selection, retries - 1, false)
       throw new EngineFaultError(
         ERROR_CODES.TXN_IN_PROGRESS,
         'a writer started while the snapshot was being read; the snapshot is torn',
         'retry after the write finishes; do not interpret this snapshot as stable',
       )
     }
-    // Only a confirmed snapshot may become the panel's remembered root. A typo
-    // in project_root must not make every later rootless call point at it.
-    this.lastRoot = store.root
     return {
       root: store.root,
+      selection,
       project: project as unknown as NovelProject,
       projectError,
       pipeline: pipeline as unknown as PipelineState,
@@ -6665,6 +7638,12 @@ export class EngineService {
 
   private async mutate<T>(options: {
     root?: string
+    /** Pre-resolved selection (novel_init); otherwise resolveRoot owns it. */
+    selection?: Selection
+    /** Persist the explicit choice after a successful write (init opts out). */
+    bindOnSuccess?: boolean
+    /** Auto-register after a successful write; init handles registration itself. */
+    registerOnSuccess?: boolean
     op: Operation
     key?: (snapshot: Snapshot) => string
     /** Chapter the caller named, used when the attempt is journaled. */
@@ -6689,7 +7668,8 @@ export class EngineService {
       replay?: boolean
     }>
   }): Promise<OpResult<T>> {
-    const root = await this.resolveRoot(options.root)
+    const selection = options.selection ?? (await this.resolveRoot(options.root))
+    const root = selection.root
     const signal = this.signalContext.getStore()
     const abortIfNeeded = (): void => {
       if (signal?.aborted === true) {
@@ -6704,9 +7684,50 @@ export class EngineService {
     return this.mutex.run(root, async () => {
       if (options.emptyAllowed === true) ensureDirAt(root)
       const store = this.storeFor(root)
+      if (options.emptyAllowed !== true && selection.source === 'session') {
+        // Mutate takes the project lock before loadAt. Preflight the bound root
+        // here so a deleted/replaced project reports MISSING/IDENTITY rather
+        // than a generic NOT_FOUND (or a raw ENOENT from the lock acquire).
+        const inspection = await inspectProject(selection.root)
+        if (inspection.state === 'missing') {
+          throw missingProjectError({
+            selection,
+            lastTitle: selection.title,
+            movedTo: await this.movedProjectHint(selection),
+          })
+        }
+        if (inspection.state === 'not-project') throw projectNotFoundError(selection.root)
+        if (inspection.state === 'unreadable') {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `the project bound to this session is unreadable: ${inspection.error ?? selection.root}`,
+            'fix the directory permissions, or explicitly rebind with /novel use after the project is readable',
+          )
+        }
+        if (
+          inspection.state === 'damaged' &&
+          selection.created_at !== undefined &&
+          selection.created_at !== ''
+        ) {
+          // A damaged novel.yaml cannot prove identity. If the path was replaced
+          // by another damaged book, a session-bound write would target the
+          // wrong project. Reads may still show the damage; writes require the
+          // user to pass an explicit project_root.
+          throw identityMismatchError({
+            selection,
+            actualTitle: inspection.title,
+          })
+        }
+      }
       const journalPath = joinRel(STATE_DIR, STATE_FILES.journal)
       const journalWasPresent = await store.exists(journalPath)
       const projectExists = await store.exists(PROJECT_FILE)
+      if (options.emptyAllowed !== true && !projectExists && !(await hasProjectState(store))) {
+        // Do not let FileLock/transaction mkdir recreate a deleted project.
+        // A directory with surviving state is a damaged project and remains
+        // repairable through amend.
+        throw projectNotFoundError(root)
+      }
       if (options.emptyAllowed === true && projectExists) {
         throw new EngineInputError(
           ERROR_CODES.PROJECT_EXISTS,
@@ -6786,7 +7807,10 @@ export class EngineService {
               )
             }
             await assertJournalConsistent(store)
-            const created = await options.run(this.emptySnapshot(root), { store, revision: 1 })
+            const created = await options.run(this.emptySnapshot(root, selection), {
+              store,
+              revision: 1,
+            })
             await runTransaction(store, {
               txid: randomUUID(),
               op: options.op,
@@ -6798,7 +7822,6 @@ export class EngineService {
               ...(options.reason === undefined ? {} : { reason: options.reason }),
             })
             this.replay.clear()
-            this.lastRoot = root
             return { data: created.data, revision: 1, warnings: created.warnings ?? [] }
           }
         }
@@ -6806,7 +7829,21 @@ export class EngineService {
         // otherwise a second process can commit between read and write and the
         // later writer silently overwrites it with a stale revision.
         await assertJournalConsistent(store, options.repairPaths ?? [])
-        const snapshot = await this.load(root, 1, true)
+        const snapshot = await this.loadAt(selection, 1, true)
+        if (
+          selection.source === 'session' &&
+          selection.created_at !== undefined &&
+          selection.created_at !== '' &&
+          snapshot.projectError !== null
+        ) {
+          // The cheap inspection can race a replacement between the preflight
+          // and this locked load. Never let a session-bound write proceed when
+          // the project definition cannot prove its identity.
+          throw identityMismatchError({
+            selection,
+            actualTitle: snapshot.project.title,
+          })
+        }
         const key = options.key?.(snapshot)
         if (key !== undefined) {
           const cached = this.replay.get(`${root}|${options.op}|${key}`)
@@ -6867,6 +7904,32 @@ export class EngineService {
           ...(options.reason === undefined ? {} : { reason: options.reason }),
         })
         const result: OpResult<T> = { data: outcome.data, revision, warnings: outcome.warnings ?? [] }
+        // An amend can change the project title. Re-read only when the project
+        // definition itself was written, so the session binding and registry do
+        // not keep the old title until the next explicit read.
+        let metadataSnapshot = snapshot
+        const metadataEnabled = options.bindOnSuccess !== false || options.registerOnSuccess !== false
+        if (metadataEnabled && outcome.files.some((file) => file.path === PROJECT_FILE)) {
+          try {
+            metadataSnapshot = await this.loadAt(selection, 1, true)
+          } catch {
+            // The content transaction is already committed; keeping the old
+            // metadata snapshot is safer than reporting the write as failed.
+          }
+        }
+        try {
+          await this.recordSelection(selection, metadataSnapshot, {
+            bind: options.bindOnSuccess,
+            register: options.registerOnSuccess,
+          })
+        } catch (error) {
+          // The content transaction already committed. Surface metadata failure
+          // as a warning; never turn a committed write into a retryable error.
+          result.warnings.push({
+            code: 'SESSION_BINDING_FAILED',
+            message: `project write committed, but project selection metadata could not be written: ${errorMessage(error)}`,
+          })
+        }
         if (key !== undefined) {
           this.invalidateReplay(root, options.op)
           this.replay.set(`${root}|${options.op}|${key}`, result)
@@ -6894,9 +7957,10 @@ export class EngineService {
     }
   }
 
-  private emptySnapshot(root: string): Snapshot {
+  private emptySnapshot(root: string, selection: Selection): Snapshot {
     return {
       root,
+      selection,
       project: { ...ENGINE_PROJECT_INITIAL },
       projectError: null,
       pipeline: emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' }),

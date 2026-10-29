@@ -6,7 +6,9 @@
 
 0.2.0 起，它同时管理**整本书**：书级蓝图 → 卷/章大纲 → 世界观设定集 → 单章 P1–P9 流水线 → 归档回写大纲 → 报告/体检/搜索/面板。大纲可以从 Markdown/YAML/JSON 导入，也可以由模型按章卡结构生成；严格模式下 P2/P3 会按章卡校验标题、场景、字数与 cast。
 
-> **当前版本：0.2.1** · 中文界面 · MIT
+0.2.2 把多项目选择从“进程最近一次工具调用”改为**会话级持久绑定**：显式 `project_root` 成功后会记住当前 DSH 会话；同一工作区的 A/B 会话不再串书。面板 v4 增加项目选择器与 choose/missing 状态，`/novel scan` 用于发现项目，`/novel resume` 与面板复制按钮共用同一份续写指令；项目被删除/移动/替换时 fail-closed，不静默换书。
+
+> **当前版本：0.2.2** · 中文界面 · MIT
 >
 > **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 
@@ -93,9 +95,9 @@
 | 规则包外置                      | 词表、格式、标点、语义、跨章阈值都在 `rulepacks/default.yaml`，代码只执行                    |
 | 六种导出                        | Markdown、纯文本、EPUB 3、大纲、世界观、书级提案；正文导出附 `cover.svg` 与 `blurb.txt`      |
 | 整书规划层                      | 书级蓝图、卷结构、章卡（严格模式）、世界观设定集；支持 Markdown/YAML/JSON 导入               |
-| 可观测性                        | `novel_status` 书级摘要、`novel_report`、`novel_doctor`、`novel_search`、panel v3、journal 活动 |
-| 多项目注册表                    | `stateDir/projects.yaml` 记录已知项目与当前项目；不影响项目目录                              |
-| 运行期依赖极少                  | 只有 `yaml` 一个运行时依赖；不联网、不调用外部 API、不读环境变量里的密钥                     |
+| 可观测性                        | `novel_status` 书级摘要、`novel_report`、`novel_doctor`、`novel_search`、panel v4、journal 活动 |
+| 多项目注册表                    | `stateDir/projects.yaml` 记录已知项目与面板默认 active；不影响项目目录                       |
+| 运行期依赖极少                  | 只有 `yaml` 一个运行时依赖；Host 侧不访问外部网络、不调用外部 API、不读环境变量里的密钥       |
 
 ### 关键设计
 
@@ -171,7 +173,7 @@ P7/P8/P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `d
 | pnpm     | CLI 安装/卸载插件需要；建议 11.x（本仓库开发基线为 11.28.9）                                         |
 | 宿主形态 | Web（面板 + 预设）、Desktop（面板 + 预设，插件由桌面壳管理）、headless（只有工具/命令，无面板/预设） |
 | 磁盘     | 项目根目录可写；默认 `stateDir` 可写                                                                 |
-| 网络     | 安装时需要访问 npm / Git 托管；运行插件本身不联网                                                    |
+| 网络     | 安装时需要访问 npm / Git 托管；运行期 Host 侧不访问外部网络，Web 客户端只向宿主面板发同源 GET |
 | 语言     | 0.2.x 仅中文                                                                                         |
 
 检查命令：
@@ -276,7 +278,7 @@ dsh plugin --profile web add dsh-novel-write-engine
 固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.2.1
+dsh plugin --profile web add dsh-novel-write-engine@0.2.2
 ```
 
 `dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
@@ -331,13 +333,13 @@ corepack pnpm pack
 会得到类似：
 
 ```text
-dsh-novel-write-engine-0.2.1.tgz
+dsh-novel-write-engine-0.2.2.tgz
 ```
 
 把这个 tarball 复制到目标机器，放在一个**稳定、不会随手删除**的路径，然后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.2.tgz
 ```
 
 tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内已经包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch。它是最接近「发布产物」的安装方式。
@@ -352,9 +354,9 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 2. 点 **添加插件**（或旁边的箭头 → **安装第三方插件**）。
 3. 在包名字段填入以下任一形式：
    - npm 包名：`dsh-novel-write-engine`
-   - 精确版本：`dsh-novel-write-engine@0.2.1`
+   - 精确版本：`dsh-novel-write-engine@0.2.2`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
-   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.2.1.tgz`
+   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.2.2.tgz`
 4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
@@ -426,7 +428,7 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 先做全书蓝图、第一卷大纲和世界观设定，再写第一章的世界观约束和章节计划。
 ```
 
-模型会调用 `novel_init` 建项目，然后按 `novel_guide` 的提示做书级规划；也可以跳过蓝图直接写第一章，严格大纲是可选开关。0.2.1 推荐顺序：
+模型会调用 `novel_init` 建项目，然后按 `novel_guide` 的提示做书级规划；也可以跳过蓝图直接写第一章，严格大纲是可选开关。0.2.2 推荐顺序：
 
 ```text
 novel_init
@@ -457,7 +459,7 @@ novel_init
 
 `premise`、`logline`、`themes`、`tone`、`pov`、`audience`、`selling_points`、`ending` 与 `strict_outline` 都是可选的书级种子；不填也能开书，之后用 `novel_blueprint` 补。
 
-`genre` 必须是 12 类之一，`platform` 必须是 `fanqie` / `qidian` / `qimao` / `jinjiang` 之一。`project_root` 省略时按「最近活跃项目 → 注册表 active → 配置里的 `projectRoot`（默认 `./novel`，相对于 DSH 进程工作目录）」解析；有多个项目时请显式传 `project_root`，避免写错书。
+`genre` 必须是 12 类之一，`platform` 必须是 `fanqie` / `qidian` / `qimao` / `jinjiang` 之一。对 `novel_init`，省略 `project_root` 时只使用配置 `projectRoot`，**不读会话绑定、工作区或 active**；创建成功后才绑定当前会话。其他工具省略 `project_root` 时按 0.2.2 的四层顺序解析：**当前 DSH 会话绑定 → 会话 cwd 中唯一项目 → 唯一注册项目/配置 `projectRoot`**；有多个项目且无法唯一确定时返回 `ENGINE_PROJECT_AMBIGUOUS`，需要 `/novel use` 或显式 `project_root`。`active` 只影响面板默认，不再静默决定 Agent 的工具项目。
 
 ### 4. 一章的标准调用顺序
 
@@ -497,9 +499,9 @@ novel_init
 
 - Hero：书名、类型、平台、当前章、阶段；
 - 统计：已归档章节、总字数、平均分、待处理门控；
-- 全书规划：蓝图/严格模式、章卡进度、卷列表、世界观计数、质量趋势、健康度；
+- 全书规划：蓝图/严格模式、章卡进度、**全部卷**（滚动列表）、世界观计数、质量趋势、健康度；
 - 九阶段轨；
-- 下一步卡；
+- 下一步卡与“复制续写指令”；
 - 章节卡、门控区与最近活动。
 
 面板每 15 秒静默同步一次，也可以点刷新；它**只读**，所有写操作仍在对话/工具里。
@@ -525,7 +527,7 @@ novel_init
 | 工具                 | 阶段       | 做什么                                                                                                                                              | 写盘           |
 | -------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `novel_init`         | —          | 建项目：`novel.yaml` + `state/` + `outline/` + 目录                                                                                                  | 是             |
-| `novel_status`       | 任意       | 当前活跃章、阶段、轮次、阻塞项、`state_errors`、下一步；`chapter` 只用于字数查询                                                                    | 否             |
+| `novel_status`       | 任意       | 当前活跃章、阶段、轮次、阻塞项、`state_errors`、下一步；`chapter` 只用于字数查询                                                                    | 项目正文否；显式 root 写绑定 |
 | `novel_brief`        | P1–P6 / P8 | 领取当前活跃章的任务书，返回 `fields`、`context`；`context.world_plan` 与 `context.context_meta` 在 `context` 内，并记录 digest                     | 仅任务书签收   |
 | `novel_plan_world`   | P1         | 提交世界观约束；数组/对象形状在服务边界校验                                                                                                         | 是             |
 | `novel_plan_chapter` | P2         | 提交章节计划；标题长度读 rulepack、5–8 个节拍、opening/ending 非空；可选 `cast` 1–8 人                                                              | 是             |
@@ -588,6 +590,12 @@ novel_init
 /novel doctor
 /novel search <关键词>
 /novel export md|txt|epub|outline|worldbook|proposal
+/novel projects
+/novel current
+/novel use <path|title|.>
+/novel unbind
+/novel scan [--register]
+/novel resume
 /novel admin
 /novel admin novel_state {"kind":"pipeline"}
 ```
@@ -622,7 +630,7 @@ novel_write_draft, novel_review, novel_revise, novel_check, novel_archive
 /novel admin novel_restore {"txid":"..."}
 ```
 
-多项目注册表与设定包导入**只有命令入口**：
+多项目注册表与设定包导入**不走工具 schema**；日常发现/切换用 `/novel scan`、`/novel use`，底层登记仍可用：
 
 ```text
 /novel admin novel_registry_list
@@ -637,13 +645,15 @@ novel_write_draft, novel_review, novel_revise, novel_check, novel_archive
 
 ### 8.4 侧边栏「网文工坊」
 
-- 只读 HTTP 路由：`GET/HEAD /api/novel-write-engine/panel`；
+- 只读 HTTP 路由：`GET/HEAD /api/novel-write-engine/panel?root=<可选>`；
 - 精确路由，复用 connection 的认证/Origin 闸门；未认证返回 401/403，连接层缺席返回 503；
 - 返回 `schemaVersion`；版本不一致时面板提示刷新；
-- 状态：loading（骨架）、empty（显示 `novel_init`）、error（重试）、outdated（刷新）、ready；
-- 章节超过 30 章时只渲染最近 30 张，并显示总记录数；
-- 窄屏纵向堆叠，支持减少动态效果；
-- 面板跟随**最近一次工具调用**的项目；冷启动时读注册表的 active，最后回退到配置的 `projectRoot`。
+- 状态：loading（骨架）、choose（多项目先选）、missing（项目不在）、empty（显示 `novel_init`）、error（重试）、outdated（刷新）、ready；
+- 顶部项目选择器（`aria-label="切换项目"`）；选择只影响面板 GET 的 `?root=`，写入浏览器 `localStorage`，**不调用 activate、不写会话绑定**；
+- 只接受注册表、active 或配置 `projectRoot` 的路径；未登记路径返回 `missing.reason="not_registered"`，不读取任意目录；
+- 章节超过 30 章时只渲染最近 30 张，并显示总记录数；卷列表展示全部卷，长列表在滚动容器内；
+- 下一步卡提供“复制续写指令”，文本与 `/novel resume` 同源，只写浏览器剪贴板；
+- 窄屏纵向堆叠，支持减少动态效果。
 
 面板不是第二个写入口。它没有改名、归档、回退按钮。
 
@@ -688,13 +698,33 @@ exports/
 - EPUB：EPUB 3，自写 ZIP 容器，`mimetype` 首条且 store 方式；
 - 封面是纯 SVG 字符串，不依赖 canvas；平台简介由模板生成，不调用模型。
 
-### 8.6 多项目
+### 8.6 多项目与会话绑定
 
-- `stateDir/projects.yaml` 记录已知项目与 active；
-- 工具可用 `project_root` 覆盖当前项目；
-- 面板跟随最近一次工具调用的项目；
-- 切换 active：`/novel admin novel_registry_activate {"root":"/abs/book"}`；
-- 删除注册行：`/novel admin novel_registry_forget {"root":"/abs/book"}`；项目文件不动。
+四层选择模型：
+
+1. 显式 `project_root`（成功后写入当前会话绑定）；
+2. `stateDir/session-bindings.yaml` 中当前 DSH `SessionId` 的绑定；
+3. 会话 cwd 的有限工作区发现（`cwd`、`cwd/novel`、唯一直接子目录；多候选报歧义）；
+4. 唯一注册项目或配置 `projectRoot`；有多个项目时不猜 `active`。
+
+```text
+/novel projects                 列出项目；* 当前会话，P 面板默认，! 目录缺失/待修复
+/novel current                  当前绑定或推导来源
+/novel use /abs/book            切换当前会话；active 不变
+/novel use .                    按当前 cwd 的工作区规则选唯一项目
+/novel use 书名                 按注册表精确标题切换；重名要求用路径
+/novel unbind                   只清当前会话绑定，不删项目
+/novel scan                     只读扫描当前工作区候选
+/novel scan --register          只登记健康项目；不改 active、不绑会话
+/novel resume                   输出可粘贴的续写指令；只读
+```
+
+- `projects.yaml` 仍是 v1，新增可选 `created_at`；`session-bindings.yaml` 只保存会话选择，删掉不会删书；
+- `/novel use` 成功绑定后会 best-effort 把项目加入注册表，便于随后在 `/novel projects` 与面板看到；不改变 active。`novel.yaml` 损坏时不绑定、不登记，先用显式 `project_root` 修复；
+- 无显式 `project_root` 时，注册/绑定文件损坏 fail-closed，不静默重建；显式 `project_root` 的读取仍可用（损坏的绑定不会被更新），写事务提交后元数据失败只回 warning；
+- 项目目录被删除时保留登记与绑定，返回 `ENGINE_PROJECT_MISSING`，不自动回退、不自动重建；
+- 原路径被另一本书占用时返回 `ENGINE_PROJECT_IDENTITY_MISMATCH`，必须显式重新 `/novel use`；
+- `/novel admin novel_registry_activate` 只改面板默认，不切换当前会话；`forget` 不删绑定与项目。
 
 ### 8.7 整书规划、观测与修复
 
@@ -733,12 +763,12 @@ novel_reopen {chapter:3, reason:"结尾需要重写"}
 
 | 键                | 默认                             | 说明                                                                      |
 | ----------------- | -------------------------------- | ------------------------------------------------------------------------- |
-| `projectRoot`     | `./novel`                        | 默认项目根；相对路径相对于 DSH 进程工作目录。工具可用 `project_root` 覆盖 |
+| `projectRoot`     | `./novel`                        | 无会话绑定/工作区/唯一项目时的兜底根；相对路径相对于 DSH 进程工作目录 |
 | `minScore`        | `120`                            | PG-07 过关线，整数 0..150；唯一 owner                                     |
 | `toolsMode`       | `all`                            | `all` 注册 28 个工具；`core` 只注册 10 个，其余走 `/novel admin`          |
 | `briefsOverrides` | 空                               | 自定义任务书目录；某阶段文件缺失时回退包内 `briefs/<阶段>.md`             |
 | `backupRetention` | `5`                              | 保留的归档备份目录数；只清理引擎自己创建的 `backups/<txid>`               |
-| `stateDir`        | 空 → `~/.dsh/novel-write-engine` | 多项目注册表位置；**不要放进项目目录**                                    |
+| `stateDir`        | 空 → `~/.dsh/novel-write-engine` | 多项目注册表与会话绑定位置；**不要放进项目目录**                          |
 
 > `stateDir` 的默认值是代码按当前用户 home 拼出的 `~/.dsh/novel-write-engine`，不跟随 `DSH_HOME`。如果你改了 `DSH_HOME`，建议显式把它设成绝对路径。
 >
@@ -874,7 +904,7 @@ corepack pnpm test
 ~/.dsh/novel-write-engine/projects.yaml
 ```
 
-只记录项目路径、标题、active；**不保存正文**。删掉它不会删任何书。面板在冷启动时用它找 active 项目。
+`projects.yaml` 只记录项目路径、标题、可选 `created_at` 与 `active`；`session-bindings.yaml` 按 DSH `SessionId` 记录显式选择。两者都**不保存正文**，删掉不会删任何书。面板用 projects/active/配置找默认项目，不读会话绑定。
 
 ### 10.3 手工修改的边界
 
@@ -895,7 +925,21 @@ corepack pnpm test
 
 ## 十一、升级
 
-### 11.0 从 0.2.0 升级到 0.2.1
+### 11.0 从 0.2.1 升级到 0.2.2
+
+0.2.2 不迁移项目数据，但改变多项目选择与面板契约：
+
+1. **面板 payload v4**：旧标签页显示刷新；刷新后出现项目选择器、choose/missing 状态和复制续写按钮。
+2. **`lastRoot` 删除**：工具不再跟随进程内“最近碰过谁”。A/B 会话分别绑定、重启后仍在；显式 `project_root` 成功后写入 `session-bindings.yaml`。
+3. **`active` 降级**：只影响面板默认与无 Agent 调用；有 Agent 且多项目无上下文时返回歧义，不静默选 active。
+4. **`novel_init` 省略 root**：只使用配置 `projectRoot`，不读会话绑定/工作区/active；创建成功后才绑定当前会话。
+5. **项目删除/移动/替换 fail-closed**：返回 MISSING/IDENTITY_MISMATCH，不自动回退、不自动重建、不清登记与绑定。
+6. **新增命令**：`/novel projects|current|use|unbind|scan|resume`；`scan`/`resume` 不是新工具，工具仍 28、操作仍 32。
+7. **面板完整卷**：0.2.1 只显示前 8 卷的 UI 截断已修复；全部卷在滚动容器中展示。
+
+回滚到 0.2.1 时，`session-bindings.yaml` 被旧版忽略；旧版恢复 `lastRoot` 行为。注册表新增的 `created_at` 对旧版可忽略。
+
+### 11.0.1 从 0.2.0 升级到 0.2.1
 
 0.2.1 不迁移项目数据，但改变几处契约：
 
@@ -911,7 +955,7 @@ corepack pnpm test
 10. **worldbook facts**：新增声明式数字事实，进入计数、brief 上下文、搜索与 P6 检查；`facts` 只做作者声明的 canon 对账，不等同外部史实库。
 11. **伏笔 anchor**：可读 `title` 与逐字 `anchor` 分离，anchor 至少 8 个字符；单字子串不再能绕过校验。
 
-### 11.0.1 从 0.1.3 升级到 0.2.0
+### 11.0.2 从 0.1.3 升级到 0.2.0
 
 0.2.0 新增 `outline/outline.yaml` 与 `outline/worldbook.yaml`，新增 9 个工具与 PG-13；旧项目缺少两份规划文档时按空规划读取，不会报错。新项目默认写入两份空文档；严格大纲默认关闭，`novel_outline` 首次提交才开启。P6 语义项从 4 条变 5 条（新增 `L2-POV`），旧的 4 条 check 需要重跑。面板 payload v1 → v2，旧标签页显示刷新。所有升级后第一次取 brief 会因上下文新增 `book_plan`/`outline_card`/`worldbook` 而失效，重新 `novel_brief` 即可。
 
@@ -951,7 +995,7 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.2.1
+dsh plugin --profile web add dsh-novel-write-engine@0.2.2
 ```
 
 升级后核对：
@@ -993,7 +1037,7 @@ corepack pnpm pack
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.2.tgz
 ```
 
 ### 11.5 在 Web / Desktop 里升级
@@ -1081,7 +1125,7 @@ dsh plugin --profile web remove dsh-novel-write-engine
 卸载插件不会删书。确认不再需要后，再手动清理：
 
 ```bash
-# 多项目注册表（只影响「最近项目」提示，不影响书）
+# 多项目注册表与会话绑定（只影响选择/查看，不影响书）
 rm -rf "$HOME/.dsh/novel-write-engine"
 
 # 某个项目（先确认路径！）
@@ -1123,8 +1167,11 @@ dsh --profile web --dump-config | grep dsh-novel-write-engine
 | 会话里没有 `novel_*` 工具         | 插件未启用、旧会话未刷新、装错 profile             | 新开会话；重启；`--dump-config` 核对                                    |
 | `ENGINE_STAGE_ORDER`              | 跳过了阶段或顺序不对                               | `/novel` / `novel_status` 看下一步；按 `novel_brief` 领任务书           |
 | `ENGINE_GATE_BLOCKED`             | 门控未过                                           | 看 `blocking` 的 code/detail/hint；改正文或补证据；不要手改 state       |
-| `ENGINE_PROJECT_NOT_FOUND`        | 项目根不对/未初始化                                | `novel_init`，或传正确的 `project_root`                                 |
-| 面板空白/显示没有项目             | 当前没有项目，或 active 指向旧路径                 | 先 `novel_init`；`/novel admin novel_registry_activate` 切到正确项目    |
+| `ENGINE_PROJECT_NOT_FOUND`        | 项目根不对/未初始化                                | `/novel scan` 发现项目；`novel_init`，或传正确的 `project_root`         |
+| `ENGINE_PROJECT_AMBIGUOUS`        | 有多个项目，无法从会话/cwd 唯一确定                | `/novel use <path|title>` 或传 `project_root`；不会默认 active          |
+| `ENGINE_PROJECT_MISSING`          | 当前会话绑定的目录被删除/未挂载                    | 恢复目录后重试；或显式 `/novel use <新路径>`；不会自动换书              |
+| `ENGINE_PROJECT_IDENTITY_MISMATCH`| 原路径已被另一本书占用，`created_at` 不同          | 确认后用 `/novel use` 重新绑定；旧绑定仍 fail-closed                    |
+| 面板空白/显示没有项目             | 当前没有项目，或 active 指向旧路径                 | 先 `novel_init`；多项目时用面板选择器或 `/novel use` 选择               |
 | 面板显示「需要刷新」              | 浏览器缓存了旧 client bundle                       | 刷新页面；重启 DSH                                                      |
 | 升级后仍是旧行为                  | 源码目录没 `corepack pnpm build`，或旧会话未换     | 重新构建；重启；新开会话                                                |
 | 卸载后配置项还在                  | profile 的 `cordis.patch.yml` 还留着覆盖           | 删除 `id: novel-write-engine` 的段落                                    |
@@ -1147,13 +1194,13 @@ dsh --profile web --dump-config | grep dsh-novel-write-engine
 
 DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制。安装本插件等于允许它在 DSH 进程权限下读写你给它的项目目录和 `stateDir`。只从你信任的 npm 包、源码或 tarball 安装。
 
-### 14.2 它不联网
+### 14.2 它不向外联网
 
-插件本身没有 `fetch`、HTTP 客户端或遥测；运行期依赖只有 `yaml`。它不读取环境变量里的 API Key，也不会把正文发到任何服务。模型调用本身由 DSH 负责，与本插件无关。
+Host 侧没有 `fetch`、HTTP 客户端或遥测；运行期依赖只有 `yaml`。它不读取环境变量里的 API Key，也不会把正文发到任何第三方服务。Web 客户端只会向宿主自己的只读面板路由发同源 `GET`，不访问外部地址；模型调用本身由 DSH 负责，与本插件无关。
 
 ### 14.3 面板是只读的
 
-`/api/novel-write-engine/panel` 只接受 `GET`/`HEAD`，并复用 DSH connection 的认证与 Origin 校验。它不能改项目；所有写操作仍然要经过工具/命令。
+`/api/novel-write-engine/panel` 只接受 `GET`/`HEAD`，并复用 DSH connection 的认证与 Origin 校验。项目选择器只改 `?root=` 与浏览器 `localStorage`，复制按钮只写剪贴板；它们不能改项目、注册表或会话绑定。所有写操作仍然要经过工具/命令。
 
 ### 14.4 状态文件不是「随便改的 YAML」
 
@@ -1180,6 +1227,7 @@ DSH bundle 的 Host 半边在 DSH 进程内执行，不受工作区沙箱限制�
 - **规则包不可运行期替换**：要改词表/阈值，必须改源码、重新构建、重新安装。
 - **普通会话可能绕过引擎**：只有「网文工坊」预设不挂 bash/fs 写工具；在普通会话里手动改文件，事务与门控保证不再完整。
 - **预设会话开始后不能切换**。
+- **同一物理项目请固定一个路径**：注册表按规范化路径（`path.resolve`）去重；同一本书通过符号链接和真实路径分别登记会变成两个 root，可能显示两行或报歧义。请在 `/novel use`/`project_root` 中固定使用其中一个路径。
 - **单章轮次上限 3**：超过需要 `novel_rollback`，不是无限重试。
 - **面板只读**：没有在面板里直接改正文/归档的按钮。
 - **DSH 仍是 developer preview**：`0.3.0` 之前可能有破坏性变更；升级 DSH 前先看插件 `engines.dsh`。
@@ -1233,7 +1281,7 @@ DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app corepack pnpm 
 6. `dsh plugin remove`，确认层与面板消失；
 7. 确认项目数据未被卸载动作删除。
 
-`pnpm check:host` 覆盖第 1–4 与第 6 步的自动断言（含 28 个工具的宿主声明与面板结构）；`/novel` 命令的注册与路由由 `tests/adapters` 覆盖；第 5 步仍是人工全流程（需要可用模型）。
+`pnpm check:host` 覆盖第 1–4 与第 6 步的自动断言（含 28 个工具的宿主声明、面板 v4 字段与空态结构）。`/novel` 命令的 handler 与路由由 `tests/adapters`、`tests/smoke` 的假宿主覆盖，真实宿主命令路由仍属于第 4 步的人工确认；第 5 步也是人工全流程（需要可用模型）。
 
 ### 16.4 项目结构
 
@@ -1257,16 +1305,17 @@ tests/            # 单测、集成、falsify、e2e
 
 ### 16.5 当前验证基线
 
-0.2.1 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
+0.2.2 在 Node 24.19 / DSH 0.2.1-rc.3 上完成过：
 
-- `corepack pnpm test` 全绿（当前树 667 项，72 个测试文件）；
-- 最近一次覆盖率语句 93.86% / 分支 89.04% / 函数 97.81% / 行 93.86%（V8 分支/行计数会有 ±0.01 波动，门禁按单次真实结果判定），`test:coverage` 与逐文件 domain/book/insight 门禁全过；
-- `typecheck`、`lint`、`check:hygiene`、`test:isolated`、`build`、`validate:rulepack`、`check:pack`、`check:artifacts`、`check:install` 全绿；
-- `check:host` 在临时 DSH profile 中实测：插件层出现、预设可见、面板未认证 401、认证后 200、headless 真实触发 `novel_init` 工具并落盘、`remove` 后层消失；`check:preset` 从真实 bundle 解析 13 个包；
-- `check:crash` 在真实子进程 SIGKILL 后恢复 pending journal：目标项目仍可读，无遗留 pending 事务。
-- `agnes-2.5-flash` / `agnes-3.0-flash` 在临时项目完成 P1→P8、归档、六种导出、`novel_reopen` 与重新归档；详见 `docs/0.2.1-real-model-evidence.md`。
+- `npm test` 全绿：**77 个测试文件 / 772 项**；
+- 覆盖率：**语句 93.87% / 分支 89.15% / 函数 97.89% / 行 93.87%**，高于 0.2.1 基线（93.86 / 89.04 / 97.81 / 93.86）；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
+- `typecheck`、`lint`、`check:hygiene`（138 files，0 v8 ignore）、`test:isolated`（58 源文件）、`build`、`validate:rulepack`、`check:pack`（25 files）、`check:artifacts`、`check:install`（26 packages）全绿；
+- `check:preset` 从真实 bundle 解析 13 个 packages；
+- `check:host` 在临时 DSH profile 中实测：面板未认证 401、认证后 200（payload v4）、预设可见、headless 真实触发 `novel_init` 并落盘、`remove` 后层消失；
+- `check:crash` 在真实子进程 SIGKILL 后恢复 pending journal：目标项目仍可读，无遗留 pending 事务；
+- `agnes-2.5-flash` 与 `agnes-3.0-flash` 在临时项目完成 P1→P8、归档、report/doctor/panel v4、history/backups、六种导出、`novel_reopen` 与重新归档；P1/P2/P3 为真实模型，P4/P6 为确定性夹具，详见 [0.2.2-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-real-model-evidence.md)。
 
-具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把上面的历史数字当保证。
+具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把上面的历史数字当保证。完整验收矩阵见 `docs/0.2.2-evidence.md`。
 
 ---
 
@@ -1277,6 +1326,9 @@ tests/            # 单测、集成、falsify、e2e
 | [DESIGN.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/DESIGN.md) | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
 | [PLAN.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/PLAN.md) | 0.1.0 实施计划（历史） |
 | [docs/0.2.0-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.0-plan.md) | 0.2.0 整书生命周期：蓝图/大纲/世界观/章卡/观测 |
+| [docs/0.2.2-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-plan.md) | 0.2.2 会话级项目选择、scan/resume、面板 v4 与完整卷 |
+| [docs/0.2.2-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-evidence.md) | 0.2.2 验收矩阵与质量门证据 |
+| [docs/0.2.2-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-real-model-evidence.md) | 0.2.2 两条真实模型 P1→P8 链路回执 |
 | [docs/0.2.1-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.1-plan.md) | 0.2.1 可信账本、历史、备份、计划分权与质量门禁 |
 | [docs/0.2.0-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.0-real-model-evidence.md) | 真实模型全链路验证回执 |
 | [docs/0.1.2-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.1.2-plan.md) | 0.1.2 长书可运行性与证据闭环方案（历史） |

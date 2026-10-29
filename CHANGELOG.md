@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.2.2
+
+### Changed
+
+- **会话级项目选择**：删除 `EngineService.lastRoot`；显式 `project_root` 成功加载后写入 `stateDir/session-bindings.yaml`，按 DSH `SessionId` 持久化，DSH 重启后仍在。A/B 会话不再因为“最近一次工具调用”互相串书。
+- **四层解析**：显式参数 → 会话绑定 → 会话 cwd 的有限工作区发现（`cwd`、`cwd/novel`、唯一直接子目录）→ 唯一注册项目/配置 `projectRoot`。有 Agent 且多项目无上下文时返回 `ENGINE_PROJECT_AMBIGUOUS`，不再用 `active` 静默兜底。
+- **删除/移动/替换 fail-closed**：绑定目录消失返回 `ENGINE_PROJECT_MISSING`；同路径换成另一本 `created_at` 不同（或新项目没有 `created_at`）的书返回 `ENGINE_PROJECT_IDENTITY_MISMATCH`；不自动回退、不自动重建、不自动清登记/绑定。移动后若注册表有同 `created_at` 的其他 root，错误提示候选但不会自动跳转。
+- **注册表增强**：`projects.yaml` 保持 v1，新增可选 `created_at`；注册按规范化 root upsert，同一路径始终一行；重复注册幂等，显式 `register` 在路径被替换时返回 `replaced:true`；`active` 降级为面板默认与无 Agent 默认。
+- **`novel_init` 的 root 规则**：省略 `project_root` 时只使用配置 `projectRoot`，不读会话绑定/工作区/active；创建成功后才绑定当前会话并登记。
+- **工具 schema**：`novel_init` 使用独立的 `project_root` 说明；其他工具说明四层顺序；`novel_status` 新增 root/source 文本与 JSON `selection`。
+- **面板 v4**：新增项目选择器、choose/missing 状态、`summary.root`、`projects[]`、`selection`、`resume`、`missing`；选择只改 GET `?root=` 与浏览器 `localStorage`，不写会话绑定；加入请求竞态/Abort、未登记偏好回退、损坏项目提示、移动端选择器布局。面板读取使用 `loadAt`，不会因查看项目而登记或绑定。
+
+### Added
+
+- **新增命令**：`/novel projects|current|use <path|title|.>|unbind|scan [--register]|resume`。`scan` 只扫有限工作区、最多 50 个候选、不递归/不跟随符号链接；普通 scan 不写，`--register` 只登记健康项目且不改 active/绑定，单条登记失败不中断整批。`resume` 与面板复制共用 `formatResumePrompt`，只读，不写绑定/注册表/项目；scan/resume 不是新工具（工具仍 28、操作仍 32）。
+- **复制续写指令**：下一步卡新增只写浏览器剪贴板的按钮，文本与 `/novel resume` 同源；剪贴板失败时展示可手动选中的只读文本。
+
+### Fixed
+
+- **完整卷视图**：修复 0.2.1 只显示前 8 卷的 UI 截断，全部卷在滚动容器中展示并高亮当前卷；不新增 DTO 字段或接口。
+- **删除项目的写入与事务**：写操作在取项目锁前确认 novel/state 证据，`FileLock` 不再把已删除目录重新 mkdir；事务在每次 rename 前与提交后检查 root，root 在 rename 之间消失时 abort、跳过补偿且不补写 journal，避免被后续 mkdir 从空目录重建。
+- **扫描批次与只读**：`scanWorkspace` 在第一个超过 50 的候选处停止检查；`scan --register` 的登记写入失败按候选记录为 skipped，不中断后续候选；`resume` 和面板查看不再通过 `load()` 自动登记/绑定。
+- **面板/初始化旧口径**：修正面板教程中“跟随最近工具调用/activate 切换”的旧说法，README 的初始化 root、旧面板版本号、注册表提示和工具写入说明。
+- **第二轮全量 review 补强**：`novel_amend` 保留已解析 Selection，绑定路径被替换时不再绕过 `created_at` 身份检查，workspace amend 不再产生持久绑定；绑定有身份而磁盘项目失去 `created_at` 时 fail-closed；写工具/amend 在项目锁前返回 `ENGINE_PROJECT_MISSING`，doctor/guide 不再把丢失绑定伪装成“还没有项目”。
+- **元数据与扫描**：重复显式读取不再抢 metadata 写锁；`SessionBindings.bind` 不因 source 变化重写文件；scan 不为已登记候选构建完整 Snapshot，新增候选快照 damaged 时不写占位登记；相对 `project_root` 按会话 cwd 解析，与 `/novel use` 一致。
+- **读取容错与纯文本 diff**：显式 `project_root` 的读取不再因绑定/登记元数据损坏或不可写而失败，无 root 解析仍 fail-closed；`novel_diff` 的 `before`+`after` 纯文本模式不再读取项目，`chapter` 缺省返回 0。
+- **事务根身份**：staging 期间根目录被删除或替换时 fail-closed，不重建、不写入替换目录；`FsStore.writeText/writeBytes/appendText` 不再用 recursive mkdir 重建缺失根。
+- **面板与契约**：切换项目时显示骨架并隐藏旧书数据/复制按钮；`AbortSignal.any` 缺失时保留 10s 超时；missing 提示中文化并区分 `unreadable`，`/novel current` 显示失效绑定状态；`novel_word_count` 纯文本与 `novel_diff` 纯文本模式明确不读项目、不绑定会话；`check:host` 从构建产物派生 28 个工具名并校验 v4 字段。
+
+### Tests
+
+- 新增会话绑定、选择矩阵、并发绑定、扫描封顶、扫描单条写失败、命令、面板 v4、只读 resume/panel、damaged 绑定、符号链接根、工作区优先级、可见加载竞态、事务 root 删除、完整卷与剪贴板测试；README/DESIGN/docs/tools/面板教程与错误码同步。
+- 版本升 0.2.2；`REMOTE_VERSION` 3 → 4；工具 28、服务操作 32、核心工具 10、门控 13、语义项 5、导出 6 均不变。
+- 质量：77 个测试文件 / 772 项测试全绿；覆盖率 93.87 / 89.15 / 97.89 / 93.87，高于 0.2.1 基线；typecheck、lint、isolated、build、pack、artifacts、install、preset、host、crash、hygiene 全过。真实模型两条 P1→P8 链路通过，见 [0.2.2-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-real-model-evidence.md)。
+
 ## 0.2.1
 
 - **面板可滚动**：`nwe-root` 改为 `height:100%; overflow-y:auto; overscroll-behavior:contain`，宿主 `overflow:hidden` 不再裁掉下方内容；教程弹框保持 fixed，Esc/遮罩/焦点返回不回归。教程弹框新增「续写下一章」可直接复制给 Agent 的话术：先 `novel_pipeline` 确认状态，缺章卡用全量 `novel_outline`，目标章数满了用 `novel_amend`，再按 P1→P8 推进并在归档前确认 `state_delta`。
@@ -119,6 +154,6 @@
 - 面板 exact route 复用 connection 的 Host/Origin/认证闸门；没有阻塞的阶段显示下一步工具与原因。
 - `FsStore` 对读、写、事务目标拒绝项目内 symlink 重定向。
 - `/novel admin` 增加 `novel_registry_list/register/activate/forget` 与 `novel_import`，让多项目注册表和设定包导入有显式命令入口。
-- 第四轮加固：跨进程归档幂等 replay、原子锁回收、持久化 staging pre-image、活跃项目解析、面板跟随最近工具调用项目、修订不再重写评审 `content_hash`、低分评审可进入 P5、短对话不触发重复段阻塞、嵌套 schema 校验与稳定快照读取。
+- 第四轮加固：跨进程归档幂等 replay、原子锁回收、持久化 staging pre-image、活跃项目解析（0.2.2 已由会话绑定取代）、修订不再重写评审 `content_hash`、低分评审可进入 P5、短对话不触发重复段阻塞、嵌套 schema 校验与稳定快照读取。
 - 面板 UI/UX 改造：Hero + 四项统计、九阶段完成态、下一步中文动作、章节卡与评分进度、门控可视化、loading/empty/error/outdated 状态、响应式布局、键盘焦点与每 15 秒自动同步。
 - 第五轮发布前加固：归档前逐文档 `narrow` 校验（非法 delta/handoff 不再写坏项目）、锁回收行不再遮蔽 pending 事务、修订 issue 状态校验、初始化不覆盖失落的 `novel.yaml` 状态、失败 root 不污染面板、长事务锁只按存活进程回收、draft/revision 备份使 `novel_diff` 有基线、journal 对全部历史 state 哈希对账、check 文档嵌套校验、面板单章完成态与全书完成态区分、工具警告回传、preset 补回 subagent 控制工具。

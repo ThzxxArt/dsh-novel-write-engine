@@ -325,6 +325,25 @@ describe('tool adapters', () => {
       next: { tool: 'novel_write_draft', reason: '写' },
     } as never)
     expect(rendered[0]!.text).toContain('《书》')
+    const coverage = tool.output.render({}, {
+      project: { title: '覆盖之书' },
+      chapter: 1,
+      stage: 'P2',
+      blocking: [],
+      next: { tool: 'novel_plan_chapter', reason: 'plan' },
+      book: {
+        strict: false,
+        outline: {
+          total: 10,
+          planned_coverage: 0.2,
+          archived_coverage: 0,
+          current: null,
+        },
+        worldbook: { characters: 1, locations: 1, factions: 0, rules: 1 },
+      },
+    } as never)
+    expect(coverage[0]!.text).toContain('规划覆盖 20%')
+    expect(coverage[0]!.text).toContain('归档覆盖 0%')
     const archive = map.get('novel_archive') as unknown as {
       output: { render: (args: unknown, value: never) => Array<{ text: string }> }
     }
@@ -831,8 +850,8 @@ describe('panel route', () => {
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
-    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 3 })
-    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(3)
+    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 4 })
+    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(4)
 
     const head = response()
     await handler({ method: 'HEAD' }, head)

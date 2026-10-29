@@ -5,15 +5,21 @@ import type { EngineService } from '../engine/service.js'
 /** The read-only payload the browser panel fetches. */
 export interface PanelPayload {
   schemaVersion: number
-  summary: unknown
-  chapters: unknown
-  gates: unknown
+  projects: unknown
+  selection: unknown
+  summary?: unknown
+  chapters?: unknown
+  gates?: unknown
+  resume?: unknown
+  missing?: unknown
+  empty?: true
+  error?: string
 }
 
-/** Build the payload from one synchronized snapshot of the project. */
-export async function panelPayload(engine: EngineService): Promise<PanelPayload> {
-  const bundle = await engine.panelBundle()
-  return { schemaVersion: REMOTE_VERSION, ...bundle }
+/** Build the payload for one optional panel query root. */
+export async function panelPayload(engine: EngineService, root?: string): Promise<PanelPayload> {
+  const bundle = await engine.panelBundle(root === undefined ? {} : { root })
+  return { ...bundle, schemaVersion: REMOTE_VERSION }
 }
 
 interface ServerResponseLike {
@@ -24,7 +30,19 @@ interface ServerResponseLike {
 
 interface RequestLike {
   method?: string
+  url?: string
   headers?: Readonly<Record<string, string | readonly string[] | undefined>>
+}
+
+const queryRoot = (url: string | undefined): string | undefined => {
+  if (url === undefined || url === '') return undefined
+  try {
+    const parsed = new URL(url, 'http://panel.local')
+    const value = parsed.searchParams.get('root')
+    return value === null || value.trim() === '' ? undefined : value
+  } catch {
+    return undefined
+  }
 }
 
 /** Admission outcome for a panel request; `undefined` means admitted. */
@@ -65,7 +83,7 @@ export function panelHandler(engine: EngineService, guard: PanelGuard = denyAll)
       return
     }
     try {
-      const payload = await panelPayload(engine)
+      const payload = await panelPayload(engine, queryRoot(request.url))
       const body = method === 'HEAD' ? '' : JSON.stringify(payload)
       response.statusCode = 200
       response.setHeader('content-type', 'application/json; charset=utf-8')
@@ -79,6 +97,8 @@ export function panelHandler(engine: EngineService, guard: PanelGuard = denyAll)
         response.end(
           JSON.stringify({
             schemaVersion: REMOTE_VERSION,
+            projects: [],
+            selection: { root: null, source: 'none' },
             error: '还没有项目：调用 novel_init 创建。',
             empty: true,
           }),
@@ -91,6 +111,8 @@ export function panelHandler(engine: EngineService, guard: PanelGuard = denyAll)
       response.end(
         JSON.stringify({
           schemaVersion: REMOTE_VERSION,
+          projects: [],
+          selection: { root: null, source: 'none' },
           error: error instanceof Error ? error.message : String(error),
         }),
       )

@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.1`                                                                                                  |
+| 插件版本 | `0.2.2`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -49,8 +49,8 @@
 字数口径    total_word_count = 汉字 + 英文单词 + 数字 + 标点
 文件        YAML 12 个 + JSONL 1 个 + 正文 Markdown N 个 + 导出 N 个
 运行时依赖  1 个（yaml）
-斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 子命令）
-客户端半边  1 个面板（「网文工坊」v3）
+斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 与 0.2.2 的 projects/current/use/unbind/scan/resume 子命令）
+客户端半边  1 个面板（「网文工坊」v4）
 Agent 预设  1 个（「网文工坊」）
 覆盖率门禁  全局 90%，engine 90/85，纯函数层 100%
 ```
@@ -157,7 +157,7 @@ Agent 预设  1 个（「网文工坊」）
 4. **证据优先于结论**：模型说「通过了」必须附原文引用，引擎校验引用真实存在。
 5. **编号唯一权威在引擎**：模型只产生 key，不产生 ID。
 6. **可复盘**：每次写盘都有 journal 记录，任何状态可追溯到哪次操作。
-7. **零外部副作用**：不联网、不调模型、不起子进程、不读环境变量当配置。
+7. **零外部副作用**：Host 侧不访问外部网络、不调模型、不起子进程、不读环境变量当配置；Web 客户端只向宿主自己的只读面板发同源 GET。
 
 ### 1.6 独立性
 
@@ -213,10 +213,10 @@ Agent 预设  1 个（「网文工坊」）
 | `src/types.ts`  | 全部跨层类型、常量、错误码                         | —             | 否     | 类型检查                    |
 | `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表        | types         | 否     | 纯单测 + 表驱动             |
 | `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度         | types, domain | 否     | 纯单测 + golden             |
-| `src/store/`    | 原子写、事务、锁、schema 加载、迁移、注册表、备份  | types         | **是** | 真实 tmpdir + 故障注入      |
-| `src/engine/`   | 32 个操作、门控、任务书、只读投影、journal         | 全部下层      | 间接   | 集成（真 store + 真 rules） |
-| `src/tools/`    | 28 个 `defineTool`：窄化 → 调 op → 规范值 → render | engine        | 否     | 假 engine（spy）            |
-| `src/commands/` | 5 条斜杠命令                                       | engine        | 否     | 假 engine                   |
+| `src/store/`    | 原子写、事务、锁、schema、迁移、注册表、会话绑定、备份 | types         | **是** | 真实 tmpdir + 故障注入      |
+| `src/engine/`   | 32 个操作、选择解析、门控、任务书、只读投影、journal | 全部下层      | 间接   | 集成（真 store + 真 rules） |
+| `src/tools/`    | 28 个 `defineTool`：caller → 窄化 → 调 op → render | engine        | 否     | 假 engine（spy）            |
+| `src/commands/` | 5 条斜杠命令（`/novel` 内含选择/scan/resume 子命令） | engine        | 否     | 假 engine                   |
 | `src/remote/`   | 3 个只读投影 + DTO 版本                            | engine        | 否     | 假 engine + 形状断言        |
 | `src/skills/`   | 1 份入口技能正文                                   | —             | 否     | 快照 + 字数上限             |
 | `src/client/`   | 侧栏入口 + 面板（view model 独立可测）             | desktop 类型  | 否     | DOM + 假 ctx                |
@@ -306,7 +306,7 @@ export function apply(ctx: Context, config: Config) {
 |          | `report`            | 否                           | —                                | —                                         |
 |          | `guide`             | 否                           | —                                | —                                         |
 
-面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，不增加业务操作计数，也不引入写路径。
+面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，并额外返回只读的 projects/selection/missing/resume；它不增加业务操作计数，也不引入写路径。`currentProject`、`useProject`、`unbindProject`、`scanProjects`、`resumePrompt` 是命令/面板支持方法，不属于 32 个工具/投影操作，也不新增项目正文写入口。
 
 **契约形状**（所有操作统一）：
 
@@ -381,10 +381,11 @@ interface OpResult<T> {
 | `EngineBlockedError` | 门控没过（字数不够、分数不足、证据无效）                             | 内容      | `code` + `details[]` + `hint` | 抛错，`details` 结构化列出每条阻塞    |
 | `EngineFaultError`   | 系统故障（IO 失败、schema 过新、锁超时、事务中止）                   | 环境/代码 | `code` + `cause`              | 抛错 + `logger.error`；建议用户查目录 |
 
-**错误码表**（前 12 条，完整表在 `src/types.ts`）：
+**错误码表**（选列，完整表在 `src/types.ts`）：
 
 ```
-ENGINE_PROJECT_NOT_FOUND / ENGINE_PROJECT_EXISTS / ENGINE_STAGE_ORDER
+ENGINE_PROJECT_NOT_FOUND / ENGINE_PROJECT_AMBIGUOUS / ENGINE_PROJECT_MISSING /
+ENGINE_PROJECT_IDENTITY_MISMATCH / ENGINE_PROJECT_EXISTS / ENGINE_STAGE_ORDER
 ENGINE_GATE_BLOCKED / ENGINE_READING_PROOF_INVALID / ENGINE_SCORE_MISMATCH
 ENGINE_DELTA_UNVERIFIED / ENGINE_SCHEMA_TOO_NEW / ENGINE_SCHEMA_INVALID
 ENGINE_PATH_ESCAPE / ENGINE_LOCK_TIMEOUT / ENGINE_TXN_ABORTED
@@ -421,6 +422,9 @@ ENGINE_RULEPACK_INVALID / ENGINE_ID_EXHAUSTED
 | INV-10 | 面板只读                                                 | remote 接口       | 类型断言 + 运行时无写方法                          |
 | INV-11 | 名字前缀唯一（工具/事件/技能）                           | 装配              | 注册时检查冲突清单                                 |
 | INV-12 | 每个落盘文件带 `schema_version`                          | store             | 遍历 fixture 校验                                  |
+| INV-13 | 项目选择不依赖进程内 `lastRoot`                          | engine 选择器     | A/B 会话并发、重启、源码扫描                       |
+| INV-14 | 删除/移动/替换的项目不静默换书、不自动重建                | engine/store      | missing/identity 矩阵 + 事务 root 消失测试          |
+| INV-15 | 面板选择只影响视图，不写 active/绑定/项目                | remote/client     | 面板切换前后 registry/bindings/项目快照比对        |
 
 ### 2.12 备选架构与否决理由
 
@@ -1263,19 +1267,36 @@ interface Store {
 - 保留最近 N 份（默认 5，可配），超出按时间清理——**只删 `backups/` 下自建目录**，不碰其他路径。
 - GC 在归档成功后异步执行，失败只记日志，不影响归档结果。
 
-### 6.8 多项目注册表
+### 6.8 多项目、会话绑定与工作区
+
+0.2.2 的四层选择顺序（详见 `docs/0.2.2-plan.md`）：
+
+1. 显式 `project_root`；成功后写入当前 DSH `SessionId` 的 `stateDir/session-bindings.yaml`；
+2. 该会话的持久绑定；失效时返回 `PROJECT_MISSING` / `PROJECT_IDENTITY_MISMATCH`，不回退；
+3. 会话 cwd 的有限发现（`cwd`、`cwd/novel`、唯一直接子目录；多候选择歧义）；
+4. 唯一注册项目或配置 `projectRoot`；有 Agent 的多项目场景不使用 `active` 静默兜底。
 
 ```yaml
-# ~/.dsh/novel-engine/projects.yaml（不在项目内，避免污染仓库）
+# ~/.dsh/novel-write-engine/projects.yaml（不在项目内）
 schema_version: 1
-projects:
-  - { root: '/abs/path/to/novel', title: '某书', lastOpenedAt: '...' }
 active: '/abs/path/to/novel'
+projects:
+  - { root: '/abs/path/to/novel', title: '某书', created_at: '...', updated_at: '...' }
 ```
 
-- 注册表是**便利设施**，不是真相：删了它，项目仍可打开。
-- `projectRoot` 配置优先；注册表只在「未指定」时用于最近项目。
-- 跨项目导入（`novel_export --kind=cast` → `novel_import`）走显式命令，不做后台同步（D-10）。
+```yaml
+# ~/.dsh/novel-write-engine/session-bindings.yaml
+schema_version: 1
+bindings:
+  - { session_id: '...', root: '/abs/path/to/novel', title: '某书',
+      project_created_at: '...', bound_at: '...', source: 'explicit' }
+```
+
+- 注册表/绑定是**便利设施**，不是真相：删了不会删项目；正文仍由 `EngineService` 单一写入口维护。
+- `active` 降级为面板默认与无 Agent 调用的默认项；`novel_registry_activate` 不再切换会话。
+- 元数据读—改—写按 `stateDir` 用进程内 mutex + `.metadata.lock` 跨进程串行；原子写。
+- 项目被删除/移动/替换时不自动回退、不自动重建、不清登记/绑定；`/novel use` 或显式 `project_root` 才能重绑。
+- 跨项目导入走显式命令，不做后台同步（D-10）。
 
 ### 6.9 迁移
 
@@ -1619,7 +1640,7 @@ ctx.skills.register({
 | #   | 工具                 | 阶段     | 服务操作            | 写盘              |
 | --- | -------------------- | -------- | ------------------- | ----------------- |
 | 1   | `novel_init`         | —        | `initProject`       | 是                |
-| 2   | `novel_status`       | —        | `getStatus`         | 否                |
+| 2   | `novel_status`       | —        | `getStatus`         | 项目正文否；显式 root 写绑定 |
 | 3   | `novel_brief`        | P1~P6/P8 | `getBrief`          | 是（`state/briefs.yaml`） |
 | 4   | `novel_plan_world`   | P1       | `submitWorldPlan`   | 是                |
 | 5   | `novel_plan_chapter` | P2       | `submitChapterPlan` | 是                |
@@ -1797,26 +1818,27 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 命名：中文「网文工坊」，英文 `Novel Studio`，id `novel-workshop`。版式按「状态优先」组织：
 
-1. **Hero**：书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数；右侧刷新。
+1. **Hero**：项目名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧项目选择器、教程、刷新。
 2. **统计**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`。
-3. **全书规划**：蓝图/严格模式、章卡进度条、卷列表、世界观计数、质量趋势、健康度；数据来自 `panelSummary.book/quality/health`。
+3. **全书规划**：蓝图/严格模式、章卡进度条、**全部卷**（滚动容器，当前卷高亮）、世界观计数、质量趋势、健康度；数据来自 `panelSummary.book/quality/health`。
 4. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
-5. **下一步卡**：工具的中文动作 + 可读理由；原始工具名只作为次要技术标识。
+5. **下一步卡**：工具的中文动作 + 可读理由；旁边“复制续写指令”只写剪贴板，失败时展示可选中文本。
 6. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
 7. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
 8. **最近活动**：最近 5 条 journal 操作（时间、op、章节、状态）；无活动时整段不渲染。
 
-**状态与可达性**：loading 用骨架 + `role=status`；empty 显示 `novel_init` 命令；error 用 `role=alert` + 重试；outdated 用 `location.reload()`（客户端 bundle 已陈旧，重新请求同 bundle 无效）；根节点 `aria-busy`，统计区 `role=group`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
+**状态与可达性**：loading 用骨架 + `role=status`；choose 显示“发现多本书，先选一本”与项目按钮；missing 显示项目根、原因和建议，并保留选择器；empty 显示 `novel_init`；error 用 `role=alert` + 重试；outdated 用 `location.reload()`；damaged 仍渲染只读数据但在顶部提示用 `novel_state`/`novel_amend` 修复。根节点 `aria-busy`，统计区 `role=group`，选择器 `aria-label="切换项目"`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 
-**刷新**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次，避免工具写入后面板陈旧；静默刷新失败保留上一份可读视图，首次加载失败才显示错误页。请求带 10 秒 `AbortSignal` 超时。
+**刷新与选择**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次。选择项目只更新 `?root=` 与浏览器 `localStorage`，不调用 activate、不写会话绑定；请求带递增 `requestId` + `AbortController`，旧响应丢弃。`not_registered` 的 localStorage 偏好会被清掉并回退到同一响应的 active/唯一项目；登记仍在但目录不存在的偏好会保留。
 
-**只读**。所有写操作仍走工具/对话；面板最多给一个「刷新」按钮，不直接改文件。
+**只读**。所有写操作仍走工具/对话；面板没有改名、归档、回退或“设为当前会话项目”按钮，也不读取项目外路径。
 
 ### 10.3 数据通道
 
-- 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，返回 `PanelPayloadDto`；连接层缺席时 503。
+- 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；连接层缺席时 503。
+- `root` 只接受注册表、active 或配置 `projectRoot`；其他路径返回 `missing.reason="not_registered"`，不读取任意目录。
 - 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
-- DTO 带 `schemaVersion`；版本不匹配时面板降级为「需刷新」提示（浏览器缓存与引擎版本可能不同步）。
+- DTO v4：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
 - **退路**：typert 的 Host 侧命名空间声明若比预期重，面板降级为「静态壳 + 刷新按钮」，数据仍由对话内工具卡片呈现——不阻塞 Host 交付。
 
 ### 10.4 构建与开关

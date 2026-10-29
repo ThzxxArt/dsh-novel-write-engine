@@ -11,7 +11,7 @@ import {
   type Genre,
   type Platform,
 } from '../types.js'
-import type { EngineService } from '../engine/service.js'
+import type { EngineCaller, EngineService } from '../engine/service.js'
 
 /**
  * Providers sometimes serialize a free-form `json` parameter as a JSON string
@@ -45,13 +45,37 @@ const fail = (error: unknown): never => {
   throw error
 }
 
-/** Wrap an execute body with cancellation and a machine-code error. */
+export interface WorkingDirectoryLike {
+  ensure(agent: { id?: string }, signal?: AbortSignal): Promise<string>
+}
+
+interface ToolExec {
+  signal?: AbortSignal
+  agent?: { id?: string }
+}
+
+/** Wrap an execute body with caller context, cancellation and a machine-code error. */
 const makeGuarded =
-  (engine: EngineService) =>
+  (engine: EngineService, workingDirectory?: WorkingDirectoryLike) =>
   <A>(body: (args: A) => Promise<unknown>) =>
-  async (args: A, exec?: { signal?: AbortSignal }): Promise<any> => {
+  async (args: A, exec?: ToolExec): Promise<any> => {
+    const caller: EngineCaller = {}
+    if (typeof exec?.agent?.id === 'string' && exec.agent.id !== '') caller.sessionId = exec.agent.id
+    if (exec?.agent !== undefined && workingDirectory !== undefined) {
+      try {
+        caller.cwd = await workingDirectory.ensure(exec.agent, exec.signal)
+      } catch {
+        // A deleted cwd must not invalidate an existing session binding.
+      }
+    }
     try {
-      return await engine.withSignal(exec?.signal, () => body(args))
+      const invoke = (): Promise<unknown> => engine.withSignal(exec?.signal, () => body(args))
+      const withCaller = (
+        engine as unknown as {
+          withCaller?: (value: EngineCaller, task: () => Promise<unknown>) => Promise<unknown>
+        }
+      ).withCaller
+      return await (typeof withCaller === 'function' ? withCaller.call(engine, caller, invoke) : invoke())
     } catch (error) {
       return fail(error)
     }
@@ -117,15 +141,28 @@ const stringArray = { type: 'array' as const, items: { type: 'string' as const }
 const root = {
   type: 'string' as const,
   description:
-    'Project root. When omitted, resolves to the last active project, then the registry active root, then the configured projectRoot; pass it explicitly when several projects exist.',
+    'Project root. Passing it selects this project for the current session and persists the choice. When omitted: session binding -> unique project in the workspace -> single registered project -> configured projectRoot -> error. Multiple projects require an explicit choice.',
+}
+const initRoot = {
+  type: 'string' as const,
+  description:
+    'Project root for the new project. Passing it creates the project there. When omitted, only the configured projectRoot is used; novel_init does not follow the session binding, workspace discovery or registry active. The created project is bound to the current session on success.',
+}
+const utilityRoot = {
+  type: 'string' as const,
+  description:
+    'Project root for the project-backed mode of this tool. Text-only word_count/diff calls ignore it and do not create a session binding; use a project-backed call when you want to select a book.',
 }
 
 /**
  * The twenty-eight tools are thin adapters: narrow parameters, call one service
  * operation, render the canonical value. They never read a file.
  */
-export function createNovelTools(engine: EngineService): ReturnType<typeof defineTool>[] {
-  const guarded = makeGuarded(engine)
+export function createNovelTools(
+  engine: EngineService,
+  options: { workingDirectory?: WorkingDirectoryLike } = {},
+): ReturnType<typeof defineTool>[] {
+  const guarded = makeGuarded(engine, options.workingDirectory)
   return [
     defineTool({
       name: 'novel_init',
@@ -148,7 +185,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         selling_points: stringArray,
         ending: { type: 'string' },
         strict_outline: { type: 'boolean' },
-        project_root: root,
+        project_root: initRoot,
       },
       output: jsonOutput,
       execute: guarded(async (args) =>
@@ -185,13 +222,14 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         schema: { type: 'json' as const },
         render: (_args: unknown, raw: unknown) => {
           const value = payload(raw) as {
-            project: { title: string }
+            project: { title: string; root?: string }
             chapter: number
             active_chapter?: number
             stage: string
             rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
+            selection?: { source: string; root: string }
             metrics?: { total_word_count: number; cjk_chars: number; punctuation_chars: number } | null
             book?: {
               strict: boolean
@@ -225,6 +263,9 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
           return text(
             [
               `《${value.project.title}》 ${where} · ${value.stage}`,
+              ...(value.selection === undefined
+                ? []
+                : [`项目根 ${value.selection.root} · 选择来源 ${value.selection.source}`]),
               ...(value.rounds === undefined
                 ? []
                 : [
@@ -515,7 +556,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
       parameters: {
         text: { type: 'string' },
         chapter: { type: 'integer' },
-        project_root: root,
+        project_root: utilityRoot,
       },
       output: jsonOutput,
       execute: guarded(async (args) =>
@@ -641,7 +682,7 @@ export function createNovelTools(engine: EngineService): ReturnType<typeof defin
         chapter: { type: 'integer' },
         before: { type: 'string' },
         after: { type: 'string' },
-        project_root: root,
+        project_root: utilityRoot,
       },
       output: jsonOutput,
       execute: guarded(async (args) =>

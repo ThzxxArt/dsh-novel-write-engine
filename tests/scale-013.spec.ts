@@ -143,11 +143,11 @@ describe('0.1.3 scale and handoff', () => {
       }
       expect(handoff).toMatchObject({ current_chapter: 30, next_chapter: 31, volume: 1 })
       const panel = await engine.panelBundle({ root })
-      expect(panel.summary.finished).toBe(true)
-      expect(panel.chapters.rows).toHaveLength(30)
-      expect(panel.chapters.rows.at(-1)).toMatchObject({ num: 30, status: 'passed' })
-      const scores = panel.chapters.rows.map((row) => row.score)
-      expect(panel.summary.averageScore).toBeCloseTo(
+      expect(panel.summary!.finished).toBe(true)
+      expect(panel.chapters!.rows).toHaveLength(30)
+      expect(panel.chapters!.rows.at(-1)).toMatchObject({ num: 30, status: 'passed' })
+      const scores = panel.chapters!.rows.map((row) => row.score)
+      expect(panel.summary!.averageScore).toBeCloseTo(
         scores.reduce((sum, score) => sum + score, 0) / scores.length,
       )
       await expect(

@@ -5,7 +5,7 @@ import { loadRulepack } from '../src/rulepack.js'
 import { FileLock } from '../src/store/lock.js'
 import { FIXED_NOW, TEST_CONFIG, bootstrapToDraft, harness, readProjectFile } from './helpers.js'
 
-type Load = (root?: string, retries?: number, allowLock?: boolean) => Promise<unknown>
+type LoadAt = (selection: { root: string }, retries?: number, allowLock?: boolean) => Promise<unknown>
 
 const emptyWorld = (marker: string): Record<string, unknown> => ({
   schema_version: 1,
@@ -38,8 +38,8 @@ describe('cross-process write lock', () => {
       const firstLoadSignal = new Promise<void>((resolve) => {
         firstLoaded = resolve
       })
-      const original = (engine as unknown as { load: Load }).load.bind(engine)
-      ;(engine as unknown as { load: Load }).load = async (...args) => {
+      const original = (engine as unknown as { loadAt: LoadAt }).loadAt.bind(engine)
+      ;(engine as unknown as { loadAt: LoadAt }).loadAt = async (...args) => {
         const snapshot = await original(...args)
         firstLoaded()
         await holdFirst
@@ -63,8 +63,8 @@ describe('cross-process write lock', () => {
         secondTriedLock = true
         return originalAcquire.call(this)
       })
-      const originalSecond = (second as unknown as { load: Load }).load.bind(second)
-      ;(second as unknown as { load: Load }).load = async (...args) => {
+      const originalSecond = (second as unknown as { loadAt: LoadAt }).loadAt.bind(second)
+      ;(second as unknown as { loadAt: LoadAt }).loadAt = async (...args) => {
         secondLoaded = true
         return originalSecond(...args)
       }
