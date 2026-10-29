@@ -81,7 +81,10 @@ describe('cross-process write lock', () => {
       spy.mockRestore()
       releaseFirst()
       const results = await Promise.allSettled([first, secondWrite])
-      expect(results.every((result) => result.status === 'fulfilled')).toBe(true)
+      const rejected = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => String(result.reason))
+      expect(rejected).toEqual([])
       const pipeline = parseYaml((await readProjectFile(root, 'state/pipeline.yaml'))!) as {
         revision: number
       }
