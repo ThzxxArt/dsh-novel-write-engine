@@ -69,8 +69,14 @@ export interface OutlineChapterInput {
 export interface OutlineInput {
   book?: BookPatch
   volumes?: VolumeInput[]
-  chapters: OutlineChapterInput[]
+  chapters?: OutlineChapterInput[]
   strict?: boolean
+  /** Explicit deletion list; omitted cards are preserved. */
+  remove?: number[]
+  /** Explicit volume deletion list, keyed by title. */
+  remove_volumes?: string[]
+  /** Preview changes without writing or journaling. */
+  dry_run?: boolean
 }
 
 export interface WorldbookPatch {
@@ -355,7 +361,9 @@ export function mergeBookPlan(existing: BookPlan, patch: BookPatch | undefined):
 /** Validate and normalize the volume structure. */
 export function normalizeVolumes(
   input: unknown,
-  options: { totalChapters: number | null } = { totalChapters: null },
+  options: { totalChapters: number | null; rejectDuplicateTitles?: boolean } = {
+    totalChapters: null,
+  },
 ): OutlineVolume[] {
   if (!Array.isArray(input)) {
     throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'volumes must be an array')
@@ -386,7 +394,7 @@ export function normalizeVolumes(
       )
     }
     return {
-      id: typeof raw.id === 'string' && raw.id.trim() !== '' ? raw.id.trim() : `V${index + 1}`,
+      id: typeof raw.id === 'string' && raw.id.trim() !== '' ? raw.id.trim() : '',
       title: text(raw.title, `volumes[${index}].title`, 120),
       start_chapter: start,
       end_chapter: end,
@@ -396,6 +404,30 @@ export function normalizeVolumes(
       status,
     }
   })
+  // Preserve explicit ids, then fill missing ids from the lowest free Vn. A
+  // positional default would collide when an existing V2 is submitted before
+  // a new first volume (remove V1 + add a new V1 in a later call).
+  const usedIds = new Set<string>()
+  const usedTitles = new Set<string>()
+  for (const volume of volumes) {
+    if (usedTitles.has(volume.title) && options.rejectDuplicateTitles !== false) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `duplicate volume title "${volume.title}"`)
+    }
+    usedTitles.add(volume.title)
+    if (volume.id === '') continue
+    if (usedIds.has(volume.id)) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `duplicate volume id "${volume.id}"`)
+    }
+    usedIds.add(volume.id)
+  }
+  let nextId = 1
+  for (const volume of volumes) {
+    if (volume.id !== '') continue
+    while (usedIds.has(`V${nextId}`)) nextId += 1
+    volume.id = `V${nextId}`
+    usedIds.add(volume.id)
+    nextId += 1
+  }
   volumes.sort(
     (left, right) => left.start_chapter - right.start_chapter || left.end_chapter - right.end_chapter,
   )
@@ -657,10 +689,19 @@ export function normalizeOutlineChapters(
     if (!['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'].includes(raw.scene_type as string)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `chapters[${index}].scene_type is invalid`)
     }
-    const cast = stringArray(raw.cast, `chapters[${index}].cast`, 8)
+    const previousCard = existing.get(num)
+    const cast =
+      raw.cast == null && previousCard?.status === 'planned'
+        ? previousCard.cast
+        : stringArray(raw.cast, `chapters[${index}].cast`, 8)
     normalized.set(num, {
       num,
-      volume: volumeNumberFor(options.volumes, num, raw.volume as number | null | undefined),
+      volume:
+        raw.volume !== undefined
+          ? volumeNumberFor(options.volumes, num, raw.volume as number | null)
+          : previousCard?.status === 'planned'
+            ? volumeForChapter(options.volumes, num, previousCard.volume)
+            : volumeNumberFor(options.volumes, num, undefined),
       title,
       scene_type: raw.scene_type as SceneType,
       goal: text(raw.goal, `chapters[${index}].goal`),
@@ -668,7 +709,10 @@ export function normalizeOutlineChapters(
       hook: text(raw.hook, `chapters[${index}].hook`),
       cast,
       target_words: wordPair(raw.target_words, `chapters[${index}].target_words`),
-      notes: optionalText(raw.notes, `chapters[${index}].notes`, LIMITS.maxOutlineNotesChars),
+      notes:
+        raw.notes == null && previousCard?.status === 'planned'
+          ? previousCard.notes
+          : optionalText(raw.notes, `chapters[${index}].notes`, LIMITS.maxOutlineNotesChars),
       status: 'planned',
       archived_at: null,
       word_count: null,
@@ -746,7 +790,10 @@ export function validateOutlineDocument(
       }
     }
     const book = mergeBookPlan(emptyBookPlan(), value.book as BookPatch)
-    const volumes = normalizeVolumes(value.volumes, { totalChapters: options.totalChapters })
+    const volumes = normalizeVolumes(value.volumes, {
+      totalChapters: options.totalChapters,
+      rejectDuplicateTitles: false,
+    })
     if (!Array.isArray(value.chapters)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapters must be an array')
     }

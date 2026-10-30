@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
+import { arraySemanticsDescription, type ArraySemantics } from './semantics.js'
 import {
   ERROR_CODES,
   EngineBlockedError,
@@ -137,7 +138,11 @@ const jsonOutput = {
   render: (_args: unknown, raw: unknown) => withReplay(text(payload(raw)), raw),
 }
 
-const stringArray = { type: 'array' as const, items: { type: 'string' as const } }
+const stringArray = (semantics: ArraySemantics, description: string) => ({
+  type: 'array' as const,
+  items: { type: 'string' as const },
+  description: arraySemanticsDescription(semantics, description),
+})
 const root = {
   type: 'string' as const,
   description:
@@ -174,15 +179,19 @@ export function createNovelTools(
         platform: { type: 'string', required: true, enum: PLATFORMS },
         author: { type: 'string' },
         description: { type: 'string' },
-        words_per_chapter: { type: 'array', items: { type: 'integer' } },
+        words_per_chapter: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: arraySemanticsDescription('replace', 'Fixed [min,max] word target for chapters.'),
+        },
         total_chapters: { type: 'integer' },
         premise: { type: 'string', description: 'Optional one-sentence premise for the book plan.' },
         logline: { type: 'string' },
-        themes: stringArray,
+        themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
         tone: { type: 'string' },
         pov: { type: 'string' },
         audience: { type: 'string' },
-        selling_points: stringArray,
+        selling_points: stringArray('replace', 'Selling points; supplied list replaces the list.'),
         ending: { type: 'string' },
         strict_outline: { type: 'boolean' },
         project_root: initRoot,
@@ -328,10 +337,16 @@ export function createNovelTools(
       description: 'Submit the P1 world plan for the active chapter.',
       parameters: {
         objective: { type: 'string', required: true },
-        constraints: stringArray,
-        characters: { type: 'json' },
-        locations: { type: 'json' },
-        continuity_notes: stringArray,
+        constraints: stringArray('replace', 'P1 constraints; supplied list replaces the plan list.'),
+        characters: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'P1 cast; supplied list replaces the cast.'),
+        },
+        locations: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'P1 locations; supplied list replaces them.'),
+        },
+        continuity_notes: stringArray('replace', 'P1 continuity notes; supplied list replaces them.'),
         project_root: root,
       },
       output: jsonOutput,
@@ -354,14 +369,24 @@ export function createNovelTools(
         title: { type: 'string', required: true },
         scene_type: { type: 'string', required: true, enum: SCENE_TYPES },
         narrator: { type: 'string', required: true },
-        beats: { ...stringArray, required: true },
+        beats: {
+          ...stringArray('replace', 'Ordered plan beats; supplied list replaces the beats.'),
+          required: true,
+        },
         opening: { type: 'string', required: true },
         ending: { type: 'string', required: true },
-        target_words: { type: 'array', items: { type: 'integer' }, required: true },
+        target_words: {
+          type: 'array',
+          items: { type: 'integer' },
+          required: true,
+          description: arraySemanticsDescription('replace', 'Plan [min,max] word target.'),
+        },
         cast: {
           type: 'json',
-          description:
+          description: arraySemanticsDescription(
+            'replace',
             'Optional 1–8 characters on stage this chapter. Each: name, entry_state, goal, knowledge, exit_change. Names must exist in the P1 world plan or the character ledger.',
+          ),
         },
         project_root: root,
       },
@@ -418,14 +443,25 @@ export function createNovelTools(
         'Submit the P4 scored review with fifteen dimensions, issues and three reading-proof quotes.',
       parameters: {
         chapter: { type: 'integer', required: true },
-        dimensions: { type: 'json', required: true },
-        issues: { type: 'json' },
+        dimensions: {
+          type: 'json',
+          required: true,
+          description: arraySemanticsDescription('replace', 'Fifteen scored dimensions.'),
+        },
+        issues: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Review issue list.'),
+        },
         total: {
           type: 'integer',
           required: true,
           description: '150 - Σdelta, the same number the review reports.',
         },
-        proof: { type: 'json', required: true },
+        proof: {
+          type: 'json',
+          required: true,
+          description: arraySemanticsDescription('replace', 'Three reading-proof quotes.'),
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -455,11 +491,17 @@ export function createNovelTools(
             'Patch mode: {expected_hash, edits:[{old_text,new_text,occurrence?}]}; edits must be unique unless occurrence is set.',
         },
         summary: { type: 'json' },
-        issues: { type: 'json', description: 'Updated issue statuses and evidence for PG-08.' },
+        issues: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Updated issue statuses and evidence for PG-08.'),
+        },
         proof: {
           type: 'json',
           required: true,
-          description: 'Three quotes from the revised text; PG-09 verifies them.',
+          description: arraySemanticsDescription(
+            'replace',
+            'Three quotes from the revised text; PG-09 verifies them.',
+          ),
         },
         project_root: root,
       },
@@ -482,16 +524,22 @@ export function createNovelTools(
         'Run the P6 consistency check. Machine findings and your semantic items form the check document.',
       parameters: {
         chapter: { type: 'integer', required: true },
-        scope: stringArray,
+        scope: stringArray('replace', 'Requested check scopes; supplied list replaces the request.'),
         semantic: {
           type: 'json',
           required: true,
-          description: 'Exactly the five P6 semantic items, each with a verbatim evidence quote.',
+          description: arraySemanticsDescription(
+            'replace',
+            'Exactly the five P6 semantic items, each with a verbatim evidence quote.',
+          ),
         },
         acknowledge: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Advisory codes read and accepted; blockers cannot be acknowledged.',
+          description: arraySemanticsDescription(
+            'replace',
+            'Advisory codes read and accepted; blockers cannot be acknowledged.',
+          ),
         },
         project_root: root,
       },
@@ -602,7 +650,10 @@ export function createNovelTools(
         chapter_range: {
           type: 'array',
           items: { type: 'integer' },
-          description: 'For kind=chapters: inclusive [start, end] range.',
+          description: arraySemanticsDescription(
+            'replace',
+            'For kind=chapters: inclusive [start, end] range.',
+          ),
         },
         project_root: root,
       },
@@ -754,17 +805,23 @@ export function createNovelTools(
       parameters: {
         premise: { type: 'string' },
         logline: { type: 'string' },
-        themes: stringArray,
+        themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
         tone: { type: 'string' },
         pov: { type: 'string' },
         audience: { type: 'string' },
-        selling_points: stringArray,
+        selling_points: stringArray('replace', 'Selling points; supplied list replaces the list.'),
         ending: { type: 'string' },
         strict: { type: 'boolean', description: 'Require a chapter card before P2/P3.' },
         volumes: {
           type: 'json',
-          description:
-            'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Replaces the current volumes.',
+          description: arraySemanticsDescription(
+            'replace',
+            'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Replaces the current volumes; dropping any volume requires confirm_remove:true.',
+          ),
+        },
+        confirm_remove: {
+          type: 'boolean',
+          description: 'Explicitly confirm a volume-list replacement that drops existing volumes.',
         },
         project_root: root,
       },
@@ -781,6 +838,7 @@ export function createNovelTools(
           ending: args.ending as string,
           strict: args.strict as boolean,
           volumes: asJson(args.volumes, 'volumes') as never,
+          confirm_remove: args.confirm_remove as boolean,
           root: args.project_root,
         }),
       ),
@@ -788,16 +846,34 @@ export function createNovelTools(
     defineTool({
       name: 'novel_outline',
       description:
-        'Write volume/chapter cards. Archived cards are preserved and cannot be rewritten. On the first submission strict mode defaults on; with an existing card, PG-13 checks title, scene, target words and cast even in non-strict mode.',
+        'Upsert volume/chapter cards by key: chapters by num, volumes by title. Omitted cards are preserved; deletion requires remove/remove_volumes. Archived cards are preserved and cannot be rewritten. Use dry_run to preview. On the first submission strict mode defaults on; with an existing card, PG-13 checks title, scene, target words and cast even in non-strict mode.',
       parameters: {
         book: { type: 'json', description: 'Optional partial book blueprint patch.' },
-        volumes: { type: 'json', description: 'Optional full volume list; omitted keeps current volumes.' },
+        volumes: {
+          type: 'json',
+          description: arraySemanticsDescription(
+            'upsert',
+            'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Upserts by title; omitted volumes are kept.',
+          ),
+        },
         chapters: {
           type: 'json',
-          required: true,
-          description:
-            'Chapter cards: [{num,title,scene_type,goal,conflict,hook,cast?,target_words:[min,max],volume?,notes?}].',
+          description: arraySemanticsDescription(
+            'upsert',
+            'Chapter cards: [{num,title,scene_type,goal,conflict,hook,cast?,target_words:[min,max],volume?,notes?}]. Upserts by num; omitted cards are kept.',
+          ),
         },
+        remove: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: arraySemanticsDescription('remove', 'Explicit chapter numbers to delete.'),
+        },
+        remove_volumes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: arraySemanticsDescription('remove', 'Explicit volume titles to delete.'),
+        },
+        dry_run: { type: 'boolean', description: 'Preview changes without writing or journaling.' },
         strict: { type: 'boolean' },
         project_root: root,
       },
@@ -807,6 +883,9 @@ export function createNovelTools(
           book: asJson(args.book, 'book') as never,
           volumes: asJson(args.volumes, 'volumes') as never,
           chapters: asJson(args.chapters, 'chapters') as never,
+          remove: args.remove as number[],
+          remove_volumes: args.remove_volumes as string[],
+          dry_run: args.dry_run as boolean,
           strict: args.strict as boolean,
           root: args.project_root,
         }),
@@ -839,17 +918,35 @@ export function createNovelTools(
       parameters: {
         premise: { type: 'string' },
         setting: { type: 'string' },
-        rules: { type: 'json' },
-        factions: { type: 'json' },
-        locations: { type: 'json' },
-        characters: { type: 'json' },
-        glossary: { type: 'json' },
-        backstory: { type: 'json' },
+        rules: { type: 'json', description: arraySemanticsDescription('replace', 'Rules section list.') },
+        factions: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Factions section list.'),
+        },
+        locations: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Locations section list.'),
+        },
+        characters: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Characters section list.'),
+        },
+        glossary: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Glossary section list.'),
+        },
+        backstory: {
+          type: 'json',
+          description: arraySemanticsDescription('replace', 'Backstory section list.'),
+        },
         facts: {
           type: 'json',
-          description: 'Declared numeric canon: [{alias,value,unit,tolerance?,note?}].',
+          description: arraySemanticsDescription(
+            'replace',
+            'Declared numeric canon: [{alias,value,unit,tolerance?,note?}].',
+          ),
         },
-        themes: stringArray,
+        themes: stringArray('replace', 'Worldbook themes; supplied list replaces the list.'),
         project_root: root,
       },
       output: jsonOutput,
@@ -933,15 +1030,17 @@ export function createNovelTools(
     defineTool({
       name: 'novel_restore',
       description:
-        'Restore an active chapter file from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
+        'Restore an active chapter file, or outline/outline.yaml, from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
       parameters: {
         txid: { type: 'string', required: true },
         chapter: { type: 'integer' },
         paths: {
           type: 'array',
           items: { type: 'string' },
-          description:
-            'Project-relative chapter files; omitted restores every restorable chapter file that the backup manifest records.',
+          description: arraySemanticsDescription(
+            'replace',
+            'Project-relative chapter files, or exactly [outline/outline.yaml]; omitted restores every restorable chapter file the manifest records.',
+          ),
         },
         project_root: root,
       },

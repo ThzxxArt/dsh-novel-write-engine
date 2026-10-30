@@ -12,6 +12,8 @@ export const PANEL_CHAPTER_LIMIT = 30
 /** Project-relative locations. Every write goes through these constants. */
 export const PROJECT_FILE = 'novel.yaml'
 export const OUTLINE_FILE = 'outline/outline.yaml'
+/** Last outline replaced by a normal planning write; one level is enough for repair. */
+export const OUTLINE_DEPRECATED_FILE = 'outline/outline.deprecated.yaml'
 export const WORLDBOOK_FILE = 'outline/worldbook.yaml'
 export const STATE_DIR = 'state'
 export const CHAPTERS_DIR = 'chapters'

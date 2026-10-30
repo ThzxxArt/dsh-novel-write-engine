@@ -10,7 +10,9 @@
 
 0.2.3 把“账本说真话”补到旧项目：`report` 从 journal 回填旧章 effort，quality 每章只算最终评审并区分 `samples`/`attempts`；briefs 按当前章隔离；归档失败可直接修订；advisory 按章去重并带证据；面板 v5 改为书桌式工作台，项目选择器分离写作/待修复/失效；`check:host` 不再污染真实注册表。
 
-> **当前版本：0.2.3** · 中文界面 · MIT
+0.2.4 根治 `novel_outline` 的“省略即删除”：`chapters` 按 `num`、`volumes` 按 `title` 做 upsert，省略的卡保持不动；删除必须显式 `remove` / `remove_volumes`；新增 `dry_run`、`added`/`updated`/`removed` 回显、`outline.deprecated.yaml` 与 `novel_restore` 的 outline 恢复路径。这是有意的 BREAKING 语义修正：从“提交集合就是全集”变成“提交的是要改的对象”。
+
+> **当前版本：0.2.4** · 中文界面 · MIT
 >
 > **宿主范围**：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 
@@ -280,7 +282,7 @@ dsh plugin --profile web add dsh-novel-write-engine
 固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.2.3
+dsh plugin --profile web add dsh-novel-write-engine@0.2.4
 ```
 
 `dsh` 不在 PATH 时，用 `npx @deepseek-ai/dsh` 代替命令开头的 `dsh`。
@@ -335,13 +337,13 @@ corepack pnpm pack
 会得到类似：
 
 ```text
-dsh-novel-write-engine-0.2.3.tgz
+dsh-novel-write-engine-0.2.4.tgz
 ```
 
 把这个 tarball 复制到目标机器，放在一个**稳定、不会随手删除**的路径，然后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.3.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.4.tgz
 ```
 
 tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内已经包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch。它是最接近「发布产物」的安装方式。
@@ -356,9 +358,9 @@ tarball 安装不会运行源码构建，也不会要求 `allowBuilds`；包内�
 2. 点 **添加插件**（或旁边的箭头 → **安装第三方插件**）。
 3. 在包名字段填入以下任一形式：
    - npm 包名：`dsh-novel-write-engine`
-   - 精确版本：`dsh-novel-write-engine@0.2.3`
+   - 精确版本：`dsh-novel-write-engine@0.2.4`
    - 源码目录：`/absolute/path/to/dsh-novel-write-engine`
-   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.2.3.tgz`
+   - tarball：`/absolute/path/to/dsh-novel-write-engine-0.2.4.tgz`
 4. npm 包名从 npm 官方源安装；本地目录和 tarball 直接使用宿主路径。
 5. 点 **安装**，等待完成。
 6. 如果出现 **立即启用**，点它；否则安装后到「已安装插件」里把 **dsh-novel-write-engine** 打开。
@@ -430,7 +432,7 @@ dsh --profile web --dump-config | grep -A8 '# == dsh-novel-write-engine'
 先做全书蓝图、第一卷大纲和世界观设定，再写第一章的世界观约束和章节计划。
 ```
 
-模型会调用 `novel_init` 建项目，然后按 `novel_guide` 的提示做书级规划；也可以跳过蓝图直接写第一章，严格大纲是可选开关。0.2.3 推荐顺序：
+模型会调用 `novel_init` 建项目，然后按 `novel_guide` 的提示做书级规划；也可以跳过蓝图直接写第一章，严格大纲是可选开关。0.2.4 推荐顺序：
 
 ```text
 novel_init
@@ -546,7 +548,7 @@ novel_init
 | `novel_audit`        | 任意       | 读追加式 journal 审计记录，含被拒 attempt；支持 chapter/op/status/since/until/cursor                                                                | 否             |
 | `novel_pipeline`     | 任意       | 「下一步该做什么」的建议                                                                                                                            | 否             |
 | `novel_blueprint`    | 任意       | 写书级蓝图：梗概、主题、基调、视角、读者、卖点、结局、卷结构                                                                                        | 是             |
-| `novel_outline`      | 任意       | 写卷/章卡；严格模式、归档卡保护、归档章自动回填                                                                                                     | 是             |
+| `novel_outline`      | 任意       | 按 `num` upsert 章卡、按 `title` upsert 卷；省略不删，`remove`/`remove_volumes` 显式删除，`dry_run` 预览 | 是             |
 | `novel_outline_import` | 任意     | 从 Markdown / YAML / JSON 导入大纲；`dry_run` 先预览                                                                                                | 可选           |
 | `novel_worldbook`    | 任意       | 增量更新世界观设定集（设定/规则/势力/地点/角色/术语/前史）                                                                                          | 是             |
 | `novel_search`       | 任意       | 跨正文、摘要、大纲、世界观、台账搜索，带章号/段落号/片段                                                                                            | 否             |
@@ -736,7 +738,8 @@ novel_blueprint {premise, logline, themes, tone, pov, audience,
                  selling_points, ending, strict, volumes}
 
 # 2. 章卡；或从 Markdown/YAML/JSON 导入
-novel_outline {chapters}
+novel_outline {chapters: [{num: 1, ...}], volumes: [...]}
+# 删除：novel_outline {remove: [2]}；预览：加 dry_run:true
 novel_outline_import {format:"markdown", content:"...", dry_run:true}
 
 # 3. 世界观设定集（按段替换）
@@ -927,6 +930,17 @@ corepack pnpm test
 
 ## 十一、升级
 
+### 11.0 从 0.2.3 升级到 0.2.4
+
+0.2.4 不迁移 `outline.yaml` 数据，只反转 `novel_outline` 的写入口语义：
+
+1. `chapters` 按 `num`、`volumes` 按 `title` upsert；省略的卡保持不动，不再被删除。
+2. 删除必须显式 `remove` / `remove_volumes`；活动章、归档章、不存在的卡和已完成卷会被拒绝。
+3. `dry_run:true` 可预演 `would_add/would_update/would_remove`；成功返回 `added/updated/removed`。
+4. `novel_outline` 正常写入会保留 `outline/outline.deprecated.yaml`；`novel_restore {txid, paths:["outline/outline.yaml"]}` 可恢复整份大纲（要求与当前章索引一致）。
+5. `novel_blueprint` 的卷列表仍是 replace；删卷必须 `confirm_remove:true`。
+6. 同名卷会被新写入拒绝；老项目若已有同名卷，先用 `novel_amend` 改名再提交 volumes（只读加载仍兼容）。
+
 ### 11.0 从 0.2.2 升级到 0.2.3
 
 0.2.3 不迁移项目数据，只改变读模型、面板 wire 版本与项目卫生：
@@ -1008,7 +1022,7 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 也可以固定版本：
 
 ```bash
-dsh plugin --profile web add dsh-novel-write-engine@0.2.3
+dsh plugin --profile web add dsh-novel-write-engine@0.2.4
 ```
 
 升级后核对：
@@ -1050,7 +1064,7 @@ corepack pnpm pack
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.3.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.4.tgz
 ```
 
 ### 11.5 在 Web / Desktop 里升级
@@ -1318,6 +1332,14 @@ tests/            # 单测、集成、falsify、e2e
 
 ### 16.5 当前验证基线
 
+0.2.4 在 Node 24.19 / DSH 0.2.1-rc.3 上完成：
+
+- `npm test` 全绿：**80 个测试文件 / 848 项**；
+- 覆盖率：**语句 93.97% / 分支 89.14% / 函数 98.00% / 行 93.97%**；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
+- `typecheck`、`lint`、`build` 通过；`check:hygiene`（143 files，0 v8 ignore）、`test:isolated`（60 源文件）、`validate:rulepack`、`check:pack`（25 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash` 全绿；
+- 0.2.4 outline 契约、dry_run、deprecated、outline restore、volumes upsert/remove 与 blueprint confirm 见 [0.2.4 验收](docs/0.2.4-acceptance.md)；
+- 真实模型链路：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在 0.2.4 临时项目完成 P1→P8、归档、report/doctor/panel v5、六种导出、`novel_reopen` 与重新归档；详见 [0.2.4 真实模型证据](docs/0.2.4-real-model-evidence.md)。
+
 0.2.3 在 Node 24.19 / DSH 0.2.1-rc.3 上完成：
 
 - `npm test` 全绿：**78 个测试文件 / 836 项**；
@@ -1339,6 +1361,9 @@ tests/            # 单测、集成、falsify、e2e
 | [DESIGN.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/DESIGN.md) | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
 | [PLAN.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/PLAN.md) | 0.1.0 实施计划（历史） |
 | [docs/0.2.0-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.0-plan.md) | 0.2.0 整书生命周期：蓝图/大纲/世界观/章卡/观测 |
+| [docs/0.2.4-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.4-plan.md) | 0.2.4 outline upsert、显式删除、dry_run 与恢复路径的根治方案 |
+| [docs/0.2.4-acceptance.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.4-acceptance.md) | 0.2.4 验收矩阵、质量门与边界 |
+| [docs/0.2.4-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.4-real-model-evidence.md) | 0.2.4 两条真实模型 P1→P8 链路回执 |
 | [docs/0.2.3-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.3-plan.md) | 0.2.3 可信账本、工作流、advisory、面板 v5 与项目卫生 |
 | [docs/0.2.3-acceptance.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.3-acceptance.md) | 0.2.3 验收矩阵、真实项目回归与质量门证据 |
 | [docs/0.2.2-plan.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-plan.md) | 0.2.2 会话级项目选择、scan/resume、面板 v4 与完整卷 |

@@ -25,7 +25,7 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 
 ## 书级规划（0.2.0）
 
-新项目先 `novel_guide`；推荐但不强制：`novel_blueprint`（蓝图/卷）→ `novel_outline`（章卡）→ `novel_worldbook`（设定集）。已有大纲可用 `novel_outline_import` 导入 Markdown/YAML/JSON。只要存在章卡，P2/P3 就按章卡校验标题、场景、字数与 cast；严格模式还要求章卡必须存在。要改已归档章先 `novel_reopen`（必须带 reason）。
+新项目先 `novel_guide`；推荐但不强制：`novel_blueprint`（蓝图/卷）→ `novel_outline`（章卡）→ `novel_worldbook`（设定集）。已有大纲可用 `novel_outline_import` 导入 Markdown/YAML/JSON。`novel_outline` 的章卡按 `num`、卷按 `title` upsert：只提交要改的对象，省略的卡保持不动；删除必须显式 `remove`/`remove_volumes`，不要用重交全量卡来“确保存在”。只要存在章卡，P2/P3 就按章卡校验标题、场景、字数与 cast；严格模式还要求章卡必须存在。要改已归档章先 `novel_reopen`（必须带 reason）。
 
 ## 流程路由
 

@@ -594,7 +594,7 @@ describe('0.2.0 review probes: coverage edges', () => {
     })
   })
 
-  it('warns when a full outline replacement drops planned cards', async () => {
+  it('upserts partial outline cards without dropping omitted planned cards', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await engine.initProject({ title: '书', genre: '都市现代', platform: 'fanqie', root })
@@ -602,8 +602,18 @@ describe('0.2.0 review probes: coverage edges', () => {
         chapters: [chapterCard, { ...chapterCard, num: 2, title: '旧城之影' }],
         root,
       })
-      const result = await engine.submitOutline({ chapters: [chapterCard], root })
-      expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'OUTLINE_PLANNED_DROPPED' }))
+      const result = await engine.submitOutline({
+        chapters: [{ ...chapterCard, goal: '改过的目标' }],
+        root,
+      })
+      expect(result.warnings).toEqual([])
+      expect(result.data).toMatchObject({ planned: 2, updated: [1], removed: [] })
+      const outline = (await engine.queryState({ kind: 'outline', root })).data as {
+        chapters: Array<{ num: number; title: string; goal: string }>
+      }
+      expect(outline.chapters.map((card) => card.num)).toEqual([1, 2])
+      expect(outline.chapters[1]?.title).toBe('旧城之影')
+      expect(outline.chapters[0]?.goal).toBe('改过的目标')
     } finally {
       await cleanup()
     }

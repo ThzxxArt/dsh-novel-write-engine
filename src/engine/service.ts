@@ -11,6 +11,7 @@ import {
   LIMITS,
   LOCK_FILE,
   METADATA_LOCK_FILE,
+  OUTLINE_DEPRECATED_FILE,
   OUTLINE_FILE,
   PROJECT_FILE,
   REVIEW_DIR,
@@ -103,6 +104,7 @@ import {
   type VolumeInput,
   type WorldbookPatch,
 } from './book.js'
+import { mergeOutline } from './outline-merge.js'
 import { buildBookReport, buildGuide, searchSnapshot } from './insight.js'
 import { historyTexts, listHistory, type HistoryEntry } from './history.js'
 import { BriefLibrary } from './brief.js'
@@ -314,7 +316,7 @@ export interface AmendSubmission {
 export interface RestoreSubmission {
   txid: string
   chapter?: number
-  /** Restrict to these project-relative files; omitted restores every chapter file in the snapshot. */
+  /** Restrict to chapter files, or exactly [outline/outline.yaml] to restore the plan. */
   paths?: string[]
   root?: string
 }
@@ -370,7 +372,27 @@ export interface WordCountInput {
 
 export interface BookPlanSubmission extends BookPatch {
   volumes?: VolumeInput[]
+  /** Explicit confirmation when a volume-list replacement drops a volume. */
+  confirm_remove?: boolean
   root?: string
+}
+
+export interface OutlineMutationResult {
+  planned: number
+  archived: number
+  total: number
+  strict: boolean
+  volumes: number
+  added: number[]
+  updated: number[]
+  removed: number[]
+  volumes_added: string[]
+  volumes_updated: string[]
+  volumes_removed: string[]
+  dry_run?: boolean
+  would_add?: number[]
+  would_update?: number[]
+  would_remove?: number[]
 }
 
 export interface OutlineSubmission extends OutlineInput {
@@ -1147,6 +1169,7 @@ export class EngineService {
       'ending',
       'strict',
       'volumes',
+      'confirm_remove',
       'root',
     ])
     for (const key of Object.keys(input)) {
@@ -1175,13 +1198,25 @@ export class EngineService {
         this.assertArchiveIndexReadable(snapshot, 'novel_blueprint')
         const now = this.now().toISOString()
         const bookPatch = Object.fromEntries(
-          Object.entries(input).filter(([key]) => key !== 'volumes' && key !== 'root'),
+          Object.entries(input).filter(
+            ([key]) => key !== 'volumes' && key !== 'confirm_remove' && key !== 'root',
+          ),
         ) as BookPatch
         const book = mergeBookPlan(snapshot.outline.book, bookPatch)
         const volumes =
           input.volumes === undefined
             ? snapshot.outline.volumes
             : normalizeVolumes(input.volumes, { totalChapters: snapshot.project.targets.total_chapters })
+        const removedVolumes = snapshot.outline.volumes
+          .filter((volume) => !volumes.some((next) => next.title === volume.title))
+          .map((volume) => volume.title)
+        if (removedVolumes.length > 0 && input.confirm_remove !== true) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `novel_blueprint would remove volumes: ${removedVolumes.join(', ')}`,
+            'pass confirm_remove:true to replace the volume list, or omit volumes to keep them',
+          )
+        }
         let chapters = snapshot.outline.chapters.map((card) => ({
           ...card,
           volume: volumeForChapter(volumes, card.num, card.volume),
@@ -1236,12 +1271,84 @@ export class EngineService {
     })
   }
 
-  async submitOutline(
+  private outlinePlanChange(
+    snapshot: Snapshot,
     input: OutlineSubmission,
-  ): Promise<
-    OpResult<{ planned: number; archived: number; total: number; strict: boolean; volumes: number }>
-  > {
-    const allowed = new Set(['book', 'volumes', 'chapters', 'strict', 'root'])
+    now: string,
+  ): { outline: OutlineDocument; data: OutlineMutationResult } {
+    const book = mergeBookPlan(
+      snapshot.outline.book,
+      input.book === undefined
+        ? undefined
+        : { ...input.book, ...(input.strict === undefined ? {} : { strict: input.strict }) },
+    )
+    if (input.strict !== undefined) {
+      book.strict = input.strict
+      book.strict_explicit = true
+    } else if (input.book?.strict === undefined) {
+      // First outline submission turns strict mode on. Once the author has
+      // authored a blueprint or volume, preserve their strict choice. Only an
+      // actual chapter submission may flip strict; an empty volumes/book patch
+      // must stay a no-op.
+      const firstCardSubmission =
+        (input.chapters?.length ?? 0) > 0 &&
+        snapshot.outline.chapters.length === 0 &&
+        snapshot.outline.book.strict_explicit !== true
+      if (firstCardSubmission) {
+        book.strict = true
+        book.strict_explicit = true
+      }
+    }
+    const merged = mergeOutline({
+      chapters: input.chapters ?? [],
+      remove: input.remove,
+      volumes: input.volumes,
+      remove_volumes: input.remove_volumes,
+      existing: snapshot.outline.chapters,
+      archivedChapters: snapshot.chapters.chapters,
+      existingVolumes: snapshot.outline.volumes,
+      titleRule: this.rulepack.format.title,
+      totalChapters: snapshot.project.targets.total_chapters,
+      defaultTargetWords: snapshot.project.targets.words_per_chapter,
+      now,
+      activeChapter: snapshot.pipeline.chapter,
+    })
+    const outline: OutlineDocument = {
+      schema_version: 1,
+      updated_at: now,
+      book,
+      volumes: merged.volumes,
+      chapters: merged.chapters,
+    }
+    return {
+      outline,
+      data: {
+        planned: merged.chapters.filter((card) => card.status === 'planned').length,
+        archived: merged.chapters.filter((card) => card.status === 'archived').length,
+        total: merged.chapters.length,
+        strict: book.strict,
+        volumes: merged.volumes.length,
+        added: merged.added,
+        updated: merged.updated,
+        removed: merged.removed,
+        volumes_added: merged.volumes_added,
+        volumes_updated: merged.volumes_updated,
+        volumes_removed: merged.volumes_removed,
+      },
+    }
+  }
+
+  async submitOutline(input: OutlineSubmission): Promise<OpResult<OutlineMutationResult>> {
+    const allowed = new Set([
+      'book',
+      'volumes',
+      'chapters',
+      'strict',
+      'remove',
+      'remove_volumes',
+      'dry_run',
+      'root',
+    ])
     for (const key of Object.keys(input)) {
       if (!allowed.has(key)) {
         throw new EngineInputError(
@@ -1255,6 +1362,54 @@ export class EngineService {
     this.assertProjectReadable(current, 'novel_outline')
     this.assertPlanningDocumentReadable(current, 'outline', 'novel_outline')
     this.assertArchiveIndexReadable(current, 'novel_outline')
+    // An empty submission is a true no-op: it must not rewrite outline.yaml,
+    // advance the pipeline or add a journal row. The old implementation treated
+    // it as an implicit "delete every planned card".
+    const emptyRequest =
+      (input.chapters === undefined || (Array.isArray(input.chapters) && input.chapters.length === 0)) &&
+      (input.remove === undefined || input.remove.length === 0) &&
+      (input.remove_volumes === undefined || input.remove_volumes.length === 0) &&
+      (input.volumes === undefined || (Array.isArray(input.volumes) && input.volumes.length === 0)) &&
+      (input.book === undefined ||
+        (typeof input.book === 'object' && input.book !== null && Object.keys(input.book).length === 0)) &&
+      input.strict === undefined
+    if (emptyRequest && input.dry_run !== true) {
+      return {
+        data: {
+          planned: current.outline.chapters.filter((card) => card.status === 'planned').length,
+          archived: current.outline.chapters.filter((card) => card.status === 'archived').length,
+          total: current.outline.chapters.length,
+          strict: current.outline.book.strict,
+          volumes: current.outline.volumes.length,
+          added: [],
+          updated: [],
+          removed: [],
+          volumes_added: [],
+          volumes_updated: [],
+          volumes_removed: [],
+        },
+        revision: current.pipeline.revision,
+        warnings: [],
+      }
+    }
+    if (input.dry_run === true) {
+      const plan = this.outlinePlanChange(current, input, this.now().toISOString())
+      this.assertOutlineWritable(current, plan.outline, 'novel_outline')
+      return {
+        data: {
+          ...plan.data,
+          added: [],
+          updated: [],
+          removed: [],
+          dry_run: true,
+          would_add: plan.data.added,
+          would_update: plan.data.updated,
+          would_remove: plan.data.removed,
+        },
+        revision: current.pipeline.revision,
+        warnings: [],
+      }
+    }
     return this.mutate({
       root: input.root,
       op: 'submitOutline',
@@ -1263,77 +1418,31 @@ export class EngineService {
         this.assertProjectReadable(snapshot, 'novel_outline')
         this.assertPlanningDocumentReadable(snapshot, 'outline', 'novel_outline')
         this.assertArchiveIndexReadable(snapshot, 'novel_outline')
-        const now = this.now().toISOString()
-        const book = mergeBookPlan(
-          snapshot.outline.book,
-          input.book === undefined
-            ? undefined
-            : { ...input.book, ...(input.strict === undefined ? {} : { strict: input.strict }) },
-        )
-        if (input.strict !== undefined) {
-          book.strict = input.strict
-          book.strict_explicit = true
-        } else if (input.book?.strict === undefined) {
-          // First outline submission turns strict mode on. Once the author has
-          // authored a blueprint or volume, preserve their strict choice; the
-          // old check only looked at chapter cards, so importing an outline
-          // after `novel_blueprint {strict:false}` silently re-enabled it.
-          const firstCardSubmission =
-            snapshot.outline.chapters.length === 0 && snapshot.outline.book.strict_explicit !== true
-          if (firstCardSubmission) {
-            book.strict = true
-            book.strict_explicit = true
-          }
-        }
-        const volumes =
-          input.volumes === undefined
-            ? snapshot.outline.volumes
-            : normalizeVolumes(input.volumes, { totalChapters: snapshot.project.targets.total_chapters })
-        const chapters = normalizeOutlineChapters(input.chapters, {
-          volumes,
-          existing: snapshot.outline.chapters,
-          archived: snapshot.chapters.chapters,
-          titleRule: this.rulepack.format.title,
-          totalChapters: snapshot.project.targets.total_chapters,
-          defaultTargetWords: snapshot.project.targets.words_per_chapter,
-          now,
-        })
-        const outline: OutlineDocument = { schema_version: 1, updated_at: now, book, volumes, chapters }
-        this.assertActiveCardPreserved(snapshot, book.strict, chapters, 'novel_outline')
-        this.assertOutlineWritable(snapshot, outline, 'novel_outline')
-        const planned = chapters.filter((card) => card.status === 'planned').length
-        const archived = chapters.filter((card) => card.status === 'archived').length
-        const kept = new Set(chapters.filter((card) => card.status === 'planned').map((card) => card.num))
-        const dropped = snapshot.outline.chapters
-          .filter((card) => card.status === 'planned' && !kept.has(card.num))
-          .map((card) => card.num)
+        const plan = this.outlinePlanChange(snapshot, input, this.now().toISOString())
+        this.assertOutlineWritable(snapshot, plan.outline, 'novel_outline')
         const nextPipeline = pipelineWith(snapshot, context.revision, {
           last_action: action('novel_outline', this.now(), shortDigest(stableJson(input))),
         })
+        const files: StagedFile[] = [
+          { path: OUTLINE_FILE, text: yaml(plan.outline) },
+          { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+        ]
+        // Keep a one-level repair copy, aligned with chapter .deprecated files.
+        const prior = await context.store.readText(OUTLINE_FILE)
+        if (prior !== null) files.push({ path: OUTLINE_DEPRECATED_FILE, text: prior })
         return {
-          files: [
-            { path: OUTLINE_FILE, text: yaml(outline) },
-            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
-          ],
+          files,
           backup: true,
-          data: { planned, archived, total: chapters.length, strict: book.strict, volumes: volumes.length },
-          warnings:
-            dropped.length === 0
-              ? []
-              : [
-                  {
-                    code: 'OUTLINE_PLANNED_DROPPED',
-                    message: `this replacement dropped planned cards: ${dropped.join(', ')}; resubmit every existing card when adding one`,
-                  },
-                ],
+          data: plan.data,
+          warnings: [],
           event: {
             name: 'novel/planned',
             payload: {
               schemaVersion: 1,
               projectRoot: snapshot.root,
               kind: 'outline',
-              chapters: chapters.length,
-              volumes: volumes.length,
+              chapters: plan.data.total,
+              volumes: plan.data.volumes,
             },
           },
         }
@@ -1873,6 +1982,79 @@ export class EngineService {
             `backup ${input.txid} has no readable manifest`,
             'list backups with novel_state {kind:"backups"}; only marked engine backups can be restored',
           )
+        }
+        const outlineOnly = input.paths?.length === 1 && input.paths[0] === OUTLINE_FILE
+        if (outlineOnly) {
+          this.assertArchiveIndexReadable(snapshot, 'novel_restore')
+          if (input.chapter !== undefined) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'restoring outline/outline.yaml does not accept a chapter',
+              'omit chapter when paths is exactly [outline/outline.yaml]',
+            )
+          }
+          if (!manifest.files.includes(OUTLINE_FILE)) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} does not contain ${OUTLINE_FILE}`,
+              'choose a backup created by novel_outline, novel_blueprint or a planning amendment',
+            )
+          }
+          const text = await context.store.readText(`backups/${input.txid}/${OUTLINE_FILE}`)
+          if (text === null) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} does not contain ${OUTLINE_FILE}`,
+              'the file was created by that transaction, so it has no pre-image to restore',
+            )
+          }
+          let document: OutlineDocument
+          try {
+            document = validateOutlineDocument(parseYaml(text), {
+              titleRule: this.rulepack.format.title,
+              totalChapters: snapshot.project.targets.total_chapters,
+            })
+          } catch (error) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} contains an invalid outline: ${errorMessage(error)}`,
+              'restore a different backup or repair the file manually',
+            )
+          }
+          const restoredCards = new Map(document.chapters.map((card) => [card.num, card]))
+          const archivedNums = new Set(snapshot.chapters.chapters.map((record) => record.num))
+          for (const record of snapshot.chapters.chapters) {
+            const restoredCard = restoredCards.get(record.num)
+            if (restoredCard?.status !== 'archived') {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} would make archived chapter ${record.num} ${restoredCard === undefined ? 'missing its card' : 'a planned card'}`,
+                'call novel_reopen before restoring a pre-archive outline, or choose an outline backup that already contains the archived card',
+              )
+            }
+          }
+          for (const card of document.chapters) {
+            if (card.status === 'archived' && !archivedNums.has(card.num)) {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} would restore an archived card for chapter ${card.num}, but that chapter is not archived`,
+                'choose an outline backup that matches the current chapter index, or reopen/archive the chapter first',
+              )
+            }
+          }
+          const files: StagedFile[] = [{ path: OUTLINE_FILE, text }]
+          const prior = await context.store.readText(OUTLINE_FILE)
+          if (prior !== null) files.push({ path: OUTLINE_DEPRECATED_FILE, text: prior })
+          const nextPipeline = pipelineWith(snapshot, context.revision, {
+            last_action: action('novel_restore', this.now(), shortDigest(input.txid)),
+          })
+          files.push({ path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) })
+          return {
+            files,
+            backup: true,
+            data: { txid: input.txid, chapter: snapshot.pipeline.chapter, restored: [OUTLINE_FILE] },
+            warnings: [],
+          }
         }
         const chapter = input.chapter ?? snapshot.pipeline.chapter
         if (snapshot.chapters.chapters.some((record) => record.num === chapter)) {
@@ -6361,10 +6543,8 @@ export class EngineService {
   }
 
   /**
-   * A strict outline cannot silently lose the active chapter's card while the
-   * chapter is still being written. Otherwise a late replacement turns a
-   * strict project non-strict in effect and archive would auto-create the card
-   * the author was required to provide.
+   * An import is a full replacement, unlike novel_outline's keyed upsert. It
+   * must not silently lose the active card while strict mode still requires it.
    */
   private assertActiveCardPreserved(
     snapshot: Snapshot,
@@ -6379,7 +6559,7 @@ export class EngineService {
     throw new EngineInputError(
       ERROR_CODES.SCHEMA_INVALID,
       `${operation} cannot remove the active chapter ${chapter} card while strict mode is on`,
-      'include the active card in the replacement, or turn strict mode off with novel_blueprint {"strict":false}',
+      'include the active card in the imported outline; import replaces the whole plan and will not turn strict mode off for you',
     )
   }
 

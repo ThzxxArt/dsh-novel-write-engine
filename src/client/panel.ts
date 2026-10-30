@@ -781,7 +781,7 @@ const TUTORIAL_NEXT_PROMPT = `继续写当前项目的下一章。先调用 nove
 如果当前会话还没绑定或不确定是哪本书：先用 /novel current 看会话绑定，再调用 novel_status 看 selection；需要切换时用 /novel use <路径|书名|.>，不要靠 active 猜。
 第一次调用带 project_root 时，它会成为当前会话的持久绑定；后续无 root 调用会继续这本书。
 
-如果下一章还没有章卡：先用 novel_state {kind:"outline"} 取出全部章卡，再在末尾加上下一章的卡，用 novel_outline 整体提交；不要只提交新卡，也不要把已有 planned 卡丢掉。
+如果下一章还没有章卡：用 novel_outline 只提交下一章的卡（按 num upsert），省略的已有卡会保持不动；不要重交全量，也不要用空数组清空。要删卡必须显式传 remove。
 如果 targets.total_chapters 已经写满：先用 novel_amend 把 total_chapters 调到至少包含下一章，不能低于已归档章数。
 
 之后严格按：novel_brief P1 → novel_plan_world → brief P2 → novel_plan_chapter → brief P3 → novel_write_draft → brief P4 → novel_review →（有 blocker）brief P5 → novel_revise → 回 P4 → brief P6 → novel_check → brief P8 → novel_archive 的顺序推进。
@@ -1733,7 +1733,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.3 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.4 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )

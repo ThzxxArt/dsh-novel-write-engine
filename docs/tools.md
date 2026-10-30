@@ -2,6 +2,15 @@
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
+## 0.2.4 大纲写入契约
+
+- `novel_outline.chapters` **按 `num` upsert**，`volumes` **按 `title` upsert**；未提交的卡不删。
+- 删除只能显式：`remove: number[]`、`remove_volumes: string[]`；活动章、归档章、不存在的章、已完成卷会被拒绝。只删不写时可省略 `chapters`：`novel_outline {remove:[2]}`；空 `{}`/`chapters:[]` 是 no-op。
+- `dry_run:true` 返回 `would_add/would_update/would_remove`，不写盘、不写 journal。
+- 成功返回 `added/updated/removed`（章）与 `volumes_added/volumes_updated/volumes_removed`（卷）；三者之外的卡不变。
+- `novel_outline` 正常写入保留上一版 `outline/outline.deprecated.yaml`；`novel_restore {txid, paths:["outline/outline.yaml"]}` 可从备份恢复整份大纲（要求与当前章索引一致）。
+- `novel_blueprint.volumes` 仍是整体 replace；删卷必须 `confirm_remove:true`。
+
 | 工具                 | 阶段     | 操作                                                                                                                                     | 写盘                                                                         |
 | -------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `novel_init`         | —        | `initProject`                                                                                                                            | 是                                                                           |
@@ -22,8 +31,8 @@
 | `novel_export`       | 任意     | `export`；md/txt/epub/outline/worldbook/proposal                                                                                         | 导出目录                                                                     |
 | `novel_audit`        | 任意     | `auditHistory`；含被拒 attempt，支持 chapter/op/status/since/until/cursor                                                    | 否                                                                           |
 | `novel_pipeline`     | 任意     | `advise`                                                                                                                                 | 否                                                                           |
-| `novel_blueprint`    | 任意     | `submitBookPlan`                                                                                                                         | 是                                                                           |
-| `novel_outline`      | 任意     | `submitOutline`；严格模式、归档卡保护                                                                                                    | 是                                                                           |
+| `novel_blueprint`    | 任意     | `submitBookPlan`；卷列表为 replace，删除卷需 `confirm_remove:true`                                                                        | 是                                                                           |
+| `novel_outline`      | 任意     | `submitOutline`；chapters 按 num、volumes 按 title upsert；显式 remove、dry_run、变更回显；归档卡保护                                    | 是                                                                           |
 | `novel_outline_import` | 任意   | `importOutline`；Markdown/YAML/JSON，`dry_run` 预览                                                                                      | 可选                                                                         |
 | `novel_worldbook`    | 任意     | `submitWorldbook`；按段替换                                                                                                              | 是                                                                           |
 | `novel_search`       | 任意     | `search`；正文/摘要/大纲/世界观/台账                                                                                                     | 否                                                                           |
@@ -31,7 +40,7 @@
 | `novel_report`       | 任意     | `report`；进度/质量/节奏/角色/伏笔/时间线/关系                                                                                           | 否                                                                           |
 | `novel_guide`        | 任意     | `guide`；六态引导（no-project/new/planning/writing/blocked/finished），无项目可用                                                        | 否                                                                           |
 | `novel_reopen`       | 已归档章 | `reopenChapter`；从归档备份恢复并重开 P3；`chapter` 与 `reason` 必填                                                                     | 事务                                                                         |
-| `novel_restore`      | 活动章   | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验；已归档章拒绝，先 `novel_reopen`                                             | 事务                                                                         |
+| `novel_restore`      | 活动章/大纲 | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验或 outline/outline.yaml；已归档章拒绝，先 `novel_reopen`                      | 事务                                                                         |
 
 ## 错误三分类
 
@@ -72,7 +81,7 @@
 ## 0.2.0 契约补充
 
 - `novel_state` 新增 `kind: outline | worldbook`；损坏时返回 `{error,message,path,raw}`。
-- `novel_blueprint` / `novel_outline` / `novel_worldbook` 是书级写操作，不受阶段门控，但会推进 revision 与 journal；严格大纲首次提交默认开启，已有蓝图内容时尊重显式 `strict:false`。
+- `novel_blueprint` / `novel_outline` / `novel_worldbook` 是书级写操作，不受阶段门控，但会推进 revision 与 journal；严格大纲首次提交默认开启，已有蓝图内容时尊重显式 `strict:false`。`novel_blueprint` 的卷列表仍是 replace，删卷必须 `confirm_remove:true`；`novel_outline` 的 chapters/volumes 是 upsert，省略不删，删除走 `remove`/`remove_volumes`。
 - `novel_amend` 允许修复 `outline/outline.yaml` 与 `outline/worldbook.yaml`；已归档卡的 title/scene/target_words/cast/word_count/score/archived_at 仍不可改。
 - `novel_doctor` 新增大纲覆盖率与当前阶段产物检查；`novel_report` 的 outline/worldbook `present` 以内容为准。
 - `novel_outline_import` 的 `dry_run=true` 不写盘；解析失败带 Markdown 行号。
@@ -112,7 +121,7 @@
 - `novel_state {kind:"history"}` 列出 `history/` 下的评审/校验/正文/废弃稿/计划版本，返回 `entries` 全量（不静默截断）与 `total`；带 `chapter` 与正整数 `revision` 时返回该章该版本文本，未带 chapter 时默认活动章。`kind:"backups"` 返回 manifest（op/chapter/revision/files/reason）；没有 manifest 的旧备份只可列出。
 - `novel_revise` 的 `patch` 模式必须带 `expected_hash`；`old_text` 默认必须唯一，`occurrence` 才允许多处；hash 不匹配时零写入。
 - `novel_check` 把 blocker 放 `machine.violations`，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code，未知 code 或 blocker 返回 `ENGINE_SCHEMA_INVALID`。
-- `novel_restore` 只能恢复活动章；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复。
+- `novel_restore` 只能恢复活动章，或 `paths: ["outline/outline.yaml"]` 的整份大纲；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。
 - P2 计划文件不再写 `summary`；活动摘要/标题/场景/叙述者位于 `pipeline.draft`，归档时写入 `ChapterRecord`，`ChapterRecord.rounds/final_check/archived_at`（含 `rollbacks`）供 `novel_report.effort` 使用。归档前正文 hash 必须仍等于 `draft.content_hash`，否则返回 `ENGINE_TXN_ABORTED`；`status` 用 `DRAFT_STALE` 指回 P3。
 - `card_coverage` 是“已归档章中有 archived 章卡”的逐章比例；`planned_coverage`/`archived_coverage` 才以目标章数为分母。worldbook 的 `facts` 同时进入计数、brief 上下文与 P6 数字事实检查。
 - `NUMERIC_CONTRADICTION` 固定为 advisory（中文主语不明确，不能可靠区分车/船等不同对象），`NUMERIC_FACT_MISMATCH` 只匹配“别名 + 数字 + 声明单位”的相邻写法，避免把旁边的数量词当成事实。

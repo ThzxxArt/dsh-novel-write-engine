@@ -291,7 +291,7 @@ const outlineAlignment: Gate = (input) => {
       block(
         'PG-13',
         `chapter ${input.chapter} has no outline card while strict mode is on`,
-        'read novel_state {kind:"outline"}, then submit every existing card plus this one with novel_outline (full replacement); or turn strict off with novel_blueprint',
+        'read novel_state {kind:"outline"}, then submit only the missing card with novel_outline (upsert by num; omitted cards are kept); do not turn strict off',
       ),
     ]
   }

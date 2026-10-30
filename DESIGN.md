@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.3`                                                                                                  |
+| 插件版本 | `0.2.4`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1380,6 +1380,8 @@ const TRANSITIONS: readonly Transition[] = [
 ### 7.4 十三条门控
 
 > 0.2.0 的 PG-13 在 `submitChapterPlan` / `submitDraft` / `archiveChapter` 求值；大纲是规划输入，不是第二真相。严格模式默认关闭，`novel_outline` 首次提交开启。缺失章卡只在严格模式拒绝；已有章卡的对齐检查在任何模式都执行。归档前再次检查，防止 P3 后删除或改写章卡绕过。
+
+0.2.4 起，`novel_outline` 的 chapters 按 `num`、volumes 按 `title` upsert：省略不删，删除只走 `remove`/`remove_volumes`，活动章/归档章/不存在章/已完成卷拒绝删除。写入支持 `dry_run`、`added/updated/removed` 回显和 `outline.deprecated.yaml`；`novel_restore` 可用 `paths:["outline/outline.yaml"]` 从备份恢复。`novel_blueprint.volumes` 仍整体 replace，但删卷必须 `confirm_remove:true`。
 
 | 编号  | 名称             | 判定条件                                                                                 | 触发点            |
 | ----- | ---------------- | ---------------------------------------------------------------------------------------- | ----------------- |

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.4
+
+### Changed
+
+- **BREAKING：`novel_outline` 改为按标识 upsert**：`chapters` 按 `num`、`volumes` 按 `title` 合并；省略的卡保持不动，不再因“提交集合就是全集”而静默删除。删除必须显式 `remove` / `remove_volumes`，活动章、归档章、不存在的卡和已完成卷都会被拒绝。
+- **可解释写入**：`novel_outline` 新增 `dry_run`（返回 `would_add`/`would_update`/`would_remove`，零写盘、零 journal）、`added`/`updated`/`removed` 变更回显、`outline/outline.deprecated.yaml` 一级回退副本；`novel_restore` 支持 `paths: ["outline/outline.yaml"]`、不要求 `chapter`。
+- **工具契约**：持久集合的数组参数声明 upsert/replace/remove 语义；`novel_blueprint` 的卷列表仍是 replace，但删除卷必须显式 `confirm_remove:true`。DSH 的强制 JSON Schema 子集不接受未知 `x-semantics` 关键字，因此语义落在参数描述与 `src/tools/semantics.ts` 契约表中，并由 `tests/tool-contract.spec.ts` 强制。
+- **文档**：`novel_outline` 描述明确“upsert by key”，P2 brief 增加“未提交卡保持”的提示，工具文档与升级说明同步。
+
+### Migration
+
+- 老的**全量提交**调用在 upsert 下等价，无需改动。
+- 老的**部分提交**以前会删掉未提交卡，现在只改提交的卡；这正是本次修正。
+- 想清空计划卡：以前空数组可行，现在空数组是 no-op；必须显式 `remove: [3,4,...]`。数据格式不变，无需迁移文件。
+- 同名卷会被新写入拒绝（upsert 以 `title` 为键，同名无法区分）。老项目只读加载仍兼容；若要提交 `volumes`/`remove_volumes`，先用 `novel_amend` 给其中一卷改名。
+
+### Tests
+
+- 新增 `tests/024.spec.ts`（部分 upsert、显式删除、active/unknown/submitted/archived 拒绝、dry_run 零写入、deprecated、outline 恢复、volumes upsert/remove、blueprint confirm）与 `tests/tool-contract.spec.ts`。
+- 质量：80 个测试文件 / 848 项测试全绿；覆盖率 93.97 / 89.14 / 98.00 / 93.97，逐文件门禁通过。
+
 ## 0.2.3
 
 ### Changed

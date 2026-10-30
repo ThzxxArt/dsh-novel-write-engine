@@ -364,6 +364,14 @@ it('routes the 0.2.0 book tools to their service operations', async () => {
   expect(engine.submitBookPlan).toHaveBeenCalledWith(expect.objectContaining({ premise: 'p', volumes: [] }))
   await map.get('novel_outline')!.execute({ chapters: [] }, {})
   expect(engine.submitOutline).toHaveBeenCalledWith(expect.objectContaining({ chapters: [] }))
+  await map.get('novel_outline')!.execute({ remove: [2], remove_volumes: ['第一卷'], dry_run: true }, {})
+  expect(engine.submitOutline).toHaveBeenCalledWith(
+    expect.objectContaining({ remove: [2], remove_volumes: ['第一卷'], dry_run: true }),
+  )
+  await map.get('novel_blueprint')!.execute({ volumes: [], confirm_remove: true }, {})
+  expect(engine.submitBookPlan).toHaveBeenCalledWith(
+    expect.objectContaining({ volumes: [], confirm_remove: true }),
+  )
   await map.get('novel_outline_import')!.execute({ format: 'markdown', content: 'x' }, {})
   expect(engine.importOutline).toHaveBeenCalledWith(
     expect.objectContaining({ format: 'markdown', content: 'x' }),

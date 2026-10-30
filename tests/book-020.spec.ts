@@ -225,10 +225,11 @@ describe('0.2.0 whole-book lifecycle', () => {
       })
       await expect(planChapter(engine, root, {}, ['他'])).rejects.toBeInstanceOf(EngineBlockedError)
 
-      // Strict mode without a card: P2 is refused before any write.
-      await expect(engine.submitOutline({ chapters: [], strict: true, root })).rejects.toMatchObject({
-        code: 'ENGINE_SCHEMA_INVALID',
-      })
+      // Strict mode without a card: the new upsert contract treats an empty
+      // chapter list as a no-op, so the active card is preserved rather than
+      // deleted. Remove it explicitly to prove P2 still refuses.
+      const kept = await engine.submitOutline({ chapters: [], strict: true, root })
+      expect(kept.data.planned).toBe(1)
       const outline = (await engine.queryState({ kind: 'outline', root })).data as {
         chapters: unknown[]
       }

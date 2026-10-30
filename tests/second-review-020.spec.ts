@@ -346,7 +346,7 @@ describe('second full review regressions', () => {
     }
   })
 
-  it('refuses to drop the active strict card through a later replacement', async () => {
+  it('preserves the active strict card through an empty upsert and rejects explicit removal', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await engine.initProject({ title: '书', genre: '都市现代', platform: 'fanqie', root })
@@ -366,7 +366,9 @@ describe('second full review regressions', () => {
         ],
         root,
       })
-      await expect(engine.submitOutline({ chapters: [], root })).rejects.toMatchObject({
+      const preserved = await engine.submitOutline({ chapters: [], root })
+      expect(preserved.data).toMatchObject({ planned: 1, removed: [] })
+      await expect(engine.submitOutline({ chapters: [], remove: [1], root })).rejects.toMatchObject({
         code: 'ENGINE_SCHEMA_INVALID',
       })
     } finally {
