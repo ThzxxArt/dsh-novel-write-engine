@@ -79,6 +79,21 @@
 - `novel_export` 新增 `outline | worldbook | proposal`；`chapter` 只对 `md/txt/epub` 有效。
 - `novel_reopen` 必须传 `chapter` 与 `reason`；只允许紧邻的已归档章，活动章未开始；损坏的 outline 会拒绝重开，避免覆盖规划。
 
+## 0.2.3 契约补充
+
+- `novel_status` 增加 `manuscript_hash`（活动正文 SHA-256，无正文为 `null`）；所有 brief 的 `fields.manuscript_hash` 同源。`novel_revise` 的 patch 可直接用这个值。
+- `ready_to_archive` 新增 `submitRevision` 回 P4：归档失败后可先 `novel_brief P5`，再直接修订；不需要 `novel_rollback`，不写额外的废弃稿快照。
+- 修订尝试改写 issue 的 `dimension/location/problem/fix/severity`、或把 blocker 降级/waived 时返回 `ENGINE_ISSUE_IMMUTABLE`；错误消息回显字段与收到的值。格式错误仍是 `ENGINE_SCHEMA_INVALID`。
+- 有 `key` 的写操作会在 journal 记录 `retry_key`/`retry_context`；与上次被拒尝试内容、brief、stage、revision 完全相同时返回 `ENGINE_RETRY_UNCHANGED`，换 brief 或改内容后才放行。无 key 的维护操作不做此限制。
+- P8 brief 的 `fields.delta_rules.minimal_schema` 给出五个 section 的最小形状与示例；delta 错误会带 `expected` 形态。
+- `novel_report.effort` 对缺少 `rounds/archived_at` 的旧章按 committed journal 回填；`quality` 每章只取最终评审，`samples`=章数，`attempts`=committed 评审轮次（含历史），`trend_basis` 说明趋势为空/可算的原因。
+- `pipeline.briefs` 只含当前章收据；`novel_state {kind:"briefs"}` 仍返回全书 append-only 收据。重复领取同章同阶段返回 `replayed:true`，不写 journal。
+- advisory 按 code 每章一条并合并证据；`RESOURCE_MISMATCH` 只在正文同窗口明确写反向符号时报，缺资源名/无符号不再报。同段“数量 × 单价 = 总额”或“人数，每人金额，共总额”不一致时，`NUMERIC_CONTRADICTION` 报 advisory；跨段/多单位换算仍不在本轮。`novel_check` 的 check 文档仍只把 blocker 放入 `machine.violations`。
+- 中文句密度上限从 8 调到 10/100 字，避免把普通短句叙事当异常；仍是 advisory，不阻塞归档。
+- `novel_doctor` 新增 `legacy-data` warning（旧 check、缺 rounds、extra 角色、pre-0.2.3 无 anchor 伏笔、stale `pipeline.briefs`）和 strict 模式 `worldbook.facts` 为空提醒；只读，不改历史。`state/briefs.yaml` 的跨章历史收据是正常 append-only 审计，不报 stale。
+- `/novel projects --prune [--yes]` 默认只列 `missing/not-project/unreadable` 登记行；`--yes` 才调用 `forgetProject`，只删登记、不删项目目录，active 被清理时同时清空。
+- 面板 payload v5：`summary.advisories[]`、`summary.legacy[]`；`quality.trend` 可为 `null`，并带 `trend_basis/samples/attempts`。旧 v4 标签页显示“需要刷新”。
+
 ## 0.2.2 契约补充
 
 - 所有工具的 `project_root` 语义：**项目模式下显式传入成功后绑定当前 DSH 会话并持久化**；省略时按「会话绑定 → cwd 唯一项目 → 唯一注册项目/配置 `projectRoot`」解析。多项目无法唯一确定时返回 `ENGINE_PROJECT_AMBIGUOUS`，不会用 `active` 猜。例外：`novel_word_count` 的纯文本模式与 `novel_diff` 的 `before`+`after` 文本模式不读项目、不绑定会话，schema 已单独标注。

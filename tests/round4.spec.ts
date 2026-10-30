@@ -144,7 +144,7 @@ it('refuses to erase or downgrade a blocker through novel_revise', async () => {
         proof: sampleReview(1, text).proof,
         root,
       }),
-    ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    ).rejects.toMatchObject({ code: 'ENGINE_ISSUE_IMMUTABLE' })
   } finally {
     await cleanup()
   }

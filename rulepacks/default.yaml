@@ -1,6 +1,6 @@
 schema_version: 1
 name: default
-version: "1.0.0"
+version: "1.0.1"
 
 lexicon:
   zero_tolerance:
@@ -145,7 +145,9 @@ punctuation:
     base: { 战斗/动作章: 3, 日常过渡章: 4, 情感爆发章: 6, 纯叙事章: 3 }
     scale_words: 3000
     token: "——"
-  period_density: { min: 1.5, max: 8 }
+  # Chinese web fiction often uses short sentences; 8/100 flagged ordinary
+  # narrative (e.g. 9.52/100). Keep a ceiling, but calibrate it for Chinese.
+  period_density: { min: 1.5, max: 10 }
   ellipsis_run: { max: 1, token: "……" }
   uniform_sentence: { min_sentences: 8, ratio: 0.6 }
   consecutive_le: { max: 3, char: "了" }

@@ -13,12 +13,12 @@ const payload = (): PanelPayloadDto & {
   summary: NonNullable<PanelPayloadDto['summary']>
   chapters: NonNullable<PanelPayloadDto['chapters']>
 } => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   projects: [{ root: '/novels/test', title: '测试之书', active: true, registered: true, state: 'ok' }],
   selection: { root: '/novels/test', source: 'active' },
   resume: { text: '请继续《测试之书》。\n项目根：/novels/test' },
   summary: {
-    schemaVersion: 4,
+    schemaVersion: 5,
     panelId: 'novel-workshop',
     root: '/novels/test',
     title: '测试之书',
@@ -68,7 +68,7 @@ const payload = (): PanelPayloadDto & {
     activity: [{ at: '2026-10-28T10:00:00.000Z', op: 'archiveChapter', chapter: 1, status: 'committed' }],
   },
   chapters: {
-    schemaVersion: 4,
+    schemaVersion: 5,
     panelId: 'novel-workshop',
     rows: [
       { num: 1, title: '开端之雨', wordCount: 2400, score: 145, stage: 'done', status: 'passed' },
@@ -76,7 +76,7 @@ const payload = (): PanelPayloadDto & {
       { num: 3, title: '灯下之言', wordCount: 0, score: 0, stage: 'P3', status: 'blocked' },
     ],
   },
-  gates: { schemaVersion: 4, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
+  gates: { schemaVersion: 5, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
 })
 
 describe('panel view model', () => {
@@ -411,6 +411,64 @@ describe('panel v4 project selection', () => {
     expect(renderToStaticMarkup(panelElement(unreadableView, false, () => undefined))).toContain('项目不可读')
   })
 
+  it('labels busy, not-project and identity-changed selector entries', () => {
+    const busy = twoProjects()
+    busy.selection = { root: '/novels/b', source: 'query' }
+    delete busy.summary
+    delete busy.chapters
+    delete busy.gates
+    busy.missing = {
+      root: '/novels/b',
+      title: '乙书',
+      code: 'ENGINE_TXN_IN_PROGRESS',
+      reason: 'busy',
+      hint: 'wait for the writer',
+    }
+    const busyView = buildView(busy)
+    expect(busyView.title).toBe('正在写入')
+    expect(busyView.stageLabel).toBe('稍后刷新')
+    expect(renderToStaticMarkup(panelElement(busyView, false, () => undefined))).toContain('稍后刷新')
+
+    const notProject = twoProjects()
+    notProject.projects[1] = { ...notProject.projects[1]!, state: 'not-project' }
+    notProject.selection = { root: '/novels/b', source: 'query' }
+    delete notProject.summary
+    delete notProject.chapters
+    delete notProject.gates
+    notProject.missing = {
+      root: '/novels/b',
+      title: '乙书',
+      code: 'ENGINE_PROJECT_NOT_FOUND',
+      reason: 'not-project',
+      hint: 'the directory is not a project',
+    }
+    const notProjectView = buildView(notProject)
+    expect(notProjectView.title).toBe('不是项目目录')
+    expect(notProjectView.projects.find((project) => project.root === '/novels/b')?.label).toContain(
+      '（不是项目）',
+    )
+
+    const identity = twoProjects()
+    identity.projects[0] = { ...identity.projects[0]!, identity_changed: true }
+    const identityView = buildView(identity)
+    const changed = identityView.projects.find((project) => project.root === '/novels/a')
+    expect(changed?.label).toContain('（路径已换书）')
+    expect(changed?.group).toBe('damaged')
+  })
+
+  it('labels an insufficient quality history without a fake trend', () => {
+    const value = payload()
+    value.summary!.quality = {
+      averageScore: 145,
+      scores: [140, 145],
+      trend: null,
+      trend_basis: 'insufficient_history',
+      samples: 2,
+      attempts: 3,
+    }
+    expect(buildView(value).quality.trendText).toBe('历史不足')
+  })
+
   it('renders a sparse ready payload without chapters, resume, root or next tool', () => {
     const sparse: PanelPayloadDto = payload()
     sparse.summary!.root = ''
@@ -499,6 +557,132 @@ describe('panel v4 project selection', () => {
     const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
     expect(html).toContain('目录不存在')
     expect(html).toContain('不可读')
+  })
+
+  it('groups and disambiguates host-smoke projects and renders advisories separately', () => {
+    const noisy = payload()
+    noisy.projects = [
+      { root: '/novels/a', title: '正常书', active: true, registered: true, state: 'ok' },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        root: `/tmp/nwe-host-${index}/host-smoke-project`,
+        title: 'Host Smoke',
+        active: false,
+        registered: true,
+        state: 'missing' as const,
+      })),
+    ]
+    noisy.selection = { root: '/novels/a', source: 'active' }
+    noisy.summary!.root = '/novels/a'
+    noisy.summary!.advisories = [
+      { code: 'LOCKED_DETAIL_DRIFT', detail: 'expected "灰长衫", actual "鲜红铠甲"', hint: '第 1 段' },
+    ]
+    noisy.summary!.legacy = [{ code: 'LEGACY_EFFORT', detail: '1 章缺少 rounds/archived_at' }]
+    const view = buildView(noisy)
+    const hostLabels = view.projects.filter((project) => project.title === 'Host Smoke').map((p) => p.label)
+    expect(new Set(hostLabels).size).toBe(7)
+    expect(hostLabels[0]).toContain('nwe-host-0/host-smoke-project')
+    expect(view.advisories[0]).toMatchObject({ code: 'LOCKED_DETAIL_DRIFT' })
+    expect(view.legacy[0]).toMatchObject({ code: 'LEGACY_EFFORT' })
+    const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(html).toContain('提示')
+    expect(html).toContain('旧数据')
+    expect(html).toContain('expected &quot;灰长衫&quot;')
+    expect(html).not.toContain('nwe-host-0/host-smoke-project')
+  })
+
+  it('renders acknowledged advice counts and the all-acknowledged state', () => {
+    const noisy = payload()
+    noisy.summary!.advisories = [
+      { code: 'LOCKED_DETAIL_DRIFT', detail: 'expected "灰长衫", actual "鲜红铠甲"', hint: '第 1 段' },
+    ]
+    noisy.summary!.acknowledgedAdvisories = 0
+    const open = renderToStaticMarkup(panelElement(buildView(noisy), false, () => undefined))
+    expect(open).toContain('可 acknowledge')
+    noisy.summary!.advisories = []
+    noisy.summary!.acknowledgedAdvisories = 2
+    const closed = renderToStaticMarkup(panelElement(buildView(noisy), false, () => undefined))
+    expect(closed).toContain('已确认 2 条')
+    expect(closed).toContain('本轮提示已全部确认')
+  })
+
+  it('uses the shortest unique path suffix when duplicate titles share their last two segments', () => {
+    const noisy = payload()
+    noisy.projects = [
+      { root: '/mnt/d/books/novel', title: '同名书', active: true, registered: true, state: 'ok' },
+      { root: '/home/me/books/novel', title: '同名书', active: false, registered: true, state: 'ok' },
+    ]
+    noisy.selection = { root: '/mnt/d/books/novel', source: 'active' }
+    noisy.summary!.root = '/mnt/d/books/novel'
+    const labels = buildView(noisy).projects.map((project) => project.label)
+    expect(new Set(labels).size).toBe(2)
+    expect(labels[0]).toContain('d/books/novel')
+    expect(labels[1]).toContain('me/books/novel')
+  })
+
+  it('reveals hidden missing projects and filters by search', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const noisy = payload()
+    noisy.projects = [
+      { root: '/novels/a', title: '正常书', active: true, registered: true, state: 'ok' },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        root: `/tmp/nwe-host-${index}/host-smoke-project`,
+        title: 'Host Smoke',
+        active: false,
+        registered: true,
+        state: 'missing' as const,
+      })),
+    ]
+    noisy.selection = { root: '/novels/a', source: 'active' }
+    noisy.summary!.root = '/novels/a'
+    const view = buildView(noisy)
+    try {
+      await act(async () => {
+        root.render(panelElement(view, false, () => undefined))
+      })
+      const select = (): HTMLSelectElement =>
+        container.querySelector<HTMLSelectElement>('select[aria-label="切换项目"]')!
+      expect(Array.from(select().options)).toHaveLength(1)
+      const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+      await act(async () => {
+        toggle.click()
+      })
+      expect(Array.from(select().options)).toHaveLength(8)
+      const search = container.querySelector<HTMLInputElement>('input[aria-label="搜索项目"]')!
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      await act(async () => {
+        setValue.call(search, '正常')
+        search.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      expect(Array.from(select().options)).toHaveLength(1)
+      expect(Array.from(select().options)[0]!.text).toContain('正常书')
+
+      // The search box unmounts when the project list shrinks. A retained query
+      // must not silently keep filtering the select.
+      await act(async () => {
+        setValue.call(search, '不存在')
+        search.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      const smaller = payload()
+      smaller.projects = [
+        { root: '/novels/a', title: '正常书', active: false, registered: true, state: 'ok' },
+      ]
+      smaller.selection = { root: null, source: 'none' }
+      smaller.summary!.root = '/novels/a'
+      await act(async () => {
+        root.render(panelElement(buildView(smaller), false, () => undefined))
+      })
+      expect(container.querySelector('input[aria-label="搜索项目"]')).toBeNull()
+      expect(Array.from(select().options)).toHaveLength(2)
+      expect(Array.from(select().options).some((option) => option.text.includes('正常书'))).toBe(true)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
   })
 
   it('keeps a damaged project readable but shows the repair notice', () => {
@@ -951,8 +1135,9 @@ describe('client registration and rendering', () => {
     expect(ready).toContain('overflow-y: auto')
     expect(ready).toContain('height: 100%')
     expect(ready).toContain('overscroll-behavior: contain')
-    expect(ready).toContain('平均评分')
-    expect(ready).toContain('NEXT MOVE')
+    expect(ready).toContain('全书均分')
+    expect(ready).toContain('近十均分')
+    expect(ready).toContain('CURRENT CHAPTER · 下一步')
     expect(ready).toContain('role="progressbar"')
     expect(ready).toContain('aria-label="开端之雨 评分"')
     expect(ready).toContain('@media (max-width: 760px)')

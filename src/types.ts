@@ -123,9 +123,13 @@ export const ERROR_CODES = {
   PROJECT_IDENTITY_MISMATCH: 'ENGINE_PROJECT_IDENTITY_MISMATCH',
   PROJECT_EXISTS: 'ENGINE_PROJECT_EXISTS',
   STAGE_ORDER: 'ENGINE_STAGE_ORDER',
+  /** The exact same keyed submission already failed in the same context. */
+  RETRY_UNCHANGED: 'ENGINE_RETRY_UNCHANGED',
   GATE_BLOCKED: 'ENGINE_GATE_BLOCKED',
   READING_PROOF_INVALID: 'ENGINE_READING_PROOF_INVALID',
   SCORE_MISMATCH: 'ENGINE_SCORE_MISMATCH',
+  /** A revision tried to rewrite reviewer-owned issue fields. */
+  ISSUE_IMMUTABLE: 'ENGINE_ISSUE_IMMUTABLE',
   DELTA_UNVERIFIED: 'ENGINE_DELTA_UNVERIFIED',
   RESOURCE_NEGATIVE_BALANCE: 'ENGINE_RESOURCE_NEGATIVE_BALANCE',
   SCHEMA_TOO_NEW: 'ENGINE_SCHEMA_TOO_NEW',
@@ -527,6 +531,8 @@ export interface ForeshadowsDocument {
     resolved_at: number | null
     description: string
     anchor?: string
+    /** New 0.2.3 writes are distinguishable from pre-0.2.3 rows by this marker. */
+    format_version?: 1
     advance_log: Array<{ chapter: number; note: string; new_info: boolean }>
   }>
 }
@@ -843,7 +849,13 @@ export interface BookReport {
     min: number
     max: number
     last_five: number[]
-    trend: number
+    /** Null when there are not enough distinct chapter reviews to compare. */
+    trend: number | null
+    trend_basis: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
+    /** Number of chapters represented by a final review. */
+    samples: number
+    /** Committed review rounds for this report, including history. */
+    attempts: number
     dimensions: Array<{ id: string; average: number; samples: number }>
   }
   /** Per-chapter effort survives archive (pipeline rounds are reset). */
@@ -1036,6 +1048,8 @@ export interface StatusReport {
   chapter: number
   /** The chapter the pipeline is currently working on. */
   active_chapter: number
+  /** SHA-256 of the active manuscript, or null when the stage has no draft. */
+  manuscript_hash: string | null
   stage: Stage
   rounds: RoundCounters
   blocking: BlockingItem[]
@@ -1110,6 +1124,10 @@ export interface AuditRow {
   /** True when no transaction started: the gate/input refused the call. */
   attempt?: boolean
   blocking?: BlockingItem[]
+  /** Keyed operation fingerprint; lets an identical failed retry be refused. */
+  retry_key?: string
+  /** Brief/stage/revision context for `retry_key`. */
+  retry_context?: string
 }
 
 /** One diff hunk between two revisions of a chapter. */

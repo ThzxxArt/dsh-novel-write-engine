@@ -243,7 +243,7 @@ describe('0.1.2 input contracts', () => {
           proof: sampleReview(1, text).proof,
           root,
         }),
-      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      ).rejects.toMatchObject({ code: 'ENGINE_ISSUE_IMMUTABLE' })
       expect([...(await snapshotTree(root)).entries()]).toEqual([...before.entries()])
     } finally {
       await cleanup()

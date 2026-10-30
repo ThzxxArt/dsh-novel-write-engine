@@ -93,6 +93,27 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
   }
 }
 
+/**
+ * Advisories are hints, not a second gate list. Keep one row per code for the
+ * chapter, preserving the first location and merging every distinct detail.
+ * Blockers are intentionally not passed through this function.
+ */
+export function dedupeAdvisories(violations: readonly Violation[]): Violation[] {
+  const groups = new Map<string, { first: Violation; details: string[] }>()
+  for (const violation of violations) {
+    const current = groups.get(violation.code)
+    if (current === undefined) {
+      groups.set(violation.code, { first: violation, details: [violation.detail] })
+    } else if (!current.details.includes(violation.detail)) {
+      current.details.push(violation.detail)
+    }
+  }
+  return [...groups.values()].map(({ first, details }) => ({
+    ...first,
+    detail: details.join('；'),
+  }))
+}
+
 /** Run only an explicit subset, used by PG-04 (format) and PG-10 (consistency). */
 export function runRules(codes: readonly string[], text: string, options: MachineOptions): Violation[] {
   const context = toContext(text, options)

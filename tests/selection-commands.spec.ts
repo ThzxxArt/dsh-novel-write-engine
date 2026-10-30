@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -73,6 +73,45 @@ describe('selection commands', () => {
     } finally {
       await cleanup()
       await rm(other, { recursive: true, force: true })
+    }
+  })
+
+  it('prunes missing and not-project registry rows without deleting directories', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'novel-command-state-'))
+    const other = await mkdtemp(join(tmpdir(), 'novel-command-b-'))
+    const empty = await mkdtemp(join(tmpdir(), 'novel-command-empty-'))
+    const { root, engine, cleanup } = await harness({ stateDir })
+    try {
+      await init(engine, root, '保留书')
+      await init(engine, other, '待清理书')
+      await init(engine, empty, '目录还在')
+      await engine.setActiveProject({ root: other })
+      await rm(other, { recursive: true, force: true })
+      await rm(empty, { recursive: true, force: true })
+      await mkdir(empty)
+      const command = novel(engine)
+      const dry = await command.handler(invocation('projects --prune'))
+      expect(dry.kind).toBe('success')
+      expect(dry.text).toContain('待清理书')
+      expect(dry.text).toContain('目录还在')
+      expect(dry.text).toContain('--yes')
+      expect((await engine.listProjects()).projects.some((project) => project.root === other)).toBe(true)
+
+      const applied = await command.handler(invocation('projects --prune --yes'))
+      expect(applied.kind).toBe('success')
+      expect(applied.text).toContain('已清理 2 条')
+      const after = await engine.listProjects()
+      expect(after.projects.some((project) => project.root === other)).toBe(false)
+      expect(after.projects.some((project) => project.root === empty)).toBe(false)
+      expect(after.projects.some((project) => project.root === root)).toBe(true)
+      expect(after.active).toBeNull()
+      // Pruning a not-project row removes the registry entry, not the directory.
+      await expect(stat(empty)).resolves.toMatchObject({})
+      const emptyList = await command.handler(invocation('projects --prune'))
+      expect(emptyList.text).toContain('没有需要清理')
+    } finally {
+      await cleanup()
+      await rm(empty, { recursive: true, force: true })
     }
   })
 

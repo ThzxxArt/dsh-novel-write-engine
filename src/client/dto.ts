@@ -65,9 +65,20 @@ export interface SummaryDto {
       facts?: number
     }
   }
-  quality?: { averageScore: number; scores: number[]; trend: number }
+  quality?: {
+    averageScore: number
+    scores: number[]
+    trend: number | null
+    trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
+    samples?: number
+    attempts?: number
+  }
   health?: { ok: boolean; blocking: number; stateErrors: number }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+  advisories?: Array<{ code: string; detail: string; hint?: string }>
+  /** Advisory codes the author has already acknowledged in the current check. */
+  acknowledgedAdvisories?: number
+  legacy?: Array<{ code: string; detail: string }>
 }
 
 export interface ChapterRowDto {
@@ -99,7 +110,8 @@ export interface ProjectOptionDto {
   title: string
   active: boolean
   registered: boolean
-  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+  state: 'ok' | 'damaged' | 'missing' | 'not-project' | 'unreadable'
+  identity_changed?: boolean
 }
 
 export interface PanelSelectionDto {
@@ -110,8 +122,8 @@ export interface PanelSelectionDto {
 export interface PanelMissingDto {
   root: string
   title: string
-  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND'
-  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable'
+  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND' | 'ENGINE_TXN_IN_PROGRESS'
+  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable' | 'busy'
   hint: string
 }
 

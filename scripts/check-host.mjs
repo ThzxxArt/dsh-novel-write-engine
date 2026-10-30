@@ -14,8 +14,8 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -31,12 +31,44 @@ if (process.platform === 'win32') {
 const shell = process.platform === 'win32'
 const npm = shell ? 'npm.cmd' : 'npm'
 const dsh = process.env.DSH_BIN ?? 'dsh'
+// Check the CLI before creating the disposable home. A missing DSH used to
+// call process.exit(2) after mkdtemp, bypassing the finally cleanup and
+// leaving /tmp/nwe-host-* behind.
+try {
+  execFileSync(dsh, ['--version'], {
+    cwd: root,
+    env: process.env,
+    encoding: 'utf8',
+    shell,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+} catch (error) {
+  console.error(`cannot run ${dsh}: ${error instanceof Error ? error.message : String(error)}`)
+  console.error('set DSH_BIN to a DSH CLI binary with Web support')
+  process.exit(2)
+}
 const profile = `nwe-host-${process.pid}`
 const headlessProfile = `nwe-headless-${process.pid}`
 const keep = process.env.DSH_KEEP_HOST === '1'
 const temporary = await mkdtemp(join(tmpdir(), 'nwe-host-'))
-const env = { ...process.env, DSH_HOME: temporary, NO_COLOR: '1', DSH_TELEMETRY_DISABLED: '1' }
+// The engine's default state directory is homedir()-based, not DSH_HOME-based.
+// Isolate both so a host smoke cannot leave `Host Smoke` rows in the real
+// projects.yaml. USERPROFILE covers a future Windows run; the gate is POSIX.
+const env = {
+  ...process.env,
+  DSH_HOME: temporary,
+  HOME: temporary,
+  USERPROFILE: temporary,
+  NO_COLOR: '1',
+  DSH_TELEMETRY_DISABLED: '1',
+}
 const smokeProject = join(temporary, 'host-smoke-project')
+const realRegistry = join(homedir(), '.dsh', 'novel-write-engine', 'projects.yaml')
+const hostSmokeCount = async () => {
+  const text = await readFile(realRegistry, 'utf8').catch(() => '')
+  return (text.match(/Host Smoke/g) ?? []).length
+}
+const hostSmokeBefore = await hostSmokeCount()
 let expectedNovelTools = []
 let packed
 let child
@@ -246,14 +278,6 @@ const waitForUrl = () =>
   })
 
 try {
-  try {
-    run(['--version'])
-  } catch (error) {
-    console.error(`cannot run ${dsh}: ${error instanceof Error ? error.message : String(error)}`)
-    console.error('set DSH_BIN to a DSH CLI binary with Web support')
-    process.exit(2)
-  }
-
   // The host gate must exercise the artifact built from this worktree, not a
   // stale lib/ left by an earlier run.
   try {
@@ -318,7 +342,7 @@ try {
     throw new Error(`authenticated panel request should be 200, got ${authorized.status}`)
   }
   const body = await authorized.json()
-  if (body.schemaVersion !== 4) throw new Error('panel payload has no schemaVersion 4')
+  if (body.schemaVersion !== 5) throw new Error('panel payload has no schemaVersion 5')
   if (
     typeof body.selection !== 'object' ||
     body.selection === null ||
@@ -335,9 +359,9 @@ try {
       typeof project.title !== 'string' ||
       typeof project.active !== 'boolean' ||
       typeof project.registered !== 'boolean' ||
-      !['ok', 'damaged', 'missing', 'unreadable'].includes(project.state)
+      !['ok', 'damaged', 'missing', 'not-project', 'unreadable'].includes(project.state)
     ) {
-      throw new Error('panel project option is missing v4 fields')
+      throw new Error('panel project option is missing v5 fields')
     }
   }
   if (body.empty === true) {
@@ -353,7 +377,7 @@ try {
     typeof body.gates !== 'object' ||
     body.gates === null
   ) {
-    throw new Error('panel payload is missing v4 summary.root/chapters/gates')
+    throw new Error('panel payload is missing v5 summary.root/chapters/gates')
   }
   if (body.resume !== undefined && typeof body.resume?.text !== 'string') {
     throw new Error('panel resume field is not text')
@@ -418,6 +442,14 @@ try {
   if (!existsSync(join(smokeProject, 'novel.yaml'))) {
     throw new Error('headless smoke called the model but novel_init did not create the project')
   }
+  // Positive control: the isolated HOME must actually receive the smoke row.
+  // Without this, a registration regression and a perfect isolation both look
+  // like "no new Host Smoke in the real registry".
+  const isolatedRegistry = join(temporary, '.dsh', 'novel-write-engine', 'projects.yaml')
+  const isolatedText = await readFile(isolatedRegistry, 'utf8').catch(() => '')
+  if ((isolatedText.match(/Host Smoke/g) ?? []).length !== 1) {
+    throw new Error(`isolated registry did not record exactly one Host Smoke row at ${isolatedRegistry}`)
+  }
   // Read the declared tool list, never a substring of the whole request JSON.
   // Persona/task-book text legitimately mentions tool names and used to make
   // this loop pass even when the host registered no tools at all.
@@ -478,5 +510,12 @@ try {
   } else {
     console.error(`kept temporary host home: ${temporary}`)
     console.error(`kept packed tarball: ${packed ?? '(none)'}`)
+  }
+  const hostSmokeAfter = await hostSmokeCount()
+  if (hostSmokeAfter > hostSmokeBefore) {
+    console.error(
+      `host gate leaked ${hostSmokeAfter - hostSmokeBefore} Host Smoke row(s) into ${realRegistry}`,
+    )
+    if (process.exitCode === undefined) process.exitCode = 1
   }
 }

@@ -38,6 +38,9 @@ export const TRANSITIONS: readonly Transition[] = [
     to: (context) => (context.completeCheck === false ? 'P6' : 'ready_to_archive'),
   },
   { from: 'ready_to_archive', op: 'archiveChapter', to: () => 'done' },
+  // An archive failure must not force a rollback just to fix a word. A revision
+  // invalidates the old review/check, so it returns to P4 for a fresh review.
+  { from: 'ready_to_archive', op: 'submitRevision', to: () => 'P4' },
 ]
 
 /** Find the row for this (stage, op), if any. */

@@ -40,9 +40,22 @@ export interface PanelSnapshot {
   phases: Array<{ id: string; done: boolean; active: boolean }>
   /** 0.2.0 book-level planning and health blocks. */
   book?: PanelBook
-  quality?: { averageScore: number; scores: number[]; trend: number }
+  quality?: {
+    averageScore: number
+    scores: number[]
+    trend: number | null
+    trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
+    samples?: number
+    attempts?: number
+  }
   health?: { ok: boolean; blocking: number; stateErrors: number }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+  /** Unacknowledged machine advisories; never mixed into `blocking`. */
+  advisories?: Array<{ code: string; detail: string; hint?: string }>
+  /** Number of advisory codes already acknowledged for the current check. */
+  acknowledgedAdvisories?: number
+  /** Read-only upgrade findings; null when the project needs no explanation. */
+  legacy?: Array<{ code: string; detail: string }>
 }
 
 export interface PanelBook {
@@ -101,9 +114,22 @@ export interface PanelSummaryDto {
   finished?: boolean
   /** 0.2.0 planning, quality, health and activity blocks. */
   book?: PanelBook
-  quality?: { averageScore: number; scores: number[]; trend: number }
+  quality?: {
+    averageScore: number
+    scores: number[]
+    trend: number | null
+    trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
+    samples?: number
+    attempts?: number
+  }
   health?: { ok: boolean; blocking: number; stateErrors: number }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+  /** Unacknowledged machine advisories; never mixed into `blocking`. */
+  advisories?: Array<{ code: string; detail: string; hint?: string }>
+  /** Number of advisory codes already acknowledged for the current check. */
+  acknowledgedAdvisories?: number
+  /** Read-only upgrade findings; null when the project needs no explanation. */
+  legacy?: Array<{ code: string; detail: string }>
 }
 
 export interface PanelChapterRow {
@@ -138,7 +164,9 @@ export interface PanelProjectOption {
   title: string
   active: boolean
   registered: boolean
-  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+  state: 'ok' | 'damaged' | 'missing' | 'not-project' | 'unreadable'
+  /** The path now holds a different project identity; writes will fail closed. */
+  identity_changed?: boolean
 }
 
 export interface PanelSelection {
@@ -149,8 +177,8 @@ export interface PanelSelection {
 export interface PanelMissing {
   root: string
   title: string
-  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND'
-  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable'
+  code: 'ENGINE_PROJECT_MISSING' | 'ENGINE_PROJECT_NOT_FOUND' | 'ENGINE_TXN_IN_PROGRESS'
+  reason: 'missing' | 'not-project' | 'damaged' | 'not_registered' | 'unreadable' | 'busy'
   hint: string
 }
 
@@ -261,6 +289,11 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     ...(snapshot.quality === undefined ? {} : { quality: snapshot.quality }),
     ...(snapshot.health === undefined ? {} : { health: snapshot.health }),
     ...(snapshot.activity === undefined ? {} : { activity: snapshot.activity }),
+    ...(snapshot.advisories === undefined ? {} : { advisories: snapshot.advisories }),
+    ...(snapshot.acknowledgedAdvisories === undefined
+      ? {}
+      : { acknowledgedAdvisories: snapshot.acknowledgedAdvisories }),
+    ...(snapshot.legacy === undefined ? {} : { legacy: snapshot.legacy }),
     ...(snapshot.next === undefined
       ? {}
       : { next: { tool: snapshot.next.tool, reason: snapshot.next.reason } }),

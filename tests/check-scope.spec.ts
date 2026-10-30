@@ -65,12 +65,12 @@ describe('0.1.2 resource sign reconciliation', () => {
     expect(codes).toContain('RESOURCE_MISMATCH')
   })
 
-  it('rejects a missing resource name even when the number appears', () => {
+  it('does not invent a mismatch when the resource name is absent', () => {
     const codes = runMachineChecks(
       '他数了数，少了 200。',
       options({ summary: withResources([{ character: '他', resource: '铜钱', delta: -200, reason: '买' }]) }),
     ).violations.map((violation) => violation.code)
-    expect(codes).toContain('RESOURCE_MISMATCH')
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
   })
 
   it('does not let a distant opposite sign satisfy the amount', () => {
@@ -78,6 +78,108 @@ describe('0.1.2 resource sign reconciliation', () => {
     const codes = runMachineChecks(
       text,
       options({ summary: withResources([{ character: '他', resource: '铜钱', delta: -200, reason: '买' }]) }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not invent a contradiction when normal prose omits the minus sign', () => {
+    const codes = runMachineChecks(
+      '他数了数铜钱，还剩 200。',
+      options({ summary: withResources([{ character: '他', resource: '铜钱', delta: -200, reason: '买' }]) }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not borrow an opposite verb from the next resource', () => {
+    const codes = runMachineChecks(
+      '陈嘉树得到 5 块银元，又花掉 2 个铜板。',
+      options({
+        summary: withResources([{ character: '陈嘉树', resource: '银元', delta: 5, reason: '收到' }]),
+      }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('still reports the opposite sign in the same local phrase', () => {
+    const codes = runMachineChecks(
+      '陈嘉树花掉 5 块银元，买了两斤米。',
+      options({
+        summary: withResources([{ character: '陈嘉树', resource: '银元', delta: 5, reason: '收到' }]),
+      }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not mistake 花园/参加/更加 for 花/加/增', () => {
+    for (const text of [
+      '他走进花园，手里攥着五块银元。',
+      '他参加完集会，把五块银元放在桌上。',
+      '他更加确信，那五块银元是假的。',
+    ]) {
+      const codes = runMachineChecks(
+        text,
+        options({
+          summary: withResources([
+            { character: '他', resource: '银元', delta: text.includes('花园') ? 5 : -5, reason: 'x' },
+          ]),
+        }),
+      ).violations.map((violation) => violation.code)
+      expect(codes).not.toContain('RESOURCE_MISMATCH')
+    }
+  })
+
+  it('finds a resource far before the amount and reports the sign word, not the number', () => {
+    const codes = runMachineChecks(
+      '他把昨天挣来的那些银元仔细数了一遍，发现少了三块。',
+      options({ summary: withResources([{ character: '他', resource: '银元', delta: 3, reason: '收到' }]) }),
+    ).violations
+    const finding = codes.find((violation) => violation.code === 'RESOURCE_MISMATCH')
+    expect(finding?.detail).toContain('"少了"')
+    expect(finding?.detail).not.toContain('opposite sign "3"')
+    expect(finding?.location.paragraph).toBe(1)
+  })
+
+  it('does not borrow the same magnitude from another amount clause', () => {
+    const codes = runMachineChecks(
+      '他买米花了 5 块，后来银元多了 5 块。',
+      options({ summary: withResources([{ character: '他', resource: '银元', delta: 5, reason: '收到' }]) }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not attribute a clause amount to another named character', () => {
+    const summary = withResources([{ character: '陈嘉树', resource: '银元', delta: 5, reason: '收到' }])
+    summary.characters_appeared = ['陈嘉树', '小满']
+    const codes = runMachineChecks('陈嘉树得到五块银元，小满花掉五块。', options({ summary })).violations.map(
+      (violation) => violation.code,
+    )
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not borrow a resource from a prior amount clause in reverse order', () => {
+    const codes = runMachineChecks(
+      '后来银元多了 5 块，他买米花了 5 块。',
+      options({ summary: withResources([{ character: '他', resource: '银元', delta: 5, reason: '收到' }]) }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not put the current sentence into the previous-sentence attribution', () => {
+    const summary = withResources([{ character: '陈嘉树', resource: '银元', delta: 5, reason: '收到' }])
+    summary.characters_appeared = ['陈嘉树', '林小雨']
+    const codes = runMachineChecks(
+      '陈嘉树走进院子。他随手花掉五块银元，林小雨站在门口。',
+      options({ summary }),
+    ).violations.map((violation) => violation.code)
+    expect(codes).toContain('RESOURCE_MISMATCH')
+  })
+
+  it('accepts a pronoun in the next sentence when the previous sentence names one character', () => {
+    const summary = withResources([{ character: '陈嘉树', resource: '银元', delta: 5, reason: '收到' }])
+    summary.characters_appeared = ['陈嘉树']
+    const codes = runMachineChecks(
+      '陈嘉树走进院子。他随手花掉五块银元。',
+      options({ summary }),
     ).violations.map((violation) => violation.code)
     expect(codes).toContain('RESOURCE_MISMATCH')
   })

@@ -137,7 +137,7 @@ describe('0.2.1 state truth', () => {
     }
   })
 
-  it('writes prior reviews into revision history so the report has real samples', async () => {
+  it('writes prior reviews into history as attempts, not extra chapter samples', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine })
@@ -158,7 +158,9 @@ describe('0.2.1 state truth', () => {
       expect(reviewEntries.length).toBeGreaterThan(0)
       const report = await engine.report({ root })
       expect(report.data.quality.dimensions.length).toBeGreaterThan(0)
-      expect(report.data.quality.dimensions.every((dimension) => dimension.samples === 2)).toBe(true)
+      expect(report.data.quality.samples).toBe(1)
+      expect(report.data.quality.attempts).toBe(2)
+      expect(report.data.quality.dimensions.every((dimension) => dimension.samples === 1)).toBe(true)
     } finally {
       await cleanup()
     }
@@ -404,6 +406,12 @@ describe('0.2.1 restore and audit guards', () => {
       await expect(engine.submitRevision({ chapter: 1, content: '', proof, root })).rejects.toMatchObject({
         code: 'ENGINE_SCHEMA_INVALID',
       })
+      await expect(
+        engine.submitRevision({ chapter: 1, content: null as never, proof, root }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
+        engine.submitRevision({ chapter: 1, content: 42 as never, proof, root }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
       await expect(
         engine.submitRevision({ chapter: 1, patch: null as never, proof, root }),
       ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })

@@ -1,4 +1,5 @@
 import { bookPlanPresent, outlineDrift, outlineSummary, worldbookCounts } from './book.js'
+import { normalizeRole } from './state-delta.js'
 import { compareText } from '../domain/stable.js'
 import { splitParagraphs } from '../domain/text.js'
 import type {
@@ -35,8 +36,15 @@ export interface ReportInput {
   timeline: TimelineDocument
   foreshadows: ForeshadowsDocument
   relationships: RelationshipsDocument
+  /** One current review per chapter; history belongs in `reviewAttempts`. */
   reviews: ReviewDocument[]
   activity: AuditRow[]
+  /** Full committed journal, used to backfill effort for pre-0.2.1 chapters. */
+  journal?: AuditRow[]
+  /** Committed review rounds for the report, including history. */
+  reviewAttempts?: number
+  /** Check verdicts recovered from disk for legacy chapters without final_check. */
+  finalChecks?: Record<number, 'pass' | 'fail'>
   targetChapters: number | null
   minScore: number
   foreshadowDormantAfter: number
@@ -74,8 +82,34 @@ export function buildBookReport(input: ReportInput): BookReport {
   const lastFive = scores.slice(-5)
   const previous = scores.slice(-10, -5)
   const qualityAverage = average(scores)
-  const dimensions = new Map<string, { total: number; samples: number }>()
+  // A chapter contributes one sample: its final review. History is counted as
+  // `attempts`, never as an independent chapter score. Pick the newest round
+  // defensively even when a caller passes history, and ignore reviews for
+  // chapters that are not in this archived snapshot.
+  const archivedChapterNums = new Set(records.map((record) => record.num))
+  const finalReviews = new Map<number, ReviewDocument>()
   for (const review of input.reviews) {
+    if (!archivedChapterNums.has(review.chapter)) continue
+    const current = finalReviews.get(review.chapter)
+    if (current === undefined || review.round >= current.round) finalReviews.set(review.chapter, review)
+  }
+  const chapterReviews = [...finalReviews.values()]
+  const qualitySamples = chapterReviews.length
+  // A readable final review is itself at least one attempt. A truncated or
+  // legacy journal must never make attempts lower than samples.
+  const qualityAttempts = Math.max(input.reviewAttempts ?? input.reviews.length, qualitySamples)
+  const trendBasis: BookReport['quality']['trend_basis'] =
+    qualitySamples < 3
+      ? 'insufficient_samples'
+      : previous.length < 5
+        ? 'insufficient_history'
+        : 'last_five_vs_previous_five'
+  const trend =
+    trendBasis === 'last_five_vs_previous_five'
+      ? Math.round((average(lastFive) - average(previous)) * 10) / 10
+      : null
+  const dimensions = new Map<string, { total: number; samples: number }>()
+  for (const review of chapterReviews) {
     for (const dimension of review.dimensions) {
       const max = Number(dimension.max ?? 0)
       const deductions = Array.isArray(dimension.deductions)
@@ -112,10 +146,19 @@ export function buildBookReport(input: ReportInput): BookReport {
       lastAppearance.set(name, Math.max(lastAppearance.get(name) ?? 0, record.num))
     }
   }
+  const roleHints = new Map<string, string>()
+  for (const character of input.worldbook.characters) {
+    if (character.role !== '') roleHints.set(character.name, character.role)
+  }
   const castTop = input.characters.characters
     .map((character) => ({
       name: character.name,
-      role: character.role,
+      // Old ledgers wrote extra for everyone before the role owner was fixed;
+      // report can still show the worldbook role without rewriting history.
+      role:
+        character.role === 'extra' && roleHints.has(character.name)
+          ? normalizeRole(roleHints.get(character.name), character.role)
+          : character.role,
       appearances: appearances.get(character.name) ?? 0,
       last_seen: Math.max(character.updated_at, lastAppearance.get(character.name) ?? 0),
     }))
@@ -181,6 +224,30 @@ export function buildBookReport(input: ReportInput): BookReport {
   if (scores.length > 0 && qualityAverage < input.minScore) {
     warnings.push(`平均分 ${qualityAverage.toFixed(1)} 低于合格线 ${input.minScore}`)
   }
+  const committed = (input.journal ?? []).filter((row) => row.status === 'committed')
+  const committedCount = (op: string, chapter: number): number =>
+    committed.filter((row) => row.op === op && row.chapter === chapter).length
+  const archivedAt = (chapter: number): string | null => {
+    const row = [...committed]
+      .reverse()
+      .find((entry) => entry.op === 'archiveChapter' && entry.chapter === chapter)
+    return row?.at ?? null
+  }
+  const effortChapters = records.map((record) => {
+    const rounds = record.rounds
+    return {
+      num: record.num,
+      reviews: Math.max(rounds?.review ?? 0, committedCount('submitReview', record.num)),
+      revisions: Math.max(rounds?.revise ?? 0, committedCount('submitRevision', record.num)),
+      checks: Math.max(rounds?.check ?? 0, committedCount('runCheck', record.num)),
+      rollbacks: Math.max(rounds?.rollbacks ?? 0, committedCount('rollback', record.num)),
+      final_check: record.final_check ?? input.finalChecks?.[record.num] ?? null,
+      archived_at: record.archived_at ?? archivedAt(record.num),
+    }
+  })
+  if (records.some((record) => record.rounds === undefined || record.archived_at === undefined)) {
+    warnings.push('部分旧章缺少归档 effort 元数据；报告已按事务日志回填')
+  }
   return {
     progress: {
       archived: records.length,
@@ -219,7 +286,10 @@ export function buildBookReport(input: ReportInput): BookReport {
       min: scores.length === 0 ? 0 : Math.min(...scores),
       max: scores.length === 0 ? 0 : Math.max(...scores),
       last_five: lastFive,
-      trend: previous.length === 0 ? 0 : Math.round((average(lastFive) - average(previous)) * 10) / 10,
+      trend,
+      trend_basis: trendBasis,
+      samples: qualitySamples,
+      attempts: qualityAttempts,
       dimensions: [...dimensions.entries()]
         .map(([id, value]) => ({
           id,
@@ -229,19 +299,11 @@ export function buildBookReport(input: ReportInput): BookReport {
         .sort((left, right) => compareText(left.id, right.id)),
     },
     effort: {
-      reviews: records.reduce((total, record) => total + (record.rounds?.review ?? 0), 0),
-      revisions: records.reduce((total, record) => total + (record.rounds?.revise ?? 0), 0),
-      checks: records.reduce((total, record) => total + (record.rounds?.check ?? 0), 0),
-      rollbacks: records.reduce((total, record) => total + (record.rounds?.rollbacks ?? 0), 0),
-      chapters: records.map((record) => ({
-        num: record.num,
-        reviews: record.rounds?.review ?? 0,
-        revisions: record.rounds?.revise ?? 0,
-        checks: record.rounds?.check ?? 0,
-        rollbacks: record.rounds?.rollbacks ?? 0,
-        final_check: record.final_check ?? null,
-        archived_at: record.archived_at ?? null,
-      })),
+      reviews: effortChapters.reduce((total, chapter) => total + chapter.reviews, 0),
+      revisions: effortChapters.reduce((total, chapter) => total + chapter.revisions, 0),
+      checks: effortChapters.reduce((total, chapter) => total + chapter.checks, 0),
+      rollbacks: effortChapters.reduce((total, chapter) => total + chapter.rollbacks, 0),
+      chapters: effortChapters,
     },
     pacing: {
       scene_types: sceneTypes,

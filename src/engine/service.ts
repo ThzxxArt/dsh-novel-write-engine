@@ -13,6 +13,7 @@ import {
   METADATA_LOCK_FILE,
   OUTLINE_FILE,
   PROJECT_FILE,
+  REVIEW_DIR,
   STATE_DIR,
   WORLDBOOK_FILE,
   STATE_FILES,
@@ -34,7 +35,13 @@ import { compareText, stableJson } from '../domain/stable.js'
 import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { reviewArithmeticProblems, totalScore } from '../domain/scoring.js'
-import { runMachineChecks, scopeOfRule, type MachineOptions, type MachineResult } from '../rules/pipeline.js'
+import {
+  dedupeAdvisories,
+  runMachineChecks,
+  scopeOfRule,
+  type MachineOptions,
+  type MachineResult,
+} from '../rules/pipeline.js'
 import type { Rulepack } from '../rules/types.js'
 import { applyExclusions } from '../domain/scoring.js'
 import {
@@ -97,10 +104,10 @@ import {
   type WorldbookPatch,
 } from './book.js'
 import { buildBookReport, buildGuide, searchSnapshot } from './insight.js'
-import { historyTexts, listHistory } from './history.js'
+import { historyTexts, listHistory, type HistoryEntry } from './history.js'
 import { BriefLibrary } from './brief.js'
 import { briefContext } from './context.js'
-import { applyStateDelta } from './state-delta.js'
+import { applyStateDelta, normalizeRole } from './state-delta.js'
 import { evaluateSemantic } from './semantic.js'
 import { briefStageFor, evaluateGates, gateName, parseParagraphLocation } from './gates.js'
 import { advanceHandoff, parseActProgress, projectHandoff } from './handoff.js'
@@ -223,6 +230,28 @@ export interface BriefInput {
   stage: import('../types.js').BriefStage
   chapter?: number
   root?: string
+}
+
+type BriefPayload = {
+  stage: BriefStage
+  chapter: number
+  digest: string
+  title: string
+  content: string
+  content_hash: string
+  fields: Record<string, unknown>
+  context: Record<string, unknown>
+}
+
+export interface LegacyIssue {
+  code:
+    | 'LEGACY_CHECK_FORMAT'
+    | 'LEGACY_EFFORT'
+    | 'LEGACY_CAST_ROLE'
+    | 'LEGACY_FORESHADOW_ANCHOR'
+    | 'LEGACY_FORESHADOW_ADVANCE'
+    | 'LEGACY_BRIEFS'
+  detail: string
 }
 
 export interface WorldPlanSubmission extends WorldPlanInput {
@@ -480,6 +509,16 @@ const MUTABLE_STATE: Record<string, DocKind> = {
   [OUTLINE_FILE]: 'outline',
   [WORLDBOOK_FILE]: 'worldbook',
 }
+
+/** Refused attempts a model can fix by changing its submission. */
+const RETRYABLE_ABORT_CODES = new Set<string>([
+  ERROR_CODES.GATE_BLOCKED,
+  ERROR_CODES.SCORE_MISMATCH,
+  ERROR_CODES.READING_PROOF_INVALID,
+  ERROR_CODES.DELTA_UNVERIFIED,
+  ERROR_CODES.RESOURCE_NEGATIVE_BALANCE,
+  ERROR_CODES.SCHEMA_INVALID,
+])
 
 /**
  * The single write authority. Tools, commands, the panel and task books never
@@ -2096,6 +2135,71 @@ export class EngineService {
   }
 
   /**
+   * Count review attempts per archived chapter. The journal is authoritative;
+   * history fills any per-chapter gap where it has more distinct historical
+   * reviews than committed journal rows (legacy or a truncated upgrade). A
+   * chapter can never report fewer attempts than readable current reviews.
+   */
+  private async reviewAttemptsByChapter(
+    store: FsStore,
+    journalRows: readonly AuditRow[],
+    archived: readonly number[],
+    readableCurrent: ReadonlySet<number>,
+    historicalEntries?: readonly HistoryEntry[],
+  ): Promise<Map<number, number>> {
+    const journalCounts = new Map<number, number>()
+    for (const row of journalRows) {
+      if (row.status === 'committed' && row.op === 'submitReview') {
+        journalCounts.set(row.chapter, (journalCounts.get(row.chapter) ?? 0) + 1)
+      }
+    }
+    const result = new Map<number, number>()
+    if (archived.length === 0) return result
+    const entries = historicalEntries ?? (await listHistory(store))
+    const historyEntryCounts = new Map<number, number>()
+    for (const entry of entries) {
+      if (entry.kind !== 'reviews') continue
+      historyEntryCounts.set(entry.chapter, (historyEntryCounts.get(entry.chapter) ?? 0) + 1)
+    }
+    const historyCounts = new Map<number, number>()
+    // Read history when it can exceed the committed journal count. This covers
+    // both a fully missing journal and a journal with two rows but four
+    // distinct historical reviews.
+    const needHistory = archived.filter(
+      (chapter) => (historyEntryCounts.get(chapter) ?? 0) > (journalCounts.get(chapter) ?? 0),
+    )
+    for (const chapter of needHistory) {
+      const documents = new Set<string>()
+      try {
+        const current = await store.readDoc(reviewFile(chapter), 'review')
+        if (current !== null) documents.add(stableJson(current))
+      } catch {
+        // report() surfaces the unreadable review; attempts still count the
+        // best evidence available.
+      }
+      for (const historical of await historyTexts(store, 'reviews', chapter, entries)) {
+        try {
+          documents.add(stableJson(narrow('review', parseYaml(historical.text))))
+        } catch {
+          // A malformed history copy is not an attempt.
+        }
+      }
+      historyCounts.set(chapter, documents.size)
+    }
+    for (const chapter of archived) {
+      result.set(
+        chapter,
+        Math.max(
+          journalCounts.get(chapter) ?? 0,
+          readableCurrent.has(chapter) ? 1 : 0,
+          historyCounts.get(chapter) ?? 0,
+        ),
+      )
+    }
+    return result
+  }
+
+  /**
    * Count every committed attempt for one chapter, not just the loop since the
    * last rollback. `pipeline.rounds` is deliberately reset by rollback to keep
    * the retry budget fair; it is not the chapter's lifetime effort.
@@ -2143,6 +2247,8 @@ export class EngineService {
       },
       chapter,
       active_chapter: snapshot.pipeline.chapter,
+      manuscript_hash:
+        snapshot.pipeline.draft !== undefined && snapshot.text !== null ? sha256(snapshot.text) : null,
       stage: snapshot.pipeline.stage,
       rounds: { ...snapshot.pipeline.rounds },
       blocking: [...this.effectiveBlocking(snapshot), ...journal],
@@ -2584,6 +2690,127 @@ export class EngineService {
     }
   }
 
+  /**
+   * Read-only upgrade audit. It never edits a legacy document: the point is to
+   * explain why an old project's numbers look different, not to rewrite history.
+   */
+  private async legacyIssues(snapshot: Snapshot, includeChecks: boolean): Promise<LegacyIssue[]> {
+    const issues: LegacyIssue[] = []
+    const store = this.storeFor(snapshot.root)
+    const oldEffort = snapshot.chapters.chapters.filter(
+      (record) => record.rounds === undefined || record.archived_at === undefined,
+    )
+    if (oldEffort.length > 0) {
+      issues.push({
+        code: 'LEGACY_EFFORT',
+        detail: `${oldEffort.length} 章缺少 rounds/archived_at；report 已按 journal 回填，归档时不会自动改写旧记录`,
+      })
+    }
+    if (includeChecks) {
+      let oldChecks = 0
+      for (const record of snapshot.chapters.chapters) {
+        try {
+          const check = (await store.readDoc(
+            checkFile(record.num),
+            'check',
+          )) as unknown as CheckDocument | null
+          if (check === null) continue
+          const machine = check.machine as {
+            advisories?: unknown
+            violations?: Array<{ severity?: unknown }>
+          }
+          const mixed =
+            machine.advisories === undefined ||
+            (Array.isArray(machine.violations) &&
+              machine.violations.some((violation) => violation.severity === 'advisory'))
+          if (mixed) oldChecks += 1
+        } catch {
+          // A damaged check already surfaces through state_errors/doctor; do not
+          // turn it into a second legacy warning.
+        }
+      }
+      if (oldChecks > 0) {
+        issues.push({
+          code: 'LEGACY_CHECK_FORMAT',
+          detail: `${oldChecks} 章 check 是 0.2.0 旧格式（advisory 混在 violations）；重新跑 novel_check 或按 docs/0.2.3-plan.md 标记`,
+        })
+      }
+    }
+    const hints = new Map<string, string>()
+    for (const character of snapshot.worldbook.characters) {
+      if (character.role !== '') hints.set(character.name, character.role)
+    }
+    const wrongRoles = snapshot.characters.characters.filter(
+      (character) =>
+        character.role === 'extra' &&
+        hints.has(character.name) &&
+        normalizeRole(hints.get(character.name), 'extra') !== 'extra',
+    )
+    if (wrongRoles.length > 0) {
+      issues.push({
+        code: 'LEGACY_CAST_ROLE',
+        detail: `${wrongRoles.length} 个角色台账仍是 extra，但世界观写的是：${wrongRoles
+          .slice(0, 3)
+          .map((character) => `${character.name}=${hints.get(character.name)}`)
+          .join('、')}`,
+      })
+    }
+    // New rows carry format_version=1. That lets the audit distinguish a
+    // legitimate new anchorless title (already verified against the manuscript
+    // at plant time) from pre-0.2.3 rows that cannot prove their label without
+    // an anchor. No manuscript read is needed, so panel/doctor stay cheap.
+    const noAnchor = snapshot.foreshadows.items.filter(
+      (item) => item.anchor === undefined && item.format_version !== 1,
+    )
+    if (noAnchor.length > 0) {
+      issues.push({
+        code: 'LEGACY_FORESHADOW_ANCHOR',
+        detail: `${noAnchor.length} 条旧伏笔没有 anchor：${noAnchor
+          .slice(0, 3)
+          .map((item) => `${item.id}「${item.title}」`)
+          .join('、')}；不自动改写，补 anchor 时请人工确认正文原句`,
+      })
+    }
+    const resolvedWithoutLog = snapshot.foreshadows.items.filter(
+      (item) => item.status === 'resolved' && item.advance_log.length === 0,
+    )
+    if (resolvedWithoutLog.length > 0) {
+      issues.push({
+        code: 'LEGACY_FORESHADOW_ADVANCE',
+        detail: `${resolvedWithoutLog.length} 条旧伏笔已 resolved 但没有 advance_log：${resolvedWithoutLog
+          .slice(0, 3)
+          .map((item) => item.id)
+          .join('、')}；新归档会自动记录，旧记录不补写`,
+      })
+    }
+    // Appending a receipt for a completed chapter is normal. The old defect was
+    // pipeline.briefs retaining a signature from another chapter, so compare the
+    // raw pipeline against the current receipts instead of treating every
+    // historical receipt as stale.
+    const rawBriefs = snapshot.pipeline.briefs ?? {}
+    const receiptDocument = await this.readBriefReceipts(store)
+    const currentReceipts = receiptDocument.receipts.filter(
+      (receipt) => receipt.chapter === snapshot.pipeline.chapter,
+    )
+    const staleBriefs = Object.entries(rawBriefs).filter(([stage, receipt]) => {
+      if (snapshot.briefs[stage]?.digest === receipt.digest) return false
+      // A renewed brief leaves the old signature in pipeline.briefs. It is a
+      // legitimate superseded receipt, not stale legacy data, as long as the
+      // append-only audit still contains it for this chapter and stage.
+      return !currentReceipts.some((current) => current.stage === stage && current.digest === receipt.digest)
+    })
+    if (staleBriefs.length > 0) {
+      issues.push({
+        code: 'LEGACY_BRIEFS',
+        detail: `pipeline.briefs 有 ${staleBriefs.length} 条与第 ${snapshot.pipeline.chapter} 章收据不一致的签名（${staleBriefs
+          .slice(0, 3)
+          .map(([stage]) => stage)
+          .join('、')}）；当前章 effective briefs 只取当前章收据`,
+      })
+    }
+    return issues
+  }
+
   async doctor(input: DoctorInput = {}): Promise<OpResult<DoctorReport>> {
     const selection = await this.resolveRootForInspection(input.root)
     const root = selection.root
@@ -2683,6 +2910,15 @@ export class EngineService {
         (snapshot.worldbookPresent ? 'worldbook is readable' : 'outline/worldbook.yaml is missing'),
       ...(snapshot.worldbookError !== null ? { hint: 'repair outline/worldbook.yaml with novel_amend' } : {}),
     })
+    if (snapshot.outline.book.strict && (snapshot.worldbook.facts ?? []).length === 0) {
+      add({
+        id: 'worldbook-facts',
+        severity: 'info',
+        title: '数值事实为空',
+        detail: '严格模式已开启，但 worldbook.facts 没有声明任何汇率、物价或数量事实',
+        hint: '在 novel_worldbook 的 facts 里声明可核对的数值，P6 的 NUMERIC_FACT_MISMATCH 才有参照',
+      })
+    }
     try {
       const journalPresent = await store.exists(joinRel(STATE_DIR, STATE_FILES.journal))
       const journal = await readJournal(store)
@@ -2911,6 +3147,19 @@ export class EngineService {
                 hint: '最新备份不属于活动章或没有本章可恢复的 pre-image；用 novel_state {kind:"backups"} 列出，归档章先 novel_reopen',
               }),
     })
+    const legacy = await this.legacyIssues(snapshot, true)
+    if (legacy.length > 0) {
+      add({
+        id: 'legacy-data',
+        severity: 'warning',
+        title: '旧数据升级提示',
+        detail: `${legacy.length} 类旧数据需要解释或人工补齐：${legacy
+          .slice(0, 3)
+          .map((issue) => `${issue.code}（${issue.detail}）`)
+          .join('；')}`,
+        hint: '这是只读审计，不会自动改历史；按 docs/0.2.3-plan.md WP0 处理，补 anchor/role 前先核对原文',
+      })
+    }
     const locked = await store.exists(LOCK_FILE)
     add({
       id: 'lock',
@@ -2967,8 +3216,10 @@ export class EngineService {
   async report(input: ReportSubmission = {}): Promise<OpResult<BookReport>> {
     const snapshot = await this.load(input.root)
     const store = this.storeFor(snapshot.root)
-    const reviews: ReviewDocument[] = []
+    const currentReviews: ReviewDocument[] = []
     const reviewIssues: string[] = []
+    const archivedChapterNums = new Set(snapshot.chapters.chapters.map((record) => record.num))
+    const finalChecks: Record<number, 'pass' | 'fail'> = {}
     // List history once. Calling listHistory per chapter reread every history
     // file on every iteration, turning a whole-book report into O(chapters ×
     // history files) disk work.
@@ -2976,12 +3227,18 @@ export class EngineService {
     for (const record of snapshot.chapters.chapters) {
       try {
         const review = await store.readDoc(reviewFile(record.num), 'review')
-        if (review === null) reviewIssues.push(`chapter ${record.num}: review is missing`)
-        else reviews.push(review as unknown as ReviewDocument)
+        if (review === null) {
+          reviewIssues.push(`chapter ${record.num}: review is missing`)
+        } else {
+          const document = review as unknown as ReviewDocument
+          currentReviews.push(document)
+        }
         for (const historical of await historyTexts(store, 'reviews', record.num, historicalEntries)) {
           try {
-            const parsed = narrow('review', parseYaml(historical.text)) as unknown as ReviewDocument
-            reviews.push(parsed)
+            // Validate history so a malformed copy is reported, but leave the
+            // attempt count to the shared helper below. Identical copies are
+            // not independent review rounds.
+            narrow('review', parseYaml(historical.text))
           } catch (error) {
             reviewIssues.push(`chapter ${record.num} ${historical.path}: ${errorMessage(error)}`)
           }
@@ -2989,17 +3246,34 @@ export class EngineService {
       } catch (error) {
         reviewIssues.push(`chapter ${record.num}: ${errorMessage(error)}`)
       }
-    }
-    // A revision that does not change issue status/evidence used to copy the
-    // current review into history byte-for-byte, and report counted both
-    // copies as independent quality samples. Keep each distinct review once;
-    // distinct reviews from a rollback-reset round still count separately.
-    const uniqueReviews = new Map<string, ReviewDocument>()
-    for (const review of reviews) {
-      const key = stableJson(review)
-      if (!uniqueReviews.has(key)) uniqueReviews.set(key, review)
+      if (record.final_check === undefined || record.final_check === null) {
+        try {
+          const check = (await store.readDoc(
+            checkFile(record.num),
+            'check',
+          )) as unknown as CheckDocument | null
+          if (check !== null && (check.verdict === 'pass' || check.verdict === 'fail')) {
+            finalChecks[record.num] = check.verdict
+          } else {
+            // The archive row has no verdict and the check evidence is gone.
+            // Keep the null rather than fabricating a pass, but say why the
+            // per-chapter final_check is unavailable.
+            reviewIssues.push(`chapter ${record.num}: check is missing`)
+          }
+        } catch (error) {
+          reviewIssues.push(`chapter ${record.num} check: ${errorMessage(error)}`)
+        }
+      }
     }
     const journal = await readJournal(store)
+    const attemptCounts = await this.reviewAttemptsByChapter(
+      store,
+      journal.rows,
+      [...archivedChapterNums],
+      new Set(currentReviews.map((review) => review.chapter)),
+      historicalEntries,
+    )
+    const reviewAttempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
     const report = buildBookReport({
       project: snapshot.project,
       outline: snapshot.outline,
@@ -3013,8 +3287,13 @@ export class EngineService {
       timeline: snapshot.timeline,
       foreshadows: snapshot.foreshadows,
       relationships: snapshot.relationships,
-      reviews: [...uniqueReviews.values()],
+      reviews: currentReviews,
       activity: journal.rows.slice(-8),
+      journal: journal.rows,
+      // The journal is the authoritative attempt ledger; history fills gaps
+      // per chapter and duplicate history copies are de-duplicated.
+      reviewAttempts,
+      finalChecks,
       targetChapters: snapshot.project.targets.total_chapters,
       minScore: this.config.quality.minScore,
       foreshadowDormantAfter: this.rulepack.crosschapter.foreshadow_dormant_after,
@@ -3124,26 +3403,16 @@ export class EngineService {
 
   /* ----------------------------------------------------------------- briefs */
 
-  async getBrief(input: BriefInput): Promise<
-    OpResult<{
-      stage: string
-      chapter: number
-      digest: string
-      title: string
-      content: string
-      content_hash: string
-      fields: Record<string, unknown>
-      context: Record<string, unknown>
-    }>
-  > {
+  async getBrief(input: BriefInput): Promise<OpResult<BriefPayload>> {
     // Surface project/schema errors before the journal-consistency check. A
     // future schema_version must not be reported as an unrelated external-edit
-    // mismatch; this preflight is validation only and the locked mutation still
-    // reloads the snapshot before signing anything.
+    // mismatch; this preflight is validation only.
     await this.load(input.root)
-    // Compute the brief only after taking the write lock. The old fast path
-    // loaded the snapshot before locking, so a concurrent archive or amend
-    // could issue a digest for a chapter/context that no longer existed.
+    // Repeating the same stage on the same chapter is a replay: the run below
+    // returns `{ files: [], replay: true }`, so no journal row or revision is
+    // written. It still takes the project lock. A lock-free fast path here used
+    // to call assertJournalConsistent() outside the writer lock, which could
+    // recover or publish another live writer's pending transaction.
     return this.mutate({
       root: input.root,
       op: 'getBrief',
@@ -3151,68 +3420,11 @@ export class EngineService {
       advanceRevision: false,
       run: async (snapshot, context) => {
         const chapter = input.chapter ?? snapshot.pipeline.chapter
-        // A brief signs the active snapshot; issuing one for a historical
-        // chapter would produce a digest the gates can never match. Keep the
-        // tool honest instead of silently signing a different chapter.
-        if (chapter !== snapshot.pipeline.chapter) {
-          throw new EngineInputError(
-            ERROR_CODES.SCHEMA_INVALID,
-            `brief ${input.stage} belongs to active chapter ${snapshot.pipeline.chapter}, not ${chapter}`,
-            `omit chapter or pass ${snapshot.pipeline.chapter}`,
-          )
-        }
-        const contextPack = this.briefContextFor(input.stage, snapshot, chapter)
-        const digest = this.briefDigest(input.stage, snapshot, contextPack)
-        const variables = this.briefVariables(snapshot, chapter)
-        const rendered = this.briefs.render(input.stage, variables)
-        const fields = {
-          stage: input.stage,
-          chapter,
-          digest,
-          min_words: snapshot.project.targets.words_per_chapter[0],
-          max_words: snapshot.project.targets.words_per_chapter[1],
-          word_count_policy: {
-            metric: 'total_word_count',
-            includes_punctuation: true,
-            formula: 'cjk_chars + english_words + numbers + punctuation_chars',
-            note: '引擎与商业平台一致把标点计入字数；brief/status/check 的 min_words 都是这个口径',
-          },
-          dialogue_ratio_target: snapshot.project.targets.dialogue_ratio,
-          dialogue_ratio_metric: '含引号行数 / 非空行数',
-          delta_rules: {
-            title_is_a_label: true,
-            anchor_required_for_verification: true,
-            rule: '伏笔 title 可以写成可读短语；要逐字校验请在 anchor 里放正文原句（至少 8 个字符）。缺 anchor 时 title 必须逐字出现在正文。',
-          },
-          min_score: this.config.quality.minScore,
-          scene_types: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'],
-          platform_style: this.rulepack.platform[snapshot.project.platform],
-          genre_guide: this.rulepack.genres[snapshot.project.genre],
-          /** P4 must apply exclusions before its arithmetic closes. */
-          score_exclusions: this.rulepack.exclusions,
-          next_tool: NEXT_TOOL_BY_BRIEF[input.stage],
-          book_plan: snapshot.outline.book,
-          outline_card: outlineCard(snapshot.outline, chapter),
-          worldbook_counts: worldbookCounts(snapshot.worldbook),
-          ...(snapshot.worldPlanError === null ? {} : { world_plan_error: snapshot.worldPlanError }),
-          ...(snapshot.planError === null ? {} : { plan_error: snapshot.planError }),
-          ...(snapshot.reviewError === null ? {} : { review_error: snapshot.reviewError }),
-          ...(snapshot.checkError === null ? {} : { check_error: snapshot.checkError }),
-          ...(snapshot.outlineError === null ? {} : { outline_error: snapshot.outlineError }),
-          ...(snapshot.worldbookError === null ? {} : { worldbook_error: snapshot.worldbookError }),
-        }
-        const data = {
-          stage: input.stage,
-          chapter,
-          digest,
-          title: rendered.title,
-          content: rendered.content,
-          content_hash: rendered.contentHash,
-          fields,
-          context: contextPack,
-        }
+        this.assertBriefChapter(input.stage, snapshot.pipeline.chapter, chapter)
+        await this.assertBriefReceiptsWritable(context.store)
+        const data = this.briefPayload(snapshot, input.stage, chapter)
         const existing = snapshot.briefs[input.stage]
-        if (existing !== undefined && existing.digest === digest) {
+        if (existing !== undefined && existing.digest === data.digest) {
           return { files: [], data, replay: true }
         }
         const issuedAt = this.now().toISOString()
@@ -3220,7 +3432,7 @@ export class EngineService {
         receiptDocument.receipts.push({
           chapter,
           stage: input.stage,
-          digest,
+          digest: data.digest,
           issued_at: issuedAt,
         })
         // Receipts are append-only evidence. Do not silently drop the oldest
@@ -3239,6 +3451,169 @@ export class EngineService {
         }
       },
     })
+  }
+
+  private assertBriefChapter(stage: BriefStage, active: number, requested: number): void {
+    // A brief signs the active snapshot; issuing one for a historical chapter
+    // would produce a digest the gates can never match.
+    if (requested !== active) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `brief ${stage} belongs to active chapter ${active}, not ${requested}`,
+        `omit chapter or pass ${active}`,
+      )
+    }
+  }
+
+  private briefPayload(snapshot: Snapshot, stage: BriefStage, chapter: number): BriefPayload {
+    const contextPack = this.briefContextFor(stage, snapshot, chapter)
+    const digest = this.briefDigest(stage, snapshot, contextPack)
+    const variables = this.briefVariables(snapshot, chapter)
+    const rendered = this.briefs.render(stage, variables)
+    const manuscriptHash =
+      snapshot.pipeline.draft !== undefined && snapshot.text !== null ? sha256(snapshot.text) : null
+    const fields = {
+      stage,
+      chapter,
+      digest,
+      manuscript_hash: manuscriptHash,
+      min_words: snapshot.project.targets.words_per_chapter[0],
+      max_words: snapshot.project.targets.words_per_chapter[1],
+      word_count_policy: {
+        metric: 'total_word_count',
+        includes_punctuation: true,
+        formula: 'cjk_chars + english_words + numbers + punctuation_chars',
+        note: '引擎与商业平台一致把标点计入字数；brief/status/check 的 min_words 都是这个口径',
+      },
+      dialogue_ratio_target: snapshot.project.targets.dialogue_ratio,
+      dialogue_ratio_metric: '含引号行数 / 非空行数',
+      delta_rules: {
+        title_is_a_label: true,
+        anchor_required_for_verification: true,
+        rule: '伏笔 title 可以写成可读短语；要逐字校验请在 anchor 里放正文原句（至少 8 个字符）。缺 anchor 时 title 必须逐字出现在正文。',
+        summary_links: {
+          characters_appeared:
+            'characters 中 action=created 的每个名字，必须出现在 draft summary.characters_appeared。',
+          new_elements:
+            'world 中 action=created 的 location/ability/artifact 必须出现在 draft summary.new_elements 的对应数组，且 kind 一致；faction/rule 只需正文出现并按 kind 写入，summary.new_elements 没有对应数组。',
+          timeline: 'timeline 的每个键必须是 draft summary.events 的下标（字符串）。',
+          relationships:
+            'relationships 的两端必须已存在于 characters（本章 created 或台账已有），否则先声明人物。',
+          archive_summary:
+            'novel_archive 不接受 summary；summary 在 P3/P5 固定。若 summary 与本章事实不符，先用 novel_brief P5 → novel_revise 修正 summary，再重走 P4/P6/P8。',
+        },
+        minimal_schema: {
+          characters: {
+            '<人物名>': {
+              action: 'created | updated | no_change',
+              reason: 'no_change 必填；created/updated 建议写',
+              role: 'protagonist | supporting | antagonist | extra（可选）',
+              profile: 'object（可选）',
+              current_state: 'object（可选，如 {"resources":{"港币":-3}}）',
+            },
+          },
+          foreshadows: {
+            '<summary.planted.key 或 FS-xxx>': {
+              action: 'created | updated | no_change',
+              title: '可读标签（可选）',
+              anchor: '正文逐字原句，至少 8 字',
+              note: 'resolve/advance 时写清如何兑现',
+              new_info: 'boolean（可选）',
+            },
+          },
+          timeline: {
+            '<summary.events 下标，字符串>': {
+              action: 'created',
+              story_time: 'string',
+              description: 'string',
+              location: 'string',
+              characters: 'string[]',
+            },
+          },
+          world: {
+            '<新地点/能力/物品名>': {
+              action: 'created',
+              kind: 'location | ability | artifact | faction | rule',
+              description: 'string',
+            },
+          },
+          relationships: {
+            '<甲|乙>': {
+              action: 'created | updated | no_change',
+              type: 'string（created 必填）',
+              description: 'string',
+              note: 'string（updated 时写变化）',
+            },
+          },
+        },
+        examples: [
+          {
+            summary_excerpt: {
+              characters_appeared: ['陈嘉树'],
+              foreshadows: { planted: [], advanced: ['FS-001'], resolved: [] },
+            },
+            characters: { 陈嘉树: { action: 'updated', current_state: { resources: { 港币: -3 } } } },
+            foreshadows: { 'FS-001': { action: 'updated', note: '欠条被收回', new_info: true } },
+          },
+          {
+            summary_excerpt: {
+              events: ['收到信'],
+              new_elements: { locations: ['旧码头'], abilities: [], artifacts: [] },
+            },
+            timeline: { '0': { action: 'created', story_time: 'Day 3 清晨', description: '收到信' } },
+            world: { 旧码头: { action: 'created', kind: 'location', description: '退潮时露出石阶' } },
+          },
+        ],
+        linked_example: {
+          summary: {
+            characters_appeared: ['陈嘉树'],
+            new_elements: { locations: ['旧码头'], abilities: [], artifacts: [] },
+            events: ['收到信'],
+          },
+          delta: {
+            characters: { 陈嘉树: { action: 'no_change', reason: '本章无变化' } },
+            world: { 旧码头: { action: 'created', kind: 'location', description: '退潮时露出石阶' } },
+            timeline: { '0': { action: 'created', description: '收到信' } },
+          },
+        },
+      },
+      ...(stage === 'P5' && manuscriptHash !== null
+        ? {
+            patch_example: {
+              expected_hash: manuscriptHash,
+              edits: [{ old_text: '原文中的唯一片段', new_text: '替换后的片段' }],
+            },
+          }
+        : {}),
+      min_score: this.config.quality.minScore,
+      scene_types: ['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'],
+      platform_style: this.rulepack.platform[snapshot.project.platform],
+      genre_guide: this.rulepack.genres[snapshot.project.genre],
+      /** P4 must apply exclusions before its arithmetic closes. */
+      score_exclusions: this.rulepack.exclusions,
+      next_tool: NEXT_TOOL_BY_BRIEF[stage],
+      book_plan: snapshot.outline.book,
+      outline_card: outlineCard(snapshot.outline, chapter),
+      worldbook_counts: worldbookCounts(snapshot.worldbook),
+      worldbook_facts: snapshot.worldbook.facts ?? [],
+      worldbook_facts_empty: snapshot.outline.book.strict && (snapshot.worldbook.facts ?? []).length === 0,
+      ...(snapshot.worldPlanError === null ? {} : { world_plan_error: snapshot.worldPlanError }),
+      ...(snapshot.planError === null ? {} : { plan_error: snapshot.planError }),
+      ...(snapshot.reviewError === null ? {} : { review_error: snapshot.reviewError }),
+      ...(snapshot.checkError === null ? {} : { check_error: snapshot.checkError }),
+      ...(snapshot.outlineError === null ? {} : { outline_error: snapshot.outlineError }),
+      ...(snapshot.worldbookError === null ? {} : { worldbook_error: snapshot.worldbookError }),
+    }
+    return {
+      stage,
+      chapter,
+      digest,
+      title: rendered.title,
+      content: rendered.content,
+      content_hash: rendered.contentHash,
+      fields,
+      context: contextPack,
+    }
   }
 
   /* ------------------------------------------------------------------ plans */
@@ -3744,7 +4119,7 @@ export class EngineService {
   async submitRevision(
     input: RevisionSubmission,
   ): Promise<OpResult<{ chapter: number; stage: Stage; metrics: WordMetrics }>> {
-    const hasContent = typeof input.content === 'string' && input.content.trim() !== ''
+    const hasContent = input.content !== undefined
     const hasPatch = input.patch !== undefined
     if (hasContent === hasPatch) {
       throw new EngineInputError(
@@ -3796,15 +4171,26 @@ export class EngineService {
       op: 'submitRevision',
       chapter: input.chapter,
       key: () =>
-        `revision:${input.chapter}:${sha256(input.content ?? stableJson(input.patch))}:${sha256(
-          stableJson({ summary: input.summary, issues: input.issues, proof: input.proof }),
-        )}`,
+        `revision:${input.chapter}:${sha256(
+          input.patch !== undefined
+            ? stableJson(input.patch)
+            : typeof input.content === 'string'
+              ? input.content
+              : stableJson(input.content),
+        )}:${sha256(stableJson({ summary: input.summary, issues: input.issues, proof: input.proof }))}`,
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const revisedContent =
           input.patch === undefined
             ? (input.content as string)
             : applyRevisionPatch(snapshot.text ?? '', input.patch)
+        if (typeof revisedContent !== 'string') {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            'revision content must be a string',
+            'send the full revised text as a string, or a patch object',
+          )
+        }
         if (revisedContent.trim() === '') {
           throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'revision content must not be empty')
         }
@@ -3874,16 +4260,16 @@ export class EngineService {
               for (const field of ['dimension', 'location', 'problem', 'fix'] as const) {
                 if (submitted[field] !== undefined && submitted[field] !== before[field]) {
                   throw new EngineInputError(
-                    ERROR_CODES.SCHEMA_INVALID,
-                    `issue ${submitted.id} cannot change its ${field} during revision`,
+                    ERROR_CODES.ISSUE_IMMUTABLE,
+                    `issue ${submitted.id} cannot change its ${field} during revision (received ${typeof submitted[field]}: ${JSON.stringify(submitted[field])})`,
                     'only status and evidence may change; new findings belong in the next review',
                   )
                 }
               }
               if (submitted.severity !== undefined && submitted.severity !== before.severity) {
                 throw new EngineInputError(
-                  ERROR_CODES.SCHEMA_INVALID,
-                  `issue ${submitted.id} cannot change severity during revision`,
+                  ERROR_CODES.ISSUE_IMMUTABLE,
+                  `issue ${submitted.id} cannot change severity during revision (received ${typeof submitted.severity}: ${JSON.stringify(submitted.severity)})`,
                   'only status and evidence may change; a blocker stays a blocker until re-reviewed',
                 )
               }
@@ -3893,15 +4279,15 @@ export class EngineService {
                 submitted.severity !== 'blocker'
               ) {
                 throw new EngineInputError(
-                  ERROR_CODES.SCHEMA_INVALID,
-                  `issue ${submitted.id} is a blocker and cannot be downgraded`,
+                  ERROR_CODES.ISSUE_IMMUTABLE,
+                  `issue ${submitted.id} is a blocker and cannot be downgraded (received ${JSON.stringify(submitted.severity)})`,
                   'keep severity blocker and mark it fixed with evidence',
                 )
               }
               if (before.severity === 'blocker' && submitted.status === 'waived') {
                 throw new EngineInputError(
-                  ERROR_CODES.SCHEMA_INVALID,
-                  `issue ${submitted.id} is a blocker and cannot be waived`,
+                  ERROR_CODES.ISSUE_IMMUTABLE,
+                  `issue ${submitted.id} is a blocker and cannot be waived (received status: ${JSON.stringify(submitted.status)})`,
                   'keep severity blocker and mark it fixed with evidence',
                 )
               }
@@ -4056,8 +4442,8 @@ export class EngineService {
         const machineBlocking = scopedMachine.violations.filter(
           (violation) => violation.severity === 'blocker',
         )
-        const machineAdvisories = scopedMachine.violations.filter(
-          (violation) => violation.severity === 'advisory',
+        const machineAdvisories = dedupeAdvisories(
+          scopedMachine.violations.filter((violation) => violation.severity === 'advisory'),
         )
         const advisoryCodes = [...new Set(machineAdvisories.map((violation) => violation.code))]
         const requestedAck = Array.isArray(input.acknowledge) ? input.acknowledge : []
@@ -4164,7 +4550,10 @@ export class EngineService {
             stage: nextStage,
           },
           warnings: [
-            ...machineWarnings(scopedMachine, acknowledged),
+            ...machineWarnings(
+              { ...scopedMachine, violations: [...machineBlocking, ...machineAdvisories] },
+              acknowledged,
+            ),
             ...(acknowledged.length === 0
               ? []
               : [
@@ -5177,13 +5566,16 @@ export class EngineService {
             ? 'damaged'
             : inspection.state === 'unreadable'
               ? 'unreadable'
-              : 'missing'
+              : inspection.state === 'not-project'
+                ? 'not-project'
+                : 'missing'
       const sameIdentity =
         expectedCreatedAt === undefined ||
         expectedCreatedAt === '' ||
         inspection.created_at === expectedCreatedAt
+      const identityChanged = inspection.state === 'ok' && !sameIdentity
       const title =
-        inspection.state === 'ok' && inspection.title !== '' && sameIdentity
+        inspection.state === 'ok' && inspection.title !== ''
           ? inspection.title
           : fallbackTitle !== undefined && fallbackTitle !== ''
             ? fallbackTitle
@@ -5194,6 +5586,7 @@ export class EngineService {
         active: active === inspection.root,
         registered,
         state,
+        ...(identityChanged ? { identity_changed: true } : {}),
       }
     }
     for (const entry of registry.projects) {
@@ -5290,28 +5683,37 @@ export class EngineService {
       // The directory can disappear between the cheap option inspection and the
       // full read. Keep the project list/selector and report the same missing
       // state instead of letting the route collapse to an empty payload.
-      if (
-        error instanceof EngineError &&
-        (error.code === ERROR_CODES.PROJECT_MISSING || error.code === ERROR_CODES.PROJECT_NOT_FOUND)
-      ) {
+      if (error instanceof EngineError) {
+        const busy = error.code === ERROR_CODES.TXN_IN_PROGRESS
+        const missingDir =
+          error.code === ERROR_CODES.PROJECT_MISSING || error.code === ERROR_CODES.PROJECT_NOT_FOUND
         return {
           projects,
           selection,
           missing: {
             root: selection.root,
             title: option.title,
-            code:
-              error.code === ERROR_CODES.PROJECT_MISSING
-                ? ERROR_CODES.PROJECT_MISSING
+            code: busy
+              ? ERROR_CODES.TXN_IN_PROGRESS
+              : missingDir
+                ? error.code
                 : ERROR_CODES.PROJECT_NOT_FOUND,
-            reason: 'missing',
-            hint: error.hint ?? '项目目录不在了；请恢复目录或挂载后刷新，登记行和面板偏好会保留。',
+            reason: busy ? 'busy' : missingDir ? 'missing' : 'unreadable',
+            hint: busy
+              ? '另一个写入正在进行；面板不会读取撕裂状态，请等写入完成后刷新。'
+              : (error.hint ??
+                (missingDir
+                  ? '项目目录不在了；请恢复目录或挂载后刷新，登记行和面板偏好会保留。'
+                  : `项目暂时无法读取（${error.code}）；修正后刷新，项目选择器会保留。`)),
           },
         }
       }
       throw error
     }
     const summary = projectSummary(snapshot)
+    // A damaged novel.yaml cannot prove its own title. The registry row can, so
+    // keep the header and the copy-resume prompt from inventing a placeholder.
+    if (option.state !== 'ok' && option.title !== '') summary.title = option.title
     const resume =
       summary.next === undefined
         ? undefined
@@ -5436,7 +5838,7 @@ export class EngineService {
   /** List known projects with a cheap directory state for the panel/command. */
   async listProjects(): Promise<{
     active: string | null
-    projects: Array<RegistryEntry & { state: ProjectState }>
+    projects: Array<RegistryEntry & { state: ProjectState; identity_changed?: boolean }>
   }> {
     const document = await this.registry().read()
     const projects = await Promise.all(
@@ -5450,12 +5852,14 @@ export class EngineService {
           ...entry,
           // A readable novel.yaml is fresher than a registry row written before
           // the title was amended, but only while the registry and disk still
-          // describe the same project identity. Missing/damaged rows keep the
-          // last known title instead of replacing it with a placeholder.
+          // describe the same project identity. The panel uses its own title
+          // projection and labels identity changes; scan --register keeps the
+          // last registered title so it cannot silently overwrite a row.
           ...(inspection.state === 'ok' && inspection.title !== '' && sameIdentity
             ? { title: inspection.title }
             : {}),
           state: inspection.state,
+          ...(inspection.state === 'ok' && !sameIdentity ? { identity_changed: true } : {}),
         }
       }),
     )
@@ -5534,6 +5938,48 @@ export class EngineService {
     return this.withMetadataLock(async () => {
       const document = await this.registry().forget(this.resolveProjectPath(input.root))
       return { active: document.active, projects: document.projects }
+    })
+  }
+
+  /**
+   * Remove only registry rows whose directories are missing, not a project, or
+   * unreadable. The default is a dry run; project files and session bindings are
+   * never touched, and `--yes` is required at the command layer.
+   */
+  async pruneProjects(input: { apply?: boolean } = {}): Promise<{
+    candidates: Array<{ root: string; title: string; state: ProjectState }>
+    removed: string[]
+    active: string | null
+  }> {
+    const listed = await this.listProjects()
+    const candidates = listed.projects
+      .filter(
+        (project) =>
+          project.state === 'missing' || project.state === 'not-project' || project.state === 'unreadable',
+      )
+      .map((project) => ({ root: project.root, title: project.title, state: project.state }))
+    if (input.apply !== true) {
+      return { candidates, removed: [], active: listed.active }
+    }
+    return this.withMetadataLock(async () => {
+      const registry = this.registry()
+      let document = await registry.read()
+      const removed: string[] = []
+      for (const candidate of candidates) {
+        if (!document.projects.some((entry) => entry.root === candidate.root)) continue
+        // Re-check immediately before removing the row. A directory restored
+        // while the user was confirming must not lose its registration.
+        const inspection = await inspectProject(candidate.root)
+        if (
+          inspection.state !== 'missing' &&
+          inspection.state !== 'not-project' &&
+          inspection.state !== 'unreadable'
+        )
+          continue
+        document = await registry.forget(candidate.root)
+        removed.push(candidate.root)
+      }
+      return { candidates, removed, active: document.active }
     })
   }
 
@@ -6094,16 +6540,76 @@ export class EngineService {
     }
     const qualityScores = scores.slice(-5)
     const previousScores = scores.slice(-10, -5)
+    // Match report()'s sample definition: an archived chapter with a readable
+    // final review file. An existing but malformed file is not a sample; the
+    // report surfaces the parse error, and the panel must not claim a sample it
+    // cannot read. Reading only the names would make deleted and corrupt
+    // reviews look identical in the two surfaces.
+    const store = this.storeFor(snapshot.root)
+    const reviewNames = new Set(await store.list(REVIEW_DIR))
+    const sampleChapters = new Set<number>()
+    for (const record of archived) {
+      const name = reviewFile(record.num).slice(`${REVIEW_DIR}/`.length)
+      if (!reviewNames.has(name)) continue
+      try {
+        if ((await store.readDoc(reviewFile(record.num), 'review')) !== null) {
+          sampleChapters.add(record.num)
+        }
+      } catch {
+        // Keep the panel count aligned with report()'s readable-review count.
+      }
+    }
+    const samples = sampleChapters.size
+    const archivedChapterNums = new Set(archived.map((record) => record.num))
+    const attemptCounts = await this.reviewAttemptsByChapter(
+      store,
+      journal.rows,
+      [...archivedChapterNums],
+      sampleChapters,
+    )
+    const attempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
+    const qualityTrendBasis =
+      samples < 3
+        ? ('insufficient_samples' as const)
+        : previousScores.length < 5
+          ? ('insufficient_history' as const)
+          : ('last_five_vs_previous_five' as const)
     const quality = {
       averageScore:
         scores.length === 0 ? 0 : scores.reduce((total, score) => total + score, 0) / scores.length,
       scores,
       trend:
-        previousScores.length === 0
-          ? 0
-          : qualityScores.reduce((total, score) => total + score, 0) / qualityScores.length -
-            previousScores.reduce((total, score) => total + score, 0) / previousScores.length,
+        qualityTrendBasis === 'last_five_vs_previous_five'
+          ? Math.round(
+              (qualityScores.reduce((total, score) => total + score, 0) / qualityScores.length -
+                previousScores.reduce((total, score) => total + score, 0) / previousScores.length) *
+                10,
+            ) / 10
+          : null,
+      trend_basis: qualityTrendBasis,
+      samples,
+      attempts,
     }
+    // A check is evidence only for the exact manuscript version it hashed. A
+    // later revision leaves the old advisories in checks/*.yaml; showing them
+    // as current would invite an acknowledge that no longer applies.
+    const checkCurrent =
+      snapshot.check !== null &&
+      snapshot.text !== null &&
+      snapshot.check.content_hash === sha256(snapshot.text)
+    const acknowledged = new Set(checkCurrent ? (snapshot.check?.acknowledged ?? []) : [])
+    const currentAdvisoryCodes = new Set(
+      checkCurrent ? (snapshot.check?.machine.advisories ?? []).map((violation) => violation.code) : [],
+    )
+    const acknowledgedAdvisories = [...acknowledged].filter((code) => currentAdvisoryCodes.has(code)).length
+    const advisories = (checkCurrent ? (snapshot.check?.machine.advisories ?? []) : [])
+      .filter((violation) => !acknowledged.has(violation.code))
+      .map((violation) => ({
+        code: violation.code,
+        detail: violation.detail,
+        hint: `第 ${violation.location.paragraph} 段`,
+      }))
+    const legacy = await this.legacyIssues(snapshot, false)
     const activity = journal.rows.slice(-5).map((row) => ({
       at: row.at,
       op: row.op,
@@ -6170,18 +6676,21 @@ export class EngineService {
         stateErrors: stateErrorCount,
       },
       activity,
+      ...(advisories.length === 0 ? {} : { advisories }),
+      ...(acknowledgedAdvisories === 0 ? {} : { acknowledgedAdvisories }),
+      ...(legacy.length === 0 ? {} : { legacy }),
     }
   }
 
   /**
-   * The archive stage has only one legal operation, so a status/panel that
-   * recommends it without checking the same gates as the archive creates a
-   * loop. Evaluate the real archive gates through `gateInput`, then add the
-   * machine pass and semantic evidence that archive re-checks separately.
+   * The archive stage can be left by a direct revision (the 0.2.3 workflow) or
+   * by rollback. Evaluate the same gates as archive so status/panel do not
+   * recommend an operation that will immediately fail; when the failure is
+   * prose-level, `nextStep` recommends the direct P5 revision instead.
    */
   private archivePreflight(
     snapshot: Snapshot,
-  ): { item: BlockingItem; to_stage: RollbackSubmission['toStage'] } | null {
+  ): { item: BlockingItem; to_stage: RollbackSubmission['toStage']; revisionable: boolean } | null {
     if (snapshot.pipeline.stage !== 'ready_to_archive') return null
     const text = snapshot.text ?? ''
     const gateResult = evaluateGates(
@@ -6201,7 +6710,14 @@ export class EngineService {
             : first.code === 'PG-11'
               ? 'P4'
               : 'P6'
-      return { item: { ...first, scope: first.scope ?? 'archive' }, to_stage: target }
+      const revisionable = ['PG-03', 'PG-04', 'PG-05', 'PG-06', 'PG-07', 'PG-08', 'PG-09'].includes(
+        first.code,
+      )
+      return {
+        item: { ...first, scope: first.scope ?? 'archive' },
+        to_stage: target,
+        revisionable,
+      }
     }
     const draft = snapshot.pipeline.draft
     if (
@@ -6213,9 +6729,10 @@ export class EngineService {
           code: 'DRAFT_STALE',
           scope: 'archive',
           detail: 'the manuscript or active chapter no longer matches its draft summary',
-          hint: 'call novel_rollback to P3 and submit novel_write_draft again',
+          hint: 'fetch novel_brief P5, then novel_revise to repair the summary and re-run P4/P6; rollback only if the plan fields themselves must change',
         },
         to_stage: 'P3',
+        revisionable: true,
       }
     }
     const summary = snapshot.plan?.summary ?? null
@@ -6227,9 +6744,10 @@ export class EngineService {
           code: blockers[0]!.code,
           scope: 'archive',
           detail: `${blockers.length} machine blocker(s) remain; first: ${blockers[0]!.detail}`,
-          hint: 'call novel_rollback with to_stage P3 and re-submit the draft and plan fields',
+          hint: 'fetch novel_brief P5 and use novel_revise; rollback to P3 only if the plan fields need rewriting',
         },
         to_stage: 'P3',
+        revisionable: true,
       }
     }
     const semantic = evaluateSemantic(
@@ -6242,9 +6760,10 @@ export class EngineService {
           code: semantic.blocking[0]?.code ?? 'SEMANTIC_CHECK_FAILED',
           scope: 'archive',
           detail: `${semantic.blocking.length} semantic check item(s) fail`,
-          hint: 'call novel_rollback with to_stage P6, then re-run novel_check',
+          hint: 'fetch novel_brief P5 and revise, then re-run novel_check; rollback to P6 only if the revision cannot repair the evidence',
         },
         to_stage: 'P6',
+        revisionable: true,
       }
     }
     return null
@@ -6419,6 +6938,16 @@ export class EngineService {
     }
     const archive = this.archivePreflight(snapshot)
     if (archive !== null) {
+      // A prose/draft/semantic archive failure can be repaired through P5
+      // without losing the plan. Rollback remains the fallback for structural
+      // changes, but status must not keep steering the model to it forever.
+      if (stage === 'ready_to_archive' && archive.revisionable && canRun(stage, 'submitRevision')) {
+        return {
+          tool: 'novel_brief',
+          args: { stage: 'P5', chapter },
+          reason: `${archive.item.code}: ${archive.item.detail}; fetch the P5 brief, then novel_revise (rollback to ${archive.to_stage} only if the plan fields themselves must change)`,
+        }
+      }
       return {
         tool: 'novel_rollback',
         args: { chapter, to_stage: archive.to_stage },
@@ -6772,6 +7301,35 @@ export class EngineService {
       }
     } catch {
       return { schema_version: 1, receipts: [] }
+    }
+  }
+
+  private async assertBriefReceiptsWritable(store: FsStore): Promise<void> {
+    const raw = await store.readText(BRIEF_RECEIPTS_FILE)
+    if (raw === null) return
+    try {
+      const parsed = parseYaml(raw) as Partial<BriefReceiptsDocument> | null
+      if (parsed === null || !Array.isArray(parsed.receipts)) {
+        throw new Error('receipts must be an array')
+      }
+      for (const [index, receipt] of parsed.receipts.entries()) {
+        if (
+          typeof receipt !== 'object' ||
+          receipt === null ||
+          !Number.isInteger(receipt.chapter) ||
+          typeof receipt.stage !== 'string' ||
+          typeof receipt.digest !== 'string' ||
+          typeof receipt.issued_at !== 'string'
+        ) {
+          throw new Error(`receipt ${index} has an invalid shape`)
+        }
+      }
+    } catch (error) {
+      throw new EngineFaultError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `state/briefs.yaml is malformed; refusing to overwrite its append-only audit (${errorMessage(error)})`,
+        'repair or move state/briefs.yaml aside, then call novel_brief again; existing receipts are never silently erased',
+      )
     }
   }
 
@@ -7334,6 +7892,11 @@ export class EngineService {
     let briefs: PipelineState['briefs'] = pipeline.briefs
     const briefsRaw = await store.readText(BRIEF_RECEIPTS_FILE)
     if (briefsRaw !== null) {
+      // Once a receipt file exists, it is the authority for signed briefs. A
+      // malformed receipt must not silently revive a legacy `pipeline.briefs`
+      // signature and let a stale brief pass PG-01; treat the file as empty so
+      // the next getBrief has to issue a fresh receipt.
+      briefs = {}
       try {
         const parsed = parseYaml(briefsRaw) as Partial<BriefReceiptsDocument> | null
         if (parsed !== null && Array.isArray(parsed.receipts)) {
@@ -7347,6 +7910,9 @@ export class EngineService {
               typeof receipt.digest === 'string' &&
               typeof receipt.issued_at === 'string'
             ) {
+              // Receipts are append-only across the whole book. A new chapter
+              // must never inherit the previous chapter's P1..P8 signatures.
+              if (receipt.chapter !== pipeline.chapter) continue
               next[receipt.stage] = { digest: receipt.digest, issued_at: receipt.issued_at }
             }
           }
@@ -7856,6 +8422,45 @@ export class EngineService {
             return { ...(cached as OpResult<T>), replayed: true }
           }
         }
+        // Reject an identical retry only when the brief/stage/revision context
+        // is also unchanged. Renewing a brief is a real fix and must re-open the
+        // operation even if the submission text is byte-identical.
+        const retryContext = sha256(
+          stableJson({
+            revision: snapshot.pipeline.revision,
+            stage: snapshot.pipeline.stage,
+            briefs: snapshot.briefs,
+          }),
+        )
+        if (key !== undefined) {
+          // Compare with the latest attempt for this operation/chapter, not any
+          // historical attempt. A later failed submission with different
+          // content means the earlier failure is no longer "the last refused
+          // attempt" and must not poison a retry forever.
+          const latestAttempt = [...(await readJournal(store)).records]
+            .reverse()
+            .find(
+              (row) =>
+                row.op === options.op &&
+                row.chapter === (options.chapter ?? snapshot.pipeline.chapter) &&
+                (row.status === 'committed' || row.status === 'aborted'),
+            )
+          if (
+            latestAttempt !== undefined &&
+            latestAttempt.status === 'aborted' &&
+            latestAttempt.attempt === true &&
+            latestAttempt.retry_key === key &&
+            latestAttempt.retry_context === retryContext &&
+            latestAttempt.code !== undefined &&
+            RETRYABLE_ABORT_CODES.has(latestAttempt.code)
+          ) {
+            throw new EngineInputError(
+              ERROR_CODES.RETRY_UNCHANGED,
+              `${options.op} is identical to the last refused attempt (${latestAttempt.code})`,
+              'change the content, delta or issue evidence, or renew the current brief; an unchanged retry would waste a transaction',
+            )
+          }
+        }
         const revision =
           options.advanceRevision === false ? snapshot.pipeline.revision : snapshot.pipeline.revision + 1
         abortIfNeeded()
@@ -7877,6 +8482,7 @@ export class EngineService {
             reason: errorMessage(error),
             attempt: true,
             stage: snapshot.pipeline.stage,
+            ...(key === undefined ? {} : { retry_key: key, retry_context: retryContext }),
             ...(error instanceof EngineError ? { code: error.code } : {}),
             ...(error instanceof EngineError && error.hint !== undefined ? { hint: error.hint } : {}),
             ...(error instanceof EngineBlockedError ? { blocking: error.blocking } : {}),
@@ -8106,7 +8712,10 @@ const pipelineWith = (
   chapter: snapshot.pipeline.chapter,
   stage: snapshot.pipeline.stage,
   rounds: snapshot.pipeline.rounds,
-  briefs: snapshot.pipeline.briefs,
+  // `snapshot.briefs` is the effective current-chapter view. Writing the raw
+  // legacy pipeline.briefs back would preserve a stale chapter signature on
+  // every unrelated edit, and doctor would report LEGACY_BRIEFS forever.
+  briefs: snapshot.briefs,
   blocking: snapshot.pipeline.blocking,
   ...(snapshot.pipeline.draft === undefined ? {} : { draft: snapshot.pipeline.draft }),
   review_digest: snapshot.pipeline.review_digest,

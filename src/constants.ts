@@ -5,7 +5,7 @@ export const PLUGIN_NAME = 'dsh-novel-write-engine'
 export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
-export const REMOTE_VERSION = 4
+export const REMOTE_VERSION = 5
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 

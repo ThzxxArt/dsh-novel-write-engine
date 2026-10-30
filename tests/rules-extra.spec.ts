@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { isExempt, runMachineChecks } from '../src/rules/pipeline.js'
+import { dedupeAdvisories, isExempt, runMachineChecks } from '../src/rules/pipeline.js'
 import { loadRulepack } from '../src/rulepack.js'
 import type { MachineOptions } from '../src/rules/pipeline.js'
+import type { Violation } from '../src/types.js'
 
 const pack = loadRulepack()
 const options = (overrides: Partial<MachineOptions> = {}): MachineOptions => ({
@@ -108,7 +109,7 @@ describe('rule edge cases', () => {
     expect(result.violations.some((entry) => entry.code === 'DUPLICATE_PARAGRAPH')).toBe(false)
   })
 
-  it('blocks a paragraph duplicated from any of the previous three chapters', () => {
+  it('marks a paragraph duplicated from any of the previous three chapters', () => {
     const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
     const result = runMachineChecks(
       repeated,
@@ -123,6 +124,61 @@ describe('rule edge cases', () => {
     )
     const violation = result.violations.find((entry) => entry.code === 'DUPLICATE_PARAGRAPH')
     expect(violation?.severity).toBe('blocker')
+  })
+
+  it('names the duplicated paragraph and both thresholds in its evidence', () => {
+    const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
+    const prefix = '第一段是完整而独立的叙述，和后面的重复段落没有任何关系，也不应该被误判。'
+    const result = runMachineChecks(
+      `${prefix}\n\n${repeated}`,
+      options({
+        chapter: 4,
+        evidence: {
+          ...options().evidence,
+          previousText: repeated,
+          previousTexts: [repeated],
+        },
+      }),
+    )
+    const violation = result.violations.find((entry) => entry.code === 'DUPLICATE_PARAGRAPH')
+    expect(violation?.severity).toBe('blocker')
+    expect(violation?.location.paragraph).toBe(2)
+    expect(violation?.detail).toContain('paragraph 2')
+    expect(violation?.detail).toContain('blocker ≥')
+    expect(violation?.detail).not.toContain('advisory threshold')
+  })
+
+  it('reports the original paragraph number when short paragraphs were merged', () => {
+    const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
+    const short = ['一。', '二。', '三。', '四。', '五。', '六。']
+    const result = runMachineChecks(
+      `${short.join('\n\n')}\n\n${repeated}`,
+      options({
+        chapter: 4,
+        evidence: { ...options().evidence, previousText: repeated, previousTexts: [repeated] },
+      }),
+    )
+    const violation = result.violations.find((entry) => entry.code === 'DUPLICATE_PARAGRAPH')
+    expect(violation?.location.paragraph).toBe(7)
+    expect(violation?.detail).toContain('paragraph 7')
+  })
+
+  it('reports paragraph numbers relative to the matched previous source', () => {
+    const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
+    const other = '另一本书记录了完全不同的一段海港旧事，和当前章节没有关系。'
+    const result = runMachineChecks(
+      repeated,
+      options({
+        chapter: 4,
+        evidence: {
+          ...options().evidence,
+          previousText: null,
+          previousTexts: [other, `短句。\n\n${repeated}`],
+        },
+      }),
+    )
+    const violation = result.violations.find((entry) => entry.code === 'DUPLICATE_PARAGRAPH')
+    expect(violation?.detail).toContain('paragraph 2 from previous source 2')
   })
 
   it('still blocks a repeated paragraph split into short lines', () => {
@@ -335,6 +391,45 @@ describe('rule edge cases', () => {
     expect(codesOf(text)).not.toContain('PERIOD_DENSITY')
   })
 
+  it('flags a local arithmetic contradiction but accepts a consistent total', () => {
+    expect(codesOf('十一个人，每人三百，共三千四百。')).toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('十一个人，每人三百，共三千三百。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('11 × 300 = 3300。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('11 × 300 = 3400。')).toContain('NUMERIC_CONTRADICTION')
+    // Duplicate equations and a consistent speed pair exercise the no-report
+    // branches without changing the advisory contract.
+    expect(codesOf('11 × 300 = 3400。11 × 300 = 3400。')).toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('时速 60 公里，另一处时速 65 公里。')).not.toContain('NUMERIC_CONTRADICTION')
+    // Approximate quantities and a verb before the total are normal Chinese.
+    expect(codesOf('二三十人，每人两块，一共五十块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('三个人每人五块，一共花了二十块。')).toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('三个人每人五块，一共十五块。')).not.toContain('NUMERIC_CONTRADICTION')
+    // 五桌 is a different unit/class from the per-person money, not a total.
+    expect(codesOf('十一个人，每人三百，共五桌。')).not.toContain('NUMERIC_CONTRADICTION')
+  })
+
+  it('understands colloquial trailing units and never joins equations across paragraphs', () => {
+    expect(codesOf('四个人每人一千五，一共六千块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('三个人每人一百五，一共四百五十块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('四个人每人一千五，一共五千块。')).toContain('NUMERIC_CONTRADICTION')
+    // Colloquial approximate factors are not exact equations.
+    expect(codesOf('三五个人，每人五块，一共十五块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('七八个人，每人五块，一共十五块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('数十人，每人五块，一共一百五十块。')).not.toContain('NUMERIC_CONTRADICTION')
+    // Thousands separators, ranges and colloquial prices are not bad equations.
+    expect(codesOf('3,000 × 2 = 6,000。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('1,500 元 × 2 一共 3,000 元。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('五、六个人，每人五块，一共二十五块。')).not.toContain('NUMERIC_CONTRADICTION')
+    expect(codesOf('三块五乘以二等于七块。')).not.toContain('NUMERIC_CONTRADICTION')
+    const split = '风从窗缝里挤进来。\n\n他又数了一遍。\n\n一共三个人\n\n每人二十块，一共五十块。'
+    expect(codesOf(split)).not.toContain('NUMERIC_CONTRADICTION')
+    const located = '风从窗缝里挤进来。\n\n他又数了一遍。\n\n三个人每人五块，一共二十块。'
+    const finding = runMachineChecks(located, options()).violations.find(
+      (violation) => violation.code === 'NUMERIC_CONTRADICTION',
+    )
+    expect(finding?.location.paragraph).toBe(3)
+  })
+
   it('recognises arbitrary Day and volume labels', () => {
     expect(codesOf('Day 7，他醒来。')).toContain('SYSTEM_LABEL')
     expect(codesOf('第4卷开始了。')).toContain('SYSTEM_LABEL')
@@ -356,5 +451,110 @@ describe('rule edge cases', () => {
     }
     const text = '他推开旧办公室的门，靠窗一张旧办公桌还在，墙角堆满文件箱，桌上的台灯没有开。'
     expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('does not compare a possessive passing mention as a locked description', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text = '他推开旧办公室的门，里面没有人。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('does not treat a later speech tag as a character appearance change', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {
+        陈嘉树: { first_appearance: 1, locked_at: 1, appearance: '灰长衫，左眉一道疤' },
+      },
+      locations: {},
+    }
+    const text = '陈嘉树穿着灰长衫，左眉一道疤，站在门口。\n\n陈嘉树说：“走吧。”'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('reports a location description that changed after a possessive mention', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text = '他推开旧办公室的门，桌子换成红木桌，墙角空荡荡的。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('does not treat a bare location mention as a changed layout', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text = '靠窗一张旧办公桌，墙角堆满文件箱。\n\n他回到旧办公室。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('reports drift introduced after a correct description', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text =
+      '他推开旧办公室的门，靠窗一张旧办公桌还在，墙角堆满文件箱，桌上的台灯没有开。\n\n后来旧办公室重新装修，桌子换成红木桌，墙角空荡荡的。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('merges same-code advisories but never drops their distinct evidence', () => {
+    const violation = (paragraph: number, detail: string): Violation => ({
+      code: 'LOCKED_DETAIL_DRIFT',
+      severity: 'advisory',
+      location: { paragraph },
+      detail,
+    })
+    const merged = dedupeAdvisories([
+      violation(1, 'expected "旧办公桌", actual "红木桌"'),
+      violation(2, 'expected "灰长衫", actual "红铠甲"'),
+      violation(1, 'expected "旧办公桌", actual "红木桌"'),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0]!.location.paragraph).toBe(1)
+    expect(merged[0]!.detail).toContain('旧办公桌')
+    expect(merged[0]!.detail).toContain('红铠甲')
+    expect(merged[0]!.detail.match(/旧办公桌/g)).toHaveLength(1)
   })
 })

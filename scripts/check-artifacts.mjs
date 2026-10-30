@@ -20,6 +20,14 @@ const host = await import(pathToFileURL(resolve(root, 'lib/index.js')).href)
 check(host.name === manifest.name, `host export name ${String(host.name)} != ${manifest.name}`)
 check(typeof host.apply === 'function', 'host entry does not export apply()')
 check(Array.isArray(host.inject) && host.inject.includes('tools'), 'host entry does not inject tools')
+const clientManifest = manifest.dsh?.client
+check(clientManifest?.platform === 'web', 'manifest dsh.client.platform is not web')
+check(
+  Array.isArray(clientManifest?.inject) &&
+    clientManifest.inject.includes('@deepseek-ai/dsh-client-ui-sidebar') &&
+    clientManifest.inject.includes('@deepseek-ai/dsh-client-ui-layout'),
+  'manifest dsh.client.inject is missing sidebar/layout',
+)
 
 const source = readFileSync(resolve(root, 'lib/client.js'), 'utf8')
 check(

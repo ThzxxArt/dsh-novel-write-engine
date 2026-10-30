@@ -31,7 +31,9 @@ export interface PanelProject {
   label: string
   active: boolean
   registered: boolean
-  state: 'ok' | 'damaged' | 'missing' | 'unreadable'
+  state: 'ok' | 'damaged' | 'missing' | 'not-project' | 'unreadable'
+  identity_changed?: boolean
+  group: 'writing' | 'damaged' | 'missing'
   selected: boolean
 }
 
@@ -91,9 +93,22 @@ export interface PanelView {
       facts?: number
     }
   }
-  quality: { averageScore: number; scores: number[]; trend: number }
+  quality: {
+    averageScore: number
+    scores: number[]
+    trend: number | null
+    trendText: string
+    samples: number
+    attempts: number
+  }
   health: { ok: boolean; blocking: number; stateErrors: number }
   activity: Array<{ at: string; op: string; chapter: number; status: string }>
+  /** Machine advisories, shown separately from blocking gates. */
+  advisories: Array<{ code: string; detail: string; hint: string }>
+  /** How many advisory codes the author already acknowledged. */
+  acknowledgedAdvisories: number
+  /** Read-only upgrade findings, shown separately from live errors. */
+  legacy: Array<{ code: string; detail: string }>
   nextTitle: string
   nextDetail: string
   nextTool: string
@@ -200,9 +215,12 @@ const loading = (): PanelView => ({
     volumes: [],
     worldbook: { characters: 0, locations: 0, factions: 0, rules: 0, glossary: 0, backstory: 0 },
   },
-  quality: { averageScore: 0, scores: [], trend: 0 },
+  quality: { averageScore: 0, scores: [], trend: null, trendText: '—', samples: 0, attempts: 0 },
   health: { ok: true, blocking: 0, stateErrors: 0 },
   activity: [],
+  advisories: [],
+  acknowledgedAdvisories: 0,
+  legacy: [],
   nextTitle: '',
   nextDetail: '',
   nextTool: '',
@@ -219,34 +237,61 @@ const errorView = (message: string): PanelView => ({
   stageLabel: '连接异常',
 })
 
-const pathTail = (root: string): string => {
-  const parts = root.split(/[\\/]/).filter((part) => part !== '')
-  return parts[parts.length - 1] ?? root
+const pathParts = (root: string): string[] => root.split(/[\\/]/).filter((part) => part !== '')
+
+/** Shortest suffix that is unique among projects sharing a display title. */
+const pathHint = (root: string, sameTitleRoots: string[]): string => {
+  const parts = pathParts(root)
+  if (parts.length === 0) return root
+  const candidates = sameTitleRoots.map((other) => pathParts(other))
+  for (let depth = 1; depth <= parts.length; depth += 1) {
+    const suffix = parts.slice(-depth).join('/')
+    const matches = candidates.filter((candidate) => candidate.slice(-depth).join('/') === suffix).length
+    if (matches === 1) return suffix
+  }
+  return root
 }
 
 const projectViews = (payload: PanelPayloadDto): PanelProject[] => {
   const selected = payload.selection.root
   const titleCounts = new Map<string, number>()
+  const titleRoots = new Map<string, string[]>()
   for (const project of payload.projects ?? []) {
     titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1)
+    const roots = titleRoots.get(project.title) ?? []
+    roots.push(project.root)
+    titleRoots.set(project.title, roots)
   }
   return (payload.projects ?? []).map((project) => {
     const duplicate = (titleCounts.get(project.title) ?? 0) > 1
     const state =
-      project.state === 'ok'
-        ? ''
-        : project.state === 'damaged'
-          ? '（待修复）'
-          : project.state === 'missing'
-            ? '（目录不存在）'
-            : '（不可读）'
+      project.identity_changed === true
+        ? '（路径已换书）'
+        : project.state === 'ok'
+          ? ''
+          : project.state === 'damaged'
+            ? '（待修复）'
+            : project.state === 'missing'
+              ? '（目录不存在）'
+              : project.state === 'not-project'
+                ? '（不是项目）'
+                : '（不可读）'
     return {
       root: project.root,
       title: project.title,
-      label: `《${project.title}》${duplicate ? ` — ${pathTail(project.root)}` : ''}${state}`,
+      label: `《${project.title}》${duplicate ? ` — ${pathHint(project.root, titleRoots.get(project.title) ?? [])}` : ''}${state}`,
       active: project.active,
       registered: project.registered,
       state: project.state,
+      ...(project.identity_changed === true ? { identity_changed: true } : {}),
+      group:
+        project.identity_changed === true
+          ? 'damaged'
+          : project.state === 'ok'
+            ? 'writing'
+            : project.state === 'damaged'
+              ? 'damaged'
+              : 'missing',
       selected: selected === project.root,
     }
   })
@@ -297,9 +342,16 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       ...loading(),
       ...base,
       state: 'missing',
-      title: payload.missing.reason === 'unreadable' ? '项目不可读' : '项目不在了',
+      title:
+        payload.missing.reason === 'busy'
+          ? '正在写入'
+          : payload.missing.reason === 'unreadable'
+            ? '项目不可读'
+            : payload.missing.reason === 'not-project'
+              ? '不是项目目录'
+              : '项目不在了',
       subtitle: `${payload.missing.title} · ${payload.missing.root}`,
-      stageLabel: '不可用',
+      stageLabel: payload.missing.reason === 'busy' ? '稍后刷新' : '不可用',
       missing: {
         root: payload.missing.root,
         title: payload.missing.title,
@@ -432,7 +484,17 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     quality: {
       averageScore: summary.quality?.averageScore ?? average,
       scores: summary.quality?.scores ?? [],
-      trend: summary.quality?.trend ?? 0,
+      trend: summary.quality?.trend ?? null,
+      trendText:
+        summary.quality?.trend === null || summary.quality?.trend === undefined
+          ? summary.quality?.trend_basis === 'insufficient_samples'
+            ? '样本不足'
+            : summary.quality?.trend_basis === 'insufficient_history'
+              ? '历史不足'
+              : '—'
+          : `${summary.quality.trend >= 0 ? '+' : ''}${summary.quality.trend}`,
+      samples: summary.quality?.samples ?? summary.totalChapters,
+      attempts: summary.quality?.attempts ?? summary.quality?.samples ?? 0,
     },
     health: {
       ok: summary.health?.ok ?? blocking.length === 0,
@@ -440,6 +502,13 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       stateErrors: summary.health?.stateErrors ?? 0,
     },
     activity: summary.activity ?? [],
+    advisories: (summary.advisories ?? []).map((item) => ({
+      code: item.code,
+      detail: item.detail,
+      hint: item.hint ?? '',
+    })),
+    acknowledgedAdvisories: summary.acknowledgedAdvisories ?? 0,
+    legacy: summary.legacy ?? [],
     nextTitle: finished ? '' : next === undefined ? '状态已同步' : toolLabel(next.tool),
     nextDetail: finished
       ? ''

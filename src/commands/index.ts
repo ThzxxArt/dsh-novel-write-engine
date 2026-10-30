@@ -86,6 +86,7 @@ const usage = () =>
     '/novel search <词>   搜索正文/大纲/世界观/台账',
     '/novel export md|txt|epub|outline|worldbook|proposal',
     '/novel projects      列出项目与目录状态',
+    '/novel projects --prune [--yes]  清理失效登记（不删项目目录）',
     '/novel current       当前会话绑定与选择来源',
     '/novel use <path|title|.>  切换当前会话项目',
     '/novel unbind        清除当前会话绑定（不删项目）',
@@ -170,7 +171,7 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
             [
               `进度：${data.progress.archived}/${data.progress.target ?? '—'} 章 · ${data.progress.words} 字 · ${data.progress.percent}%`,
               `大纲：${data.outline.planned} 计划 / ${data.outline.archived} 归档 · 漂移 ${data.outline.drift.length} 项`,
-              `质量：均分 ${data.quality.average} · 中位 ${data.quality.median} · 趋势 ${data.quality.trend >= 0 ? '+' : ''}${data.quality.trend}`,
+              `质量：均分 ${data.quality.average} · 中位 ${data.quality.median} · 趋势 ${data.quality.trend === null ? '—' : `${data.quality.trend >= 0 ? '+' : ''}${data.quality.trend}`} · ${data.quality.samples} 章样本 / ${data.quality.attempts} 次评审`,
               `伏笔：未回收 ${data.foreshadows.open} · 逾期 ${data.foreshadows.overdue}`,
               ...data.warnings.map((warning) => `警告：${warning}`),
             ].join('\n'),
@@ -211,6 +212,31 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
           return ok(`已导出 ${data.kind}：${data.files.join(', ')}`)
         }
         case 'projects': {
+          if (rest.includes('--yes') && !rest.includes('--prune')) {
+            return bad('--yes 只能和 --prune 一起用')
+          }
+          if (rest.includes('--prune')) {
+            const result = await engine.pruneProjects({ apply: rest.includes('--yes') })
+            if (result.candidates.length === 0) return ok('没有需要清理的失效登记。')
+            if (!rest.includes('--yes')) {
+              return ok(
+                [
+                  `发现 ${result.candidates.length} 条失效登记（只删登记行，不删项目目录）：`,
+                  ...result.candidates.map((item) => `  - 《${item.title}》 — ${item.root} [${item.state}]`),
+                  '确认后运行 /novel projects --prune --yes',
+                ].join('\n'),
+              )
+            }
+            return ok(
+              [
+                `已清理 ${result.removed.length} 条失效登记；项目目录未删除。`,
+                ...result.removed.map((root) => `  - ${root}`),
+                result.removed.length === 0 ? '（没有行实际被删除，可能已恢复或已被其他会话清理。）' : '',
+              ]
+                .filter((line) => line !== '')
+                .join('\n'),
+            )
+          }
           const list = await engine.listProjects()
           let current: string | undefined
           try {
@@ -227,10 +253,15 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
                 ...(project.root === list.active ? ['P'] : []),
                 ...(project.state === 'ok' ? [] : ['!']),
               ].join('')
-              const state = project.state === 'ok' ? '' : ` [${project.state}]`
+              const state =
+                project.state === 'ok'
+                  ? project.identity_changed === true
+                    ? ' [路径已换书]'
+                    : ''
+                  : ` [${project.state}]`
               return `${marks === '' ? '  ' : marks} 《${project.title}》 — ${project.root}${state}`
             }),
-            '* 当前会话 · P 面板默认 · ! 目录缺失/待修复',
+            '* 当前会话 · P 面板默认 · ! 目录缺失/待修复 · [路径已换书] 登记路径已换书',
           ]
           return ok(lines.join('\n'))
         }

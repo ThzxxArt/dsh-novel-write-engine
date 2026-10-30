@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from 'react'
 import { PANEL_CHAPTER_LIMIT, PANEL_ROUTE } from '../constants.js'
-import { buildView, fetchPanel, type PanelChapter, type PanelView } from './viewmodel.js'
+import { buildView, fetchPanel, type PanelChapter, type PanelProject, type PanelView } from './viewmodel.js'
 import type { PanelPayloadDto } from './dto.js'
 
 interface NweWindow {
@@ -34,9 +34,6 @@ const CSS = `
   --nwe-surface: var(--dsw-alias-bg-layer-1, #171a20);
   --nwe-raised: var(--dsw-alias-bg-layer-2, #1e222a);
   --nwe-border: var(--dsw-alias-border-l1, #ffffff14);
-  --nwe-gold: #8f6a28;
-  --nwe-jade: #3f7f69;
-  --nwe-rose: #9e5454;
   --nwe-gold: color-mix(in srgb, #b7862f 82%, var(--nwe-ink));
   --nwe-jade: color-mix(in srgb, #4f9f82 68%, var(--nwe-ink));
   --nwe-rose: color-mix(in srgb, #c96a6a 68%, var(--nwe-ink));
@@ -352,7 +349,7 @@ const CSS = `
 .nwe-health { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--nwe-muted); font-size: 11px; }
 .nwe-health.is-bad { color: var(--nwe-rose); }
 .nwe-activity { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
-.nwe-activity li { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 8px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-activity li { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 8px; color: var(--nwe-muted); font-size: 11px; }
 .nwe-activity code { color: var(--nwe-ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .nwe-next {
   display: flex;
@@ -469,6 +466,181 @@ const CSS = `
   .nwe-chapter-detail { padding-left: 18px; }
   .nwe-next-tool { display: none; }
   .nwe-footer { flex-direction: column; }
+}
+/* v5 desk: one accent, compact chrome, content before decoration. */
+.nwe-root {
+  max-width: 1180px;
+  padding: clamp(14px, 2.2vw, 28px);
+  background: transparent;
+}
+.nwe-root::before { display: none; }
+.nwe-hero {
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--nwe-surface) 94%, var(--nwe-raised));
+  box-shadow: none;
+}
+.nwe-hero-title { min-width: 0; }
+.nwe-eyebrow { color: var(--nwe-muted); font-size: 9px; letter-spacing: .16em; }
+.nwe-title {
+  margin: 4px 0 4px;
+  font-family: inherit;
+  font-size: clamp(21px, 2.4vw, 28px);
+  font-weight: 650;
+  letter-spacing: -.015em;
+}
+.nwe-meta { gap: 7px; font-size: 11px; }
+.nwe-actions { gap: 7px; }
+.nwe-project { flex-wrap: wrap; gap: 5px; }
+.nwe-project-label { font-size: 10px; }
+.nwe-project-select {
+  max-width: 310px;
+  min-height: 32px;
+  padding: 5px 26px 5px 9px;
+  border-radius: 8px;
+  background: var(--nwe-surface);
+  font-size: 11px;
+}
+.nwe-project-search {
+  width: 124px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-surface);
+  color: var(--nwe-ink);
+  font: inherit;
+  font-size: 11px;
+}
+.nwe-project-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--nwe-muted);
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nwe-refresh, .nwe-help { min-height: 32px; padding: 6px 10px; border-radius: 8px; }
+.nwe-rootline { font-size: 9px; margin-top: 3px; }
+.nwe-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--nwe-border);
+  border-bottom: 1px solid var(--nwe-border);
+}
+.nwe-stat {
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-stat:last-child { border-right: 0; }
+.nwe-stat-label { font-size: 10px; }
+.nwe-stat-value { margin-top: 1px; font-size: 18px; font-weight: 600; }
+.nwe-section { margin-top: 18px; }
+.nwe-section-title { font-family: inherit; font-size: 14px; font-weight: 650; }
+.nwe-section-note { font-size: 10px; }
+.nwe-next {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--nwe-gold) 32%, var(--nwe-border));
+  border-left: 3px solid var(--nwe-gold);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nwe-gold) 5%, var(--nwe-surface));
+}
+.nwe-next-icon { width: 24px; height: 24px; border-radius: 7px; }
+.nwe-next-body { min-width: 0; }
+.nwe-next-title { font-size: 14px; }
+.nwe-next-detail { font-size: 11px; }
+.nwe-next-tool { font-size: 9px; }
+.nwe-desk {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
+  gap: 18px;
+  align-items: start;
+}
+.nwe-desk-main, .nwe-desk-side { min-width: 0; }
+.nwe-desk-side { padding-left: 18px; border-left: 1px solid var(--nwe-border); }
+.nwe-desk-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+}
+.nwe-desk-kicker { color: var(--nwe-muted); font-size: 9px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase; }
+.nwe-desk-note { color: var(--nwe-gold); font-size: 10px; }
+.nwe-desk-main .nwe-phases { margin-top: 8px; }
+.nwe-desk-side .nwe-book-grid { grid-template-columns: 1fr; }
+.nwe-desk-side .nwe-section { margin-top: 16px; }
+.nwe-advisories, .nwe-legacy-list { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.nwe-advisory {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, #c9a227 24%, var(--nwe-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, #c9a227 5%, transparent);
+  font-size: 11px;
+}
+.nwe-advisory-code { color: #b08a1e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; white-space: nowrap; }
+.nwe-advisory-detail { color: var(--nwe-ink); line-height: 1.5; }
+.nwe-advisory-hint { color: var(--nwe-muted); font-size: 9px; white-space: nowrap; }
+.nwe-advisory-empty {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, #c9a227 18%, var(--nwe-border));
+  border-radius: 7px;
+  color: var(--nwe-muted);
+  font-size: 11px;
+}
+.nwe-legacy {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border: 1px dashed var(--nwe-border);
+  border-radius: 7px;
+  color: var(--nwe-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.nwe-legacy code { color: var(--nwe-muted); font-size: 9px; white-space: nowrap; }
+.nwe-chapters-section { margin-top: 20px; }
+.nwe-desk-main .nwe-chapters {
+  max-height: 460px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+.nwe-chapter { border-radius: 9px; }
+.nwe-chapter summary { padding: 10px 13px; }
+.nwe-chapter-detail { padding-left: 68px; }
+@media (max-width: 900px) {
+  .nwe-desk { grid-template-columns: 1fr; gap: 0; }
+  .nwe-desk-side { padding-left: 0; border-left: 0; }
+  .nwe-desk-side .nwe-section { margin-top: 18px; }
+}
+@media (max-width: 760px) {
+  .nwe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 0; padding: 8px 0; }
+  .nwe-stat:nth-child(2) { border-right: 0; }
+  .nwe-stat { padding: 0 8px; }
+  .nwe-project { order: 3; width: 100%; }
+  .nwe-project-select { flex: 1; max-width: none; }
+  .nwe-project-search { flex: 1 1 100%; width: auto; }
+  .nwe-project-toggle { flex: 1 1 100%; }
+  .nwe-desk-main .nwe-chapters { max-height: 360px; }
+  .nwe-chapter-detail { padding-left: 18px; }
+  .nwe-advisory { grid-template-columns: 1fr; gap: 2px; }
+  .nwe-advisory-hint { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) {
   .nwe-skeleton-line { animation: none; }
@@ -824,7 +996,9 @@ const bookSection = (view: PanelView): ReactElement => {
           createElement(
             'span',
             { className: 'nwe-book-note' },
-            bars.length === 0 ? '—' : `${view.quality.averageScore.toFixed(1)} 均分`,
+            bars.length === 0
+              ? '—'
+              : `${view.quality.averageScore.toFixed(1)} 近十均分 · 趋势 ${view.quality.trendText} · ${view.quality.samples} 章 / ${view.quality.attempts} 评`,
           ),
         ),
         createElement(
@@ -889,6 +1063,65 @@ const activitySection = (view: PanelView): ReactElement | null => {
   )
 }
 
+const advisoriesSection = (view: PanelView): ReactElement | null => {
+  if (view.advisories.length === 0 && view.acknowledgedAdvisories === 0) return null
+  const note =
+    view.acknowledgedAdvisories === 0
+      ? '不阻塞归档 · 可 acknowledge'
+      : `已确认 ${view.acknowledgedAdvisories} 条 · 不阻塞归档`
+  return createElement(
+    'section',
+    { className: 'nwe-section nwe-advisory-section', 'aria-label': '质量提示' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '提示'),
+      createElement('span', { className: 'nwe-section-note' }, note),
+    ),
+    view.advisories.length === 0
+      ? createElement('div', { className: 'nwe-advisory-empty' }, '本轮提示已全部确认。')
+      : createElement(
+          'ul',
+          { className: 'nwe-advisories' },
+          ...view.advisories.map((item) =>
+            createElement(
+              'li',
+              { className: 'nwe-advisory', key: `${item.code}-${item.detail}` },
+              createElement('code', { className: 'nwe-advisory-code' }, item.code),
+              createElement('span', { className: 'nwe-advisory-detail' }, item.detail),
+              item.hint === '' ? null : createElement('span', { className: 'nwe-advisory-hint' }, item.hint),
+            ),
+          ),
+        ),
+  )
+}
+
+const legacySection = (view: PanelView): ReactElement | null => {
+  if (view.legacy.length === 0) return null
+  return createElement(
+    'section',
+    { className: 'nwe-section nwe-legacy-section', 'aria-label': '旧数据提示' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '旧数据'),
+      createElement('span', { className: 'nwe-section-note' }, '只读审计 · 不改历史'),
+    ),
+    createElement(
+      'ul',
+      { className: 'nwe-legacy-list' },
+      ...view.legacy.map((item) =>
+        createElement(
+          'li',
+          { className: 'nwe-legacy', key: `${item.code}-${item.detail}` },
+          createElement('code', null, item.code),
+          createElement('span', null, item.detail),
+        ),
+      ),
+    ),
+  )
+}
+
 const footer = (): ReactElement =>
   createElement(
     'footer',
@@ -914,11 +1147,72 @@ const loadingState = (): ReactElement =>
     createElement('div', { className: 'nwe-section-note', style: { marginTop: 12 } }, '正在读取项目状态…'),
   )
 
-const projectSelector = (view: PanelView, onSelect: (root: string | null) => void): ReactElement | null => {
+const ProjectSelector = ({
+  view,
+  onSelect,
+}: {
+  view: PanelView
+  onSelect: (root: string | null) => void
+}): ReactElement | null => {
+  const [query, setQuery] = useState('')
+  const [showMissing, setShowMissing] = useState(false)
+  const searchableCount = view.projects.filter(
+    (project) => project.group !== 'missing' || showMissing || project.root === view.selectedRoot,
+  ).length
+  useEffect(() => {
+    // The search box is unmounted when the list becomes small; a retained query
+    // would keep filtering the select with no visible way to clear it.
+    if (searchableCount <= 6 && query !== '') setQuery('')
+  }, [searchableCount, query])
   if (view.projects.length === 0) return null
+  const normalized = query.trim().toLowerCase()
+  const selected = view.projects.find((project) => project.root === view.selectedRoot)
+  const visible = view.projects.filter((project) => {
+    const groupVisible = project.group !== 'missing' || showMissing || project.root === view.selectedRoot
+    const queryVisible =
+      normalized === '' ||
+      project.title.toLowerCase().includes(normalized) ||
+      project.root.toLowerCase().includes(normalized) ||
+      project.label.toLowerCase().includes(normalized)
+    return groupVisible && queryVisible
+  })
+  const groups: Array<{ key: PanelProject['group']; label: string; items: PanelProject[] }> = [
+    {
+      key: 'writing',
+      label: `写作中 (${view.projects.filter((p) => p.group === 'writing').length})`,
+      items: [],
+    },
+    {
+      key: 'damaged',
+      label: `待修复 (${view.projects.filter((p) => p.group === 'damaged').length})`,
+      items: [],
+    },
+    {
+      key: 'missing',
+      label: `失效 (${view.projects.filter((p) => p.group === 'missing').length})`,
+      items: [],
+    },
+  ]
+  for (const project of visible) groups.find((group) => group.key === project.group)!.items.push(project)
+  groups[0]!.label = `写作中 (${groups[0]!.items.length})`
+  groups[1]!.label = `待修复 (${groups[1]!.items.length})`
+  groups[2]!.label = `失效 (${groups[2]!.items.length})`
+  const missingCount = view.projects.filter((project) => project.group === 'missing').length
+  // Search is for the projects the user can actually see. Seven hidden stale
+  // rows should not add a search box to a one-book header.
   return createElement(
     'div',
     { className: 'nwe-project' },
+    searchableCount > 6
+      ? createElement('input', {
+          className: 'nwe-project-search',
+          type: 'search',
+          value: query,
+          placeholder: '搜索项目',
+          'aria-label': '搜索项目',
+          onChange: (event: { target: { value: string } }): void => setQuery(event.target.value),
+        })
+      : null,
     createElement('label', { className: 'nwe-project-label', htmlFor: 'nwe-project-select' }, '项目'),
     createElement(
       'select',
@@ -932,15 +1226,40 @@ const projectSelector = (view: PanelView, onSelect: (root: string | null) => voi
         },
       },
       view.selectedRoot === null ? createElement('option', { value: '' }, '选择项目…') : null,
-      ...view.projects.map((project) =>
-        createElement('option', { key: project.root, value: project.root }, project.label),
-      ),
+      ...groups
+        .filter((group) => group.items.length > 0)
+        .map((group) =>
+          createElement(
+            'optgroup',
+            { key: group.key, label: group.label },
+            ...group.items.map((project) =>
+              createElement('option', { key: project.root, value: project.root }, project.label),
+            ),
+          ),
+        ),
+      selected !== undefined && !visible.some((project) => project.root === selected.root)
+        ? createElement('option', { value: selected.root }, selected.label)
+        : null,
     ),
+    missingCount > 0
+      ? createElement(
+          'label',
+          { className: 'nwe-project-toggle' },
+          createElement('input', {
+            type: 'checkbox',
+            checked: showMissing,
+            onChange: (event: { target: { checked: boolean } }): void => setShowMissing(event.target.checked),
+          }),
+          `显示失效 ${missingCount}`,
+        )
+      : null,
   )
 }
 
-const choosePanel = (view: PanelView, onSelect: (root: string | null) => void): ReactElement =>
-  createElement(
+const choosePanel = (view: PanelView, onSelect: (root: string | null) => void): ReactElement => {
+  const preferred = view.projects.filter((project) => project.group !== 'missing')
+  const shown = preferred.length > 0 ? preferred : view.projects
+  return createElement(
     'div',
     { className: 'nwe-state', role: 'status' },
     createElement('div', { className: 'nwe-state-icon' }, stateIcon()),
@@ -949,7 +1268,7 @@ const choosePanel = (view: PanelView, onSelect: (root: string | null) => void): 
     createElement(
       'div',
       { className: 'nwe-project-choices' },
-      ...view.projects.map((project) =>
+      ...shown.map((project) =>
         createElement(
           'button',
           {
@@ -964,6 +1283,7 @@ const choosePanel = (view: PanelView, onSelect: (root: string | null) => void): 
       ),
     ),
   )
+}
 
 const missingPanel = (view: PanelView): ReactElement =>
   createElement(
@@ -973,7 +1293,13 @@ const missingPanel = (view: PanelView): ReactElement =>
     createElement(
       'div',
       { className: 'nwe-state-title' },
-      view.missing?.reason === 'unreadable' ? '项目不可读' : '项目不在了',
+      view.missing?.reason === 'busy'
+        ? '正在写入'
+        : view.missing?.reason === 'unreadable'
+          ? '项目不可读'
+          : view.missing?.reason === 'not-project'
+            ? '不是项目目录'
+            : '项目不在了',
     ),
     createElement('div', { className: 'nwe-state-text' }, view.missing?.hint ?? view.subtitle),
     view.missing === undefined
@@ -1270,7 +1596,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
             'p',
             { className: 'nwe-tutorial-note' },
             createElement('strong', null, '项目状态：'),
-            '选择器里 choose 表示发现多本书、还没选；项目不在了表示目录缺失，绑定仍会保留；项目不可读表示权限或 IO 错误，先修权限或换一本。面板选择只影响查看，不改变任何会话的写作绑定。',
+            '选择器里 choose 表示发现多本书、还没选；项目不在了表示目录缺失，绑定仍会保留；不是项目表示目录还在但没有 novel.yaml 或项目状态；项目不可读表示权限或 IO 错误，先修权限或换一本。面板选择只影响查看，不改变任何会话的写作绑定。',
           ),
         ),
         createElement(
@@ -1407,7 +1733,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.2 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.3 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )
@@ -1468,6 +1794,92 @@ const NovelHelp = (): ReactElement => {
   )
 }
 
+const nextCard = (view: PanelView): ReactElement =>
+  createElement(
+    'section',
+    { className: 'nwe-next', 'aria-label': '下一步' },
+    createElement('div', { className: 'nwe-next-icon' }, arrowIcon()),
+    createElement(
+      'div',
+      { className: 'nwe-next-body' },
+      createElement('div', { className: 'nwe-next-kicker' }, 'CURRENT CHAPTER · 下一步'),
+      createElement('div', { className: 'nwe-next-title' }, view.nextTitle),
+      createElement('div', { className: 'nwe-next-detail' }, view.nextDetail),
+      createElement(CopyResumeButton, { text: view.resumeText }),
+    ),
+    view.nextTool === '' ? null : createElement('code', { className: 'nwe-next-tool' }, view.nextTool),
+  )
+
+const blockingSection = (view: PanelView): ReactElement =>
+  createElement(
+    'section',
+    { className: 'nwe-section' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '门控'),
+      createElement('span', { className: 'nwe-section-note' }, view.blockingTitle),
+    ),
+    view.blocking.length === 0
+      ? createElement(
+          'div',
+          { className: 'nwe-pass', role: 'status' },
+          createElement('span', { 'aria-hidden': 'true' }, '✓'),
+          createElement('span', null, '当前阶段没有阻塞项，可以继续下一步。'),
+        )
+      : createElement(
+          'ul',
+          { className: 'nwe-blocking', 'aria-label': '阻塞项' },
+          ...view.blocking.map((item) =>
+            createElement(
+              'li',
+              { className: 'nwe-block', key: `${item.code}-${item.scope}-${item.detail}` },
+              createElement('span', { className: 'nwe-block-icon', 'aria-hidden': 'true' }, '!'),
+              createElement(
+                'div',
+                null,
+                createElement('div', { className: 'nwe-block-code' }, item.code),
+                createElement('div', { className: 'nwe-block-detail' }, item.detail),
+                item.hint === '' ? null : createElement('div', { className: 'nwe-block-hint' }, item.hint),
+              ),
+            ),
+          ),
+        ),
+  )
+
+const chaptersSection = (view: PanelView): ReactElement =>
+  createElement(
+    'section',
+    { className: 'nwe-section nwe-chapters-section' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '章节'),
+      createElement(
+        'span',
+        { className: 'nwe-section-note' },
+        `${view.stats.chapters} 条记录${
+          view.stats.chapters > view.rows.filter((row) => row.tone === 'ok').length
+            ? ` · 显示最近 ${view.rows.length} 条`
+            : ''
+        }`,
+      ),
+    ),
+    view.rows.length === 0
+      ? createElement(
+          'div',
+          { className: 'nwe-empty', style: { marginTop: 12, minHeight: 170 } },
+          createElement('div', { className: 'nwe-state-icon' }, stateIcon()),
+          createElement('div', { className: 'nwe-state-title' }, '书架还是空的'),
+          createElement('div', { className: 'nwe-state-text' }, '完成第一次归档后，章节会出现在这里。'),
+        )
+      : createElement(
+          'ul',
+          { className: 'nwe-chapters' },
+          ...view.rows.slice(-PANEL_CHAPTER_LIMIT).map(chapterCard),
+        ),
+  )
+
 /**
  * Pure view: given a view model, return the element tree. Keeping the hooks in
  * `NovelPanel` makes every visual state renderable without a browser.
@@ -1498,7 +1910,7 @@ export function panelElement(
       { className: 'nwe-hero' },
       createElement(
         'div',
-        null,
+        { className: 'nwe-hero-title' },
         createElement('div', { className: 'nwe-eyebrow' }, 'NOVEL STUDIO · 网文工坊'),
         createElement('h1', { className: 'nwe-title' }, view.title),
         createElement(
@@ -1521,7 +1933,7 @@ export function panelElement(
       createElement(
         'div',
         { className: 'nwe-actions' },
-        selectable ? projectSelector(view, onSelectProject) : null,
+        selectable ? createElement(ProjectSelector, { view, onSelect: onSelectProject }) : null,
         createElement(NovelHelp),
         createElement(
           'button',
@@ -1544,13 +1956,14 @@ export function panelElement(
           '项目定义不可读；先用 novel_state 查看，再用 novel_amend 按 next 修复。面板不会把它伪装成正常项目。',
         )
       : null,
+    ready && view.nextTitle !== '' ? nextCard(view) : null,
     ready
       ? createElement(
           'div',
           { className: 'nwe-stats', role: 'group', 'aria-label': '项目统计' },
           stat('已归档', String(view.stats.chapters), '章'),
           stat('总字数', view.stats.words.toLocaleString('zh-CN'), '字'),
-          stat('平均评分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
+          stat('全书均分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
           stat('待处理', String(view.stats.blocking), '项'),
         )
       : null,
@@ -1560,97 +1973,33 @@ export function panelElement(
     view.state === 'error' || view.state === 'empty' || view.state === 'outdated'
       ? statePanel(view.state, view, loading, onRefresh)
       : null,
-    ready ? bookSection(view) : null,
-    ready ? phases(view) : null,
-    ready && view.nextTitle !== ''
-      ? createElement(
-          'section',
-          { className: 'nwe-next', 'aria-label': '下一步' },
-          createElement('div', { className: 'nwe-next-icon' }, arrowIcon()),
-          createElement(
-            'div',
-            null,
-            createElement('div', { className: 'nwe-next-kicker' }, 'NEXT MOVE'),
-            createElement('div', { className: 'nwe-next-title' }, view.nextTitle),
-            createElement('div', { className: 'nwe-next-detail' }, view.nextDetail),
-            createElement(CopyResumeButton, { text: view.resumeText }),
-          ),
-          view.nextTool === '' ? null : createElement('code', { className: 'nwe-next-tool' }, view.nextTool),
-        )
-      : null,
     ready
       ? createElement(
-          'section',
-          { className: 'nwe-section' },
+          'div',
+          { className: 'nwe-desk' },
           createElement(
             'div',
-            { className: 'nwe-section-head' },
-            createElement('h2', { className: 'nwe-section-title' }, '章节'),
+            { className: 'nwe-desk-main' },
             createElement(
-              'span',
-              { className: 'nwe-section-note' },
-              `${view.stats.chapters} 条记录${
-                view.stats.chapters > view.rows.filter((row) => row.tone === 'ok').length
-                  ? ` · 显示最近 ${view.rows.length} 条`
-                  : ''
-              }`,
+              'div',
+              { className: 'nwe-desk-heading' },
+              createElement('span', { className: 'nwe-desk-kicker' }, '当前一章'),
+              createElement('span', { className: 'nwe-desk-note' }, view.stageLabel),
             ),
+            phases(view),
+            blockingSection(view),
+            advisoriesSection(view),
+            legacySection(view),
+            chaptersSection(view),
           ),
-          view.rows.length === 0
-            ? createElement(
-                'div',
-                { className: 'nwe-empty', style: { marginTop: 12, minHeight: 170 } },
-                createElement('div', { className: 'nwe-state-icon' }, stateIcon()),
-                createElement('div', { className: 'nwe-state-title' }, '书架还是空的'),
-                createElement('div', { className: 'nwe-state-text' }, '完成第一次归档后，章节会出现在这里。'),
-              )
-            : createElement(
-                'ul',
-                { className: 'nwe-chapters' },
-                ...view.rows.slice(-PANEL_CHAPTER_LIMIT).map(chapterCard),
-              ),
-        )
-      : null,
-    ready
-      ? createElement(
-          'section',
-          { className: 'nwe-section' },
           createElement(
-            'div',
-            { className: 'nwe-section-head' },
-            createElement('h2', { className: 'nwe-section-title' }, '门控'),
-            createElement('span', { className: 'nwe-section-note' }, view.blockingTitle),
+            'aside',
+            { className: 'nwe-desk-side', 'aria-label': '全书与活动' },
+            bookSection(view),
+            activitySection(view),
           ),
-          view.blocking.length === 0
-            ? createElement(
-                'div',
-                { className: 'nwe-pass', role: 'status' },
-                createElement('span', { 'aria-hidden': 'true' }, '✓'),
-                createElement('span', null, '当前阶段没有阻塞项，可以继续下一步。'),
-              )
-            : createElement(
-                'ul',
-                { className: 'nwe-blocking', 'aria-label': '阻塞项' },
-                ...view.blocking.map((item) =>
-                  createElement(
-                    'li',
-                    { className: 'nwe-block', key: `${item.code}-${item.scope}-${item.detail}` },
-                    createElement('span', { className: 'nwe-block-icon', 'aria-hidden': 'true' }, '!'),
-                    createElement(
-                      'div',
-                      null,
-                      createElement('div', { className: 'nwe-block-code' }, item.code),
-                      createElement('div', { className: 'nwe-block-detail' }, item.detail),
-                      item.hint === ''
-                        ? null
-                        : createElement('div', { className: 'nwe-block-hint' }, item.hint),
-                    ),
-                  ),
-                ),
-              ),
         )
       : null,
-    ready ? activitySection(view) : null,
     footer(),
   )
 }
@@ -1755,8 +2104,10 @@ export function NovelPanel(): ReactElement {
       }
       setView((previous) => {
         const next = buildView(payload, result.error)
-        // A brief background failure must not wipe a readable panel.
-        if (silent && result.error !== null && previous.state === 'ready') return previous
+        // A brief background failure must not wipe a readable panel or the
+        // choose/missing view. Keep the last view whenever its selector still
+        // has projects; a user-visible refresh may still replace it.
+        if (silent && result.error !== null && previous.projects.length > 0) return previous
         return next
       })
     } finally {

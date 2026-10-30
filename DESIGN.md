@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.2`                                                                                                  |
+| 插件版本 | `0.2.3`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -49,13 +49,15 @@
 字数口径    total_word_count = 汉字 + 英文单词 + 数字 + 标点
 文件        YAML 12 个 + JSONL 1 个 + 正文 Markdown N 个 + 导出 N 个
 运行时依赖  1 个（yaml）
-斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 与 0.2.2 的 projects/current/use/unbind/scan/resume 子命令）
-客户端半边  1 个面板（「网文工坊」v4）
+斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 与 0.2.2 的 projects/current/use/unbind/scan/resume，0.2.3 增加 projects --prune）
+客户端半边  1 个面板（「网文工坊」v5）
 Agent 预设  1 个（「网文工坊」）
 覆盖率门禁  全局 90%，engine 90/85，纯函数层 100%
 ```
 
 0.2.0 新增书级规划层：`outline/outline.yaml`（蓝图 + 卷 + 章卡）与 `outline/worldbook.yaml`（世界观设定集）。它们是规划输入与进度视图，不替代 `state/` 台账；正文仍是唯一真实来源。
+
+0.2.3 的读模型原则：`novel_report.effort` 以 journal 的 committed 操作为准回填旧章；`quality` 的每个 chapter 只贡献一份最终评审，history 计入 `attempts` 而不是 `samples`；`pipeline.briefs` 只投影当前章，`state/briefs.yaml` 保留全书审计。旧章缺 `rounds/archived_at`、旧 check 格式、extra 角色、pre-0.2.3 无 anchor 伏笔、stale `pipeline.briefs` 由 `doctor.legacy-data` 只读标出，不自动改写历史；`state/briefs.yaml` 的历史收据是正常 append-only 审计。面板 DTO v5 把 `advisories` 与 `legacy` 从 blocking 中分离，项目选择器按写作/待修复/失效（缺失/非项目/不可读）分组。
 
 ### 0.4 架构一句话
 
@@ -470,7 +472,7 @@ dsh-novel-write-engine/
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
-  "files": ["lib", "rulepacks", "briefs", "skills", "presets", "README.md", "LICENSE"],
+  "files": ["lib", "presets", "rulepacks", "briefs", "skills", "cordis.patch.yml", "README.md", "LICENSE", "CHANGELOG.md"],
   "exports": {
     ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
     "./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" },
@@ -969,10 +971,10 @@ dialogue_ratio = dialogue_lines / nonEmptyLines     // 小数字面量，禁百�
 ### 5.5 词表与规则包结构
 
 ```yaml
-# rulepacks/default.yaml（节选；0.2.0 真实 schema）
+# rulepacks/default.yaml（节选；0.2.3 真实 schema）
 schema_version: 1
 name: default
-version: '1.0.0'
+version: '1.0.1'
 
 lexicon:
   zero_tolerance: # 命中即 blocker
@@ -1003,7 +1005,7 @@ format:
 punctuation:
   dash:
     { base: { 战斗/动作章: 3, 日常过渡章: 4, 情感爆发章: 6, 纯叙事章: 3 }, scale_words: 3000, token: '——' }
-  period_density: { min: 1.5, max: 8 }
+  period_density: { min: 1.5, max: 10 }
   ellipsis_run: { max: 1, token: '……' }
   uniform_sentence: { min_sentences: 8, ratio: 0.6 }
   consecutive_le: { max: 3, char: '了' }
@@ -1818,14 +1820,14 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 命名：中文「网文工坊」，英文 `Novel Studio`，id `novel-workshop`。版式按「状态优先」组织：
 
-1. **Hero**：项目名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧项目选择器、教程、刷新。
-2. **统计**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`。
-3. **全书规划**：蓝图/严格模式、章卡进度条、**全部卷**（滚动容器，当前卷高亮）、世界观计数、质量趋势、健康度；数据来自 `panelSummary.book/quality/health`。
-4. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
-5. **下一步卡**：工具的中文动作 + 可读理由；旁边“复制续写指令”只写剪贴板，失败时展示可选中文本。
+1. **紧凑顶栏**：项目名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧分组项目选择器、教程、刷新。
+2. **首屏下一步卡**：工具的中文动作 + 可读理由；旁边“复制续写指令”只写剪贴板，失败时展示可选中文本。
+3. **统计条**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`，不再用四张大卡片。
+4. **双栏工作台**：左侧阶段轨、门控、advisory 提示、legacy 旧数据；右侧全书规划（蓝图/严格模式、章卡进度条、**全部卷**、世界观计数、质量趋势、健康度）与最近活动。
+5. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
 6. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
-7. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。
-8. **最近活动**：最近 5 条 journal 操作（时间、op、章节、状态）；无活动时整段不渲染。
+7. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。advisory 用黄色区、legacy 用虚线灰色区，均不与 blocking 混排。
+8. **项目选择器**：按写作中/待修复/失效（缺失/非项目/不可读）分组；失效默认折叠，`>6` 项出现搜索框；同名项目用父目录区分，状态写进 option 文本。
 
 **状态与可达性**：loading 用骨架 + `role=status`；choose 显示“发现多本书，先选一本”与项目按钮；missing 显示项目根、原因和建议，并保留选择器；empty 显示 `novel_init`；error 用 `role=alert` + 重试；outdated 用 `location.reload()`；damaged 仍渲染只读数据但在顶部提示用 `novel_state`/`novel_amend` 修复。根节点 `aria-busy`，统计区 `role=group`，选择器 `aria-label="切换项目"`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 
@@ -1838,7 +1840,8 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 - 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；连接层缺席时 503。
 - `root` 只接受注册表、active 或配置 `projectRoot`；其他路径返回 `missing.reason="not_registered"`，不读取任意目录。
 - 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
-- DTO v4：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
+- DTO v5：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `advisories`/`legacy` 与 quality 的 `samples`/`attempts`/`trend_basis`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
+- 0.2.3 的面板选择器按 `writing/damaged/missing` 分组，失效项默认折叠；同名项目用父目录区分。布局改为“当前章/下一步 → 统计条 → 双栏工作台 → 章节表”，advisories 与 legacy 独立于 blocking。
 - **退路**：typert 的 Host 侧命名空间声明若比预期重，面板降级为「静态壳 + 刷新按钮」，数据仍由对话内工具卡片呈现——不阻塞 Host 交付。
 
 ### 10.4 构建与开关

@@ -278,10 +278,13 @@ describe('review probes', () => {
       await writeFile(join(root, 'chapters', 'chapter-001.md'), `${cleanText()} appended`, 'utf8')
       const status = await engine.getStatus({ root })
       // Changing the manuscript invalidates both the review and the check.
-      // The review is the earlier binding, so the honest repair starts at P4
-      // rather than asking for a fresh check that can never satisfy PG-07.
+      // 0.2.3 can repair this through a direct P5 revision without rolling back
+      // the plan first; the revision returns to P4 for a fresh review/check.
       expect(status.data.blocking).toContainEqual(expect.objectContaining({ code: 'PG-07' }))
-      expect(status.data.next).toMatchObject({ tool: 'novel_rollback', args: { to_stage: 'P4' } })
+      expect(status.data.next).toMatchObject({
+        tool: 'novel_brief',
+        args: { stage: 'P5' },
+      })
     } finally {
       await cleanup()
     }

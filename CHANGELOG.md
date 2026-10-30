@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.3
+
+### Changed
+
+- **报表账本**：`novel_report.effort` 对旧章按 committed journal 回填 `submitReview`/`submitRevision`/`runCheck`/`rollback` 与 `archived_at`，旧 `final_check` 从 check 文档补读；`quality` 改为每章一份最终评审，新增 `samples`（章数）、`attempts`（committed 评审轮次，含历史）与 `trend_basis`，样本不足时 `trend` 为 `null` 而不是伪造 0。
+- **简报按章隔离**：`state/briefs.yaml` 仍是全书 append-only 审计，但 `pipeline.briefs` 与 `getBrief` 只取当前章收据；重复领取同一章同一阶段直接 replay，不写 journal、不升 revision；仍取项目写锁做 journal 一致性检查，避免误恢复其他写者的 pending 事务。
+- **角色与伏笔**：旧 `extra` 角色可从 worldbook/P1 或叙述者修正；伏笔 `resolved` 同步写 `advance_log`，记录章节、note 与 new_info。
+- **归档失败可直接修订**：`ready_to_archive` 增加 `submitRevision` 回 P4，不必先 `novel_rollback`；P5 任务书与所有 brief 暴露 `manuscript_hash`/patch 示例。
+- **P8 契约**：brief 带最小 `state_delta` schema、每段示例和 `worldbook_facts_empty`；delta 错误回显 expected 形态；`ENGINE_ISSUE_IMMUTABLE` 区分“格式错”和“评审归属不可改”。
+- **提示降噪**：advisory 按 code 每章一条并合并去重后的证据；`LOCKED_DETAIL_DRIFT` 带 expected/actual 片段，重复段带阈值；`RESOURCE_MISMATCH` 只在正文明确写反向符号时报，不再把中文省略符号当矛盾。strict 模式下 `facts` 为空时 doctor 提醒；同段“数量×单价/人数×单价”算式不一致会报 advisory；中文句密度上限校准为 10/100 字。
+- **失败重试**：有 key 的写操作在 journal 记录 `retry_key`/`retry_context`；与上次被拒尝试内容、brief、stage、revision 完全相同时返回 `ENGINE_RETRY_UNCHANGED`，防止原样重试浪费事务；换 brief 或改内容后放行。
+- **默认规则包 1.0.1**：`period_density.max` 8→10（中文短句校准），并加入同段乘式/人数×单价算式 advisory。
+- **面板 v5**：紧凑顶栏、首屏“当前章/下一步”、双栏工作台、统计条；项目选择器按写作/待修复/失效分组，失效默认折叠、可搜索、同名用父目录区分；advisories 与 legacy 独立展示；payload v5，旧标签页刷新。
+- **项目卫生**：`check:host` 同时隔离 `HOME`/`DSH_HOME`，用临时注册表正控证明 `novel_init` 确实写入了隔离行，并回查真实 `projects.yaml` 未新增 Host Smoke；新增 `/novel projects --prune [--yes]`，默认只列失效登记，`--yes` 才删登记行，不删项目目录。
+- **升级审计**：doctor 新增 `legacy-data`，只读标出旧 check、缺 rounds/archived_at、extra 角色、pre-0.2.3 无 anchor 伏笔、stale `pipeline.briefs`；`state/briefs.yaml` 的跨章历史收据是正常 append-only 审计，不误报；不自动改历史。新伏笔用 `format_version:1` 区分合法 anchorless 条目。
+- **发布前复核**：`ready_to_archive` 的可修订归档阻断改推荐 P5→revise；锁定细节、资源归属、千分位/枚举算式、重复段证据定位修正；quality `attempts` 补齐 journal 缺口；`check:host` 在创建临时 home 前验 DSH、保留隔离正控；`check:artifacts` 校验 `dsh.client` 清单。
+
+### Tests
+
+- 新增 0.2.3 报表回填、quality 样本/attempts、briefs 按章、brief replay、ready_to_archive 直接修订、P5 hash、doctor legacy、面板分组/advisory/legacy、`projects --prune` 与 advisory 去重测试。
+- 质量：78 个测试文件 / 836 项测试全绿；覆盖率 94.12 / 89.28 / 97.96 / 94.12，逐文件门禁通过；typecheck、lint、build、pack、artifacts、install、preset、host、crash、hygiene、isolated、rulepack 全过。
+- 真实模型：`agnes-2.5-flash`（275 字 / 6 段）与 `agnes-3.0-flash`（373 字 / 8 段）在临时项目完成 P1→P8、归档、report/doctor/panel v5、六种导出、reopen 与重新归档；P1/P2/P3 真实，P4/P6 确定性夹具，详见 [0.2.3 真实模型证据](docs/0.2.3-real-model-evidence.md)。
+- 版本升 0.2.3；`REMOTE_VERSION` 4 → 5；工具 28、服务操作 32、核心工具 10、门控 13、语义项 5、导出 6 均不变。
+
 ## 0.2.2
 
 ### Changed

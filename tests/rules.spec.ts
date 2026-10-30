@@ -430,7 +430,7 @@ describe('machine pipeline', () => {
   })
 
   it('flags cross-chapter problems from evidence', () => {
-    const text = '主角和配角一起走进旧办公室。Day 4 的风很大。'
+    const text = '主角和配角一起走进旧办公室。主角数了数铜钱，多了 200。Day 4 的风很大。'
     const result = runMachineChecks(
       text,
       options({

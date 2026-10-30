@@ -504,6 +504,9 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     resolveDelta.timeline['0'] = { action: 'created' }
     const second = run(resolveSummary, resolveDelta, first as unknown as Record<string, unknown>, 2)
     expect(second.foreshadows.items[0]).toMatchObject({ status: 'resolved', resolved_at: 2 })
+    expect(second.foreshadows.items[0]!.advance_log).toEqual([
+      { chapter: 2, note: 'resolved', new_info: true },
+    ])
   })
 
   it('validates relationships against the character ledger', () => {
@@ -905,5 +908,67 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       }),
       badLayout,
     )
+  })
+
+  it('does not turn an unknown role hint into protagonist and honors an explicit no_change role', () => {
+    const docs = base()
+    ;(docs.characters as { characters: Array<Record<string, unknown>> }).characters = [
+      {
+        name: '他',
+        role: 'extra',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      },
+    ]
+    const summary = sampleSummary({ characters_appeared: ['他'], events: [] })
+    const delta = empty()
+    delta.characters['他'] = { action: 'no_change', reason: 'already on stage' }
+    const unknown = applyStateDelta({
+      chapter: 2,
+      text: '他站在门口。',
+      summary,
+      delta: delta as never,
+      ...(docs as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      narrator: '他',
+      roleHints: { 他: '幕后黑手' },
+    })
+    expect(unknown.characters.characters[0]!.role).toBe('extra')
+
+    const explicit = empty()
+    explicit.characters['他'] = {
+      action: 'no_change',
+      reason: 'role correction',
+      role: 'protagonist',
+    }
+    const corrected = applyStateDelta({
+      chapter: 2,
+      text: '他站在门口。',
+      summary,
+      delta: explicit as never,
+      ...(docs as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      narrator: '别人',
+      roleHints: { 他: '主角' },
+    })
+    expect(corrected.characters.characters[0]!.role).toBe('protagonist')
+  })
+
+  it('does not turn an unknown role hint into protagonist on a newly created character', () => {
+    const docs = base()
+    const summary = sampleSummary({ characters_appeared: ['他'], events: [] })
+    const delta = empty()
+    delta.characters['他'] = { action: 'created' }
+    const result = applyStateDelta({
+      chapter: 1,
+      text: '他站在门口。',
+      summary,
+      delta: delta as never,
+      ...(docs as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      narrator: '他',
+      roleHints: { 他: '幕后黑手' },
+    })
+    expect(result.characters.characters[0]!.role).toBe('extra')
   })
 })

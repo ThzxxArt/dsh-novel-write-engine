@@ -267,7 +267,7 @@ describe('panel bundle v4', () => {
         selection: { root: string; source: string }
         summary: { root: string }
       }
-      expect(body.schemaVersion).toBe(4)
+      expect(body.schemaVersion).toBe(5)
       expect(body.selection).toEqual({ root: other, source: 'query' })
       expect(body.summary.root).toBe(other)
     } finally {

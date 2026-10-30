@@ -43,9 +43,12 @@ const entry = <T extends { action?: unknown }>(
   where: string,
 ): T & { action: DeltaAction } => {
   if (value === undefined) fail(`${where} is not declared`)
-  if (!isRecord(value)) fail(`${where} must be an object`)
+  if (!isRecord(value))
+    fail(`${where} must be an object; expected {"action":"created|updated|no_change", ...}`)
   if (!ACTIONS.includes(value.action as DeltaAction)) {
-    fail(`${where} must declare action created|updated|no_change`)
+    fail(
+      `${where} must declare action created|updated|no_change; expected {"action":"updated","reason":"..."} or {"action":"no_change","reason":"..."}`,
+    )
   }
   return value as T & { action: DeltaAction }
 }
@@ -146,6 +149,13 @@ export const normalizeRole = (value: string | undefined, fallback: string): stri
   return ROLE_ALIASES[trimmed] ?? canonicalFallback
 }
 
+/** A hint is authoritative only when it is a known role, not arbitrary prose. */
+const canonicalRole = (value: string | undefined): string | null => {
+  const trimmed = value?.trim() ?? ''
+  if (trimmed === '') return null
+  return ROLE_ALIASES[trimmed] ?? null
+}
+
 /**
  * Apply the archive reconciliation sheet. Every ledger entity the summary
  * mentions must be declared; unknown keys are refused instead of being
@@ -215,7 +225,15 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     requireReason(declared, `characters.${name}`)
     for (const field of ['profile', 'current_state', 'growth'] as const) {
       if (declared[field] !== undefined && !isRecord(declared[field])) {
-        fail(`characters.${name}.${field} must be an object`)
+        fail(
+          `characters.${name}.${field} must be an object; expected ${
+            field === 'current_state'
+              ? '{"resources":{"港币":-3},"status":"..."}'
+              : field === 'profile'
+                ? '{"age":31,"occupation":"..."}'
+                : '{"change":"...","status_change":"..."}'
+          }`,
+        )
       }
     }
     if (declared.growth !== undefined) {
@@ -232,10 +250,10 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       if (!appeared.includes(name)) {
         fail(`character "${name}" is created but does not appear in characters_appeared`)
       }
-      const hinted = normalizeRole(
-        input.roleHints?.[name],
-        name === narratorName || name === narrator ? 'protagonist' : 'extra',
-      )
+      const rawHint = input.roleHints?.[name]
+      const hinted =
+        canonicalRole(rawHint) ??
+        (rawHint === undefined && (name === narratorName || name === narrator) ? 'protagonist' : 'extra')
       const created = {
         name,
         role: normalizeRole(declared.role, hinted),
@@ -250,8 +268,23 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       continue
     }
     if (existing === undefined) fail(`character "${name}" does not exist; created must be used first`)
+    // Role is metadata, not manuscript state. Repair a legacy `extra` from a
+    // known worldbook/P1 role or, only when no hint exists at all, from the
+    // narrator. An unknown hint must not silently become protagonist.
+    if (existing.role === 'extra' && declared.role === undefined) {
+      const rawHint = input.roleHints?.[name]
+      const hinted = canonicalRole(rawHint)
+      if (hinted !== null && hinted !== 'extra') {
+        existing.role = hinted
+      } else if (rawHint === undefined && (name === narratorName || name === narrator)) {
+        existing.role = 'protagonist'
+      }
+    }
+    // A role is metadata and may be corrected even on a no_change declaration.
+    if (declared.role !== undefined) {
+      existing.role = normalizeRole(declared.role, existing.role)
+    }
     if (declared.action === 'updated') {
-      if (declared.role !== undefined) existing.role = normalizeRole(declared.role, existing.role)
       if (declared.profile !== undefined) existing.profile = { ...existing.profile, ...declared.profile }
       if (declared.current_state !== undefined) {
         existing.current_state = { ...existing.current_state, ...declared.current_state }
@@ -531,6 +564,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       resolved_at: null,
       description: declared.description ?? plant.description,
       ...(anchor === undefined ? {} : { anchor }),
+      // Read-model compatibility marker: old rows keep working, while a new
+      // anchorless title verified against the manuscript is not legacy data.
+      format_version: 1 as const,
       advance_log: [] as Array<{ chapter: number; note: string; new_info: boolean }>,
     }
     foreshadows.items.push(item)
@@ -538,7 +574,10 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     assigned[plant.key] = item.id
   }
 
+  const advancedKeys = new Set<string>()
   for (const advance of summary.foreshadows.advanced) {
+    if (advancedKeys.has(advance.key)) fail(`foreshadow "${advance.key}" is advanced twice`)
+    advancedKeys.add(advance.key)
     if (!Object.hasOwn(delta.foreshadows, advance.key)) {
       fail(`foreshadows.${advance.key} is not declared`)
     }
@@ -579,6 +618,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     item.status = 'resolved'
     item.last_touched = chapter
     item.resolved_at = chapter
+    item.advance_log.push({
+      chapter,
+      note: declared.note?.trim() === '' || declared.note === undefined ? 'resolved' : declared.note,
+      new_info: declared.new_info ?? true,
+    })
     assigned[key] = item.id
   }
 

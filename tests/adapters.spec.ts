@@ -144,7 +144,7 @@ const fakeEngine = () => {
       totalWords: 100,
       chapters: 1,
       revision: 2,
-      rulepack: 'default@1.0.0',
+      rulepack: 'default@1.0.1',
       averageScore: 0,
       lastScore: 0,
       openForeshadows: 0,
@@ -602,7 +602,7 @@ describe('command adapters', () => {
     ).toBe('success')
     expect(
       (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
-    ).toContain('default@1.0.0')
+    ).toContain('default@1.0.1')
     expect(
       (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
     ).toContain('revision 2')
@@ -850,8 +850,8 @@ describe('panel route', () => {
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
-    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 4 })
-    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(4)
+    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 5 })
+    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(5)
 
     const head = response()
     await handler({ method: 'HEAD' }, head)

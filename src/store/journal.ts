@@ -29,6 +29,8 @@ export interface JournalRecord {
   stage?: string
   attempt?: boolean
   blocking?: import('../types.js').BlockingItem[]
+  retry_key?: string
+  retry_context?: string
   /** Content hash per target, written before rename and again on commit. */
   hashes?: Record<string, string>
   /** Pre-commit hash per target; null means the target did not exist. */
@@ -89,6 +91,8 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
       if (typeof raw.hint === 'string') record.hint = raw.hint
       if (typeof raw.stage === 'string') record.stage = raw.stage
       if (raw.attempt === true) record.attempt = true
+      if (typeof raw.retry_key === 'string') record.retry_key = raw.retry_key
+      if (typeof raw.retry_context === 'string') record.retry_context = raw.retry_context
       if (Array.isArray(raw.blocking)) {
         record.blocking = raw.blocking
           .map((item) => (typeof item === 'object' && item !== null ? item : null))
@@ -126,6 +130,8 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
           ...(record.stage === undefined ? {} : { stage: record.stage }),
           ...(record.attempt === true ? { attempt: true } : {}),
           ...(record.blocking === undefined ? {} : { blocking: record.blocking }),
+          ...(record.retry_key === undefined ? {} : { retry_key: record.retry_key }),
+          ...(record.retry_context === undefined ? {} : { retry_context: record.retry_context }),
         })
       }
     } catch {

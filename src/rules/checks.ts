@@ -1,9 +1,9 @@
 import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
 import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
-import { maxParagraphSimilarity } from '../domain/simhash.js'
+import { textSimilarity } from '../domain/simhash.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import type { Severity, Violation } from '../types.js'
-import type { Rule } from './types.js'
+import type { Rule, RuleContext } from './types.js'
 
 const v = (code: string, severity: Severity, paragraph: number, detail: string): Violation => ({
   code,
@@ -441,12 +441,16 @@ const CN_UNITS: Readonly<Record<string, number>> = { 十: 10, 百: 100, 千: 100
 /** Parse a small Chinese/Arabic number; null means the token was not a number. */
 function parseSmallNumber(raw: string): number | null {
   if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw)
+  if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(raw)) return Number(raw.replaceAll(',', ''))
   let total = 0
   let section = 0
   let digit: number | null = null
+  let lastUnit = 0
+  let explicitZero = false
   for (const char of raw) {
     if (char in CN_DIGITS) {
       digit = CN_DIGITS[char]!
+      if (digit === 0) explicitZero = true
       continue
     }
     const unit = CN_UNITS[char]
@@ -460,11 +464,18 @@ function parseSmallNumber(raw: string): number | null {
       section += (digit ?? 1) * unit
       digit = null
     }
+    lastUnit = unit
+    explicitZero = false
+  }
+  // Colloquial Chinese elides the final unit: 一百五 = 150, 一千五 = 1500,
+  // 一万五 = 15000. An explicit 零 keeps the literal form: 一百零五 = 105.
+  if (digit !== null && !explicitZero && lastUnit >= 100) {
+    return total + section + digit * (lastUnit / 10)
   }
   return total + section + (digit ?? 0)
 }
 
-const NUMBER_TOKEN = '[零一二两三四五六七八九十百千万]+|\\d+(?:\\.\\d+)?'
+const NUMBER_TOKEN = '[零一二两三四五六七八九十百千万]+|\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?'
 const DISTANCE_RE = new RegExp(`(${NUMBER_TOKEN})\\s*(海里|公里|千米|米|里)`, 'g')
 const DURATION_RE = new RegExp(`(${NUMBER_TOKEN})\\s*个?\\s*(小时|钟头|分钟)`, 'g')
 const SPEED_RE = new RegExp(`(?:时速|每小时|速度(?:是|为)?)\\s*(${NUMBER_TOKEN})\\s*(海里|公里|千米|米)`, 'g')
@@ -495,7 +506,69 @@ const collect = (text: string, pattern: RegExp, units: Readonly<Record<string, n
   return result
 }
 
+/** Approximate quantities (二三十, 两三百, 三五, 数十) cannot form an exact equation. */
+const approximateNumber = (raw: string): boolean =>
+  /^[一二两三四五六七八九]{2}十$/.test(raw) ||
+  /^[一二两三四五六七八九]{2,}百$/.test(raw) ||
+  // A unitless run of two or more Chinese digits is a colloquial estimate
+  // (三五个人, 七八天), not an exact factor.
+  /^[一二两三四五六七八九]{2,}$/.test(raw)
+
+const approximatePrefix = (text: string, index: number): boolean =>
+  // Also skip a token that is the second half of a range/price such as
+  // 五、六个人 or 三块五, where the preceding token already supplied the value.
+  /[数近约几上余、和或至到~块元角毛]/.test(text.slice(Math.max(0, index - 1), index))
+
+/** A tiny, deliberately local arithmetic check: one equation, one paragraph. */
+const arithmeticMismatches = (ctx: RuleContext): Violation[] => {
+  const results: Violation[] = []
+  const seen = new Set<string>()
+  const unit = '(?:人|个|元|块|蚊|斤|件|张|条|里|米)?'
+  const multiply = '(?:×|x|X|\\*|乘以|乘)'
+  const equals = '(?:=|等于|得|共|合计|总共|一共)'
+  const patterns = [
+    new RegExp(
+      `(${NUMBER_TOKEN})[ \\t\\u3000]*${unit}[ \\t\\u3000]*${multiply}[ \\t\\u3000]*(${NUMBER_TOKEN})[ \\t\\u3000]*${unit}[ \\t\\u3000]*${equals}[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${unit})?(?=$|[。！？，, \\t\\u3000])`,
+      'g',
+    ),
+    new RegExp(
+      `(${NUMBER_TOKEN})[ \\t\\u3000]*(?:人|个人)[，,、 \\t\\u3000]*(?:每人|每个)[ \\t\\u3000]*(${NUMBER_TOKEN})[^。！？\\n]{0,24}(?:共|合计|总共|一共)(?:花了|用了|要|付|得|是|有)?[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${unit})?(?=$|[。！？，, \\t\\u3000])`,
+      'g',
+    ),
+  ]
+  for (const pattern of patterns) {
+    for (const match of ctx.text.matchAll(pattern)) {
+      // NUMBER_TOKEN only captures strings parseSmallNumber accepts; the
+      // non-null assertion is a parser invariant, not a runtime fallback.
+      if (
+        [match[1], match[2], match[3]].some((value) => approximateNumber(value ?? '')) ||
+        approximatePrefix(ctx.text, match.index ?? 0) ||
+        /[数近约几上余]/.test(match[0])
+      )
+        continue
+      const left = parseSmallNumber(match[1] ?? '')!
+      const right = parseSmallNumber(match[2] ?? '')!
+      const shown = parseSmallNumber(match[3] ?? '')!
+      const expected = left * right
+      if (Math.abs(expected - shown) < 0.001) continue
+      const key = `${left}x${right}=${shown}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      results.push(
+        v(
+          SEMANTIC_RULES.NUMERIC_CONTRADICTION,
+          'advisory',
+          paragraphOfIndex(ctx.text, match.index ?? 0),
+          `arithmetic mismatch: ${left} × ${right} = ${expected}, but the text shows ${shown}`,
+        ),
+      )
+    }
+  }
+  return results
+}
+
 const numericContradiction: Rule = (ctx) => {
+  const arithmetic = arithmeticMismatches(ctx)
   // Explicit speed anchors do not need a distance/duration pair.
   const explicit = collect(ctx.text, SPEED_RE, METRES).map((quantity) => ({
     at: quantity.index,
@@ -523,15 +596,16 @@ const numericContradiction: Rule = (ctx) => {
   }
   // An explicit speed statement is a stronger anchor than an implied pair.
   const anchors = explicit.length > 0 ? explicit : speeds
-  if (anchors.length < 2) return []
+  if (anchors.length < 2) return arithmetic
   const positive = anchors.filter((anchor) => anchor.kmh > 0)
-  if (positive.length < 2) return []
+  if (positive.length < 2) return arithmetic
   const min = Math.min(...positive.map((anchor) => anchor.kmh))
   const max = Math.max(...positive.map((anchor) => anchor.kmh))
-  if (max / Math.max(0.0001, min) < 1.5) return []
+  if (max / Math.max(0.0001, min) < 1.5) return arithmetic
   const firstNeedle = positive[0]!.raw.split(' / ')[0]!
   const paragraphIndex = splitParagraphs(ctx.text).findIndex((paragraph) => paragraph.includes(firstNeedle))
   return [
+    ...arithmetic,
     // Chinese prose rarely names the subject of two speed clauses, so this
     // cannot distinguish a car at 60 km/h from a boat at 12 knots. It is a
     // reading aid, never a hard archive gate.
@@ -659,38 +733,85 @@ const duplicateParagraph: Rule = (ctx) => {
   const minChars = ctx.rulepack.crosschapter.duplicate_min_chars
   // Do not let a writer hide a repeated paragraph by inserting newlines: merge
   // consecutive short paragraphs until each comparison unit reaches minChars.
-  const longParagraphs = (text: string): string => {
-    const units: string[] = []
-    let buffer = ''
-    for (const paragraph of splitParagraphs(text)) {
-      buffer += paragraph
-      if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) {
-        units.push(buffer)
-        buffer = ''
-      }
-    }
-    if (buffer !== '') {
-      if (units.length === 0) {
-        if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) units.push(buffer)
-      } else {
-        units[units.length - 1] += buffer
-      }
-    }
-    return units.join('\n\n')
+  // Keep the original paragraph offsets so the advisory points at the real
+  // paragraph even when several short paragraphs were merged into one unit.
+  interface ParagraphUnit {
+    text: string
+    start: number
+    paragraphs: string[]
   }
-  const best = maxParagraphSimilarity(
-    longParagraphs(ctx.text),
-    previous.map((text) => longParagraphs(text)).filter((text) => text !== ''),
-  )
+  const longParagraphUnits = (text: string): ParagraphUnit[] => {
+    const units: ParagraphUnit[] = []
+    let buffer = ''
+    let start = 0
+    let paragraphs: string[] = []
+    for (const [index, paragraph] of splitParagraphs(text).entries()) {
+      if (paragraphs.length === 0) start = index
+      buffer += paragraph
+      paragraphs.push(paragraph)
+      if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) {
+        units.push({ text: buffer, start, paragraphs })
+        buffer = ''
+        paragraphs = []
+      }
+    }
+    if (paragraphs.length > 0) {
+      if (units.length === 0) {
+        if (Array.from(buffer.replace(/\s+/g, '')).length >= minChars) {
+          units.push({ text: buffer, start, paragraphs })
+        }
+      } else {
+        const last = units[units.length - 1]!
+        last.text += buffer
+        last.paragraphs.push(...paragraphs)
+      }
+    }
+    return units
+  }
+  const currentUnits = longParagraphUnits(ctx.text)
+  const previousUnits: Array<ParagraphUnit & { source: number }> = []
+  for (const [index, text] of previous.entries()) {
+    for (const unit of longParagraphUnits(text)) {
+      previousUnits.push({ ...unit, source: index + 1 })
+    }
+  }
+  if (currentUnits.length === 0 || previousUnits.length === 0) return []
+  let best = { score: 0, current: 0, previous: 0 }
+  for (const [currentIndex, current] of currentUnits.entries()) {
+    for (const [previousIndex, previousUnit] of previousUnits.entries()) {
+      const score = textSimilarity(current.text, previousUnit.text)
+      if (score > best.score) {
+        best = { score, current: currentIndex, previous: previousIndex }
+      }
+    }
+  }
+  const currentUnit = currentUnits[best.current]!
+  const matched = previousUnits[best.previous]!
   const advisory = ctx.rulepack.crosschapter.duplicate_advisory
-  if (best < advisory) return []
-  const severity = best >= ctx.rulepack.crosschapter.duplicate_similarity ? 'blocker' : 'advisory'
+  if (best.score < advisory) return []
+  // The unit score is the gate, but the evidence must name the actual original
+  // paragraph, not the merged unit index.
+  let currentParagraph = currentUnit.start
+  let previousParagraph = matched.start
+  let paragraphScore = 0
+  for (const [currentIndex, current] of currentUnit.paragraphs.entries()) {
+    for (const [previousIndex, previousText] of matched.paragraphs.entries()) {
+      const score = textSimilarity(current, previousText)
+      if (score > paragraphScore) {
+        paragraphScore = score
+        currentParagraph = currentUnit.start + currentIndex
+        previousParagraph = matched.start + previousIndex
+      }
+    }
+  }
+  const blocker = ctx.rulepack.crosschapter.duplicate_similarity
+  const severity = best.score >= blocker ? 'blocker' : 'advisory'
   return [
     v(
       CROSS_RULES.DUPLICATE_PARAGRAPH,
       severity,
-      1,
-      `paragraph reuses ${Math.round(best * 100)}% of a paragraph from the previous three chapters`,
+      currentParagraph + 1,
+      `paragraph ${currentParagraph + 1} reuses ${Math.round(best.score * 100)}% of paragraph ${previousParagraph - matched.start + 1} from previous source ${matched.source} (advisory ≥${Math.round(advisory * 100)}%, blocker ≥${Math.round(blocker * 100)}%)`,
     ),
   ]
 }
@@ -735,37 +856,112 @@ const revisitedTooSoon: Rule = (ctx) => {
     )
 }
 
+const isClauseBoundary = (text: string, index: number): boolean => {
+  const char = text[index]
+  if (char === undefined) return false
+  if ('。！？!?；;\n'.includes(char)) return true
+  if (char === '，' || char === ',') {
+    // Do not split an Arabic thousands separator such as 1,000.
+    return !(/\d/.test(text[index - 1] ?? '') && /\d/.test(text[index + 1] ?? ''))
+  }
+  return false
+}
+
+const isSentenceBoundary = (text: string, index: number): boolean => {
+  const char = text[index]
+  return char !== undefined && '。！？!?\n'.includes(char)
+}
+
+const clauseBounds = (text: string, index: number, end: number): { start: number; end: number } => {
+  let start = index
+  while (start > 0 && !isClauseBoundary(text, start - 1)) start -= 1
+  let stop = end
+  while (stop < text.length && !isClauseBoundary(text, stop)) stop += 1
+  return { start, end: stop }
+}
+
+const sentenceBounds = (text: string, index: number, end: number): { start: number; end: number } => {
+  let start = index
+  while (start > 0 && !isSentenceBoundary(text, start - 1)) start -= 1
+  let stop = end
+  while (stop < text.length && !isSentenceBoundary(text, stop)) stop += 1
+  return { start, end: stop }
+}
+
 const resourceMismatch: Rule = (ctx) => {
   const changes = ctx.summary?.resource_changes ?? []
-  const positive = /(增加|多了|得到|获得|赚|加|上升|增|\+)/
-  const negative = /(减少|少了|失去|消耗|花|损失|下降|减|-|−)/
+  // These are verbs/phrases, not character windows: 花园/参加/更加 must not
+  // count as 花/加/增. The sign must be in the amount's own clause.
+  const positive = /(增加|加了|多了|得到|获得|赚到|赚了|赚|收到|拿到|上升|上涨|增|\+)/
+  const negative = /(减少|减了|少了|失去|消耗|花掉|花了|花费|损失|下降|支出|付了|用了|丢了|减|−|-)/
   return changes.flatMap((change) => {
     if (change.delta === 0) return []
     const magnitude = Math.abs(change.delta)
-    // Match a sign and a resource only in the same local statement as the
-    // amount. A global "text contains '-' somewhere" would accept an opposite
-    // change in a different paragraph.
-    const stated = [...ctx.text.matchAll(/\d+/g)].some((match) => {
-      if (Number(match[0]) !== magnitude) return false
+    const opposite = change.delta > 0 ? negative : positive
+    // Only report an explicit opposite sign in the amount's clause. Chinese
+    // narrative often writes 「三块钱压在数簿底下」 without a mathematical
+    // minus sign; absence of a sign is not a contradiction.
+    let conflict: { index: number; amount: string; sign: string } | null = null
+    for (const match of ctx.text.matchAll(new RegExp(`(${NUMBER_TOKEN})`, 'g'))) {
+      if (parseSmallNumber(match[1] ?? '') !== magnitude) continue
       const index = match.index ?? 0
-      const window = ctx.text.slice(
-        Math.max(0, index - 80),
-        Math.min(ctx.text.length, index + match[0].length + 80),
+      const numberEnd = index + match[0].length
+      const clause = clauseBounds(ctx.text, index, numberEnd)
+      const sentence = sentenceBounds(ctx.text, index, numberEnd)
+      const clauseText = ctx.text.slice(clause.start, clause.end)
+      const sign = opposite.exec(clauseText)
+      if (sign === null) continue
+      let previousClauseText = ''
+      if (clause.start > sentence.start) {
+        let previousStart = clause.start
+        if (previousStart > sentence.start) previousStart -= 1
+        while (previousStart > sentence.start && !isClauseBoundary(ctx.text, previousStart - 1)) {
+          previousStart -= 1
+        }
+        previousClauseText = ctx.text.slice(previousStart, clause.start)
+      }
+      let resourceVisible = clauseText.includes(change.resource)
+      if (!resourceVisible && previousClauseText !== '') {
+        // A resource in the preceding clause can describe this amount, but if
+        // that clause already contains an amount *and* a sign, the resource
+        // belongs to that amount: 他买米花了 5 块，后来银元多了 5 块。
+        const previousHasNumber = new RegExp(`(${NUMBER_TOKEN})`).test(previousClauseText)
+        const previousHasSign = positive.test(previousClauseText) || negative.test(previousClauseText)
+        resourceVisible =
+          !(previousHasNumber && previousHasSign) && previousClauseText.includes(change.resource)
+      }
+      if (!resourceVisible) continue
+      const names = ctx.summary?.characters_appeared ?? []
+      const otherCharacter = names.some(
+        (name) => name !== '' && name !== change.character && clauseText.includes(name),
       )
-      return (
-        window.includes(change.character) &&
-        window.includes(change.resource) &&
-        (change.delta > 0 ? positive : negative).test(window)
-      )
-    })
-    return stated
+      let characterVisible = clauseText.includes(change.character)
+      if (!characterVisible && !otherCharacter) {
+        // An elided subject can be carried by the previous clause, but a
+        // different named person in this clause owns the amount instead.
+        characterVisible = previousClauseText.includes(change.character)
+      }
+      if (!characterVisible && !otherCharacter && sentence.start > 0) {
+        // A pronoun in the current sentence may refer to the single character
+        // named in the previous sentence: 陈嘉树走进院子。他随手花掉五块银元。
+        const previous = sentenceBounds(ctx.text, sentence.start - 1, sentence.start - 1)
+        const previousText = ctx.text.slice(previous.start, previous.end)
+        const named = names.filter((name) => previousText.includes(name))
+        const pronoun = /(?:他|她|它|我|他们|她们)/.test(clauseText)
+        characterVisible = pronoun && named.length === 1 && named[0] === change.character
+      }
+      if (!characterVisible) continue
+      conflict = { index, amount: match[1] ?? '', sign: sign[0] }
+      break
+    }
+    return conflict === null
       ? []
       : [
           v(
             CROSS_RULES.RESOURCE_MISMATCH,
             'advisory',
-            1,
-            `${change.character}'s ${change.resource} change (${change.delta}) is not stated with the right sign in the text`,
+            paragraphOfIndex(ctx.text, conflict.index),
+            `${change.character}'s ${change.resource} change is ${change.delta >= 0 ? '+' : ''}${change.delta}, but the text states the opposite sign "${conflict.sign}" near amount ${conflict.amount}`,
           ),
         ]
   })
@@ -850,6 +1046,38 @@ const relationUnknown: Rule = (ctx) => {
   return results
 }
 
+const lastDescribedMention = (
+  name: string,
+  locked: string,
+  text: string,
+  order: 'first' | 'last',
+): { index: number; text: string; coverage: number } | null => {
+  const candidates: Array<{ index: number; text: string; coverage: number }> = []
+  const strippedLock = locked.split(name).join('')
+  for (const [index, paragraph] of splitParagraphs(text).entries()) {
+    if (!paragraph.includes(name)) continue
+    // Remove the subject and its possessive particle before comparing. A bare
+    // mention such as "他回到旧办公室" then has almost no content, while
+    // "旧办公室的门，桌子换成红木桌" still leaves a real description.
+    const strippedParagraph = paragraph.split(`${name}的`).join('').split(name).join('')
+    const coverage = lockedDetailCoverage(strippedParagraph, strippedLock)
+    const content = strippedParagraph.replace(/[\s\p{P}]+/gu, '')
+    const speech = /^(?:说|问|答|喊|道|叫|笑道|低声说|沉声道|开口)[：:，,]?[“"「『]/.test(
+      strippedParagraph.trim(),
+    )
+    // Zero overlap is a passing mention unless the remaining prose is long
+    // enough to be a real (but completely wrong) description. Short speech
+    // tags are not descriptions of the locked appearance.
+    if (coverage === 0 && (content.length < 16 || speech)) continue
+    candidates.push({ index, text: paragraph, coverage })
+  }
+  if (candidates.length === 0) return null
+  // A character lock is its first appearance; a location lock is the latest
+  // *described* appearance, so a correct early description followed by drift
+  // is still caught while a later bare mention is ignored.
+  return order === 'first' ? candidates[0]! : candidates[candidates.length - 1]!
+}
+
 const lockedDetailDrift: Rule = (ctx) => {
   if (ctx.evidence.locks === null) return []
   const locks = ctx.evidence.locks
@@ -857,16 +1085,15 @@ const lockedDetailDrift: Rule = (ctx) => {
   for (const [name, lock] of Object.entries(locks.locations)) {
     if (!ctx.text.includes(name)) continue
     if (lock.layout.trim() === '') continue
-    const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
-    if (paragraph === undefined) continue
-    const similarity = lockedDetailCoverage(paragraph, lock.layout)
-    if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
+    const mention = lastDescribedMention(name, lock.layout, ctx.text, 'last')
+    if (mention === null) continue
+    if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
         v(
           CROSS_RULES.LOCKED_DETAIL_DRIFT,
           'advisory',
-          paragraphOfIndex(ctx.text, ctx.text.indexOf(paragraph)),
-          `${name} is described differently from its locked layout`,
+          mention.index + 1,
+          `${name} is described differently from its locked layout; expected "${lock.layout.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
         ),
       )
     }
@@ -874,16 +1101,15 @@ const lockedDetailDrift: Rule = (ctx) => {
   for (const [name, lock] of Object.entries(locks.characters)) {
     if (!ctx.text.includes(name)) continue
     if (lock.appearance.trim() === '') continue
-    const paragraph = splitParagraphs(ctx.text).find((candidate) => candidate.includes(name))
-    if (paragraph === undefined) continue
-    const similarity = lockedDetailCoverage(paragraph, lock.appearance)
-    if (similarity < ctx.rulepack.crosschapter.lock_similarity) {
+    const mention = lastDescribedMention(name, lock.appearance, ctx.text, 'first')
+    if (mention === null) continue
+    if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
         v(
           CROSS_RULES.LOCKED_DETAIL_DRIFT,
           'advisory',
-          paragraphOfIndex(ctx.text, ctx.text.indexOf(paragraph)),
-          `${name} is described differently from the locked first appearance`,
+          mention.index + 1,
+          `${name} is described differently from the locked first appearance; expected "${lock.appearance.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
         ),
       )
     }

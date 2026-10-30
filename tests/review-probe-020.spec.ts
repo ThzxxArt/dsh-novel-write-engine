@@ -86,7 +86,7 @@ const review: ReviewDocument = {
 }
 
 describe('0.2.0 review probes', () => {
-  it('reports zero quality trend when there is no previous window', () => {
+  it('reports a null quality trend when there are not enough samples', () => {
     const report = buildBookReport({
       project: {
         schema_version: 1,
@@ -113,7 +113,8 @@ describe('0.2.0 review probes', () => {
       minScore: 120,
       foreshadowDormantAfter: 10,
     })
-    expect(report.quality.trend).toBe(0)
+    expect(report.quality.trend).toBeNull()
+    expect(report.quality.trend_basis).toBe('insufficient_samples')
   })
 
   it('searches blueprint fields under the outline scope', () => {
