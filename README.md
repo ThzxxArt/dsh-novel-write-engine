@@ -4,17 +4,7 @@
 
 它不是一个提示词合集，也不是独立的写作软件。它把「这一章处于什么阶段、下一步只能做什么、正文是否达标、归档要核销哪些实体」变成可执行、可回滚、可审计的引擎；模型负责写，引擎负责裁决和记账。
 
-0.2.0 起，它同时管理**整本书**：书级蓝图 → 卷/章大纲 → 世界观设定集 → 单章 P1–P9 流水线 → 归档回写大纲 → 报告/体检/搜索/面板。大纲可以从 Markdown/YAML/JSON 导入，也可以由模型按章卡结构生成；严格模式下 P2/P3 会按章卡校验标题、场景、字数与 cast。
-
-0.2.2 把多项目选择从“进程最近一次工具调用”改为**会话级持久绑定**：显式 `project_root` 成功后会记住当前 DSH 会话；同一工作区的 A/B 会话不再串书。面板 v4 增加项目选择器与 choose/missing 状态，`/novel scan` 用于发现项目，`/novel resume` 与面板复制按钮共用同一份续写指令；项目被删除/移动/替换时 fail-closed，不静默换书。
-
-0.2.3 把“账本说真话”补到旧项目：`report` 从 journal 回填旧章 effort，quality 每章只算最终评审并区分 `samples`/`attempts`；briefs 按当前章隔离；归档失败可直接修订；advisory 按章去重并带证据；面板 v5 改为书桌式工作台，项目选择器分离写作/待修复/失效；`check:host` 不再污染真实注册表。
-
-0.2.4 根治 `novel_outline` 的“省略即删除”：`chapters` 按 `num`、`volumes` 按 `title` 做 upsert，省略的卡保持不动；删除必须显式 `remove` / `remove_volumes`；新增 `dry_run`、`added`/`updated`/`removed` 回显、`outline.deprecated.yaml` 与 `novel_restore` 的 outline 恢复路径。这是有意的 BREAKING 语义修正：从“提交集合就是全集”变成“提交的是要改的对象”。
-
 0.2.6 把“证据、台账、书籍数据”从能跑推进到可解释：语义证据改为配对冲突并统一句边界；world 新实体支持 `name + anchors`，不再逼正文写台账名；网文工坊 v6 增加书脊/当前章/人物关系/世界/伏笔/质量节奏/逐章 effort/健康恢复；同时补上 pipeline 备份恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。详见 [0.2.6 方案](docs/0.2.6-plan.md)。
-
-0.2.5 根治“证据/账本/恢复”三条真实链路：语义引文支持跨句/跨段并逐条解释；check 的 submission 错误不再消耗轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 崩溃恢复；归档卷/active 卡在 blueprint/import/amend/outline 全入口一致；新增 summary-only 修订（不改正文、不重跑 P4/P6）；resources 深合并非负整数。P1–P3 及 S1–S8 硬化见 [0.2.5 验收](docs/0.2.5-acceptance.md)。
 
 > **当前版本：0.2.6** · 中文界面 · MIT
 >
