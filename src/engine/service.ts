@@ -6995,8 +6995,14 @@ export class EngineService {
     const target = snapshot.project.targets.total_chapters
     const finished = snapshot.pipeline.stage === 'done' && target !== null && archived.length >= target
     const draftWords = snapshot.text === null ? 0 : countWordMetrics(snapshot.text).total_word_count
-    const journal = await readJournal(this.storeFor(snapshot.root))
     const pending = await inspectPending(this.storeFor(snapshot.root))
+    const stateErrorCount = this.stateErrors(snapshot).length
+    const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
+      snapshot.outlineError ?? ''
+    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}`
+    const cachedPanel = this.panelCache.get(snapshot.root)
+    if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
+    const journal = await readJournal(this.storeFor(snapshot.root))
     const journalBlocking = await this.journalBlocking(snapshot)
     const outline = outlineSummary(
       snapshot.outline,
@@ -7008,12 +7014,6 @@ export class EngineService {
     const scores = archived.slice(-10).map((chapter) => chapter.score)
     const blocking = [...this.effectiveBlocking(snapshot), ...journalBlocking]
     const healthBlocking = blocking.length
-    const stateErrorCount = this.stateErrors(snapshot).length
-    const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
-      snapshot.outlineError ?? ''
-    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}`
-    const cachedPanel = this.panelCache.get(snapshot.root)
-    if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
     const book = {
       premise: snapshot.outline.book.premise,
       logline: snapshot.outline.book.logline,
@@ -7638,7 +7638,7 @@ export class EngineService {
         code: 'PG-13',
         scope: 'outline',
         detail: `chapter ${snapshot.pipeline.chapter} has no outline card while strict mode is on`,
-        hint: 'call novel_outline to add the card, or novel_blueprint {"strict":false} to turn strict mode off',
+        hint: 'call novel_outline to add the missing card; do not turn strict mode off just to pass this gate',
       }
     }
     const plan = snapshot.plan

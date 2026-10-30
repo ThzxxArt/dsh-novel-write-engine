@@ -25,6 +25,7 @@ export interface PanelChapter {
   details: string
   stageLabel: string
   sceneType: string
+  dialogueRatio: number | null
   hookStrength: number | null
   finalCheck: 'pass' | 'fail' | null
   reviews: number
@@ -446,6 +447,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       details: row.details ?? '',
       stageLabel: stageLabel(row.stage),
       sceneType: row.sceneType ?? '',
+      dialogueRatio: row.dialogueRatio ?? null,
       hookStrength: row.hookStrength ?? null,
       finalCheck: row.finalCheck ?? null,
       reviews: row.reviews ?? 0,

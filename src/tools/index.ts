@@ -1037,7 +1037,7 @@ export function createNovelTools(
     defineTool({
       name: 'novel_restore',
       description:
-        'Restore an active chapter file, or outline/outline.yaml, from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
+        'Restore an active chapter file, outline/outline.yaml, or a damaged state/pipeline.yaml from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
       parameters: {
         txid: { type: 'string', required: true },
         chapter: { type: 'integer' },
@@ -1046,7 +1046,7 @@ export function createNovelTools(
           items: { type: 'string' },
           description: arraySemanticsDescription(
             'replace',
-            'Project-relative chapter files, or exactly [outline/outline.yaml]; omitted restores every restorable chapter file the manifest records.',
+            'Project-relative chapter files, exactly [outline/outline.yaml], or exactly [state/pipeline.yaml] when the pipeline is unreadable; omitted restores every restorable chapter file the manifest records.',
           ),
         },
         project_root: root,

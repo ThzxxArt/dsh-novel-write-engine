@@ -59,7 +59,7 @@ export interface PanelBookData {
     metrics: WordMetrics | null
   }
   worldbook: {
-    counts: BookReport['worldbook']
+    counts: Omit<BookReport['worldbook'], 'anchors'>
     locations: PanelWorldEntry[]
     factions: PanelWorldEntry[]
     rules: PanelWorldEntry[]

@@ -623,7 +623,7 @@ const CSS = `
 .nwe-v6-note { margin: 8px 0 0; font-size: 10px; line-height: 1.5; color: var(--nwe-muted); }
 .nwe-v6-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .nwe-v6-tags span { border: 1px solid var(--nwe-border); border-radius: 999px; padding: 2px 7px; font-size: 9px; color: var(--nwe-muted); }
-.nwe-chapter-extra { margin-top: 6px; font-size: 10px; color: var(--nwe-muted); line-height: 1.5; }
+.nwe-chapter-extra { margin-top: 6px; font-size: 10px; color: var(--nwe-muted); line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .nwe-v6-grid { grid-template-columns: 1fr; } .nwe-v6-card[open] { grid-column: auto; } }
 .nwe-legacy {
   display: flex;
@@ -879,7 +879,7 @@ const chapterCard = (row: PanelChapter): ReactElement =>
       createElement(
         'div',
         { className: 'nwe-chapter-extra' },
-        `${row.sceneType || '—'} · 钩子 ${row.hookStrength ?? '—'} · 终检 ${row.finalCheck ?? '—'} · 评 ${row.reviews} / 修 ${row.revisions} / 检 ${row.checks} / 回滚 ${row.rollbacks}`,
+        `${row.sceneType || '—'} · 对话 ${row.dialogueRatio === null ? '—' : `${Math.round(row.dialogueRatio * 100)}%`} · 钩子 ${row.hookStrength ?? '—'} · 终检 ${row.finalCheck ?? '—'} · 评 ${row.reviews} / 修 ${row.revisions} / 检 ${row.checks} / 回滚 ${row.rollbacks} · 归档 ${row.archivedAt ?? '—'}`,
       ),
     ),
   )

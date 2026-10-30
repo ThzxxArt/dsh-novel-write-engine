@@ -601,6 +601,36 @@ describe('gate evaluation', () => {
     ).toContain('PG-09')
   })
 
+  it('PG-09 uses the referenced occurrence when the same sentence repeats', () => {
+    const repeated = '他伸手压住被风吹翻的纸角。'
+    const repeatedText = [
+      repeated,
+      '第二段写的是走廊尽头的脚步声。',
+      '第三段写的是门缝里透进来的冷风。',
+      '第四段写的是桌上那枚暗红蜡印。',
+      repeated,
+    ].join('\n\n')
+    const repeatedProof = {
+      opening: { paragraph: 1, quote: repeated },
+      middle: { paragraph: 3, quote: '第三段写的是门缝里透进来的冷风。' },
+      ending: { paragraph: 5, quote: repeated },
+    }
+    const base = input({
+      operation: 'submitReview',
+      stage: 'P4',
+      text: repeatedText,
+      pipeline: {
+        ...input().pipeline,
+        stage: 'P4',
+        briefs: { P4: { issued_at: 'x', digest: 'D' } },
+      },
+      briefStage: 'P4',
+      proof: repeatedProof,
+      review: review(150, 0, { proof: repeatedProof }),
+    })
+    expect(codes(base)).not.toContain('PG-09')
+  })
+
   it('PG-12 checks archive preconditions', () => {
     const base = input({
       operation: 'archiveChapter',

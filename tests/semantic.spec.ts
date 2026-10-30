@@ -65,13 +65,17 @@ describe('semantic evidence validation', () => {
     expect(result.items[0]?.nearest).toBeUndefined()
   })
 
-  it('reports an absent quote as NOT_FOUND with a nearest paragraph', () => {
-    const result = evaluateSemantic(TEXT, [item('L2-POV', '这句话完全不在正文里')])
-    const finding = result.items.find((entry) => entry.id === 'L2-POV')!
+  it('reports a near-miss quote with a nearest paragraph only above the similarity floor', () => {
+    const near = evaluateSemantic(TEXT, [item('L2-POV', '旧楼停电。守门人正在收伞！')])
+    const finding = near.items.find((entry) => entry.id === 'L2-POV')!
     expect(finding.state).toBe('not_found')
-    expect(finding.nearest?.paragraph).toBeGreaterThanOrEqual(1)
+    expect(finding.nearest?.paragraph).toBe(1)
+    expect(finding.nearest?.score).toBeGreaterThanOrEqual(0.5)
     expect(finding.nearest?.quote.length).toBeGreaterThan(0)
-    expect(result.blocking.some((entry) => entry.code === 'SEMANTIC_EVIDENCE_NOT_FOUND')).toBe(true)
+    expect(near.blocking.some((entry) => entry.code === 'SEMANTIC_EVIDENCE_NOT_FOUND')).toBe(true)
+
+    const unrelated = evaluateSemantic(TEXT, [item('L2-POV', '这句话完全不在正文里')])
+    expect(unrelated.items.find((entry) => entry.id === 'L2-POV')?.nearest).toBeUndefined()
   })
 
   it('reports exact duplicate quotes as DUPLICATE with the other item id', () => {
@@ -100,6 +104,12 @@ describe('semantic evidence validation', () => {
     expect(overlap.conflicts?.[0]?.overlap_text).toBeTruthy()
     expect(overlap.conflicts?.[0]?.overlap_chars).toBeGreaterThanOrEqual(8)
     expect(result.blocking.some((entry) => entry.code === 'SEMANTIC_EVIDENCE_OVERLAP')).toBe(true)
+    expect(
+      result.blocking
+        .filter((entry) => entry.code === 'SEMANTIC_EVIDENCE_OVERLAP')
+        .map((entry) => entry.detail)
+        .join(' '),
+    ).toContain('paragraph 1')
   })
 
   it('does not reject evidence from different paragraphs that merely share common words', () => {
@@ -113,7 +123,7 @@ describe('semantic evidence validation', () => {
     expect(result.conflicts).toHaveLength(0)
   })
 
-  it('does not let a long quote swallow an independent sentence after an ellipsis', () => {
+  it('accepts an independent sentence outside a cross-sentence quote range', () => {
     const text = '第一句很长。第二句也很长……第三句独立成段。'
     const result = evaluateSemantic(text, [
       item('L2-SCENE-ANCHOR', '第一句很长。第二句也很长……'),
@@ -122,6 +132,16 @@ describe('semantic evidence validation', () => {
     expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
     expect(result.items.find((entry) => entry.id === 'L2-CHARACTER-STATE')?.state).toBe('pass')
     expect(result.conflicts).toHaveLength(0)
+  })
+
+  it('rejects a later quote when a longer quote physically includes its sentence', () => {
+    const text = '第一句很长。第二句也很长……第三句独立成段。'
+    const result = evaluateSemantic(text, [
+      item('L2-SCENE-ANCHOR', '第一句很长。第二句也很长……第三句独立成段。'),
+      item('L2-CHARACTER-STATE', '第三句独立成段。'),
+    ])
+    expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
+    expect(result.items.find((entry) => entry.id === 'L2-CHARACTER-STATE')?.state).toBe('overlap')
   })
 
   it('reports different non-overlapping substrings of one sentence as SAME_SENTENCE with sentence evidence', () => {
@@ -164,6 +184,14 @@ describe('semantic evidence validation', () => {
     expect(failing.submission_failed).toBe(false)
     expect(failing.content_failed).toBe(true)
     expect(failing.findings[0]).toMatchObject({ code: 'SEMANTIC_CHECK_FAILED' })
+  })
+
+  it('rejects an unknown id before it can consume a sentence or count as passed', () => {
+    const result = evaluateSemantic(TEXT, [item('L2-EXTRA', CROSS[0]!), item('L2-SCENE-ANCHOR', CROSS[0]!)])
+    expect(result.items.find((entry) => entry.id === 'L2-EXTRA')?.state).toBe('invalid')
+    expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
+    expect(result.items.filter((entry) => entry.id === 'L2-SCENE-ANCHOR')).toHaveLength(1)
+    expect(result.items.filter((entry) => entry.state === 'pass')).toHaveLength(1)
   })
 
   it('accepts five quotes that each span two sentences', () => {

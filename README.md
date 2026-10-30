@@ -1338,11 +1338,11 @@ tests/            # 单测、集成、falsify、e2e
 
 0.2.6 在 Node 24.19 / DSH 0.2.1-rc.3 上完成：
 
-- `npm test` 全绿：**89 个测试文件 / 901 项**；
-- 覆盖率：**语句 93.45% / 分支 89.04% / 函数 98.11% / 行 93.45%**；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
-- `typecheck`、`lint`、`build` 通过；`check:hygiene`（154 files，0 v8 ignore）、`test:isolated`（62 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash` 全绿；
+- `npm test` 全绿：**90 个测试文件 / 906 项**；
+- 覆盖率：**语句 93.51% / 分支 89.14% / 函数 98.12% / 行 93.51%**；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
+- `typecheck`、`lint`、`build` 通过；`check:hygiene`（155 files，0 v8 ignore）、`test:isolated`（62 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash` 全绿；
 - M1–M7、S1–S8 与 P2/P3 硬化见 [0.2.5 验收](docs/0.2.5-acceptance.md)；0.2.6 的 E1–E6 见 [0.2.6 验收](docs/0.2.6-acceptance.md)；
-- 真实模型：0.2.5 的 `agnes-2.5-flash` 与 `agnes-3.0-flash` 真实 P3 正文在本轮 0.2.6 引擎上离线重放 P3→P8/归档成功（P4/P6/P8 为确定性夹具，详见 [0.2.5 真实模型证据](docs/0.2.5-real-model-evidence.md)）；本轮没有把旧实时 P1/P2 结果冒充 0.2.6 新证据。
+- 真实模型：0.2.6 临时项目中 `agnes-2.5-flash` 实时完成 P1/P2/P3，公开引擎 P4/P6/P8（确定性夹具）归档成功，`stage=done`、`score=145`；`agnes-3.0-flash` 连续 HTTP 429，未产出第二份实时结果。0.2.5 的两篇真实正文也在 0.2.6 引擎离线重放通过；没有把旧实时结果冒充新证据。
 
 0.2.4 在 Node 24.19 / DSH 0.2.1-rc.3 上完成：
 

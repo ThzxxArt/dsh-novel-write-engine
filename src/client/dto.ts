@@ -96,6 +96,7 @@ export interface ChapterRowDto {
   status: 'passed' | 'blocked' | 'draft'
   details?: string
   sceneType?: string
+  dialogueRatio?: number
   hookStrength?: number
   finalCheck?: 'pass' | 'fail' | null
   reviews?: number

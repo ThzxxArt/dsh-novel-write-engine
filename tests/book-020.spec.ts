@@ -240,6 +240,10 @@ describe('0.2.0 whole-book lifecycle', () => {
         root,
       })
       await expect(planChapter(engine, root)).rejects.toBeInstanceOf(EngineBlockedError)
+      const missingCard = await engine.getStatus({ root })
+      const hint = JSON.stringify(missingCard.data.blocking)
+      expect(hint).toContain('novel_outline')
+      expect(hint).not.toContain('"strict":false')
     } finally {
       await cleanup()
     }

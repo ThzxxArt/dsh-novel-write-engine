@@ -472,12 +472,20 @@ const issuesCleared: Gate = (input) => {
     : [block('PG-08', problems.join('; '), 'mark every blocker fixed and quote the revised text as evidence')]
 }
 
-/** Paragraph index (1-based) that contains the quote, or -1. */
+/** Paragraph index (1-based) nearest the reference when the quote repeats, or -1. */
 function actualParagraph(text: string, reference: ReadingProofReference): number {
   if (typeof reference !== 'object' || reference === null || typeof reference.quote !== 'string') return -1
   const quote = reference.quote.trim()
   if (Array.from(quote).length < LIMITS.minQuoteChars) return -1
-  return splitParagraphs(text).findIndex((paragraph) => paragraph.includes(quote)) + 1
+  const matches = splitParagraphs(text)
+    .map((paragraph, index) => ({ paragraph, index }))
+    .filter(({ paragraph }) => paragraph.includes(quote))
+  if (matches.length === 0) return -1
+  const target = Number.isInteger(reference.paragraph) && reference.paragraph > 0 ? reference.paragraph : 1
+  const nearest = matches.reduce((best, match) =>
+    Math.abs(match.index + 1 - target) < Math.abs(best.index + 1 - target) ? match : best,
+  )
+  return nearest.index + 1
 }
 
 /** Verify one reading-proof reference against the manuscript. */

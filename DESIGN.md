@@ -1846,7 +1846,7 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 - 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；连接层缺席时 503。
 - `root` 只接受注册表、active 或配置 `projectRoot`；其他路径返回 `missing.reason="not_registered"`，不读取任意目录。
 - 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
-- DTO v6：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `advisories`/`legacy` 与 quality 的 `samples`/`attempts`/`trend_basis`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
+- DTO v6：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `bookData`（identity/blueprint/progress/current/worldbook/cast/relationships/foreshadows/timeline/outline/quality/pacing/effort/health）以及 `advisories`/`legacy`、quality 的 `samples`/`attempts`/`trend_basis`、pending；章节行增加 scene_type/dialogue ratio/hook/final_check/effort/archived_at；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
 - 0.2.3 的面板选择器按 `writing/damaged/missing` 分组，失效项默认折叠；同名项目用父目录区分。布局改为“当前章/下一步 → 统计条 → 双栏工作台 → 章节表”，advisories 与 legacy 独立于 blocking。
 - **退路**：typert 的 Host 侧命名空间声明若比预期重，面板降级为「静态壳 + 刷新按钮」，数据仍由对话内工具卡片呈现——不阻塞 Host 交付。
 

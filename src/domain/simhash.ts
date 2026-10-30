@@ -70,6 +70,33 @@ export function textSimilarity(a: string, b: string): number {
   return similarity(simhash(a), simhash(b))
 }
 
+/** Character-bigram Dice similarity; unlike SimHash this has a ~0 baseline for unrelated short text. */
+export function bigramSimilarity(a: string, b: string): number {
+  const grams = (text: string): string[] => {
+    const chars = Array.from(text.replace(/\s+/g, ''))
+    if (chars.length < 2) return chars.length === 0 ? [] : [chars[0]!]
+    const result: string[] = []
+    for (let index = 0; index + 1 < chars.length; index += 1) {
+      result.push(chars[index]! + chars[index + 1]!)
+    }
+    return result
+  }
+  const left = grams(a)
+  const right = grams(b)
+  if (left.length === 0 || right.length === 0) return 0
+  const counts = new Map<string, number>()
+  for (const gram of left) counts.set(gram, (counts.get(gram) ?? 0) + 1)
+  let intersection = 0
+  for (const gram of right) {
+    const count = counts.get(gram) ?? 0
+    if (count > 0) {
+      counts.set(gram, count - 1)
+      intersection += 1
+    }
+  }
+  return (2 * intersection) / (left.length + right.length)
+}
+
 /** Fingerprints of every paragraph, in document order. */
 export function paragraphSimhashes(text: string): SimHash[] {
   return splitParagraphs(text).map((paragraph) => simhash(paragraph))

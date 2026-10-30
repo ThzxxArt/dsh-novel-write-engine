@@ -151,6 +151,7 @@ export interface PanelChapterRow {
   /** One-line summary shown when the row is expanded. */
   details: string
   sceneType?: string
+  dialogueRatio?: number
   hookStrength?: number
   finalCheck?: 'pass' | 'fail' | null
   reviews?: number
@@ -275,6 +276,7 @@ export function projectChapter(record: ChapterRecord): PanelChapterRow {
     status: record.status === 'reviewed' ? 'passed' : 'draft',
     details: record.summary.events.join('；').slice(0, 240),
     sceneType: record.scene_type,
+    dialogueRatio: record.dialogue_ratio,
     hookStrength: record.summary.hook_strength,
     finalCheck: record.final_check ?? null,
     reviews: record.rounds?.review ?? 0,

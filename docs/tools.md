@@ -1,3 +1,7 @@
+# 工具面
+
+28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
+
 ## 0.2.6 证据、锚点与面板契约
 
 - 语义证据：`novel_check` 的 `semantic[]` 仍是五项；失败时逐项 `items` + `conflicts`（`duplicate|same_sentence|interval_overlap`，带 `other_id/overlap_text/overlap_chars/overlap_ratio/sentence`），submission 错误 message 列出最多 5 条配对摘要，aborted journal 写紧凑 blocking。
@@ -5,10 +9,6 @@
 - 面板 v6：`summary.bookData` additive，含 identity/blueprint/progress/current/worldbook/cast/relationships/foreshadows/timeline/outline/quality/pacing/effort/health；旧 v5 payload 显示刷新。`health` 增加 `pending`，`quality` 明确区分全书 `average` 与 `last_ten_average`。
 - pipeline 恢复：`novel_restore { paths: ["state/pipeline.yaml"], txid }` 只接受损坏 pipeline 的备份恢复，不绕过 journal hash；恢复前 status/doctor 报告 `PIPELINE_UNREADABLE`。
 - summary-only 的 PG-01 旁路只对紧随其后的 P6 check 生效，archive 仍需新的 P8 brief。
-
-# 工具面
-
-28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
 ## 0.2.5 证据、修订与恢复契约
 
@@ -57,7 +57,7 @@
 | `novel_report`       | 任意     | `report`；进度/质量/节奏/角色/伏笔/时间线/关系                                                                                           | 否                                                                           |
 | `novel_guide`        | 任意     | `guide`；六态引导（no-project/new/planning/writing/blocked/finished），无项目可用                                                        | 否                                                                           |
 | `novel_reopen`       | 已归档章 | `reopenChapter`；从归档备份恢复并重开 P3；`chapter` 与 `reason` 必填                                                                     | 事务                                                                         |
-| `novel_restore`      | 活动章/大纲 | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验或 outline/outline.yaml；已归档章拒绝，先 `novel_reopen`                      | 事务                                                                         |
+| `novel_restore`      | 活动章/大纲/损坏 pipeline | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验、outline/outline.yaml，或损坏的 state/pipeline.yaml；已归档章拒绝，先 `novel_reopen` | 事务 |
 
 ## 错误三分类
 
@@ -138,7 +138,7 @@
 - `novel_state {kind:"history"}` 列出 `history/` 下的评审/校验/正文/废弃稿/计划版本，返回 `entries` 全量（不静默截断）与 `total`；带 `chapter` 与正整数 `revision` 时返回该章该版本文本，未带 chapter 时默认活动章。`kind:"backups"` 返回 manifest（op/chapter/revision/files/reason）；没有 manifest 的旧备份只可列出。
 - `novel_revise` 的 `patch` 模式必须带 `expected_hash`；`old_text` 默认必须唯一，`occurrence` 才允许多处；hash 不匹配时零写入。
 - `novel_check` 把 blocker 放 `machine.violations`，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code，未知 code 或 blocker 返回 `ENGINE_SCHEMA_INVALID`。
-- `novel_restore` 只能恢复活动章，或 `paths: ["outline/outline.yaml"]` 的整份大纲；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。
+- `novel_restore` 可恢复活动章、`paths: ["outline/outline.yaml"]` 的整份大纲，或 `paths: ["state/pipeline.yaml"]` 的损坏 pipeline（只在该文件不可读时）；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。
 - P2 计划文件不再写 `summary`；活动摘要/标题/场景/叙述者位于 `pipeline.draft`，归档时写入 `ChapterRecord`，`ChapterRecord.rounds/final_check/archived_at`（含 `rollbacks`）供 `novel_report.effort` 使用。归档前正文 hash 必须仍等于 `draft.content_hash`，否则返回 `ENGINE_TXN_ABORTED`；`status` 用 `DRAFT_STALE` 指回 P3。
 - `card_coverage` 是“已归档章中有 archived 章卡”的逐章比例；`planned_coverage`/`archived_coverage` 才以目标章数为分母。worldbook 的 `facts` 同时进入计数、brief 上下文与 P6 数字事实检查。
 - `NUMERIC_CONTRADICTION` 固定为 advisory（中文主语不明确，不能可靠区分车/船等不同对象），`NUMERIC_FACT_MISMATCH` 只匹配“别名 + 数字 + 声明单位”的相邻写法，避免把旁边的数量词当成事实。

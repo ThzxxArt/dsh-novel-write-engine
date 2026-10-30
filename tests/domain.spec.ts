@@ -8,6 +8,7 @@ import {
   splitSentences,
 } from '../src/domain/text.js'
 import {
+  bigramSimilarity,
   hammingDistance,
   maxParagraphSimilarity,
   simhash,
@@ -129,6 +130,16 @@ describe('simhash', () => {
     expect(maxParagraphSimilarity('甲段落内容', ['完全无关的乙段落', '甲段落内容'])).toBeGreaterThan(0.9)
     expect(maxParagraphSimilarity('甲', [])).toBe(0)
     expect(simhash('')).toBe(0n)
+  })
+
+  it('uses character bigrams for near-miss evidence with a zero-ish unrelated baseline', () => {
+    expect(bigramSimilarity('', '甲乙')).toBe(0)
+    expect(bigramSimilarity('甲', '甲')).toBe(1)
+    expect(bigramSimilarity('甲乙', '甲乙')).toBe(1)
+    expect(bigramSimilarity('甲乙', '丙丁')).toBe(0)
+    expect(bigramSimilarity('甲乙乙', '甲乙')).toBeGreaterThan(0.5)
+    expect(bigramSimilarity('旧楼停电。守门人正在收伞！', '旧楼停电。守门人正在收伞。')).toBeGreaterThan(0.9)
+    expect(bigramSimilarity('旧楼停电。守门人正在收伞。', '这句话完全不在正文里')).toBeLessThan(0.2)
   })
 })
 

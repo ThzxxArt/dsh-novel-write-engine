@@ -13,8 +13,8 @@
 ### Fixed
 
 - `resources:null` 不再被当成空对象；summary-only 不再静默吞掉 `issues`/`proof`；rulepack 递归 unknown-key 覆盖 `reader_intrusion`/`god_view`、`genres.*`、`water_words.scene_thresholds`。
-- 面板 `pending` 不再丢失，活跃章详情改读 `pipeline.draft.summary`，`revisionLabel` 用本章 revise 轮次，samples/attempts 不再倒挂，教程版本升至 0.2.6。
-- 测试移除真实项目正文，新增隐私扫描；工具数固定 28 并断言全集；R7 识别 `skipIf`；panel v6 从真实 engine 快照集成验证。
+- 面板 `pending` 不再丢失，活跃章详情改读 `pipeline.draft.summary`，`revisionLabel` 用本章 revise 轮次，samples/attempts 不再倒挂，章节行补齐 dialogue ratio 与 archived_at，教程版本升至 0.2.6。
+- 测试与 docs 移除真实项目正文，新增覆盖 docs 的隐私扫描；工具数固定 28 并断言全集；R7 识别 `skipIf`；panel v6 从真实 engine 快照集成验证。
 
 ### Migration
 

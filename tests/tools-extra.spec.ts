@@ -64,6 +64,7 @@ const engine = () => ({
 
 type Tool = {
   name: string
+  parameters?: unknown
   execute: (args: unknown, exec: unknown) => Promise<unknown>
   output: { render: (args: unknown, value: never) => Array<{ text: string }> }
 }
@@ -78,6 +79,7 @@ describe('every tool executes one operation', () => {
     const fake = engine()
     const map = tools(fake)
     expect([...map.keys()].sort()).toEqual([...TOOL_NAMES].sort())
+    expect(JSON.stringify(map.get('novel_restore')!.parameters)).toContain('state/pipeline.yaml')
     await map.get('novel_brief')!.execute({ stage: 'P1', chapter: 2 }, {})
     expect(fake.getBrief).toHaveBeenCalledWith({ stage: 'P1', chapter: 2 })
     await map.get('novel_plan_world')!.execute(

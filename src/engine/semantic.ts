@@ -1,4 +1,4 @@
-import { textSimilarity } from '../domain/simhash.js'
+import { bigramSimilarity } from '../domain/simhash.js'
 import { splitParagraphs, splitSentenceSpans, type SentenceSpan } from '../domain/text.js'
 import { ERROR_CODES, EngineInputError, type BlockingItem, type SemanticItem } from '../types.js'
 
@@ -15,8 +15,8 @@ export const SEMANTIC_CHECK_IDS = [
 export const SEMANTIC_OVERLAP_MIN_CHARS = 8
 /** A longer evidence interval must share at least this share of the shorter quote. */
 export const SEMANTIC_OVERLAP_RATIO = 0.5
-/** Below this similarity, a nearest paragraph would be a misleading coincidence. */
-export const SEMANTIC_NEAREST_MIN_SCORE = 0.25
+/** Below this Dice similarity, a nearest paragraph would be a misleading coincidence. */
+export const SEMANTIC_NEAREST_MIN_SCORE = 0.5
 
 export type SemanticItemState =
   | 'pass'
@@ -86,7 +86,11 @@ const conflictSummary = (itemId: string, conflict: SemanticConflict): string => 
   if (conflict.kind === 'duplicate') return `${pair} exact duplicate`
   const chars = conflict.overlap_chars ?? 0
   const ratio = conflict.overlap_ratio === undefined ? '' : ` (${Math.round(conflict.overlap_ratio * 100)}%)`
-  return `${pair} overlaps ${chars} chars${ratio}`
+  const where =
+    conflict.paragraphs === undefined || conflict.paragraphs.length === 0
+      ? ''
+      : ` at paragraph ${conflict.paragraphs.join('/')}`
+  return `${pair} overlaps ${chars} chars${ratio}${where}`
 }
 
 /**
@@ -150,7 +154,7 @@ function nearestParagraph(text: string, quote: string): SemanticNearest | null {
   const paragraphs = splitParagraphs(text)
   let best: { index: number; paragraph: string; score: number } | null = null
   for (const [index, paragraph] of paragraphs.entries()) {
-    const score = textSimilarity(paragraph, quote)
+    const score = bigramSimilarity(paragraph, quote)
     if (best === null || score > best.score) best = { index, paragraph, score }
   }
   if (best === null || best.score < SEMANTIC_NEAREST_MIN_SCORE) return null
@@ -306,6 +310,10 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       items.push({ id, state: 'too_short', quote, detail: `${id} quotes fewer than 8 characters` })
       continue
     }
+    if (!(SEMANTIC_CHECK_IDS as readonly string[]).includes(id)) {
+      items.push({ id, state: 'invalid', detail: `${id} is not one of the required P6 semantic checks` })
+      continue
+    }
     const duplicate = acceptedQuotes.get(quote)
     if (duplicate !== undefined) {
       const conflict: SemanticConflict = { kind: 'duplicate', other_id: duplicate }
@@ -429,11 +437,6 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
   for (const id of SEMANTIC_CHECK_IDS) {
     if (!seenIds.has(id)) {
       items.push({ id, state: 'missing', detail: `${id} is required by the P6 task book` })
-    }
-  }
-  for (const id of seenIds) {
-    if (!(SEMANTIC_CHECK_IDS as readonly string[]).includes(id)) {
-      items.push({ id, state: 'invalid', detail: `${id} is not one of the required P6 semantic checks` })
     }
   }
 

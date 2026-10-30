@@ -795,16 +795,51 @@ export interface PanelBookDataInput {
 }
 
 const oneLine = (value: string): string => value.replace(/\s+/g, ' ').trim()
+type PanelWorldKind = 'location' | 'faction' | 'rule'
+
+const ledgerWorldEntries = (world: WorldDocument, kind: PanelWorldKind): PanelWorldEntry[] => {
+  const rows: readonly unknown[] =
+    kind === 'location' ? world.locations : kind === 'faction' ? world.factions : world.rules
+  const entries: PanelWorldEntry[] = []
+  for (const row of rows) {
+    if (typeof row !== 'object' || row === null) continue
+    const record = row as { name?: unknown; description?: unknown; anchors?: unknown }
+    if (typeof record.name !== 'string' || record.name.trim() === '') continue
+    const anchors = Array.isArray(record.anchors)
+      ? record.anchors.filter((anchor): anchor is string => typeof anchor === 'string')
+      : []
+    entries.push({
+      name: record.name,
+      description: typeof record.description === 'string' ? record.description : '',
+      ...(anchors.length === 0 ? {} : { anchors }),
+    })
+  }
+  return entries
+}
+
 const nameDescription = (
-  entries: readonly { name: string; description: string }[],
-  world?: WorldDocument,
+  entries: readonly { name: string; description: string; anchors?: string[] }[],
+  world: WorldDocument,
+  kind: PanelWorldKind = 'location',
 ): PanelWorldEntry[] => {
-  const anchors = new Map(world?.locations.map((entry) => [entry.name, entry.anchors ?? []]) ?? [])
-  return entries.slice(0, 5).map((entry) => ({
-    name: oneLine(entry.name),
-    description: oneLine(entry.description),
-    ...(anchors.get(entry.name)?.length ? { anchors: [...anchors.get(entry.name)!] } : {}),
-  }))
+  const merged = new Map<string, PanelWorldEntry>()
+  for (const entry of [...entries, ...ledgerWorldEntries(world, kind)]) {
+    const name = oneLine(entry.name)
+    if (name === '') continue
+    const existing = merged.get(name)
+    if (existing === undefined) {
+      merged.set(name, {
+        name,
+        description: oneLine(entry.description),
+        ...(entry.anchors === undefined || entry.anchors.length === 0 ? {} : { anchors: [...entry.anchors] }),
+      })
+      continue
+    }
+    if (existing.anchors === undefined && entry.anchors !== undefined && entry.anchors.length > 0) {
+      existing.anchors = [...entry.anchors]
+    }
+  }
+  return [...merged.values()].slice(0, 5)
 }
 
 /**
@@ -896,8 +931,8 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
     worldbook: {
       counts,
       locations: nameDescription(input.worldbook.locations, input.world),
-      factions: nameDescription(input.worldbook.factions),
-      rules: nameDescription(input.worldbook.rules),
+      factions: nameDescription(input.worldbook.factions, input.world, 'faction'),
+      rules: nameDescription(input.worldbook.rules, input.world, 'rule'),
       facts: (input.worldbook.facts ?? []).slice(0, 5).map((fact) => ({
         alias: fact.alias,
         value: fact.value,

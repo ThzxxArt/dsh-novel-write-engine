@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { buildView } from '../src/client/viewmodel.js'
 import { buildPanelBookData } from '../src/engine/insight.js'
+import { projectChapters, projectSummary, type PanelSnapshot } from '../src/engine/projections.js'
 import { panelElement } from '../src/client/panel.js'
 import { archiveDelta, cleanText, harness, readyToArchive, sampleSummary } from './helpers.js'
 import type { BookReport } from '../src/types.js'
@@ -11,10 +12,6 @@ describe('panel v6 book data', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine, text: cleanText() })
-      await engine.submitWorldbook({
-        locations: [{ name: '旧茶楼', description: '雨夜里的旧茶楼', layout: '二层', capacity: 12 }],
-        root,
-      })
       const summary = sampleSummary({
         new_elements: { locations: ['旧茶楼'], abilities: [], artifacts: [] },
         new_element_anchors: { locations: { 旧茶楼: ['门口'] } },
@@ -42,8 +39,14 @@ describe('panel v6 book data', () => {
       expect(view.bookData?.progress.archived).toBe(1)
       expect(view.quality.samples).toBe(1)
       expect(view.quality.attempts).toBeGreaterThanOrEqual(view.quality.samples)
+      const chapterRow = bundle.chapters!.rows[0]!
+      expect(chapterRow.dialogueRatio).toBeTypeOf('number')
+      expect(chapterRow.archivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+      expect(view.rows[0]?.dialogueRatio).toBe(chapterRow.dialogueRatio)
       const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
       expect(html).toContain('这本书')
+      expect(html).toContain('对话')
+      expect(html).toContain('归档')
       expect(html).toContain('书脊与蓝图')
       expect(html).toContain('质量与节奏')
       expect(html).toContain('第 1 章')
@@ -160,11 +163,32 @@ describe('panel v6 book data', () => {
             capacity: 1,
             changes: [],
           },
+          null as never,
+          {
+            name: '',
+            description: 'empty',
+            anchors: ['x'],
+            first_appearance: 1,
+            locked: true,
+            layout: '',
+            capacity: 1,
+            changes: [],
+          } as never,
+          {
+            name: '坏地点',
+            description: 42,
+            anchors: 'bad',
+            first_appearance: 1,
+            locked: true,
+            layout: '',
+            capacity: 1,
+            changes: [],
+          } as never,
         ],
         abilities: [],
         artifacts: [],
-        factions: [],
-        rules: [],
+        factions: [{ name: '码头帮', description: '旧码头势力', anchors: ['码头'] }, null as never],
+        rules: [{ name: '夜禁', description: '入夜后不得出城', anchors: ['宵禁'] }],
       },
       outline: {
         schema_version: 1,
@@ -204,7 +228,63 @@ describe('panel v6 book data', () => {
     expect(data.effort.chapters[0]?.num).toBe(771)
     expect(data.effort.chapters[29]?.num).toBe(800)
     expect(data.worldbook.locations[0]?.anchors).toEqual(['门口'])
+    expect(data.worldbook.factions[0]?.anchors).toEqual(['码头'])
+    expect(data.worldbook.rules[0]?.anchors).toEqual(['宵禁'])
+    expect(data.worldbook.locations).toHaveLength(2)
     expect(data.worldbook.locations[0]?.description).toBe('旧 茶楼')
     expect(JSON.stringify(data).length).toBeLessThan(64 * 1024)
+    const chapters = Array.from({ length: 800 }, (_, index) => ({
+      num: index + 1,
+      title: `第${index + 1}章`,
+      file: `chapters/chapter-${String(index + 1).padStart(3, '0')}.md`,
+      word_count: 100,
+      dialogue_lines: 1,
+      dialogue_ratio: 0.4,
+      scene_type: '日常过渡章',
+      narrator: '他',
+      score: 140,
+      status: 'reviewed' as const,
+      content_hash: 'hash',
+      summary: {
+        events: ['事件'],
+        characters_appeared: ['他'],
+        foreshadows: { planted: [], advanced: [], resolved: [] },
+        new_elements: { locations: [], abilities: [], artifacts: [] },
+        resource_changes: [],
+        opening: '开头',
+        continuity: { opens_from: '上章', ends_with: '钩子' },
+        hook_strength: 3,
+        pleasure_points: [],
+        plot_advancement: 'mid' as const,
+      },
+      rounds: { review: 1, revise: 0, check: 1, rollbacks: 0 },
+      final_check: 'pass' as const,
+      archived_at: '2026-01-01',
+    }))
+    const snapshot = {
+      root: '/tmp/book',
+      title: '书',
+      genre: '都市现代',
+      platform: 'fanqie',
+      chapter: 1,
+      stage: 'done',
+      revision: 1,
+      rounds: { review: 0, revise: 0, check: 0 },
+      blocking: [],
+      chapters,
+      totalWords: 80000,
+      phases: [],
+      bookData: data,
+    } as unknown as PanelSnapshot
+    const payloadBytes = Buffer.byteLength(
+      JSON.stringify({
+        schemaVersion: 6,
+        projects: [],
+        selection: { root: null, source: 'none' },
+        summary: projectSummary(snapshot),
+        chapters: projectChapters(snapshot),
+      }),
+    )
+    expect(payloadBytes).toBeLessThan(64 * 1024)
   })
 })
