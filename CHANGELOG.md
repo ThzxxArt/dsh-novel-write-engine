@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.7
+
+0.2.7 是通用性与发布边界版本，不改工具、阶段、门控、schema 或规则阈值。
+
+### Changed
+
+- **产品面去具体项目化**：`novel_brief P8` 的示例、`state_delta` 错误提示、规则注释和 `CHANGELOG` 中的历史验收段落不再引用具体书稿的人物、地点、货币或道具，统一使用 `角色甲`、`地点甲`、`资源名`、`代币` 一类中性占位。
+- **测试夹具中立化**：单元与集成测试改用合成人物、地点、资源，不再依赖某一本书的专有名词；资源正负号、实体锚点、PG-05、锁细节、数字事实等判定语义保持不变。
+- **文档收口**：当前分支只保留 `docs/tools.md`、`docs/states.md`、`docs/rulepack.md` 三份维护文档与 `CHANGELOG`/`DESIGN`/`PLAN`；历史版本方案与验收稿留在对应发布 tag，不再复制进 `main`。
+
+### Added
+
+- **三题材归档矩阵**：新增 `tests/generality.spec.ts`，用玄幻修仙、都市现代、西方奇幻三组互不相关的原创文本各跑一遍 `init → P1 → P2 → P3 → P4 → P6 → P8 → archive`，并断言题材持久化与章节推进。
+- **发布面隐私守卫**：`tests/privacy.spec.ts` 扫描 `src / briefs / skills / presets / rulepacks / docs` 与根文档，阻止真实项目名、人物名和宿主绝对路径进入随包内容；同时断言扫描目标存在，避免目录缺失时空跑通过。
+
+### Tests
+
+- 91 个测试文件 / 910 项测试全绿；覆盖率 93.51 / 89.13 / 98.12 / 93.51，逐文件门禁通过。
+- typecheck、lint、build、validate:rulepack、check:pack（26 files）、check:artifacts、check:install（26 packages）、check:preset（13 packages）、check:host、check:crash、check:hygiene（156 files）、test:isolated（62 源文件）全过。
+
+### Migration
+
+- 无 schema、工具、阶段、门控、导出或配置键变更；升级后不需要迁移项目文件。
+- 面板教程版本更新到 0.2.7，旧标签页刷新即可。
+- 历史版本的内部方案与验收稿不再随 `main` 分发；需要溯源时使用对应发布 tag 或 Release 快照。
+
 ## 0.2.6
 
 ### Added
@@ -49,7 +75,7 @@
 - archive 遇到旧 `summary.new_elements` 与 ledger 冲突时按新规则成功并给 warning；不会回写旧 ledger。
 - summary-only 是新增调用模式，旧 content/patch 修订语义不变。
 - `strict_explicit` 若曾被外部写入，仍可被读取；新的公共写入必须改用 `strict`。
-- 详细验收与真实项目/模型证据见 `docs/0.2.5-acceptance.md`、`docs/0.2.5-real-model-evidence.md`。
+- 详细验收与真实项目/模型证据保留在 0.2.5 发布快照中。
 
 ## 0.2.4
 
@@ -93,7 +119,7 @@
 
 - 新增 0.2.3 报表回填、quality 样本/attempts、briefs 按章、brief replay、ready_to_archive 直接修订、P5 hash、doctor legacy、面板分组/advisory/legacy、`projects --prune` 与 advisory 去重测试。
 - 质量：78 个测试文件 / 836 项测试全绿；覆盖率 94.12 / 89.28 / 97.96 / 94.12，逐文件门禁通过；typecheck、lint、build、pack、artifacts、install、preset、host、crash、hygiene、isolated、rulepack 全过。
-- 真实模型：`agnes-2.5-flash`（275 字 / 6 段）与 `agnes-3.0-flash`（373 字 / 8 段）在临时项目完成 P1→P8、归档、report/doctor/panel v5、六种导出、reopen 与重新归档；P1/P2/P3 真实，P4/P6 确定性夹具，详见 [0.2.3 真实模型证据](docs/0.2.3-real-model-evidence.md)。
+- 真实模型：`agnes-2.5-flash`（275 字 / 6 段）与 `agnes-3.0-flash`（373 字 / 8 段）在临时项目完成 P1→P8、归档、report/doctor/panel v5、六种导出、reopen 与重新归档；P1/P2/P3 真实，P4/P6 确定性夹具。
 - 版本升 0.2.3；`REMOTE_VERSION` 4 → 5；工具 28、服务操作 32、核心工具 10、门控 13、语义项 5、导出 6 均不变。
 
 ## 0.2.2
@@ -129,7 +155,7 @@
 
 - 新增会话绑定、选择矩阵、并发绑定、扫描封顶、扫描单条写失败、命令、面板 v4、只读 resume/panel、damaged 绑定、符号链接根、工作区优先级、可见加载竞态、事务 root 删除、完整卷与剪贴板测试；README/DESIGN/docs/tools/面板教程与错误码同步。
 - 版本升 0.2.2；`REMOTE_VERSION` 3 → 4；工具 28、服务操作 32、核心工具 10、门控 13、语义项 5、导出 6 均不变。
-- 质量：77 个测试文件 / 772 项测试全绿；覆盖率 93.87 / 89.15 / 97.89 / 93.87，高于 0.2.1 基线；typecheck、lint、isolated、build、pack、artifacts、install、preset、host、crash、hygiene 全过。真实模型两条 P1→P8 链路通过，见 [0.2.2-real-model-evidence.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.2-real-model-evidence.md)。
+- 质量：77 个测试文件 / 772 项测试全绿；覆盖率 93.87 / 89.15 / 97.89 / 93.87，高于 0.2.1 基线；typecheck、lint、isolated、build、pack、artifacts、install、preset、host、crash、hygiene 全过。真实模型两条 P1→P8 链路通过。
 
 ## 0.2.1
 
@@ -145,7 +171,7 @@
 - **伏笔标签与锚点**：`title` 可保留可读短语，新增 `anchor` 作为正文逐字校验证据，且至少 8 个字符（单字锚点不再能绕过）；无 anchor 时仍要求 title 出现在正文；P8 brief 给出规则和示例。
 - **质量门禁分层**：`check.machine.violations` 只放 blocker，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code。新增 `DIALOGUE_RATIO`、`NUMERIC_CONTRADICTION` 与 `NUMERIC_FACT_MISMATCH`；数字矛盾因无法判定主语固定为 advisory，数字事实只匹配“别名+数字+声明单位”的相邻写法；worldbook 支持声明式 `facts`，并进入计数、brief 上下文、搜索与 P6 检查。
 - **初始化与角色**：空 author/description 返回 warning；角色 role 从显式值、P1 计划、worldbook、narrator 推导，不再一律 extra；`insight` 的 cast/维度排序改用稳定 code-unit 比较。
-- **真实模型**：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在临时项目完成 P1→P8、归档、report/doctor/panel、六种导出、`novel_reopen` 与重新归档；P3 366 / 490 字，P2/P3 叙述者分别继承 P1 的林深/林渊；2.5 的 564 字在更早 600 字目标下被 PG-03 真实拒绝，本次 76 字由驱动脚本 300 字下限拦截（未进引擎）；详见 `docs/0.2.1-real-model-evidence.md`。
+- **真实模型**：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在临时项目完成 P1→P8、归档、report/doctor/panel、六种导出、`novel_reopen` 与重新归档；P3 366 / 490 字，P2/P3 叙述者分别继承 P1 的角色甲/角色乙；2.5 的 564 字在更早 600 字目标下被 PG-03 真实拒绝，本次 76 字由驱动脚本 300 字下限拦截（未进引擎）。
 - **发布前回归收口**：无 target 时 status/stats/panel 的 null 覆盖显示不再伪装 100%；report 对重复评审去重；novel_state pipeline 返回合并后的 briefs、briefs 查询保留 0.2.0 pipeline.briefs 回退；restore review/check 重算 blocking；archive 把 P2 计划纳入事务哈希，reopen 拒绝归档后被改动的计划；doctor 只推荐活动章可恢复备份；amend/rollback 不再用旧 revision 缓存吞掉外部改动；worldbook entries 计入 facts。
 - 版本升 0.2.1；panel payload v3；工具 27 → 28（新增 `novel_restore`），服务操作 31 → 32；文档、教程、任务书与测试同步。
 - 质量：72 个测试文件 / 667 条测试；覆盖率 93.86 / 89.04 / 97.81 / 93.86；per-file 门禁通过。
@@ -173,7 +199,7 @@
 - 状态与日志恢复修复：replay 缓存按 revision 失效（export 按内容键跨无关 revision 幂等）；损坏的 `archive-digests.json` 从 chapter index 重建且不再拖垮 journal；缺失 journal fail-closed；尾部撕裂日志只裁剪最后一个无换行片段；崩溃前 pending 的 staging 目录清理；写临时文件失败清理 `.tmp`；worldbook `updated_at` 稳定；search 包含活动草稿并按 gate 段落口径编号；report/doctor 暴露损坏评审；reopen 拒绝覆盖归档后的 amend；规划写拒绝 projectError；卷迁移自动推导归档卡卷；时间线角色类型校验；文本 diff 可脱离项目；admin plan_chapter 不再注入非法默认值；stats 命令补齐新增字段。
 - 持久化与观测修复：卷范围重排时归档卡按新区间推导卷号；`novel_amend` 保护归档索引的标题/场景/字数/评语/摘要/评分/状态等派生事实；4 位章节文件名纳入孤立正文与归档卡校验；journal 只含 lock-reclaim/空文件时 fail-closed，stale lock 不再隐藏 journal 诊断；备份先写入 staging 再原子移入 backups，崩溃不再留下不可回收目录；PG-09 引用与 check 文档先窄化再落盘；hand-edited outline 可省略 nullable 归档字段；`novel_plan_chapter` 的 target_words 不再硬编码 2000–3000 且工具 schema 补齐必填；`/novel admin` 透传 warnings/replayed；volume-only Markdown 大纲可回导；面板/命令的 next reason 中文化；docs 的 report 字段、PG-13 码、工具计数与 P4 版本同步。
 - 发布前回归修复：`novel_plan_chapter` 的必填字段在工具 schema 与服务端重新对齐；`check:host` 改为先 build，再断言宿主声明全部 27 个工具，并校验预设名与面板空态/结构；README 文档链接改为 GitHub 绝对地址，修正 `toolsMode`、`novel_panel`、六种导出与工具计数等文档漂移；事务 abort 行追加前修复撕裂日志尾；同 pid 但非 live nonce 的锁按 stale 读取，不再伪装成活跃 writer；journal 对账与 `auditHistory` 在读取期间出现 writer 时丢弃半提交误报；lock reclaim 仅在原锁确实被移除时写审计行。
-- 真实模型验证：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在发布前最终构建的临时项目完成单章 P1→P8、归档、report/doctor/search/panel、六种导出、`novel_reopen` 与重新归档；P3 分别 931 字 / 898 字，均通过 P6，重开后无 state_errors。详见 `docs/0.2.0-real-model-evidence.md`。
+- 真实模型验证：`agnes-2.5-flash` 与 `agnes-3.0-flash` 在发布前最终构建的临时项目完成单章 P1→P8、归档、report/doctor/search/panel、六种导出、`novel_reopen` 与重新归档；P3 分别 931 字 / 898 字，均通过 P6，重开后无 state_errors。
 - 质量：新增 `tests/book-020.spec.ts`、`tests/book-domain.spec.ts`、`tests/insight-020.spec.ts`、`tests/coverage-020.spec.ts`、`tests/review-probe-020.spec.ts`、`tests/second-review-020.spec.ts` 与 `tests/third-review-020.spec.ts`；当前 71 个测试文件 / 625 条测试；覆盖率 93.94 / 89.16 / 98.02 / 93.94；门禁为全局 statements/lines/functions 90、branches 89，engine 90/85、commands 85、client 85、viewmodel 95，新增 `engine/book.ts`/`engine/insight.ts` 的 lines/statements/functions ≥95、branches ≥93。
 
 ## 0.1.3

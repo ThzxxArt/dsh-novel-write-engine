@@ -309,7 +309,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         fail(
           `characters.${name}.${field} must be an object; expected ${
             field === 'current_state'
-              ? '{"resources":{"港币":3},"status":"..."}'
+              ? '{"resources":{"资源名":3},"status":"..."}'
               : field === 'profile'
                 ? '{"age":31,"occupation":"..."}'
                 : '{"change":"...","status_change":"..."}'

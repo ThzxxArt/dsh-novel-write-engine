@@ -2,6 +2,12 @@
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
+## 0.2.7 通用性与边界
+
+- 工具名、参数、服务操作、阶段与门控与 0.2.6 完全一致；0.2.7 只收口通用性、测试夹具与发布面隐私边界。
+- 产品运行面的示例、任务书与错误提示不再引用具体书稿的人物、地点、货币或道具；统一使用 `角色甲`、`地点甲`、`资源名` 一类中性占位。
+- 新增三题材 `init → archive` 验收矩阵，以及扫描 `src / briefs / skills / presets / rulepacks / docs` 与根文档的隐私守卫；不改变任何规则阈值。
+
 ## 0.2.6 证据、锚点与面板契约
 
 - 语义证据：`novel_check` 的 `semantic[]` 仍是五项；失败时逐项 `items` + `conflicts`（`duplicate|same_sentence|interval_overlap`，带 `other_id/overlap_text/overlap_chars/overlap_ratio/sentence`），submission 错误 message 列出最多 5 条配对摘要，aborted journal 写紧凑 blocking。

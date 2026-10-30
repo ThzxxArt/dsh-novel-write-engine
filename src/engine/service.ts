@@ -3045,7 +3045,7 @@ export class EngineService {
       if (oldChecks > 0) {
         issues.push({
           code: 'LEGACY_CHECK_FORMAT',
-          detail: `${oldChecks} 章 check 是 0.2.0 旧格式（advisory 混在 violations）；重新跑 novel_check 或按 docs/0.2.3-plan.md 标记`,
+          detail: `${oldChecks} 章 check 是 0.2.0 旧格式（advisory 混在 violations）；重新跑 novel_check 或按 0.2.3 迁移说明标记`,
         })
       }
     }
@@ -3510,7 +3510,7 @@ export class EngineService {
           .slice(0, 3)
           .map((issue) => `${issue.code}（${issue.detail}）`)
           .join('；')}`,
-        hint: '这是只读审计，不会自动改历史；按 docs/0.2.3-plan.md WP0 处理，补 anchor/role 前先核对原文',
+        hint: '这是只读审计，不会自动改历史；按 0.2.3 的 WP0 处理，补 anchor/role 前先核对原文',
       })
     }
     const locked = await store.exists(LOCK_FILE)
@@ -3863,7 +3863,7 @@ export class EngineService {
               reason: 'no_change 必填；created/updated 建议写',
               role: 'protagonist | supporting | antagonist | extra（可选）',
               profile: 'object（可选）',
-              current_state: 'object（可选，如 {"resources":{"港币":-3}}）',
+              current_state: 'object（可选，如 {"resources":{"资源名":-3}}）',
             },
           },
           foreshadows: {
@@ -3903,30 +3903,30 @@ export class EngineService {
         examples: [
           {
             summary_excerpt: {
-              characters_appeared: ['陈嘉树'],
+              characters_appeared: ['角色甲'],
               foreshadows: { planted: [], advanced: ['FS-001'], resolved: [] },
             },
-            characters: { 陈嘉树: { action: 'updated', current_state: { resources: { 港币: -3 } } } },
-            foreshadows: { 'FS-001': { action: 'updated', note: '欠条被收回', new_info: true } },
+            characters: { 角色甲: { action: 'updated', current_state: { resources: { 资源名: -3 } } } },
+            foreshadows: { 'FS-001': { action: 'updated', note: '债务已结清', new_info: true } },
           },
           {
             summary_excerpt: {
               events: ['收到信'],
-              new_elements: { locations: ['旧码头'], abilities: [], artifacts: [] },
+              new_elements: { locations: ['地点甲'], abilities: [], artifacts: [] },
             },
             timeline: { '0': { action: 'created', story_time: 'Day 3 清晨', description: '收到信' } },
-            world: { 旧码头: { action: 'created', kind: 'location', description: '退潮时露出石阶' } },
+            world: { 地点甲: { action: 'created', kind: 'location', description: '地点说明' } },
           },
         ],
         linked_example: {
           summary: {
-            characters_appeared: ['陈嘉树'],
-            new_elements: { locations: ['旧码头'], abilities: [], artifacts: [] },
+            characters_appeared: ['角色甲'],
+            new_elements: { locations: ['地点甲'], abilities: [], artifacts: [] },
             events: ['收到信'],
           },
           delta: {
-            characters: { 陈嘉树: { action: 'no_change', reason: '本章无变化' } },
-            world: { 旧码头: { action: 'created', kind: 'location', description: '退潮时露出石阶' } },
+            characters: { 角色甲: { action: 'no_change', reason: '本章无变化' } },
+            world: { 地点甲: { action: 'created', kind: 'location', description: '地点说明' } },
             timeline: { '0': { action: 'created', description: '收到信' } },
           },
         },

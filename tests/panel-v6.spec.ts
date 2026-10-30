@@ -13,8 +13,8 @@ describe('panel v6 book data', () => {
     try {
       await readyToArchive({ root, engine, text: cleanText() })
       const summary = sampleSummary({
-        new_elements: { locations: ['旧茶楼'], abilities: [], artifacts: [] },
-        new_element_anchors: { locations: { 旧茶楼: ['门口'] } },
+        new_elements: { locations: ['旧商铺'], abilities: [], artifacts: [] },
+        new_element_anchors: { locations: { 旧商铺: ['门口'] } },
       })
       await engine.submitRevision({ chapter: 1, summary, root })
       await engine.getBrief({ stage: 'P8', root })
@@ -131,7 +131,7 @@ describe('panel v6 book data', () => {
       setting: '',
       rules: [],
       factions: [],
-      locations: [{ name: '旧茶楼', description: ' 旧 茶楼 ', layout: '', capacity: 1 }],
+      locations: [{ name: '旧商铺', description: ' 旧 商铺 ', layout: '', capacity: 1 }],
       characters: [],
       glossary: [],
       backstory: [],
@@ -154,11 +154,11 @@ describe('panel v6 book data', () => {
         schema_version: 1,
         locations: [
           {
-            name: '旧茶楼',
+            name: '旧商铺',
             anchors: ['门口'],
             first_appearance: 1,
             locked: true,
-            description: '旧茶楼',
+            description: '旧商铺',
             layout: '',
             capacity: 1,
             changes: [],
@@ -187,7 +187,7 @@ describe('panel v6 book data', () => {
         ],
         abilities: [],
         artifacts: [],
-        factions: [{ name: '码头帮', description: '旧码头势力', anchors: ['码头'] }, null as never],
+        factions: [{ name: '商会', description: '旧仓库势力', anchors: ['仓库'] }, null as never],
         rules: [{ name: '夜禁', description: '入夜后不得出城', anchors: ['宵禁'] }],
       },
       outline: {
@@ -228,10 +228,10 @@ describe('panel v6 book data', () => {
     expect(data.effort.chapters[0]?.num).toBe(771)
     expect(data.effort.chapters[29]?.num).toBe(800)
     expect(data.worldbook.locations[0]?.anchors).toEqual(['门口'])
-    expect(data.worldbook.factions[0]?.anchors).toEqual(['码头'])
+    expect(data.worldbook.factions[0]?.anchors).toEqual(['仓库'])
     expect(data.worldbook.rules[0]?.anchors).toEqual(['宵禁'])
     expect(data.worldbook.locations).toHaveLength(2)
-    expect(data.worldbook.locations[0]?.description).toBe('旧 茶楼')
+    expect(data.worldbook.locations[0]?.description).toBe('旧 商铺')
     expect(JSON.stringify(data).length).toBeLessThan(64 * 1024)
     const chapters = Array.from({ length: 800 }, (_, index) => ({
       num: index + 1,

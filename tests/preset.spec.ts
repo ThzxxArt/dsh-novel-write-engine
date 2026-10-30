@@ -28,12 +28,12 @@ describe('root patch', () => {
     expect(rows[0]).toMatchObject({ id: 'novel-write-engine', name: 'dsh-novel-write-engine' })
   })
 
-  it('declares the 0.2.6 host range without admitting the next minor prerelease', () => {
+  it('declares the 0.2.7 host range without admitting the next minor prerelease', () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
       version: string
       engines: { node: string; dsh: string }
     }
-    expect(manifest.version).toBe('0.2.6')
+    expect(manifest.version).toBe('0.2.7')
     expect(manifest.engines).toEqual({
       node: '>=24.9.0',
       dsh: '>=0.2.1-rc.2 <0.3.0-0',

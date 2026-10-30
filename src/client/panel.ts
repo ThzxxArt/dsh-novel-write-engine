@@ -1788,7 +1788,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.6 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.7 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )

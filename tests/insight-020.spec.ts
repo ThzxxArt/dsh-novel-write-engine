@@ -221,11 +221,11 @@ describe('book report', () => {
           schema_version: 1,
           locations: [
             {
-              name: '城寨六婶家',
-              anchors: ['三楼尾房', '楼梯底'],
+              name: '旧宅',
+              anchors: ['二楼书房', '一楼门厅'],
               first_appearance: 4,
               locked: true,
-              description: '六婶住处',
+              description: '旧宅内部',
               layout: '三楼',
               capacity: 3,
               changes: [],
@@ -239,7 +239,7 @@ describe('book report', () => {
       }),
     )
     expect(report.worldbook.anchors).toEqual([
-      { name: '城寨六婶家', kind: 'location', anchors: ['三楼尾房', '楼梯底'] },
+      { name: '旧宅', kind: 'location', anchors: ['二楼书房', '一楼门厅'] },
     ])
     const damaged = buildBookReport(
       reportInput({
@@ -418,7 +418,7 @@ describe('insight edge branches', () => {
     worldbook.rules = [{ name: '灵气不能离体', description: '离体即溃散' }]
     worldbook.factions = [{ name: '巡夜司', description: '维持秩序', goal: '稳定' }]
     worldbook.locations = [{ name: '旧城区', description: '被遗忘', layout: '窄巷', capacity: 10 }]
-    worldbook.characters = [{ name: '陈默', role: '主角', description: '档案员', arc: '入局' }]
+    worldbook.characters = [{ name: '主角', role: '主角', description: '档案员', arc: '入局' }]
     worldbook.glossary = [{ term: '蜡印', definition: '封缄' }]
     worldbook.backstory = [{ time: '十年前', event: '旧案' }]
     const world: WorldDocument = {

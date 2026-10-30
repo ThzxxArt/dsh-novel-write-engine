@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.6`                                                                                                  |
+| 插件版本 | `0.2.7`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1271,7 +1271,7 @@ interface Store {
 
 ### 6.8 多项目、会话绑定与工作区
 
-0.2.2 的四层选择顺序（详见 `docs/0.2.2-plan.md`）：
+0.2.2 的四层选择顺序：
 
 1. 显式 `project_root`；成功后写入当前 DSH `SessionId` 的 `stateDir/session-bindings.yaml`；
 2. 该会话的持久绑定；失效时返回 `PROJECT_MISSING` / `PROJECT_IDENTITY_MISMATCH`，不回退；
@@ -1385,7 +1385,9 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
-0.2.5 把不变量扩到全入口：blueprint/import（含 dry-run）/amend(outline)/outline 共用归档卷与 active 卡保护；`reindexed` 显式回显，归档卡不伪造 `archived_at`。语义证据允许跨句/跨段，check 区分 submission 与 content 轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 恢复；summary-only 修订不改正文、不消耗 revise、可直接 check/archive；resources 深合并且只接受非负整数。详见 `docs/0.2.5-acceptance.md`。
+0.2.7 是通用性与发布边界版本：产品示例、任务书与测试夹具去具体项目化，新增三题材归档矩阵与发布面隐私守卫；无 schema、工具、阶段或门控变化。
+
+0.2.5 把不变量扩到全入口：blueprint/import（含 dry-run）/amend(outline)/outline 共用归档卷与 active 卡保护；`reindexed` 显式回显，归档卡不伪造 `archived_at`。语义证据允许跨句/跨段，check 区分 submission 与 content 轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 恢复；summary-only 修订不改正文、不消耗 revise、可直接 check/archive；resources 深合并且只接受非负整数。详见 CHANGELOG 的 0.2.5 条目。
 
 | 编号  | 名称             | 判定条件                                                                                 | 触发点            |
 | ----- | ---------------- | ---------------------------------------------------------------------------------------- | ----------------- |
@@ -2267,7 +2269,7 @@ CI 不伪造这个解析结果。
 
 ### 14.3 发布判据（0.2.0 Release Gate）
 
-1. `docs/0.2.0-plan.md` 的全部切片完成，且每片有对应测试。
+1. 0.2.0 方案的全部切片完成，且每片有对应测试。
 2. **覆盖率四项全部 ≥ 门槛**（§13.3），CI 绿。
 3. **15 条证伪测试全绿**（§13.5）。
 4. 架构测试全绿（R1~R6 + 规则码唯一 + 面板只读）。

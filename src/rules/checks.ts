@@ -924,7 +924,7 @@ const resourceMismatch: Rule = (ctx) => {
       if (!resourceVisible && previousClauseText !== '') {
         // A resource in the preceding clause can describe this amount, but if
         // that clause already contains an amount *and* a sign, the resource
-        // belongs to that amount: 他买米花了 5 块，后来银元多了 5 块。
+        // belongs to that amount: 他买米花了 5 块，后来代币多了 5 块。
         const previousHasNumber = new RegExp(`(${NUMBER_TOKEN})`).test(previousClauseText)
         const previousHasSign = positive.test(previousClauseText) || negative.test(previousClauseText)
         resourceVisible =
@@ -943,7 +943,7 @@ const resourceMismatch: Rule = (ctx) => {
       }
       if (!characterVisible && !otherCharacter && sentence.start > 0) {
         // A pronoun in the current sentence may refer to the single character
-        // named in the previous sentence: 陈嘉树走进院子。他随手花掉五块银元。
+        // named in the previous sentence: 角色甲走进院子。他随手花掉五枚代币。
         const previous = sentenceBounds(ctx.text, sentence.start - 1, sentence.start - 1)
         const previousText = ctx.text.slice(previous.start, previous.end)
         const named = names.filter((name) => previousText.includes(name))

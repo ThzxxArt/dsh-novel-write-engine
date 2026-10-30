@@ -431,7 +431,7 @@ describe('0.1.2 context budget', () => {
     input.relationships.items = []
     input.characters.characters = [
       {
-        name: '林',
+        name: '阿',
         role: 'supporting',
         first_appearance: 1,
         profile: {},
@@ -440,7 +440,7 @@ describe('0.1.2 context budget', () => {
         updated_at: 1,
       },
       {
-        name: '林小雨',
+        name: '阿甲',
         role: 'supporting',
         first_appearance: 1,
         profile: {},
@@ -449,9 +449,9 @@ describe('0.1.2 context budget', () => {
         updated_at: 2,
       },
     ]
-    input.text = '林小雨推门进来。'
+    input.text = '阿甲推门进来。'
     const context = briefContext(input)
-    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual(['林小雨'])
+    expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual(['阿甲'])
   })
 
   it('orders the fallback active cast by recency', () => {
@@ -465,7 +465,7 @@ describe('0.1.2 context budget', () => {
     input.timeline.items = []
     input.relationships.items = []
     input.characters.characters = Array.from({ length: 10 }, (_, index) => ({
-      name: index === 0 ? '林小雨' : `角色${index + 1}`,
+      name: index === 0 ? '阿甲' : `角色${index + 1}`,
       role: 'supporting',
       first_appearance: 1,
       profile: { bio: `人物 ${index + 1}` },
@@ -473,7 +473,7 @@ describe('0.1.2 context budget', () => {
       growth: [],
       updated_at: index + 1,
     }))
-    input.text = `林小雨和${input.characters.characters
+    input.text = `阿甲和${input.characters.characters
       .slice(1)
       .map((character) => character.name)
       .join('、')}都在场。`
@@ -502,7 +502,7 @@ describe('0.1.2 context budget', () => {
     input.relationships.items = []
     input.characters.characters = [
       {
-        name: '林',
+        name: '阿',
         role: 'supporting',
         first_appearance: 1,
         profile: {},
@@ -511,7 +511,7 @@ describe('0.1.2 context budget', () => {
         updated_at: 1,
       },
       {
-        name: '林小雨',
+        name: '阿甲',
         role: 'supporting',
         first_appearance: 1,
         profile: {},
@@ -538,13 +538,13 @@ describe('0.1.2 context budget', () => {
         updated_at: 3,
       },
     ]
-    input.text = '林小雨提起角色1，又在门口遇见角色10。'
+    input.text = '阿甲提起角色1，又在门口遇见角色10。'
     const context = briefContext(input)
     expect((context.characters as Array<{ name: string }>).map((row) => row.name)).toEqual([
       '角色1',
       '角色10',
-      '林小雨',
-      // "林" only occurs inside "林小雨"; it must not be promoted separately.
+      '阿甲',
+      // "阿" only occurs inside "阿甲"; it must not be promoted separately.
     ])
   })
 

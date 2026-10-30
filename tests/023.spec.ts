@@ -536,7 +536,7 @@ describe('0.2.3 trusted ledgers', () => {
           items: [
             {
               id: 'FS-001',
-              title: '船费债',
+              title: '车费债',
               planted: 1,
               last_touched: 1,
               status: 'planted',

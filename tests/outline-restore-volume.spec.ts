@@ -26,7 +26,7 @@ describe('outline restore volume guard', () => {
             title: '第一卷',
             start_chapter: 1,
             end_chapter: 10,
-            goal: '守住茶楼',
+            goal: '守住商铺',
             arc: '开端',
             climax: '第一次冲突',
             status: 'planned',

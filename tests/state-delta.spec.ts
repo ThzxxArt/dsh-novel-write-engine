@@ -56,18 +56,18 @@ const character = (name: string, patch: Record<string, unknown> = {}): Record<st
 
 describe('state_delta shape and character reconciliation', () => {
   it('accepts the plan narrator alias for a first-person manuscript', () => {
-    const summary = sampleSummary({ characters_appeared: ['陈默'], events: [] })
+    const summary = sampleSummary({ characters_appeared: ['主角'], events: [] })
     const delta = empty()
-    delta.characters['陈默'] = character('陈默')
+    delta.characters['主角'] = character('主角')
     const result = applyStateDelta({
       chapter: 1,
       text: '我站在雨里，手里捏着一封旧信。',
       summary,
       delta: delta as never,
-      narrator: '陈默（第一人称「我」）',
+      narrator: '主角（第一人称「我」）',
       ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
     })
-    expect(result.locks.characters['陈默']!.appearance).toContain('我站在雨里')
+    expect(result.locks.characters['主角']!.appearance).toContain('我站在雨里')
   })
 
   it('requires all five sections and valid actions', () => {
@@ -1042,7 +1042,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       role: 'extra',
       first_appearance: 1,
       profile: {},
-      current_state: { resources: { 港币: 5, 银元: 2 } },
+      current_state: { resources: { 灵石: 5, 铜钱: 2 } },
       growth: [],
       updated_at: 0,
     })
@@ -1050,17 +1050,17 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const delta = empty()
     delta.characters['他'] = {
       action: 'updated',
-      current_state: { resources: { 港币: 7 } },
+      current_state: { resources: { 灵石: 7 } },
     }
     const result = run(summary, delta, docs)
     expect(result.characters.characters[0]!.current_state).toMatchObject({
-      resources: { 港币: 7, 银元: 2 },
+      resources: { 灵石: 7, 铜钱: 2 },
     })
 
     const negative = empty()
     negative.characters['他'] = {
       action: 'updated',
-      current_state: { resources: { 港币: -1 } },
+      current_state: { resources: { 灵石: -1 } },
     }
     expect(() => run(summary, negative, docs)).toThrowError(
       expect.objectContaining({ code: 'ENGINE_RESOURCE_NEGATIVE_BALANCE' }),
@@ -1069,7 +1069,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const stringBalance = empty()
     stringBalance.characters['他'] = {
       action: 'updated',
-      current_state: { resources: { 港币: '7' } },
+      current_state: { resources: { 灵石: '7' } },
     }
     expect(() => run(summary, stringBalance, docs)).toThrowError(/must be an integer/)
     const nullResources = empty()
@@ -1084,34 +1084,34 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const summary = sampleSummary({
       events: [],
       characters_appeared: [],
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     const delta = empty()
-    delta.world['城寨六婶家'] = { action: 'created', kind: 'location', description: '六婶住处' }
+    delta.world['旧宅'] = { action: 'created', kind: 'location', description: '旧宅内部' }
     const result = applyStateDelta({
       chapter: 1,
-      text: '他爬上三楼尾房，敲了敲门。',
+      text: '他爬上二楼书房，敲了敲门。',
       summary,
       delta: delta as never,
       ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
     })
     expect(result.world.locations[0]).toMatchObject({
-      name: '城寨六婶家',
-      anchors: ['三楼尾房'],
+      name: '旧宅',
+      anchors: ['二楼书房'],
     })
-    expect(result.world.locations[0]?.description).toBe('六婶住处')
+    expect(result.world.locations[0]?.description).toBe('旧宅内部')
   })
 
   it('rejects a new entity with anchors that do not occur verbatim', () => {
     const summary = sampleSummary({
       events: [],
       characters_appeared: [],
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     const delta = empty()
-    delta.world['城寨六婶家'] = { action: 'created', kind: 'location' }
+    delta.world['旧宅'] = { action: 'created', kind: 'location' }
     expect(() =>
       applyStateDelta({
         chapter: 1,
@@ -1127,10 +1127,10 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const summary = sampleSummary({
       events: [],
       characters_appeared: [],
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
     })
     const delta = empty()
-    delta.world['城寨六婶家'] = { action: 'created', kind: 'location' }
+    delta.world['旧宅'] = { action: 'created', kind: 'location' }
     expect(() =>
       applyStateDelta({
         chapter: 1,
@@ -1147,7 +1147,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       events: [],
       characters_appeared: [],
       new_elements: { locations: [], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     expect(() => run(summary, empty())).toThrowError(/has no such entity/)
   })

@@ -625,22 +625,22 @@ describe('0.2.1 quality rules branches', () => {
     ).toBe('advisory')
     const factsOptions = machineOptions()
     factsOptions.facts = [
-      { alias: '船费', value: 300, unit: '蚊' },
-      { alias: '房租', value: 100, unit: '蚊', tolerance: 5 },
+      { alias: '车费', value: 300, unit: '元' },
+      { alias: '房租', value: 100, unit: '元', tolerance: 5 },
       { alias: '不存在', value: 1, unit: '个' },
       { alias: '无数字', value: 1, unit: '个' },
     ]
-    const factCodes = codes('船费三百五十蚊，房租九十八蚊。', factsOptions)
+    const factCodes = codes('车费三百五十元，房租九十八元。', factsOptions)
     expect(factCodes).toContain('NUMERIC_FACT_MISMATCH')
     expect(factCodes.filter((code) => code === 'NUMERIC_FACT_MISMATCH')).toHaveLength(1)
     expect(codes('无数字。', factsOptions)).not.toContain('NUMERIC_FACT_MISMATCH')
-    expect(codes('船费三百蚊。', machineOptions())).not.toContain('NUMERIC_FACT_MISMATCH')
+    expect(codes('车费三百元。', machineOptions())).not.toContain('NUMERIC_FACT_MISMATCH')
     const priceOptions = machineOptions()
-    priceOptions.facts = [{ alias: '船价', value: 3000, unit: '元' }]
-    expect(codes('船价不低，他数了三遍才把银元收好，又叫来两个伙计。', priceOptions)).not.toContain(
+    priceOptions.facts = [{ alias: '车价', value: 3000, unit: '元' }]
+    expect(codes('车价不低，他数了三遍才把铜钱收好，又叫来两个伙计。', priceOptions)).not.toContain(
       'NUMERIC_FACT_MISMATCH',
     )
-    expect(codes('船费三百蚊。船费三百五十蚊。', factsOptions)).toContain('NUMERIC_FACT_MISMATCH')
+    expect(codes('车费三百元。车费三百五十元。', factsOptions)).toContain('NUMERIC_FACT_MISMATCH')
     const invalidFacts = machineOptions()
     invalidFacts.facts = [
       { alias: '', value: 1, unit: '元' },
@@ -879,13 +879,13 @@ describe('0.2.1 worldbook numeric facts', () => {
     try {
       await bootstrapToDraft({ root, engine })
       const result = await engine.submitWorldbook({
-        facts: [{ alias: '船费', value: 300, unit: '蚊', tolerance: 0, note: '开篇债务' }],
+        facts: [{ alias: '车费', value: 300, unit: '元', tolerance: 0, note: '开篇债务' }],
         root,
       })
       expect(result.data.counts.facts).toBe(1)
       expect(result.data.entries).toBe(1)
       const worldbook = await engine.queryState({ kind: 'worldbook', root })
-      expect((worldbook.data as { facts: Array<{ alias: string }> }).facts[0]?.alias).toBe('船费')
+      expect((worldbook.data as { facts: Array<{ alias: string }> }).facts[0]?.alias).toBe('车费')
       await expect(
         engine.submitWorldbook({
           facts: [{ alias: '坏容差', value: 1, unit: '米', tolerance: -1 }],
@@ -1134,14 +1134,14 @@ describe('0.2.1 closure regressions', () => {
       expect((history.data as { entries: unknown[] }).entries).toHaveLength(201)
 
       await engine.submitWorldbook({
-        facts: [{ alias: '船费', value: 300, unit: '蚊' }],
+        facts: [{ alias: '车费', value: 300, unit: '元' }],
         root,
       })
       const worldbook = (await engine.queryState({ kind: 'worldbook', root })).data as Parameters<
         typeof worldbookCounts
       >[0]
       expect(worldbookCounts(worldbook)).toMatchObject({ present: true, facts: 1 })
-      expect(worldbookBrief(worldbook, '', [])).toMatchObject({ facts: [{ alias: '船费', value: 300 }] })
+      expect(worldbookBrief(worldbook, '', [])).toMatchObject({ facts: [{ alias: '车费', value: 300 }] })
       const status = await engine.getStatus({ root })
       expect(status.data.book?.worldbook.facts).toBe(1)
       const stats = await engine.stats({ root })
@@ -1371,7 +1371,7 @@ describe('0.2.1 second-order review regressions', () => {
       await readyToArchive({ root, engine })
       const summary = sampleSummary({
         foreshadows: {
-          planted: [{ key: 'FS-01', title: '船费债', description: '欠船费', anchor: '的' }],
+          planted: [{ key: 'FS-01', title: '车费债', description: '欠车费', anchor: '的' }],
           advanced: [],
           resolved: [],
         },

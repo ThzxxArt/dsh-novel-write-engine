@@ -113,10 +113,10 @@ describe('semantic evidence validation', () => {
   })
 
   it('does not reject evidence from different paragraphs that merely share common words', () => {
-    const text = '何九把秤砣放在柜台。\n\n何九看着秤杆上的星。'
+    const text = '铁匠把铁锤放在柜台。\n\n铁匠看着铁砧上的纹。'
     const result = evaluateSemantic(text, [
-      item('L2-SCENE-ANCHOR', '何九把秤砣放在柜台'),
-      item('L2-CHARACTER-STATE', '何九看着秤杆上的星'),
+      item('L2-SCENE-ANCHOR', '铁匠把铁锤放在柜台'),
+      item('L2-CHARACTER-STATE', '铁匠看着铁砧上的纹'),
     ])
     expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
     expect(result.items.find((entry) => entry.id === 'L2-CHARACTER-STATE')?.state).toBe('pass')

@@ -459,7 +459,7 @@ describe('worldbook', () => {
         characters: [{ name: '角色', role: '主角', description: '说明', arc: '' }],
         glossary: [{ term: '术语', definition: '定义' }],
         backstory: [{ time: '十年前', event: '旧事' }],
-        facts: [{ alias: '船费', value: 300, unit: '蚊', note: '旧账' }],
+        facts: [{ alias: '车费', value: 300, unit: '元', note: '旧账' }],
       },
       '2026-01-02',
     )
@@ -710,7 +710,7 @@ describe('outline import and render', () => {
         characters: [{ name: '角色', role: '主角', description: '说明', arc: '弧线' }],
         glossary: [{ term: '术语', definition: '定义' }],
         backstory: [{ time: '十年前', event: '旧事' }],
-        facts: [{ alias: '船费', value: 300, unit: '蚊', note: '旧账' }],
+        facts: [{ alias: '车费', value: 300, unit: '元', note: '旧账' }],
       },
       '2026-01-02',
     )
@@ -721,8 +721,8 @@ describe('outline import and render', () => {
     expect(rendered).toContain('术语')
     expect(rendered).toContain('旧事')
     expect(rendered).toContain('数值事实')
-    expect(rendered).toContain('船费')
-    expect(rendered).toContain('300蚊')
+    expect(rendered).toContain('车费')
+    expect(rendered).toContain('300元')
     const parsed = parseOutlineData(
       JSON.stringify({
         book: { logline: 'JSON 梗概' },

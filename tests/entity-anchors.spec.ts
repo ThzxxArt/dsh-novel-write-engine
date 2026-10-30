@@ -14,7 +14,7 @@ import { EngineInputError } from '../src/types.js'
 
 describe('entity anchors', () => {
   it('normalizes, de-duplicates and limits explicit anchors', () => {
-    expect(normalizeAnchors([' 三楼尾房 ', '三楼尾房', '楼梯底'], 'x')).toEqual(['三楼尾房', '楼梯底'])
+    expect(normalizeAnchors([' 二楼书房 ', '二楼书房', '楼梯底'], 'x')).toEqual(['二楼书房', '楼梯底'])
     expect(() => normalizeAnchors('x', 'x')).toThrow(EngineInputError)
     expect(() => normalizeAnchors(['一'], 'x')).toThrow(/2..120/)
     expect(() => normalizeAnchors([1], 'x')).toThrow(/must be a string/)
@@ -54,9 +54,9 @@ describe('entity anchors', () => {
   })
 
   it('matches explicit anchors first and falls back to the readable name', () => {
-    expect(matchEntityText('他站在三楼尾房。', '城寨六婶家', ['三楼尾房'])).toMatchObject({
+    expect(matchEntityText('他站在二楼书房。', '旧宅', ['二楼书房'])).toMatchObject({
       ok: true,
-      matched: '三楼尾房',
+      matched: '二楼书房',
       usedFallback: false,
     })
     expect(matchEntityText('他站在屋里。', '屋')).toMatchObject({

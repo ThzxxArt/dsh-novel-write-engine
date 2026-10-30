@@ -246,10 +246,10 @@ describe('gate evaluation', () => {
     const firstPerson = '我站在雨里，手里捏着一封旧信。'
     const aliasInput = input({
       text: firstPerson,
-      summary: { ...sampleSummary(), characters_appeared: ['陈默'], opening: firstPerson.slice(0, 14) },
+      summary: { ...sampleSummary(), characters_appeared: ['主角'], opening: firstPerson.slice(0, 14) },
       pipeline: {
         ...input().pipeline,
-        draft: { ...input().pipeline.draft!, narrator: '陈默（第一人称「我」）' },
+        draft: { ...input().pipeline.draft!, narrator: '主角（第一人称「我」）' },
       } as never,
     })
     expect(codes(aliasInput)).not.toContain('PG-05')
@@ -739,11 +739,11 @@ describe('gate evaluation', () => {
 
   it('PG-05 accepts a readable new entity through an explicit anchor', () => {
     const summary = sampleSummary({
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     const gateInput = input({
-      text: `${text}\n\n他爬上三楼尾房，敲了敲门。`,
+      text: `${text}\n\n他爬上二楼书房，敲了敲门。`,
       summary,
     })
     expect(codes(gateInput)).not.toContain('PG-05')
@@ -751,16 +751,16 @@ describe('gate evaluation', () => {
 
   it('PG-05 keeps the name fallback and names the attempted anchors on failure', () => {
     const withAnchors = sampleSummary({
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     const anchored = evaluateGates(input({ summary: withAnchors }), options).blocking.find(
       (item) => item.code === 'PG-05',
     )
-    expect(anchored?.detail).toContain('三楼尾房')
+    expect(anchored?.detail).toContain('二楼书房')
 
     const noAnchors = sampleSummary({
-      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
     })
     const fallback = evaluateGates(input({ summary: noAnchors }), options).blocking.find(
       (item) => item.code === 'PG-05',

@@ -492,11 +492,11 @@ describe('rule edge cases', () => {
       schema_version: 1 as const,
       locked_at_chapter: 1,
       characters: {
-        陈嘉树: { first_appearance: 1, locked_at: 1, appearance: '灰长衫，左眉一道疤' },
+        角色甲: { first_appearance: 1, locked_at: 1, appearance: '灰长衫，左眉一道疤' },
       },
       locations: {},
     }
-    const text = '陈嘉树穿着灰长衫，左眉一道疤，站在门口。\n\n陈嘉树说：“走吧。”'
+    const text = '角色甲穿着灰长衫，左眉一道疤，站在门口。\n\n角色甲说：“走吧。”'
     expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
   })
 
