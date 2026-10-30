@@ -259,6 +259,7 @@ describe('0.2.0 whole-book lifecycle', () => {
       const status = await engine.getStatus({ root })
       expect(status.data.stage).toBe('P3')
       expect(status.data.blocking).toContainEqual(expect.objectContaining({ code: 'PG-13' }))
+      expect(JSON.stringify(status.data.blocking)).not.toContain('"strict":false')
       expect(status.data.next).toMatchObject({ tool: 'novel_rollback', args: { to_stage: 'P2' } })
     } finally {
       await cleanup()

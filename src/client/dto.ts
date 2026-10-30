@@ -1,3 +1,5 @@
+import type { PanelBookData } from '../panel-contract.js'
+
 /** Wire DTOs of the panel route. Versioned so a stale tab can say "refresh". */
 export interface PhaseDto {
   id: string
@@ -73,7 +75,7 @@ export interface SummaryDto {
     samples?: number
     attempts?: number
   }
-  health?: { ok: boolean; blocking: number; stateErrors: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number; pending?: boolean }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
   advisories?: Array<{ code: string; detail: string; hint?: string }>
   /** Advisory codes the author has already acknowledged in the current check. */
@@ -81,6 +83,8 @@ export interface SummaryDto {
   legacy?: Array<{ code: string; detail: string }>
   /** Crash-left pending transaction; read-only diagnostics. */
   pending?: { state: string; txid: string; detail: string }
+  /** v6 read-only book data; v5 payloads omit it and are rejected by the client. */
+  bookData?: PanelBookData
 }
 
 export interface ChapterRowDto {
@@ -91,6 +95,14 @@ export interface ChapterRowDto {
   stage: string
   status: 'passed' | 'blocked' | 'draft'
   details?: string
+  sceneType?: string
+  hookStrength?: number
+  finalCheck?: 'pass' | 'fail' | null
+  reviews?: number
+  revisions?: number
+  checks?: number
+  rollbacks?: number
+  archivedAt?: string | null
 }
 
 export interface ChaptersDto {

@@ -106,12 +106,12 @@ import {
   type WorldbookPatch,
 } from './book.js'
 import { assertArchivedCardVolumes, assertArchivedCardsInVolumes, mergeOutline } from './outline-merge.js'
-import { buildBookReport, buildGuide, searchSnapshot } from './insight.js'
+import { buildBookReport, buildGuide, buildPanelBookData, searchSnapshot } from './insight.js'
 import { historyTexts, listHistory, type HistoryEntry } from './history.js'
 import { BriefLibrary } from './brief.js'
 import { briefContext } from './context.js'
 import { applyStateDelta, normalizeRole } from './state-delta.js'
-import { evaluateSemantic, validateSemanticSubmission } from './semantic.js'
+import { CheckSubmissionError, evaluateSemantic, validateSemanticSubmission } from './semantic.js'
 import { briefStageFor, evaluateGates, gateName, parseParagraphLocation } from './gates.js'
 import { advanceHandoff, parseActProgress, projectHandoff } from './handoff.js'
 import {
@@ -452,6 +452,8 @@ interface Snapshot {
   project: NovelProject
   /** Set when novel.yaml exists but cannot be parsed/narrowed. */
   projectError: string | null
+  /** Set when pipeline.yaml is unreadable and a backup fallback was used. */
+  pipelineError: string | null
   pipeline: PipelineState
   /** Latest receipt per brief stage, loaded from state/briefs.yaml or legacy pipeline.briefs. */
   briefs: PipelineState['briefs']
@@ -557,6 +559,8 @@ export class EngineService {
   private readonly exportArtifactEpoch = new Map<string, number>()
   /** Status, panel and gates ask for the same stage context repeatedly. */
   private readonly briefContextCache = new WeakMap<Snapshot, Map<string, Record<string, unknown>>>()
+  /** The 15s panel poll reuses the heavy book projection until revision/damage changes. */
+  private readonly panelCache = new Map<string, { key: string; snapshot: PanelSnapshot }>()
   private readonly briefs: BriefLibrary
   private readonly now: () => Date
   private readonly metadataMutex = new KeyedMutex()
@@ -2003,11 +2007,14 @@ export class EngineService {
     if (input.paths !== undefined && (!Array.isArray(input.paths) || input.paths.length === 0)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'restore paths must be a non-empty array')
     }
+    const pipelinePath = joinRel(STATE_DIR, STATE_FILES.pipeline)
+    const pipelineOnly = input.paths?.length === 1 && input.paths[0] === pipelinePath
     return this.mutate({
       root: input.root,
       op: 'restoreBackup',
       chapter: input.chapter,
       reason: `restore backup ${input.txid}`,
+      ...(pipelineOnly ? { allowPipelineRecovery: true, repairPaths: [pipelinePath] } : {}),
       // A restore is repair, not a pure read: the same txid/paths is still
       // meaningful after an external edit changed the target again. Replaying
       // the cached answer would report success without touching the file.
@@ -2019,6 +2026,58 @@ export class EngineService {
             `backup ${input.txid} has no readable manifest`,
             'list backups with novel_state {kind:"backups"}; only marked engine backups can be restored',
           )
+        }
+        if (pipelineOnly) {
+          if (input.chapter !== undefined) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'restoring state/pipeline.yaml does not accept a chapter',
+              'omit chapter when paths is exactly [state/pipeline.yaml]',
+            )
+          }
+          if (!manifest.files.includes(pipelinePath)) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} does not contain ${pipelinePath}`,
+              'choose a backup created by a stage operation or amend that contains the pipeline',
+            )
+          }
+          if (snapshot.pipelineError === null) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'state/pipeline.yaml is readable; refusing a blind pipeline restore',
+              'use the normal stage operation, or repair a genuinely unreadable pipeline',
+            )
+          }
+          const text = await context.store.readText(`backups/${input.txid}/${pipelinePath}`)
+          if (text === null) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} does not contain ${pipelinePath}`,
+              'choose another backup with a pipeline pre-image',
+            )
+          }
+          let backupPipeline: PipelineState
+          try {
+            backupPipeline = narrow('pipeline', parseYaml(text)) as unknown as PipelineState
+          } catch (error) {
+            throw new EngineFaultError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} contains an invalid pipeline: ${errorMessage(error)}`,
+              'choose a different backup or repair the file manually',
+            )
+          }
+          const nextPipeline: PipelineState = {
+            ...backupPipeline,
+            revision: context.revision,
+            last_action: action('novel_restore', this.now(), shortDigest(input.txid)),
+          }
+          return {
+            files: [{ path: pipelinePath, text: yaml(nextPipeline) }],
+            backup: true,
+            data: { txid: input.txid, chapter: nextPipeline.chapter, restored: [pipelinePath] },
+            warnings: [],
+          }
         }
         const outlineOnly = input.paths?.length === 1 && input.paths[0] === OUTLINE_FILE
         if (outlineOnly) {
@@ -2058,6 +2117,19 @@ export class EngineService {
               'restore a different backup or repair the file manually',
             )
           }
+          assertArchivedCardVolumes(
+            snapshot.chapters.chapters,
+            snapshot.outline.chapters,
+            snapshot.outline.volumes,
+            document.volumes,
+            'novel_restore',
+          )
+          assertArchivedCardsInVolumes(
+            snapshot.chapters.chapters,
+            document.chapters,
+            document.volumes,
+            'novel_restore',
+          )
           const restoredCards = new Map(document.chapters.map((card) => [card.num, card]))
           const archivedNums = new Set(snapshot.chapters.chapters.map((record) => record.num))
           for (const record of snapshot.chapters.chapters) {
@@ -3123,7 +3195,10 @@ export class EngineService {
         severity: 'error',
         title: '状态文档不可读',
         detail: `${error.code}: ${error.message}`,
-        hint: `repair ${error.path} with novel_amend`,
+        hint:
+          error.code === 'PIPELINE_UNREADABLE'
+            ? 'restore a valid pipeline backup with novel_restore { paths: ["state/pipeline.yaml"], txid }'
+            : `repair ${error.path} with novel_amend`,
       })
     }
     add({
@@ -3560,6 +3635,7 @@ export class EngineService {
       worldbook: snapshot.worldbook,
       worldbookPresent: snapshot.worldbookPresent,
       worldbookError: snapshot.worldbookError,
+      world: snapshot.world,
       chapters: snapshot.chapters.chapters,
       characters: snapshot.characters,
       timeline: snapshot.timeline,
@@ -6933,6 +7009,11 @@ export class EngineService {
     const blocking = [...this.effectiveBlocking(snapshot), ...journalBlocking]
     const healthBlocking = blocking.length
     const stateErrorCount = this.stateErrors(snapshot).length
+    const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
+      snapshot.outlineError ?? ''
+    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}`
+    const cachedPanel = this.panelCache.get(snapshot.root)
+    if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
     const book = {
       premise: snapshot.outline.book.premise,
       logline: snapshot.outline.book.logline,
@@ -6983,12 +7064,15 @@ export class EngineService {
     const store = this.storeFor(snapshot.root)
     const reviewNames = new Set(await store.list(REVIEW_DIR))
     const sampleChapters = new Set<number>()
+    const currentReviews: import('../types.js').ReviewDocument[] = []
     for (const record of archived) {
       const name = reviewFile(record.num).slice(`${REVIEW_DIR}/`.length)
       if (!reviewNames.has(name)) continue
       try {
-        if ((await store.readDoc(reviewFile(record.num), 'review')) !== null) {
+        const review = await store.readDoc(reviewFile(record.num), 'review')
+        if (review !== null) {
           sampleChapters.add(record.num)
+          currentReviews.push(review as unknown as import('../types.js').ReviewDocument)
         }
       } catch {
         // Keep the panel count aligned with report()'s readable-review count.
@@ -7051,6 +7135,63 @@ export class EngineService {
       chapter: row.chapter,
       status: row.status,
     }))
+    const draftMetrics = snapshot.text === null ? null : countWordMetrics(snapshot.text)
+    const panelReport = buildBookReport({
+      project: snapshot.project,
+      outline: snapshot.outline,
+      outlinePresent: snapshot.outlinePresent,
+      outlineError: snapshot.outlineError,
+      worldbook: snapshot.worldbook,
+      worldbookPresent: snapshot.worldbookPresent,
+      worldbookError: snapshot.worldbookError,
+      world: snapshot.world,
+      chapters: archived,
+      characters: snapshot.characters,
+      timeline: snapshot.timeline,
+      foreshadows: snapshot.foreshadows,
+      relationships: snapshot.relationships,
+      reviews: currentReviews,
+      activity: journal.rows.slice(-8),
+      journal: journal.rows,
+      reviewAttempts: attempts,
+      finalChecks: Object.fromEntries(
+        archived
+          .filter((record) => record.final_check === 'pass' || record.final_check === 'fail')
+          .map((record) => [record.num, record.final_check!]),
+      ),
+      targetChapters: target,
+      minScore: this.config.quality.minScore,
+      foreshadowDormantAfter: this.rulepack.crosschapter.foreshadow_dormant_after,
+    })
+    const bookData = buildPanelBookData({
+      report: panelReport,
+      project: snapshot.project,
+      worldbook: snapshot.worldbook,
+      world: snapshot.world,
+      outline: snapshot.outline,
+      outlinePresent: snapshot.outlinePresent,
+      worldbookPresent: snapshot.worldbookPresent,
+      currentChapter: snapshot.pipeline.chapter,
+      stage: snapshot.pipeline.stage,
+      rounds: snapshot.pipeline.rounds,
+      draftWords,
+      lastTenAverage:
+        scores.length === 0 ? 0 : scores.reduce((total, score) => total + score, 0) / scores.length,
+      manuscriptHash:
+        snapshot.pipeline.draft?.content_hash ?? (snapshot.text === null ? null : sha256(snapshot.text)),
+      metrics: draftMetrics,
+      stateErrors: this.stateErrors(snapshot).map((error) => ({
+        path: error.path,
+        code: error.code,
+        message: error.message,
+      })),
+      pending:
+        pending.state === 'none'
+          ? null
+          : { state: pending.state, txid: pending.txid ?? '', detail: pending.detail ?? '' },
+      outlineError: snapshot.outlineError,
+      worldbookError: snapshot.worldbookError,
+    })
     const draft =
       archivedCurrent || snapshot.pipeline.stage === 'done'
         ? null
@@ -7060,9 +7201,9 @@ export class EngineService {
             wordCount: draftWords,
             score: snapshot.review?.total ?? 0,
             status: (blocking.length > 0 ? 'blocked' : 'draft') as 'blocked' | 'draft',
-            details: (snapshot.plan?.summary?.events ?? []).join('；').slice(0, 240),
+            details: (snapshot.pipeline.draft?.summary?.events ?? []).join('；').slice(0, 240),
           }
-    return {
+    const result: PanelSnapshot = {
       root: snapshot.root,
       title: snapshot.project.title,
       genre: snapshot.project.genre,
@@ -7104,11 +7245,13 @@ export class EngineService {
           : archived.reduce((total, chapter) => total + chapter.score, 0) / archived.length,
       phases: phaseStrip(snapshot.pipeline.stage, finished),
       book,
+      bookData,
       quality,
       health: {
-        ok: healthBlocking === 0 && stateErrorCount === 0,
+        ok: healthBlocking === 0 && stateErrorCount === 0 && pending.state === 'none',
         blocking: healthBlocking,
         stateErrors: stateErrorCount,
+        pending: pending.state !== 'none',
       },
       activity,
       ...(advisories.length === 0 ? {} : { advisories }),
@@ -7124,6 +7267,12 @@ export class EngineService {
             },
           }),
     }
+    this.panelCache.set(snapshot.root, { key: panelCacheKey, snapshot: result })
+    if (this.panelCache.size > 16) {
+      const oldest = this.panelCache.keys().next().value
+      if (oldest !== undefined) this.panelCache.delete(oldest)
+    }
+    return result
   }
 
   /**
@@ -7554,6 +7703,13 @@ export class EngineService {
     if (snapshot.projectError !== null) {
       errors.push({ path: PROJECT_FILE, code: 'PROJECT_UNREADABLE', message: snapshot.projectError })
     }
+    if (snapshot.pipelineError !== null) {
+      errors.push({
+        path: joinRel(STATE_DIR, STATE_FILES.pipeline),
+        code: 'PIPELINE_UNREADABLE',
+        message: snapshot.pipelineError,
+      })
+    }
     const chapter = snapshot.pipeline.chapter
     if (snapshot.worldPlanError !== null) {
       errors.push({
@@ -7594,10 +7750,17 @@ export class EngineService {
 
   /** The earliest rebuild point for the current state damage. */
   private recoveryFor(snapshot: Snapshot): {
-    tool: 'novel_rollback' | 'novel_amend'
+    tool: 'novel_rollback' | 'novel_amend' | 'novel_restore'
     args: Record<string, unknown>
     reason: string
   } {
+    if (snapshot.pipelineError !== null) {
+      return {
+        tool: 'novel_restore',
+        args: { paths: [joinRel(STATE_DIR, STATE_FILES.pipeline)] },
+        reason: `PIPELINE_UNREADABLE: ${snapshot.pipelineError}; choose a backup with a pipeline pre-image and pass its txid`,
+      }
+    }
     const chapter = snapshot.pipeline.chapter
     const errors = this.stateErrors(snapshot)
     if (snapshot.projectError !== null) {
@@ -8107,7 +8270,10 @@ export class EngineService {
       summaryProvided: extras.summaryProvided,
       summaryOnly: extras.summaryOnly,
       summaryOnlyRevision:
-        extras.summaryOnlyRevision ?? snapshot.pipeline.last_action?.op === 'novel_revise_summary',
+        extras.summaryOnlyRevision ??
+        (operation === 'runCheck' &&
+          snapshot.pipeline.stage === 'P6' &&
+          snapshot.pipeline.last_action?.op === 'novel_revise_summary'),
       review: extras.review ?? snapshot.review,
       check: extras.check ?? snapshot.check,
       semantic: extras.semantic ?? [],
@@ -8343,12 +8509,27 @@ export class EngineService {
         })
       }
     }
-    const pipeline = (await store.readDoc(
-      joinRel(STATE_DIR, STATE_FILES.pipeline),
-      'pipeline',
-    )) as unknown as PipelineState | null
-    if (pipeline === null)
-      throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, 'state/pipeline.yaml is missing')
+    const pipelinePath = joinRel(STATE_DIR, STATE_FILES.pipeline)
+    let pipeline: PipelineState | null = null
+    let pipelineError: string | null = null
+    try {
+      pipeline = (await store.readDoc(pipelinePath, 'pipeline')) as unknown as PipelineState | null
+      if (pipeline === null) {
+        throw new EngineFaultError(ERROR_CODES.SCHEMA_INVALID, 'state/pipeline.yaml is missing')
+      }
+    } catch (error) {
+      // Read-only status/doctor/restore must still reach a project whose
+      // pipeline is damaged. Use the newest valid backup in memory; a write is
+      // rejected by mutate() unless it is the dedicated restore transaction.
+      pipelineError = errorMessage(error)
+      const backup = await this.latestBackup(store, pipelinePath)
+      if (backup === null) throw error
+      try {
+        pipeline = narrow('pipeline', parseYaml(backup)) as unknown as PipelineState
+      } catch {
+        throw error
+      }
+    }
     let briefs: PipelineState['briefs'] = pipeline.briefs
     const briefsRaw = await store.readText(BRIEF_RECEIPTS_FILE)
     if (briefsRaw !== null) {
@@ -8564,17 +8745,19 @@ export class EngineService {
     if (check === null && checkError === null && pipeline.stage === 'ready_to_archive') {
       checkError = `${checkFile(chapter)} is missing`
     }
-    const latest = (await store.readDoc(
-      joinRel(STATE_DIR, STATE_FILES.pipeline),
-      'pipeline',
-    )) as unknown as PipelineState | null
-    if (latest === null || latest.revision !== pipeline.revision) {
-      if (retries > 0) return this.loadAt(selection, retries - 1, allowLock)
-      throw new EngineFaultError(
-        ERROR_CODES.TXN_ABORTED,
-        'the project changed while its snapshot was being read',
-        'retry the read; if it keeps moving, wait for the writer to finish',
-      )
+    if (pipelineError === null) {
+      const latest = (await store.readDoc(
+        joinRel(STATE_DIR, STATE_FILES.pipeline),
+        'pipeline',
+      )) as unknown as PipelineState | null
+      if (latest === null || latest.revision !== pipeline.revision) {
+        if (retries > 0) return this.loadAt(selection, retries - 1, allowLock)
+        throw new EngineFaultError(
+          ERROR_CODES.TXN_ABORTED,
+          'the project changed while its snapshot was being read',
+          'retry the read; if it keeps moving, wait for the writer to finish',
+        )
+      }
     }
     // A writer may have taken the lock after the initial check. Re-check before
     // returning: otherwise this read can see new ledgers with the old pipeline
@@ -8592,6 +8775,7 @@ export class EngineService {
       selection,
       project: project as unknown as NovelProject,
       projectError,
+      pipelineError,
       pipeline: pipeline as unknown as PipelineState,
       briefs,
       chapters: chapters as unknown as ChaptersDocument,
@@ -8679,8 +8863,10 @@ export class EngineService {
     advanceRevision?: false
     /** Human reason for a maintenance transaction; persisted in the journal. */
     reason?: string
-    /** Only an explicit amend may overwrite these externally changed paths. */
+    /** Only an explicit amend/restore may overwrite these externally changed paths. */
     repairPaths?: readonly string[]
+    /** Allow the dedicated pipeline restore path to load from a valid backup. */
+    allowPipelineRecovery?: boolean
     run: (
       snapshot: Snapshot,
       context: { store: FsStore; revision: number },
@@ -8888,6 +9074,13 @@ export class EngineService {
         // later writer silently overwrites it with a stale revision.
         await assertJournalConsistent(store, options.repairPaths ?? [])
         const snapshot = await this.loadAt(selection, 1, true)
+        if (snapshot.pipelineError !== null && options.allowPipelineRecovery !== true) {
+          throw new EngineFaultError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `state/pipeline.yaml is unreadable: ${snapshot.pipelineError}`,
+            'restore a valid pipeline backup with novel_restore { paths: ["state/pipeline.yaml"], txid: ... }; other writes are blocked until then',
+          )
+        }
         if (
           selection.source === 'session' &&
           selection.created_at !== undefined &&
@@ -8978,6 +9171,7 @@ export class EngineService {
             ...(error instanceof EngineError ? { code: error.code } : {}),
             ...(error instanceof EngineError && error.hint !== undefined ? { hint: error.hint } : {}),
             ...(error instanceof EngineBlockedError ? { blocking: error.blocking } : {}),
+            ...(error instanceof CheckSubmissionError ? { blocking: error.blocking.slice(0, 20) } : {}),
           }).catch(() => undefined)
           throw error
         }
@@ -9061,6 +9255,7 @@ export class EngineService {
       selection,
       project: { ...ENGINE_PROJECT_INITIAL },
       projectError: null,
+      pipelineError: null,
       pipeline: emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' }),
       briefs: {},
       chapters: emptyChapters(),

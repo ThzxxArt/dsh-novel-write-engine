@@ -342,7 +342,7 @@ try {
     throw new Error(`authenticated panel request should be 200, got ${authorized.status}`)
   }
   const body = await authorized.json()
-  if (body.schemaVersion !== 5) throw new Error('panel payload has no schemaVersion 5')
+  if (body.schemaVersion !== 6) throw new Error('panel payload has no schemaVersion 6')
   if (
     typeof body.selection !== 'object' ||
     body.selection === null ||
@@ -370,6 +370,7 @@ try {
     }
   } else if (
     typeof body.summary !== 'object' ||
+    body.summary?.bookData === undefined ||
     body.summary === null ||
     typeof body.summary.root !== 'string' ||
     typeof body.chapters !== 'object' ||

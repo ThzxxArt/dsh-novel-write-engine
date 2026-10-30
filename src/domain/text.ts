@@ -6,11 +6,68 @@ export function splitParagraphs(text: string): string[] {
     .filter((line) => line !== '')
 }
 
+/** One sentence occurrence with exact source offsets and 1-based paragraph. */
+export interface SentenceSpan {
+  start: number
+  end: number
+  paragraph: number
+  text: string
+}
+
+const SENTENCE_TERMINATOR = /[。！？!?]+|…+|\.(?=\s|$)/g
+const SENTENCE_CLOSERS = new Set(['」', '』', '”', '"', '’', "'", '）', ')', '】', ']'])
+
+/**
+ * Sentence boundaries have one owner. This offset-preserving variant is used
+ * by semantic evidence and any caller that must map a quote back to a
+ * paragraph; `splitSentences` is the string-only convenience view of it.
+ */
+export function splitSentenceSpans(text: string): SentenceSpan[] {
+  const spans: SentenceSpan[] = []
+  let paragraph = 1
+  let lineStart = 0
+  while (lineStart <= text.length) {
+    const newline = text.indexOf('\n', lineStart)
+    const lineEnd = newline === -1 ? text.length : newline
+    const line = text.slice(lineStart, lineEnd)
+    if (line.trim() !== '') {
+      let cursor = 0
+      while (cursor < line.length) {
+        SENTENCE_TERMINATOR.lastIndex = cursor
+        const match = SENTENCE_TERMINATOR.exec(line)
+        let rawEnd = match === null ? line.length : match.index + match[0].length
+        while (rawEnd < line.length && SENTENCE_CLOSERS.has(line[rawEnd]!)) rawEnd += 1
+        let start = cursor
+        while (start < rawEnd && /\s/.test(line[start]!)) start += 1
+        const body = line.slice(start, rawEnd).trimEnd()
+        const end = start + body.length
+        if (body !== '') {
+          spans.push({
+            start: lineStart + start,
+            end: lineStart + end,
+            paragraph,
+            text: body,
+          })
+        }
+        cursor = rawEnd
+      }
+      paragraph += 1
+    }
+    if (newline === -1) break
+    lineStart = newline + 1
+  }
+  return spans
+}
+
 /** Sentence splitting uses Chinese and English terminators; empty runs collapse. */
 export function splitSentences(text: string): string[] {
-  return text
-    .split(/[。！？!?]+|…+|\.(?=\s|$)/)
-    .map((sentence) => sentence.trim())
+  return splitSentenceSpans(text)
+    .map((span) =>
+      span.text
+        .replace(/([。！？!?]+|…+|\.)$/u, '')
+        .replace(/[」』”"'’）)】\]]+$/u, '')
+        .trim(),
+    )
     .filter((sentence) => sentence !== '')
 }
 

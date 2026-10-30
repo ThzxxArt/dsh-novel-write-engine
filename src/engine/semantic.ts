@@ -1,5 +1,5 @@
 import { textSimilarity } from '../domain/simhash.js'
-import { splitParagraphs } from '../domain/text.js'
+import { splitParagraphs, splitSentenceSpans, type SentenceSpan } from '../domain/text.js'
 import { ERROR_CODES, EngineInputError, type BlockingItem, type SemanticItem } from '../types.js'
 
 /** The five checks the P6 task book requires; a subset cannot pass. */
@@ -10,6 +10,13 @@ export const SEMANTIC_CHECK_IDS = [
   'L2-VOICE',
   'L2-POV',
 ] as const
+
+/** A short evidence interval may share this many characters before it is "meaningful". */
+export const SEMANTIC_OVERLAP_MIN_CHARS = 8
+/** A longer evidence interval must share at least this share of the shorter quote. */
+export const SEMANTIC_OVERLAP_RATIO = 0.5
+/** Below this similarity, a nearest paragraph would be a misleading coincidence. */
+export const SEMANTIC_NEAREST_MIN_SCORE = 0.25
 
 export type SemanticItemState =
   | 'pass'
@@ -23,6 +30,21 @@ export type SemanticItemState =
   | 'same_sentence'
   | 'boundary'
 
+export type SemanticConflictKind = 'duplicate' | 'same_sentence' | 'interval_overlap'
+
+export interface SemanticConflict {
+  kind: SemanticConflictKind
+  other_id: string
+  /** Only for interval_overlap; a verbatim excerpt, capped at 120 characters. */
+  overlap_text?: string
+  overlap_chars?: number
+  /** overlap_chars / min(quoteA, quoteB), 0..1. */
+  overlap_ratio?: number
+  paragraphs?: number[]
+  /** Only for same_sentence. */
+  sentence?: { id: number; text: string; paragraph: number }
+}
+
 export interface SemanticNearest {
   paragraph: number
   quote: string
@@ -35,11 +57,14 @@ export interface SemanticItemResult {
   quote?: string
   detail?: string
   nearest?: SemanticNearest
+  /** Kept for older adapters; the full pair is in `conflicts`. */
   conflict_with?: string
+  conflicts?: SemanticConflict[]
 }
 
 export interface SemanticEvaluation {
   items: SemanticItemResult[]
+  conflicts: SemanticConflict[]
   /** Content findings only; these are written to a check document. */
   findings: BlockingItem[]
   /** Findings for every failed item, used by the archive preflight compatibility path. */
@@ -47,6 +72,21 @@ export interface SemanticEvaluation {
   submission_failed: boolean
   content_failed: boolean
   failed: boolean
+}
+
+const conflictSummary = (itemId: string, conflict: SemanticConflict): string => {
+  const pair = `${itemId}↔${conflict.other_id}`
+  if (conflict.kind === 'same_sentence') {
+    const where =
+      conflict.sentence === undefined
+        ? ''
+        : ` at paragraph ${conflict.sentence.paragraph} sentence ${conflict.sentence.id}`
+    return `${pair} same sentence${where}`
+  }
+  if (conflict.kind === 'duplicate') return `${pair} exact duplicate`
+  const chars = conflict.overlap_chars ?? 0
+  const ratio = conflict.overlap_ratio === undefined ? '' : ` (${Math.round(conflict.overlap_ratio * 100)}%)`
+  return `${pair} overlaps ${chars} chars${ratio}`
 }
 
 /**
@@ -57,23 +97,39 @@ export class CheckSubmissionError extends EngineInputError {
   readonly items: SemanticItemResult[]
   readonly passed: number
   readonly failed: number
+  readonly conflicts: SemanticConflict[]
+  readonly blocking: BlockingItem[]
   readonly rounds_consumed = 0 as const
   readonly failure_class = 'submission' as const
 
-  constructor(items: SemanticItemResult[]) {
+  constructor(items: SemanticItemResult[], blocking?: BlockingItem[]) {
     const passed = items.filter((item) => item.state === 'pass').length
     const failed = items.filter((item) => item.state !== 'pass' && item.state !== 'fail').length
     const first = items.find((item) => item.state !== 'pass' && item.state !== 'fail')
+    const conflicts = items.flatMap((item) => item.conflicts ?? [])
+    const summaries = items
+      .flatMap((item) => (item.conflicts ?? []).map((conflict) => conflictSummary(item.id, conflict)))
+      .slice(0, 5)
     super(
       ERROR_CODES.CHECK_SUBMISSION_INVALID,
       `semantic submission is invalid: ${first?.id ?? 'semantic'} ${first?.state ?? 'invalid'}${
         first?.detail === undefined ? '' : ` (${first.detail})`
-      }; ${passed} passed, ${failed} failed; no check was written and no round was consumed`,
-      'resubmit novel_check with all five semantic items; each needs a distinct verbatim quote of at least 8 characters',
+      }${summaries.length === 0 ? '' : `; conflicts: ${summaries.join('; ')}`}; ${passed} passed, ${failed} failed; no check was written and no round was consumed`,
+      'resubmit novel_check with all five semantic items; use distinct quotes from different sentences and paragraphs, and never reuse a sentence for two dimensions',
     )
     this.items = items
     this.passed = passed
     this.failed = failed
+    this.conflicts = conflicts
+    this.blocking =
+      blocking ??
+      items
+        .filter((item) => submissionState(item.state))
+        .map((item) => ({
+          code: codeForState(item.state),
+          scope: 'check',
+          detail: detailFor(item),
+        }))
   }
 }
 
@@ -90,50 +146,6 @@ export function evidenceQuote(value: string): string {
   return candidate
 }
 
-interface SentenceSpan {
-  start: number
-  end: number
-  paragraph: number
-}
-
-const CLOSING_PUNCTUATION = new Set(['」', '』', '”', '"', '’', "'", '）', ')', '】', ']'])
-
-/**
- * Split text into sentence spans while treating every non-empty line as a
- * paragraph boundary. A quote may cover multiple sentences or paragraphs; the
- * spans are only used to prove that no two evidence items reuse the same
- * passage. Trailing closing quotes belong to the sentence they terminate.
- */
-function sentenceSpans(text: string): SentenceSpan[] {
-  const spans: SentenceSpan[] = []
-  let paragraph = 1
-  let lineStart = 0
-  let sentenceStart = 0
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!
-    if (char === '\n') {
-      if (text.slice(lineStart, index).trim() !== '') {
-        if (index > sentenceStart) spans.push({ start: sentenceStart, end: index, paragraph })
-        paragraph += 1
-      }
-      lineStart = index + 1
-      sentenceStart = index + 1
-      continue
-    }
-    if ('。！？!?'.includes(char)) {
-      let end = index + 1
-      while (end < text.length && CLOSING_PUNCTUATION.has(text[end]!)) end += 1
-      spans.push({ start: sentenceStart, end, paragraph })
-      sentenceStart = end
-      index = end - 1
-    }
-  }
-  if (sentenceStart < text.length) {
-    spans.push({ start: sentenceStart, end: text.length, paragraph })
-  }
-  return spans
-}
-
 function nearestParagraph(text: string, quote: string): SemanticNearest | null {
   const paragraphs = splitParagraphs(text)
   let best: { index: number; paragraph: string; score: number } | null = null
@@ -141,7 +153,7 @@ function nearestParagraph(text: string, quote: string): SemanticNearest | null {
     const score = textSimilarity(paragraph, quote)
     if (best === null || score > best.score) best = { index, paragraph, score }
   }
-  if (best === null) return null
+  if (best === null || best.score < SEMANTIC_NEAREST_MIN_SCORE) return null
   return {
     paragraph: best.index + 1,
     quote: Array.from(best.paragraph).slice(0, 120).join(''),
@@ -194,18 +206,59 @@ const detailFor = (result: SemanticItemResult): string => {
   }
 }
 
+interface AcceptedSpan {
+  start: number
+  end: number
+  id: string
+  quote: string
+  sentenceIds: number[]
+}
+
+const sentenceIdsFor = (sentences: readonly SentenceSpan[], start: number, end: number): number[] =>
+  sentences
+    .map((sentence, index) => ({ sentence, index }))
+    .filter(({ sentence }) => start < sentence.end && sentence.start < end)
+    .map(({ index }) => index)
+
+const paragraphsFor = (sentences: readonly SentenceSpan[], start: number, end: number): number[] => {
+  const values = new Set<number>()
+  for (const sentence of sentences) {
+    if (start < sentence.end && sentence.start < end) values.add(sentence.paragraph)
+  }
+  return [...values].sort((left, right) => left - right)
+}
+
+const intervalOverlap = (
+  start: number,
+  end: number,
+  other: AcceptedSpan,
+): { start: number; end: number; chars: number; ratio: number; contains: boolean } => {
+  const overlapStart = Math.max(start, other.start)
+  const overlapEnd = Math.min(end, other.end)
+  const overlapChars = Math.max(0, overlapEnd - overlapStart)
+  const minLength = Math.min(end - start, other.end - other.start)
+  return {
+    start: overlapStart,
+    end: overlapEnd,
+    chars: overlapChars,
+    ratio: minLength === 0 ? 0 : overlapChars / minLength,
+    contains: (start <= other.start && end >= other.end) || (other.start <= start && other.end >= end),
+  }
+}
+
 /**
- * Validate and evaluate all five L2 semantic items.
+ * Evaluate all five L2 semantic items.
  *
- * Evidence is located by character range, not by requiring one sentence. Two
- * items may not overlap or reuse a sentence; a quote that exists but fails
- * those rules is reported as OVERLAP/SAME_SENTENCE instead of the old generic
- * "overlapping text or the same sentence" message.
+ * Sentence boundaries come from the domain owner. A failure never consumes an
+ * interval or a sentence, so one bad quote cannot cascade into the next item.
+ * Exact duplicate, same-sentence reuse and meaningful interval overlap are
+ * distinct, pair-level conflicts; merely sharing a few words in different
+ * sentences is not a conflict.
  */
 export function evaluateSemantic(text: string, input: unknown): SemanticEvaluation {
   const items: SemanticItemResult[] = []
-  const spans: Array<{ start: number; end: number; id: string }> = []
-  const sentences = sentenceSpans(text)
+  const accepted: AcceptedSpan[] = []
+  const sentences = splitSentenceSpans(text)
   const usedSentences = new Map<number, string>()
   const seenIds = new Set<string>()
   const acceptedQuotes = new Map<string, string>()
@@ -255,11 +308,13 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
     }
     const duplicate = acceptedQuotes.get(quote)
     if (duplicate !== undefined) {
+      const conflict: SemanticConflict = { kind: 'duplicate', other_id: duplicate }
       items.push({
         id,
         state: 'duplicate',
         quote,
         conflict_with: duplicate,
+        conflicts: [conflict],
         detail: `${id} repeats ${duplicate}'s quote exactly`,
       })
       continue
@@ -283,66 +338,79 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       continue
     }
 
-    let accepted: { start: number; end: number; id: string } | null = null
-    let overlapWith: string | undefined
-    let sameSentenceWith: string | undefined
-    let boundary = false
+    let acceptedSpan: AcceptedSpan | null = null
+    const conflicts: SemanticConflict[] = []
     for (const start of occurrences) {
       const end = start + quote.length
-      const conflict = spans.find((span) => start < span.end && span.start < end)
-      if (conflict !== undefined) {
-        overlapWith ??= conflict.id
+      const sentenceIds = sentenceIdsFor(sentences, start, end)
+      if (sentenceIds.length === 0) {
         continue
       }
-      const covered = sentences
-        .map((sentence, sentenceIndex) => ({ sentence, sentenceIndex }))
-        .filter(({ sentence }) => start < sentence.end && sentence.start < end)
-      if (covered.length === 0) {
-        boundary = true
-        continue
+      let rejected = false
+      for (const other of accepted) {
+        const overlap = intervalOverlap(start, end, other)
+        const minLength = Math.min(quote.length, other.quote.length)
+        const threshold = Math.max(SEMANTIC_OVERLAP_MIN_CHARS, Math.ceil(SEMANTIC_OVERLAP_RATIO * minLength))
+        if (overlap.chars > 0 && (overlap.contains || overlap.chars >= threshold)) {
+          conflicts.push({
+            kind: 'interval_overlap',
+            other_id: other.id,
+            overlap_text: Array.from(text.slice(overlap.start, overlap.end)).slice(0, 120).join(''),
+            overlap_chars: overlap.chars,
+            overlap_ratio: Math.round(overlap.ratio * 1000) / 1000,
+            paragraphs: paragraphsFor(sentences, overlap.start, overlap.end),
+          })
+          rejected = true
+        }
       }
-      const used = covered.find(({ sentenceIndex }) => usedSentences.has(sentenceIndex))
-      if (used !== undefined) {
-        sameSentenceWith ??= usedSentences.get(used.sentenceIndex)
-        continue
+      if (!rejected) {
+        for (const sentenceId of sentenceIds) {
+          const owner = usedSentences.get(sentenceId)
+          if (owner !== undefined) {
+            const sentence = sentences[sentenceId]!
+            conflicts.push({
+              kind: 'same_sentence',
+              other_id: owner,
+              sentence: { id: sentenceId + 1, text: sentence.text, paragraph: sentence.paragraph },
+            })
+            rejected = true
+          }
+        }
       }
-      accepted = { start, end, id }
-      for (const { sentenceIndex } of covered) usedSentences.set(sentenceIndex, id)
-      break
+      if (!rejected) {
+        acceptedSpan = { start, end, id, quote, sentenceIds }
+        break
+      }
     }
 
-    if (accepted === null) {
-      if (overlapWith !== undefined) {
-        items.push({
-          id,
-          state: 'overlap',
-          quote,
-          conflict_with: overlapWith,
-          detail: `${id} overlaps ${overlapWith}'s accepted evidence interval`,
-        })
-      } else if (sameSentenceWith !== undefined) {
-        items.push({
-          id,
-          state: 'same_sentence',
-          quote,
-          conflict_with: sameSentenceWith,
-          detail: `${id} reuses a sentence already cited by ${sameSentenceWith}`,
-        })
-      } else {
-        items.push({
-          id,
-          state: boundary ? 'boundary' : 'same_sentence',
-          quote,
-          ...(boundary ? {} : { conflict_with: id }),
-          detail: boundary
-            ? `${id} cannot be mapped onto a sentence boundary`
-            : `${id} reuses a sentence already cited by another item`,
-        })
+    if (acceptedSpan === null) {
+      const unique = new Map<string, SemanticConflict>()
+      for (const conflict of conflicts) {
+        const key = `${conflict.kind}:${conflict.other_id}:${conflict.overlap_chars ?? ''}:${conflict.sentence?.id ?? ''}`
+        unique.set(key, conflict)
       }
+      const all = [...unique.values()]
+      const overlap = all.find((conflict) => conflict.kind === 'interval_overlap')
+      const same = all.find((conflict) => conflict.kind === 'same_sentence')
+      const chosen = overlap ?? same
+      const state: SemanticItemState =
+        overlap !== undefined ? 'overlap' : same !== undefined ? 'same_sentence' : 'boundary'
+      items.push({
+        id,
+        state,
+        quote,
+        ...(chosen === undefined ? {} : { conflict_with: chosen.other_id }),
+        ...(all.length === 0 ? {} : { conflicts: all }),
+        detail:
+          chosen === undefined
+            ? `${id} cannot be mapped onto a sentence boundary`
+            : `${id} ${chosen.kind} with ${chosen.other_id}`,
+      })
       continue
     }
 
-    spans.push(accepted)
+    accepted.push(acceptedSpan)
+    for (const sentenceId of acceptedSpan.sentenceIds) usedSentences.set(sentenceId, id)
     acceptedQuotes.set(quote, id)
     items.push({
       id,
@@ -369,6 +437,7 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
     }
   }
 
+  const conflicts = items.flatMap((item) => item.conflicts ?? [])
   const findings: BlockingItem[] = items
     .filter((item) => item.state === 'fail')
     .map((item) => ({
@@ -383,10 +452,18 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       scope: 'check',
       detail: detailFor(item),
     })),
+    ...submissionItems.flatMap((item) =>
+      (item.conflicts ?? []).slice(0, 5).map((conflict) => ({
+        code: codeForState(item.state),
+        scope: 'check',
+        detail: `${item.id}: ${conflictSummary(item.id, conflict)}`,
+      })),
+    ),
     ...findings,
   ]
   return {
     items,
+    conflicts,
     findings,
     blocking,
     submission_failed: submissionItems.length > 0,
@@ -399,7 +476,7 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
 export function validateSemanticSubmission(text: string, input: unknown): SemanticEvaluation {
   const evaluation = evaluateSemantic(text, input)
   if (evaluation.submission_failed) {
-    throw new CheckSubmissionError(evaluation.items)
+    throw new CheckSubmissionError(evaluation.items, evaluation.blocking)
   }
   return evaluation
 }

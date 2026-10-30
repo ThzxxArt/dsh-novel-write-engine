@@ -152,26 +152,24 @@ describe('FsStore', () => {
     }
   })
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'wraps raw permission failures as ENGINE_IO_PERMISSION',
-    async () => {
-      const root = await temp()
+  it('wraps raw permission failures as ENGINE_IO_PERMISSION', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return
+    const root = await temp()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/a.yaml', 'hello')
+      await chmod(join(root, 'state/a.yaml'), 0o000)
       try {
-        const store = new FsStore(root)
-        await store.writeText('state/a.yaml', 'hello')
-        await chmod(join(root, 'state/a.yaml'), 0o000)
-        try {
-          await expect(store.readText('state/a.yaml')).rejects.toMatchObject({
-            code: 'ENGINE_IO_PERMISSION',
-          })
-        } finally {
-          await chmod(join(root, 'state/a.yaml'), 0o600)
-        }
+        await expect(store.readText('state/a.yaml')).rejects.toMatchObject({
+          code: 'ENGINE_IO_PERMISSION',
+        })
       } finally {
-        await rm(root, { recursive: true, force: true })
+        await chmod(join(root, 'state/a.yaml'), 0o600)
       }
-    },
-  )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('transactions', () => {

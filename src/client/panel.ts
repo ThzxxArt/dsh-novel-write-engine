@@ -607,6 +607,24 @@ const CSS = `
 .nwe-pending-error { border-left-color: #b3261e; }
 .nwe-pending-detail { margin: 8px 0 0; color: var(--nwe-ink); font-size: 11px; line-height: 1.6; }
 .nwe-pending-hint { margin: 4px 0 0; color: var(--nwe-muted); font-size: 10px; line-height: 1.5; }
+
+.nwe-v6-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.nwe-v6-card { border: 1px solid var(--nwe-border); border-radius: 8px; padding: 10px; background: var(--nwe-surface); }
+.nwe-v6-card[open] { grid-column: span 2; }
+.nwe-v6-card > summary { cursor: pointer; font: 600 12px/1.4 var(--nwe-font); color: var(--nwe-ink); }
+.nwe-v6-card > summary:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: 2px; }
+.nwe-v6-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.nwe-v6-list li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 8px; font-size: 10px; line-height: 1.55; color: var(--nwe-muted); }
+.nwe-v6-list b { color: var(--nwe-ink); font-weight: 600; overflow-wrap: anywhere; }
+.nwe-v6-bars { display: grid; gap: 4px; margin-top: 8px; }
+.nwe-v6-bar { display: grid; grid-template-columns: 7em minmax(0, 1fr) 3em; gap: 6px; align-items: center; font-size: 10px; color: var(--nwe-muted); }
+.nwe-v6-bar span { height: 4px; border-radius: 2px; background: var(--nwe-border); overflow: hidden; }
+.nwe-v6-bar span i { display: block; height: 100%; background: var(--nwe-accent); }
+.nwe-v6-note { margin: 8px 0 0; font-size: 10px; line-height: 1.5; color: var(--nwe-muted); }
+.nwe-v6-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.nwe-v6-tags span { border: 1px solid var(--nwe-border); border-radius: 999px; padding: 2px 7px; font-size: 9px; color: var(--nwe-muted); }
+.nwe-chapter-extra { margin-top: 6px; font-size: 10px; color: var(--nwe-muted); line-height: 1.5; }
+@media (max-width: 640px) { .nwe-v6-grid { grid-template-columns: 1fr; } .nwe-v6-card[open] { grid-column: auto; } }
 .nwe-legacy {
   display: flex;
   gap: 8px;
@@ -858,6 +876,11 @@ const chapterCard = (row: PanelChapter): ReactElement =>
         createElement('span', { className: 'nwe-chevron', 'aria-hidden': 'true' }, '›'),
       ),
       row.details === '' ? null : createElement('div', { className: 'nwe-chapter-detail' }, row.details),
+      createElement(
+        'div',
+        { className: 'nwe-chapter-extra' },
+        `${row.sceneType || '—'} · 钩子 ${row.hookStrength ?? '—'} · 终检 ${row.finalCheck ?? '—'} · 评 ${row.reviews} / 修 ${row.revisions} / 检 ${row.checks} / 回滚 ${row.rollbacks}`,
+      ),
     ),
   )
 
@@ -930,6 +953,7 @@ const bookSection = (view: PanelView): ReactElement => {
             `${view.book.planned} 计划 / ${view.book.archivedCards} 归档`,
           ),
         ),
+        createElement('p', { className: 'nwe-v6-note' }, view.book.logline || '还没有 logline'),
         createElement(
           'div',
           {
@@ -1003,7 +1027,7 @@ const bookSection = (view: PanelView): ReactElement => {
             { className: 'nwe-book-note' },
             bars.length === 0
               ? '—'
-              : `${view.quality.averageScore.toFixed(1)} 近十均分 · 趋势 ${view.quality.trendText} · ${view.quality.samples} 章 / ${view.quality.attempts} 评`,
+              : `${view.quality.lastTenAverage.toFixed(1)} 近十均分 · 趋势 ${view.quality.trendText} · ${view.quality.samples} 章 / ${view.quality.attempts} 评`,
           ),
         ),
         createElement(
@@ -1027,7 +1051,7 @@ const bookSection = (view: PanelView): ReactElement => {
             null,
             view.health.ok
               ? '项目健康：没有阻塞或损坏状态'
-              : `需要处理：${view.health.blocking} 条门控 · ${view.health.stateErrors} 个损坏文档`,
+              : `需要处理：${view.health.blocking} 条门控 · ${view.health.stateErrors} 个损坏文档${view.health.pending ? ' · 有 pending 事务' : ''}`,
           ),
         ),
       ),
@@ -1764,7 +1788,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.4 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.6 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )
@@ -1911,6 +1935,296 @@ const chaptersSection = (view: PanelView): ReactElement =>
         ),
   )
 
+const v6Kv = (entries: Array<[string, string]>): ReactElement =>
+  createElement(
+    'ul',
+    { className: 'nwe-v6-list' },
+    ...entries.map(([key, value]) =>
+      createElement('li', { key }, createElement('b', null, key), createElement('span', null, value)),
+    ),
+  )
+
+const v6Card = (
+  key: string,
+  title: string,
+  children: Array<ReactElement | null>,
+  open = false,
+): ReactElement =>
+  createElement(
+    'details',
+    { className: 'nwe-v6-card', key, ...(open ? { open: true } : {}) },
+    createElement('summary', null, title),
+    ...children,
+  )
+
+const bookDataSection = (view: PanelView): ReactElement | null => {
+  const data = view.bookData
+  if (data === null) return null
+  const dims = data.quality.dimensions.map((dimension) =>
+    createElement(
+      'div',
+      { className: 'nwe-v6-bar', key: dimension.id },
+      createElement('span', null, dimension.id),
+      createElement(
+        'span',
+        null,
+        createElement('i', {
+          style: { width: `${Math.min(100, Math.max(0, (dimension.average / 10) * 100))}%` },
+        }),
+      ),
+      createElement('span', null, dimension.samples === 0 ? '—' : dimension.average.toFixed(1)),
+    ),
+  )
+  const worldEntries = (
+    entries: Array<{ name: string; description: string; anchors?: string[] }>,
+  ): ReactElement[] =>
+    entries.map((entry) =>
+      createElement(
+        'li',
+        { key: entry.name },
+        createElement('b', null, entry.name),
+        createElement('span', null, entry.description),
+        entry.anchors === undefined || entry.anchors.length === 0
+          ? null
+          : createElement('span', { className: 'nwe-v6-note' }, `锚点：${entry.anchors.join(' / ')}`),
+      ),
+    )
+  return createElement(
+    'section',
+    { className: 'nwe-section', 'aria-label': '书籍数据' },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, '这本书'),
+      createElement('span', { className: 'nwe-section-note' }, '只读投影 · 不含正文'),
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-v6-grid' },
+      v6Card(
+        'bp',
+        '书脊与蓝图',
+        [
+          v6Kv([
+            ['作者', data.identity.author || '未填写'],
+            ['简介', data.identity.description || '未填写'],
+            ['创建', data.identity.created_at || '—'],
+            [
+              '目标',
+              `${data.identity.targets.words_per_chapter[0]}–${data.identity.targets.words_per_chapter[1]} 字 / 章 · ${data.identity.targets.total_chapters ?? '不限'} 章`,
+            ],
+            ['主题', data.blueprint.themes.join(' / ') || '—'],
+            ['基调 / POV', `${data.blueprint.tone || '—'} / ${data.blueprint.pov || '—'}`],
+            [
+              '读者 / 卖点',
+              `${data.blueprint.audience || '—'} / ${data.blueprint.selling_points.join(' / ') || '—'}`,
+            ],
+            ['结局', data.blueprint.ending || '—'],
+          ]),
+          createElement(
+            'p',
+            { className: 'nwe-v6-note' },
+            data.blueprint.logline || data.blueprint.premise || '还没有蓝图摘要',
+          ),
+        ],
+        true,
+      ),
+      v6Card('progress', '进度与当前章', [
+        v6Kv([
+          ['已归档', `${data.progress.archived} / ${data.progress.target ?? '不限'} 章`],
+          ['字数', `归档 ${data.progress.words_archived} · 含草稿 ${data.progress.words_with_draft}`],
+          [
+            '剩余',
+            data.progress.remaining_words === null
+              ? '—'
+              : `${data.progress.remaining_words} 字（${data.progress.remaining_words_basis}）`,
+          ],
+          [
+            '当前章',
+            `${data.current.chapter} · ${data.current.stage} · ${data.current.card?.title ?? '无章卡'}`,
+          ],
+          [
+            '轮次',
+            `评 ${data.current.rounds.review} / 修 ${data.current.rounds.revise} / 检 ${data.current.rounds.check}`,
+          ],
+          ['正文 hash', data.current.manuscript_hash ?? '—'],
+          ['当前字数', data.current.metrics === null ? '—' : String(data.current.metrics.total_word_count)],
+        ]),
+        data.current.card === null
+          ? null
+          : createElement(
+              'div',
+              { className: 'nwe-v6-tags' },
+              ...data.current.card.cast.map((name) => createElement('span', { key: name }, name)),
+            ),
+      ]),
+      v6Card('cast', '人物与关系', [
+        v6Kv([
+          ['角色总数', String(data.cast.total)],
+          [
+            '关系',
+            `${data.relationships.total} 条 · ${
+              Object.entries(data.relationships.types)
+                .map(([type, count]) => `${type} ${count}`)
+                .join(' / ') || '—'
+            }`,
+          ],
+        ]),
+        createElement(
+          'ul',
+          { className: 'nwe-v6-list' },
+          ...data.cast.top.map((person) =>
+            createElement(
+              'li',
+              { key: person.name },
+              createElement('b', null, person.name),
+              createElement(
+                'span',
+                null,
+                `${person.role} · 出场 ${person.appearances} · 最近第 ${person.last_seen} 章`,
+              ),
+            ),
+          ),
+        ),
+      ]),
+      v6Card('world', '世界与设定', [
+        v6Kv([
+          ['地点 / 势力', `${data.worldbook.counts.locations} / ${data.worldbook.counts.factions}`],
+          ['规则 / 术语', `${data.worldbook.counts.rules} / ${data.worldbook.counts.glossary}`],
+          ['前史 / 数值事实', `${data.worldbook.counts.backstory} / ${data.worldbook.counts.facts ?? 0}`],
+        ]),
+        createElement('ul', { className: 'nwe-v6-list' }, ...worldEntries(data.worldbook.locations)),
+        createElement('ul', { className: 'nwe-v6-list' }, ...worldEntries(data.worldbook.factions)),
+        createElement('ul', { className: 'nwe-v6-list' }, ...worldEntries(data.worldbook.rules)),
+        ...data.worldbook.facts.map((fact) =>
+          createElement(
+            'p',
+            { className: 'nwe-v6-note', key: fact.alias },
+            `${fact.alias} = ${fact.value} ${fact.unit}`,
+          ),
+        ),
+      ]),
+      v6Card('foreshadow', '伏笔与时间线', [
+        v6Kv([
+          [
+            '伏笔',
+            `未解 ${data.foreshadows.open} · 休眠 ${data.foreshadows.dormant} · 逾期 ${data.foreshadows.overdue} · 已解 ${data.foreshadows.resolved}`,
+          ],
+          [
+            '时间线',
+            `${data.timeline.events} 个事件 · 第 ${data.timeline.first_chapter ?? '—'}–${data.timeline.last_chapter ?? '—'} 章`,
+          ],
+        ]),
+        createElement(
+          'ul',
+          { className: 'nwe-v6-list' },
+          ...data.foreshadows.oldest.map((item) =>
+            createElement(
+              'li',
+              { key: item.id },
+              createElement('b', null, item.id),
+              createElement('span', null, `${item.title} · 已 ${item.age} 章`),
+            ),
+          ),
+        ),
+      ]),
+      v6Card('quality', '质量与节奏', [
+        v6Kv([
+          [
+            '全书均分',
+            `${data.quality.average.toFixed(1)} · 中位 ${data.quality.median.toFixed(1)} · ${data.quality.min}–${data.quality.max}`,
+          ],
+          ['近十均分', data.quality.last_ten_average.toFixed(1)],
+          ['样本 / 评审', `${data.quality.samples} / ${data.quality.attempts}`],
+          [
+            '趋势',
+            data.quality.trend === null
+              ? data.quality.trend_basis
+              : `${data.quality.trend >= 0 ? '+' : ''}${data.quality.trend}`,
+          ],
+          ['节奏', JSON.stringify(data.pacing.scene_types)],
+          [
+            '钩子 / 推进',
+            `${JSON.stringify(data.pacing.hook_strength)} / ${JSON.stringify(data.pacing.plot_advancement)}`,
+          ],
+          [
+            '最长 / 最短',
+            data.pacing.longest === null
+              ? '—'
+              : `第 ${data.pacing.longest.chapter} 章 ${data.pacing.longest.words} 字 / 第 ${data.pacing.shortest?.chapter ?? '—'} 章 ${data.pacing.shortest?.words ?? '—'} 字`,
+          ],
+          [
+            '返工',
+            `评 ${data.effort.reviews} · 修 ${data.effort.revisions} · 检 ${data.effort.checks} · 回滚 ${data.effort.rollbacks}`,
+          ],
+        ]),
+        createElement('div', { className: 'nwe-v6-bars', 'aria-label': '十五维质量' }, ...dims),
+        createElement(
+          'details',
+          null,
+          createElement('summary', null, '逐章 effort'),
+          createElement(
+            'ul',
+            { className: 'nwe-v6-list' },
+            ...data.effort.chapters.map((chapter) =>
+              createElement(
+                'li',
+                { key: chapter.num },
+                createElement('b', null, `第 ${chapter.num} 章`),
+                createElement(
+                  'span',
+                  null,
+                  `评 ${chapter.reviews} / 修 ${chapter.revisions} / 检 ${chapter.checks} / 回滚 ${chapter.rollbacks} · ${chapter.final_check ?? '—'}`,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]),
+      v6Card('health', '健康与恢复', [
+        v6Kv([
+          [
+            '大纲',
+            data.health.outline.present ? '可读' : data.health.outline.error === null ? '还没有大纲' : '损坏',
+          ],
+          [
+            '世界观',
+            data.health.worldbook.present
+              ? '可读'
+              : data.health.worldbook.error === null
+                ? '还没有设定'
+                : '损坏',
+          ],
+          [
+            'pending',
+            data.health.pending === null
+              ? '无'
+              : `${data.health.pending.state} · ${data.health.pending.detail}`,
+          ],
+        ]),
+        data.health.outline.error === null
+          ? null
+          : createElement('p', { className: 'nwe-v6-note' }, data.health.outline.error),
+        data.health.worldbook.error === null
+          ? null
+          : createElement('p', { className: 'nwe-v6-note' }, data.health.worldbook.error),
+        createElement(
+          'ul',
+          { className: 'nwe-v6-list' },
+          ...data.health.state_errors.map((error) =>
+            createElement(
+              'li',
+              { key: `${error.path}:${error.code}` },
+              createElement('b', null, error.code),
+              createElement('span', null, `${error.path}: ${error.message}`),
+            ),
+          ),
+        ),
+      ]),
+    ),
+  )
+}
+
 /**
  * Pure view: given a view model, return the element tree. Keeping the hooks in
  * `NovelPanel` makes every visual state renderable without a browser.
@@ -1998,6 +2312,7 @@ export function panelElement(
           stat('待处理', String(view.stats.blocking), '项'),
         )
       : null,
+    ready ? bookDataSection(view) : null,
     view.state === 'loading' ? loadingState() : null,
     view.state === 'choose' ? choosePanel(view, onSelectProject) : null,
     view.state === 'missing' ? missingPanel(view) : null,

@@ -33,7 +33,7 @@ const response = () => {
   }
 }
 
-describe('panel bundle v5', () => {
+describe('panel bundle v6', () => {
   it('offers every project and chooses active or an explicit query root', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
     const other = await mkdtemp(join(tmpdir(), 'novel-panel-b-'))
@@ -249,7 +249,7 @@ describe('panel bundle v5', () => {
     }
   })
 
-  it('parses ?root= in the remote handler and serves v5', async () => {
+  it('parses ?root= in the remote handler and serves v6', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
     const other = await mkdtemp(join(tmpdir(), 'novel-panel-b-'))
     const { root, engine, cleanup } = await harness({ stateDir })
@@ -267,7 +267,7 @@ describe('panel bundle v5', () => {
         selection: { root: string; source: string }
         summary: { root: string }
       }
-      expect(body.schemaVersion).toBe(5)
+      expect(body.schemaVersion).toBe(6)
       expect(body.selection).toEqual({ root: other, source: 'query' })
       expect(body.summary.root).toBe(other)
     } finally {

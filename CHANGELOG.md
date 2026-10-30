@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.6
+
+### Added
+
+- **语义证据配对**：`novel_check` 失败项新增 `conflicts`（`duplicate`/`same_sentence`/`interval_overlap`，带 `other_id`、重叠原文/字数/比例、段落、句子），submission 错误的 message 汇总最多五条配对；aborted journal 写紧凑 blocking，失败后仍可审计。句边界统一由 `domain/text.ts` 的 `splitSentenceSpans` 提供，支持 `…` 与英文句点。
+- **world 实体锚点**：`summary.new_element_anchors` 支持 `name + anchors`；PG-05 与新世界实体归档共用 `entity-anchors.ts`，新 ledger 持久化 `anchors`，旧数据无 anchors 继续按 name 回退。
+- **panel v6**：`summary.bookData` 增加身份/蓝图、当前章卡与 metrics、世界/人物/关系/伏笔/时间线、15 维质量、节奏、逐章 effort、outline drift、state_errors/pending/damaged 区分；`quality` 明确区分全书 `average` 与 `last_ten_average`。
+- **pipeline 恢复**：`novel_restore { paths: ["state/pipeline.yaml"], txid }` 可从有效备份恢复损坏 pipeline；status/doctor 报 `PIPELINE_UNREADABLE`，普通写操作在恢复前 fail-closed。
+- **回归**：summary-only 的 PG-01 旁路只对紧接的 P6 check 生效；outline restore 复用归档卷守卫；PG-05 对 null world row 不再崩溃；PG-09 重复句匹配所有段落。
+
+### Fixed
+
+- `resources:null` 不再被当成空对象；summary-only 不再静默吞掉 `issues`/`proof`；rulepack 递归 unknown-key 覆盖 `reader_intrusion`/`god_view`、`genres.*`、`water_words.scene_thresholds`。
+- 面板 `pending` 不再丢失，活跃章详情改读 `pipeline.draft.summary`，`revisionLabel` 用本章 revise 轮次，samples/attempts 不再倒挂，教程版本升至 0.2.6。
+- 测试移除真实项目正文，新增隐私扫描；工具数固定 28 并断言全集；R7 识别 `skipIf`；panel v6 从真实 engine 快照集成验证。
+
+### Migration
+
+- check/world/summary 新字段均为 additive；旧文档可读，不自动迁移 anchors。
+- 面板 v6 与 v5 不混用；旧标签页显示刷新。
+- 工具 28、操作 32、语义项 5、门控 13、导出 6 均不变。
+
 ## 0.2.5
 
 ### Fixed

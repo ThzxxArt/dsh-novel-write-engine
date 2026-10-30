@@ -1,11 +1,14 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { bootstrapToDraft, cleanText, harness, sampleSummary, snapshotTree } from '../helpers.js'
 
 /**
- * T-01 / INV-03: a submission that fails a gate must not write a single byte.
- * Snapshots include a content hash, not only size/mtime.
+ * T-01 / INV-03: a submission that fails a gate must not change content state.
+ * The append-only journal intentionally records the refused attempt; it is
+ * excluded from the content snapshot and asserted separately below.
  */
-it('T-01 gate failure leaves the project tree byte-identical', async () => {
+it('T-01 gate failure leaves the content tree byte-identical', async () => {
   const { root, engine, cleanup } = await harness()
   try {
     await bootstrapToDraft({ root, engine })
@@ -24,6 +27,8 @@ it('T-01 gate failure leaves the project tree byte-identical', async () => {
     ).rejects.toMatchObject({ code: 'ENGINE_GATE_BLOCKED' })
     const after = await snapshotTree(root)
     expect([...after.entries()]).toEqual([...before.entries()])
+    const journal = await readFile(join(root, 'state/journal.jsonl'), 'utf8')
+    expect(journal).toContain('"status":"aborted"')
   } finally {
     await cleanup()
   }

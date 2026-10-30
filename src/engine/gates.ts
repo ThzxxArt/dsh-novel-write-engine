@@ -4,6 +4,14 @@ import { stripChapterPrefix } from './book.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
 import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
+import {
+  anchorsForGroup,
+  anchorsFromSummary,
+  entityMatchHint,
+  matchEntityText,
+  worldEntityName,
+  type AnchorMap,
+} from './entity-anchors.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { runRules } from '../rules/pipeline.js'
 import { sha256 } from '../store/fs.js'
@@ -212,18 +220,26 @@ const summarySchema: Gate = (input) => {
   if (typeof newElements !== 'object' || newElements === null) {
     problems.push('new_elements must be an object')
   } else {
+    let anchorMap: AnchorMap | null = null
+    try {
+      anchorMap = anchorsFromSummary(summary)
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : 'new_element_anchors is invalid')
+    }
     for (const key of ['locations', 'abilities', 'artifacts'] as const) {
       if (!textArray(newElements[key])) problems.push(`new_elements.${key} must be a string array`)
       for (const name of textArray(newElements[key]) ? newElements[key] : []) {
-        if (!input.text.includes(name)) {
-          problems.push(`new_elements.${key} lists "${name}", but the manuscript never mentions it`)
+        const anchors = anchorMap === null ? [] : anchorsForGroup(anchorMap, key, name)
+        const match = matchEntityText(input.text, name, anchors)
+        if (!match.ok) {
+          problems.push(`new_elements.${key} lists "${name}", but ${entityMatchHint(name, anchors)}`)
         }
         if (input.operation !== 'archiveChapter') {
           const ledger = input.evidence.world
           const already =
             ledger !== null &&
             [ledger.locations, ledger.abilities, ledger.artifacts, ledger.factions, ledger.rules].some(
-              (rows) => (rows as Array<{ name: string }>).some((row) => row.name === name),
+              (rows) => rows.some((row) => worldEntityName(row) === name),
             )
           if (already) {
             problems.push(
@@ -476,10 +492,17 @@ export function verifyReference(text: string, reference: ReadingProofReference):
     return `quote "${reference.quote}" is shorter than ${LIMITS.minQuoteChars} characters`
   }
   const paragraphs = splitParagraphs(text)
-  const actual = paragraphs.findIndex((paragraph) => paragraph.includes(quote))
-  if (actual === -1) return `quote "${quote}" does not appear in the text`
-  if (Math.abs(actual + 1 - reference.paragraph) > 1) {
-    return `quote "${quote}" is at paragraph ${actual + 1}, not ${reference.paragraph}`
+  const matches = paragraphs
+    .map((paragraph, index) => ({ paragraph, index }))
+    .filter(({ paragraph }) => paragraph.includes(quote))
+  if (matches.length === 0) return `quote "${quote}" does not appear in the text`
+  const nearest = matches.reduce((best, match) =>
+    Math.abs(match.index + 1 - reference.paragraph) < Math.abs(best.index + 1 - reference.paragraph)
+      ? match
+      : best,
+  )
+  if (Math.abs(nearest.index + 1 - reference.paragraph) > 1) {
+    return `quote "${quote}" is at paragraph ${nearest.index + 1}, not ${reference.paragraph}`
   }
   return null
 }

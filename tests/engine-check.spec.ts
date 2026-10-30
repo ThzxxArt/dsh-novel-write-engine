@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
+import { CheckSubmissionError } from '../src/engine/semantic.js'
 import {
   bootstrapToDraft,
   harness,
@@ -57,6 +58,43 @@ describe('semantic check evidence', () => {
       expect(state.blocking).toEqual([])
       expect(state.rounds).toMatchObject({ check: 0 })
       expect(await readProjectFile(root, 'checks/ch001.check.yaml')).toBe(before)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('journals compact pair conflicts for a refused semantic submission', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const semantic = sampleSemantic(text)
+      semantic[1] = { ...semantic[0]!, id: 'L2-CHARACTER-STATE' }
+      let caught: CheckSubmissionError | null = null
+      try {
+        await engine.runCheck({ chapter: 1, semantic, root })
+      } catch (error) {
+        caught = error as CheckSubmissionError
+      }
+      expect(caught).toBeInstanceOf(CheckSubmissionError)
+      expect(caught!.conflicts[0]).toMatchObject({
+        kind: 'duplicate',
+        other_id: 'L2-SCENE-ANCHOR',
+      })
+      expect(caught!.blocking.some((item) => item.code === 'SEMANTIC_EVIDENCE_DUPLICATE')).toBe(true)
+      const journal = (await readProjectFile(root, 'state/journal.jsonl'))!
+      const rows = journal
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const refused = rows.findLast((row) => row.attempt === true && row.op === 'runCheck')!
+      expect(refused.status).toBe('aborted')
+      expect(refused.code).toBe('ENGINE_CHECK_SUBMISSION_INVALID')
+      expect(refused.blocking).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'SEMANTIC_EVIDENCE_DUPLICATE', scope: 'check' }),
+        ]),
+      )
+      expect(JSON.stringify(refused.blocking)).toContain('↔')
     } finally {
       await cleanup()
     }

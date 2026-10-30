@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.5`                                                                                                  |
+| 插件版本 | `0.2.6`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -50,7 +50,7 @@
 文件        YAML 12 个 + JSONL 1 个 + 正文 Markdown N 个 + 导出 N 个
 运行时依赖  1 个（yaml）
 斜杠命令    5 条（/novel 内含 outline/guide/report/doctor/search 与 0.2.2 的 projects/current/use/unbind/scan/resume，0.2.3 增加 projects --prune）
-客户端半边  1 个面板（「网文工坊」v5）
+客户端半边  1 个面板（「网文工坊」v6）
 Agent 预设  1 个（「网文工坊」）
 覆盖率门禁  全局 90%，engine 90/85，纯函数层 100%
 ```
@@ -1383,6 +1383,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.4 起，`novel_outline` 的 chapters 按 `num`、volumes 按 `title` upsert：省略不删，删除只走 `remove`/`remove_volumes`，活动章/归档章/不存在章/已完成卷拒绝删除。写入支持 `dry_run`、`added/updated/removed` 回显和 `outline.deprecated.yaml`；`novel_restore` 可用 `paths:["outline/outline.yaml"]` 从备份恢复。`novel_blueprint.volumes` 仍整体 replace，但删卷必须 `confirm_remove:true`。
 
+0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
+
 0.2.5 把不变量扩到全入口：blueprint/import（含 dry-run）/amend(outline)/outline 共用归档卷与 active 卡保护；`reindexed` 显式回显，归档卡不伪造 `archived_at`。语义证据允许跨句/跨段，check 区分 submission 与 content 轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 恢复；summary-only 修订不改正文、不消耗 revise、可直接 check/archive；resources 深合并且只接受非负整数。详见 `docs/0.2.5-acceptance.md`。
 
 | 编号  | 名称             | 判定条件                                                                                 | 触发点            |
@@ -1844,7 +1846,7 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 - 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；连接层缺席时 503。
 - `root` 只接受注册表、active 或配置 `projectRoot`；其他路径返回 `missing.reason="not_registered"`，不读取任意目录。
 - 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
-- DTO v5：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `advisories`/`legacy` 与 quality 的 `samples`/`attempts`/`trend_basis`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
+- DTO v6：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `advisories`/`legacy` 与 quality 的 `samples`/`attempts`/`trend_basis`；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。
 - 0.2.3 的面板选择器按 `writing/damaged/missing` 分组，失效项默认折叠；同名项目用父目录区分。布局改为“当前章/下一步 → 统计条 → 双栏工作台 → 章节表”，advisories 与 legacy 独立于 blocking。
 - **退路**：typert 的 Host 侧命名空间声明若比预期重，面板降级为「静态壳 + 刷新按钮」，数据仍由对话内工具卡片呈现——不阻塞 Host 交付。
 

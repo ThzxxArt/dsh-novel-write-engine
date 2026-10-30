@@ -237,6 +237,18 @@ const duplicateNames = (
   }
 }
 
+const validateAnchorList = (kind: DocKind, value: unknown, path: string): void => {
+  if (value === undefined) return
+  const anchors = listAt(kind, value, path)
+  if (anchors.length > 8) invalid(kind, `${path} may contain at most 8 anchors`)
+  for (const [index, anchor] of anchors.entries()) {
+    const text = stringAt(kind, anchor, `${path}[${index}]`).trim()
+    if (text.length < 2 || Array.from(text).length > 120) {
+      invalid(kind, `${path}[${index}] must contain 2..120 characters`)
+    }
+  }
+}
+
 const validateSummary = (kind: DocKind, value: unknown, path: string): void => {
   const summary = objectAt(kind, value, path)
   for (const key of ['events', 'characters_appeared', 'pleasure_points'] as const) {
@@ -249,6 +261,18 @@ const validateSummary = (kind: DocKind, value: unknown, path: string): void => {
     listAt(kind, foreshadows[key], `${path}.foreshadows.${key}`)
   }
   objectAt(kind, summary.new_elements, `${path}.new_elements`)
+  if (summary.new_element_anchors !== undefined) {
+    const anchorMap = objectAt(kind, summary.new_element_anchors, `${path}.new_element_anchors`)
+    for (const group of Object.keys(anchorMap)) {
+      if (!['locations', 'abilities', 'artifacts'].includes(group)) {
+        invalid(kind, `${path}.new_element_anchors has unknown group "${group}"`)
+      }
+      const entries = objectAt(kind, anchorMap[group], `${path}.new_element_anchors.${group}`)
+      for (const [name, anchors] of Object.entries(entries)) {
+        validateAnchorList(kind, anchors, `${path}.new_element_anchors.${group}.${name}`)
+      }
+    }
+  }
   listAt(kind, summary.resource_changes, `${path}.resource_changes`)
   stringAt(kind, summary.opening, `${path}.opening`)
   const continuity = objectAt(kind, summary.continuity, `${path}.continuity`)
@@ -341,9 +365,14 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.layout, `${path}.layout`)
         numberAt(kind, row.capacity, `${path}.capacity`)
         listAt(kind, row.changes, `${path}.changes`)
+        validateAnchorList(kind, row.anchors, `${path}.anchors`)
       })
       for (const key of ['abilities', 'artifacts', 'factions', 'rules'] as const) {
-        listAt(kind, record[key], key)
+        for (const [index, row] of listAt(kind, record[key], key).entries()) {
+          if (typeof row === 'object' && row !== null && !Array.isArray(row)) {
+            validateAnchorList(kind, (row as Record<string, unknown>).anchors, `${key}[${index}].anchors`)
+          }
+        }
       }
       {
         const names: string[] = []

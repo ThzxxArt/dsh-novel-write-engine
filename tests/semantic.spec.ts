@@ -7,20 +7,21 @@ import {
   validateSemanticSubmission,
 } from '../src/engine/semantic.js'
 
+// Synthetic evidence shape; deliberately not copied from the real project.
 const TEXT = [
-  '九记茶楼。门口一个伙记正在收碗。',
-  '二十蚊。他身上一个仙都冇。',
-  '最后两转，佢冇盖印。卡上面盖到九十二，碟洗出来一百零三。',
-  '冇身份证就系冇身份证。你喺我铺头企一个钟，我都系犯法。',
-  '他把脸转开，看见路边的牌子。',
+  '旧楼停电。守门人正在收伞。',
+  '三枚铜钱。他口袋里一枚也没有。',
+  '最后两趟，伙计忘了盖章。账本写着九十二，碟子洗出一百零三。',
+  '没有通行证就是没有通行证。你在铺头站一个钟，也是犯法。',
+  '他转过脸，看见路边的木牌。',
 ].join('\n\n')
 
 const CROSS = [
-  '九记茶楼。门口一个伙记正在收碗。',
-  '二十蚊。他身上一个仙都冇。',
-  '最后两转，佢冇盖印。卡上面盖到九十二，碟洗出来一百零三。',
-  '冇身份证就系冇身份证。你喺我铺头企一个钟，我都系犯法。',
-  '他把脸转开，看见路边的牌子。',
+  '旧楼停电。守门人正在收伞。',
+  '三枚铜钱。他口袋里一枚也没有。',
+  '最后两趟，伙计忘了盖章。账本写着九十二，碟子洗出一百零三。',
+  '没有通行证就是没有通行证。你在铺头站一个钟，也是犯法。',
+  '他转过脸，看见路边的木牌。',
 ]
 
 const item = (id: string, evidence: string, verdict: 'pass' | 'fail' = 'pass') => ({
@@ -83,19 +84,47 @@ describe('semantic evidence validation', () => {
     expect(duplicate.conflict_with).toBe('L2-SCENE-ANCHOR')
   })
 
-  it('reports overlapping substrings as OVERLAP with the accepted item id', () => {
+  it('reports overlapping substrings as OVERLAP with the accepted item id and interval evidence', () => {
     const sentence = '他站在雨里看着远处的灯火一言不发。'
-    const overlapping = ['他站在雨里看着远处', '在雨里看着远处的灯', '雨里看着远处的灯火']
+    const overlapping = ['他站在雨里看着远处的灯火', '在雨里看着远处的灯火一', '雨里看着远处的灯火一言']
     const result = evaluateSemantic(
       sentence,
       SEMANTIC_CHECK_IDS.map((id, index) => item(id, overlapping[index]!)),
     )
     const overlap = result.items.find((entry) => entry.state === 'overlap')!
     expect(overlap.conflict_with).toBe('L2-SCENE-ANCHOR')
+    expect(overlap.conflicts?.[0]).toMatchObject({
+      kind: 'interval_overlap',
+      other_id: 'L2-SCENE-ANCHOR',
+    })
+    expect(overlap.conflicts?.[0]?.overlap_text).toBeTruthy()
+    expect(overlap.conflicts?.[0]?.overlap_chars).toBeGreaterThanOrEqual(8)
     expect(result.blocking.some((entry) => entry.code === 'SEMANTIC_EVIDENCE_OVERLAP')).toBe(true)
   })
 
-  it('reports different non-overlapping substrings of one sentence as SAME_SENTENCE', () => {
+  it('does not reject evidence from different paragraphs that merely share common words', () => {
+    const text = '何九把秤砣放在柜台。\n\n何九看着秤杆上的星。'
+    const result = evaluateSemantic(text, [
+      item('L2-SCENE-ANCHOR', '何九把秤砣放在柜台'),
+      item('L2-CHARACTER-STATE', '何九看着秤杆上的星'),
+    ])
+    expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
+    expect(result.items.find((entry) => entry.id === 'L2-CHARACTER-STATE')?.state).toBe('pass')
+    expect(result.conflicts).toHaveLength(0)
+  })
+
+  it('does not let a long quote swallow an independent sentence after an ellipsis', () => {
+    const text = '第一句很长。第二句也很长……第三句独立成段。'
+    const result = evaluateSemantic(text, [
+      item('L2-SCENE-ANCHOR', '第一句很长。第二句也很长……'),
+      item('L2-CHARACTER-STATE', '第三句独立成段。'),
+    ])
+    expect(result.items.find((entry) => entry.id === 'L2-SCENE-ANCHOR')?.state).toBe('pass')
+    expect(result.items.find((entry) => entry.id === 'L2-CHARACTER-STATE')?.state).toBe('pass')
+    expect(result.conflicts).toHaveLength(0)
+  })
+
+  it('reports different non-overlapping substrings of one sentence as SAME_SENTENCE with sentence evidence', () => {
     const sentence = '他站在雨里看着远处的灯火一言不发，雨声很大，街上没有人，只有风从巷口吹过来。'
     const chars = Array.from(sentence)
     const quotes = [chars.slice(0, 8), chars.slice(9, 17), chars.slice(18, 26), chars.slice(27, 35)].map(
@@ -105,7 +134,13 @@ describe('semantic evidence validation', () => {
       sentence,
       SEMANTIC_CHECK_IDS.map((id, index) => item(id, quotes[index]!)),
     )
-    expect(result.items.some((entry) => entry.state === 'same_sentence')).toBe(true)
+    const same = result.items.find((entry) => entry.state === 'same_sentence')!
+    expect(same.conflicts?.[0]).toMatchObject({
+      kind: 'same_sentence',
+      other_id: 'L2-SCENE-ANCHOR',
+      sentence: { paragraph: 1 },
+    })
+    expect(same.conflicts?.[0]?.sentence?.text).toContain('他站在雨里')
     expect(result.blocking.some((entry) => entry.code === 'SEMANTIC_EVIDENCE_SAME_SENTENCE')).toBe(true)
   })
 
@@ -179,5 +214,24 @@ describe('semantic evidence validation', () => {
       expect((error as CheckSubmissionError).failure_class).toBe('submission')
       expect((error as CheckSubmissionError).items.length).toBeGreaterThan(0)
     }
+  })
+
+  it('exposes pair conflicts and all blocking rows on the typed submission error', () => {
+    let caught: CheckSubmissionError | null = null
+    try {
+      validateSemanticSubmission(TEXT, [
+        item('L2-SCENE-ANCHOR', CROSS[0]!),
+        item('L2-CHARACTER-STATE', CROSS[0]!),
+      ])
+    } catch (error) {
+      caught = error as CheckSubmissionError
+    }
+    expect(caught).toBeInstanceOf(CheckSubmissionError)
+    expect(caught!.conflicts).toEqual([
+      expect.objectContaining({ kind: 'duplicate', other_id: 'L2-SCENE-ANCHOR' }),
+    ])
+    expect(caught!.blocking.length).toBeGreaterThanOrEqual(4)
+    expect(caught!.message).toContain('L2-CHARACTER-STATE↔L2-SCENE-ANCHOR')
+    expect(caught!.message).toContain('no check was written')
   })
 })

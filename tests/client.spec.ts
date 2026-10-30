@@ -13,12 +13,12 @@ const payload = (): PanelPayloadDto & {
   summary: NonNullable<PanelPayloadDto['summary']>
   chapters: NonNullable<PanelPayloadDto['chapters']>
 } => ({
-  schemaVersion: 5,
+  schemaVersion: 6,
   projects: [{ root: '/novels/test', title: '测试之书', active: true, registered: true, state: 'ok' }],
   selection: { root: '/novels/test', source: 'active' },
   resume: { text: '请继续《测试之书》。\n项目根：/novels/test' },
   summary: {
-    schemaVersion: 5,
+    schemaVersion: 6,
     panelId: 'novel-workshop',
     root: '/novels/test',
     title: '测试之书',
@@ -68,7 +68,7 @@ const payload = (): PanelPayloadDto & {
     activity: [{ at: '2026-10-28T10:00:00.000Z', op: 'archiveChapter', chapter: 1, status: 'committed' }],
   },
   chapters: {
-    schemaVersion: 5,
+    schemaVersion: 6,
     panelId: 'novel-workshop',
     rows: [
       { num: 1, title: '开端之雨', wordCount: 2400, score: 145, stage: 'done', status: 'passed' },
@@ -76,7 +76,7 @@ const payload = (): PanelPayloadDto & {
       { num: 3, title: '灯下之言', wordCount: 0, score: 0, stage: 'P3', status: 'blocked' },
     ],
   },
-  gates: { schemaVersion: 5, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
+  gates: { schemaVersion: 6, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
 })
 
 describe('panel view model', () => {
@@ -341,7 +341,7 @@ describe('panel view model', () => {
   })
 })
 
-describe('panel v5 project selection', () => {
+describe('panel v6 project selection', () => {
   const twoProjects = (): PanelPayloadDto => {
     const value = payload()
     value.projects = [
@@ -527,7 +527,7 @@ describe('panel v5 project selection', () => {
     expect(view.projects[0]!.label).toContain('— /')
   })
 
-  it('falls back to empty when a v4 payload has no projects and no summary', () => {
+  it('falls back to empty when a v6 payload has no projects and no summary', () => {
     const blank: PanelPayloadDto = payload()
     blank.projects = []
     blank.selection = { root: null, source: 'none' }

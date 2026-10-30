@@ -20,8 +20,10 @@ import type {
   Stage,
   TimelineDocument,
   WorldDocument,
+  WordMetrics,
   WorldbookDocument,
 } from '../types.js'
+import type { PanelBookData, PanelCardData, PanelWorldEntry } from '../panel-contract.js'
 
 export interface ReportInput {
   project: NovelProject
@@ -31,6 +33,8 @@ export interface ReportInput {
   worldbook: WorldbookDocument
   worldbookPresent: boolean
   worldbookError?: string | null
+  /** Archived world ledger; its anchors are the only persisted retrieval proof. */
+  world?: WorldDocument
   chapters: ChapterRecord[]
   characters: CharactersDocument
   timeline: TimelineDocument
@@ -73,6 +77,31 @@ const scoreOf = (review: ReviewDocument): number =>
       ),
     0,
   )
+
+/** Persisted anchors exposed by the report; top-level caps keep the JSON small. */
+const worldAnchors = (world?: WorldDocument): NonNullable<BookReport['worldbook']['anchors']> => {
+  if (world === undefined) return []
+  const groups: Array<[string, readonly unknown[]]> = [
+    ['location', world.locations],
+    ['ability', world.abilities],
+    ['artifact', world.artifacts],
+    ['faction', world.factions],
+    ['rule', world.rules],
+  ]
+  const out: NonNullable<BookReport['worldbook']['anchors']> = []
+  for (const [kind, entries] of groups) {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const record = entry as { name?: unknown; anchors?: unknown }
+      if (typeof record.name !== 'string' || !Array.isArray(record.anchors)) continue
+      const anchors = record.anchors
+        .filter((anchor): anchor is string => typeof anchor === 'string')
+        .slice(0, 8)
+      if (anchors.length > 0) out.push({ name: record.name, kind, anchors })
+    }
+  }
+  return out.slice(0, 10)
+}
 
 /** Build the whole-book report from one committed snapshot. No IO. */
 export function buildBookReport(input: ReportInput): BookReport {
@@ -248,6 +277,7 @@ export function buildBookReport(input: ReportInput): BookReport {
   if (records.some((record) => record.rounds === undefined || record.archived_at === undefined)) {
     warnings.push('部分旧章缺少归档 effort 元数据；报告已按事务日志回填')
   }
+  const persistedAnchors = worldAnchors(input.world)
   return {
     progress: {
       archived: records.length,
@@ -279,7 +309,10 @@ export function buildBookReport(input: ReportInput): BookReport {
       volumes: volumeCounts,
       drift,
     },
-    worldbook: worldbookCounts(input.worldbook),
+    worldbook: {
+      ...worldbookCounts(input.worldbook),
+      ...(persistedAnchors.length === 0 ? {} : { anchors: persistedAnchors }),
+    },
     quality: {
       average: Math.round(qualityAverage * 10) / 10,
       median: Math.round(median(scores) * 10) / 10,
@@ -737,6 +770,180 @@ export function searchSnapshot(input: SearchInput): SearchReport {
     total,
     truncated: total > results.length,
     results,
+  }
+}
+
+export interface PanelBookDataInput {
+  report: BookReport
+  project: NovelProject
+  worldbook: WorldbookDocument
+  world: WorldDocument
+  outline: OutlineDocument
+  outlinePresent: boolean
+  worldbookPresent: boolean
+  currentChapter: number
+  stage: Stage
+  rounds: { review: number; revise: number; check: number }
+  draftWords: number
+  lastTenAverage: number
+  manuscriptHash: string | null
+  metrics: WordMetrics | null
+  stateErrors: Array<{ path: string; code: string; message: string }>
+  pending: { state: string; txid: string; detail: string } | null
+  outlineError: string | null
+  worldbookError: string | null
+}
+
+const oneLine = (value: string): string => value.replace(/\s+/g, ' ').trim()
+const nameDescription = (
+  entries: readonly { name: string; description: string }[],
+  world?: WorldDocument,
+): PanelWorldEntry[] => {
+  const anchors = new Map(world?.locations.map((entry) => [entry.name, entry.anchors ?? []]) ?? [])
+  return entries.slice(0, 5).map((entry) => ({
+    name: oneLine(entry.name),
+    description: oneLine(entry.description),
+    ...(anchors.get(entry.name)?.length ? { anchors: [...anchors.get(entry.name)!] } : {}),
+  }))
+}
+
+/**
+ * Build the v6 panel book view from the canonical `BookReport`. This function
+ * only truncates and renames; it never recomputes a quality/pacing aggregate.
+ */
+export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
+  const report = input.report
+  const remainingBasis: PanelBookData['progress']['remaining_words_basis'] =
+    report.progress.target === null
+      ? 'none'
+      : report.progress.archived === 0
+        ? 'minimum_target'
+        : 'actual_average'
+  const remaining =
+    remainingBasis === 'actual_average'
+      ? report.progress.remaining_words_average
+      : remainingBasis === 'minimum_target'
+        ? report.progress.remaining_words_min
+        : null
+  const card = input.outline.chapters.find((candidate) => candidate.num === input.currentChapter)
+  const currentCard: PanelCardData | null =
+    card === undefined
+      ? null
+      : {
+          num: card.num,
+          title: card.title,
+          scene_type: card.scene_type,
+          goal: card.goal,
+          conflict: card.conflict,
+          hook: card.hook,
+          cast: [...card.cast],
+          target_words: [card.target_words[0], card.target_words[1]],
+          status: card.status,
+        }
+  const quality = report.quality
+  const counts = {
+    present: report.worldbook.present,
+    characters: report.worldbook.characters,
+    locations: report.worldbook.locations,
+    factions: report.worldbook.factions,
+    rules: report.worldbook.rules,
+    glossary: report.worldbook.glossary,
+    backstory: report.worldbook.backstory,
+    ...(report.worldbook.facts === undefined ? {} : { facts: report.worldbook.facts }),
+  }
+  return {
+    identity: {
+      author: input.project.author,
+      description: input.project.description,
+      created_at: input.project.created_at,
+      targets: {
+        words_per_chapter: [
+          input.project.targets.words_per_chapter[0],
+          input.project.targets.words_per_chapter[1],
+        ],
+        total_chapters: input.project.targets.total_chapters,
+        dialogue_ratio: [input.project.targets.dialogue_ratio[0], input.project.targets.dialogue_ratio[1]],
+      },
+    },
+    blueprint: {
+      premise: input.outline.book.premise,
+      logline: input.outline.book.logline,
+      themes: [...input.outline.book.themes],
+      tone: input.outline.book.tone,
+      pov: input.outline.book.pov,
+      audience: input.outline.book.audience,
+      selling_points: [...input.outline.book.selling_points],
+      ending: input.outline.book.ending,
+    },
+    progress: {
+      archived: report.progress.archived,
+      target: report.progress.target,
+      words_archived: report.progress.words,
+      words_with_draft: report.progress.words + input.draftWords,
+      average_words: report.progress.average_words,
+      remaining_words: remaining,
+      remaining_words_basis: remainingBasis,
+      percent: report.progress.percent,
+    },
+    current: {
+      card: currentCard,
+      chapter: input.currentChapter,
+      stage: input.stage,
+      rounds: { ...input.rounds },
+      manuscript_hash: input.manuscriptHash,
+      metrics: input.metrics,
+    },
+    worldbook: {
+      counts,
+      locations: nameDescription(input.worldbook.locations, input.world),
+      factions: nameDescription(input.worldbook.factions),
+      rules: nameDescription(input.worldbook.rules),
+      facts: (input.worldbook.facts ?? []).slice(0, 5).map((fact) => ({
+        alias: fact.alias,
+        value: fact.value,
+        unit: fact.unit,
+      })),
+    },
+    cast: {
+      total: report.cast.total,
+      top: report.cast.top.slice(0, 5).map((entry) => ({ ...entry })),
+    },
+    relationships: { total: report.relationships.total, types: { ...report.relationships.types } },
+    foreshadows: {
+      ...report.foreshadows,
+      oldest: report.foreshadows.oldest.slice(0, 5).map((entry) => ({ ...entry })),
+    },
+    timeline: { ...report.timeline },
+    outline: { drift: report.outline.drift.slice(0, 10).map((entry) => ({ ...entry })) },
+    quality: {
+      average: quality.average,
+      median: quality.median,
+      min: quality.min,
+      max: quality.max,
+      last_ten_average: input.lastTenAverage,
+      trend: quality.trend,
+      trend_basis: quality.trend_basis,
+      samples: quality.samples,
+      attempts: quality.attempts,
+      dimensions: quality.dimensions.slice(0, 15).map((entry) => ({ ...entry })),
+    },
+    pacing: {
+      scene_types: { ...report.pacing.scene_types },
+      hook_strength: { ...report.pacing.hook_strength },
+      plot_advancement: { ...report.pacing.plot_advancement },
+      longest: report.pacing.longest === null ? null : { ...report.pacing.longest },
+      shortest: report.pacing.shortest === null ? null : { ...report.pacing.shortest },
+    },
+    effort: {
+      ...report.effort,
+      chapters: report.effort.chapters.slice(-30).map((entry) => ({ ...entry })),
+    },
+    health: {
+      state_errors: input.stateErrors.slice(0, 10).map((entry) => ({ ...entry })),
+      outline: { present: input.outlinePresent, error: input.outlineError },
+      worldbook: { present: input.worldbookPresent, error: input.worldbookError },
+      pending: input.pending === null ? null : { ...input.pending },
+    },
   }
 }
 

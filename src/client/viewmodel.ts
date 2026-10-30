@@ -1,6 +1,7 @@
 import { REMOTE_VERSION } from '../constants.js'
 import { NEXT_DETAILS } from '../next-reasons.js'
 import type { PanelPayloadDto } from './dto.js'
+import type { PanelBookData } from '../panel-contract.js'
 
 /** One human-facing progress step. */
 export interface PanelPhase {
@@ -23,6 +24,14 @@ export interface PanelChapter {
   tone: 'ok' | 'bad' | 'muted'
   details: string
   stageLabel: string
+  sceneType: string
+  hookStrength: number | null
+  finalCheck: 'pass' | 'fail' | null
+  reviews: number
+  revisions: number
+  checks: number
+  rollbacks: number
+  archivedAt: string | null
 }
 
 export interface PanelProject {
@@ -73,6 +82,7 @@ export interface PanelView {
     present: boolean
     strict: boolean
     premise: string
+    logline: string
     target: number | null
     planned: number
     outlineTotal: number
@@ -95,13 +105,18 @@ export interface PanelView {
   }
   quality: {
     averageScore: number
+    lastTenAverage: number
+    bookMedian: number
+    bookMin: number
+    bookMax: number
+    dimensions: Array<{ id: string; average: number; samples: number }>
     scores: number[]
     trend: number | null
     trendText: string
     samples: number
     attempts: number
   }
-  health: { ok: boolean; blocking: number; stateErrors: number }
+  health: { ok: boolean; blocking: number; stateErrors: number; pending: boolean }
   activity: Array<{ at: string; op: string; chapter: number; status: string }>
   /** Machine advisories, shown separately from blocking gates. */
   advisories: Array<{ code: string; detail: string; hint: string }>
@@ -111,6 +126,8 @@ export interface PanelView {
   legacy: Array<{ code: string; detail: string }>
   /** Crash-left pending transaction, read-only. */
   pending: { state: string; txid: string; detail: string } | null
+  /** v6 book data; null on a payload that predates it. */
+  bookData: PanelBookData | null
   nextTitle: string
   nextDetail: string
   nextTool: string
@@ -205,6 +222,7 @@ const loading = (): PanelView => ({
     present: false,
     strict: false,
     premise: '',
+    logline: '',
     target: null,
     planned: 0,
     outlineTotal: 0,
@@ -217,13 +235,26 @@ const loading = (): PanelView => ({
     volumes: [],
     worldbook: { characters: 0, locations: 0, factions: 0, rules: 0, glossary: 0, backstory: 0 },
   },
-  quality: { averageScore: 0, scores: [], trend: null, trendText: '—', samples: 0, attempts: 0 },
-  health: { ok: true, blocking: 0, stateErrors: 0 },
+  quality: {
+    averageScore: 0,
+    lastTenAverage: 0,
+    bookMedian: 0,
+    bookMin: 0,
+    bookMax: 0,
+    dimensions: [],
+    scores: [],
+    trend: null,
+    trendText: '—',
+    samples: 0,
+    attempts: 0,
+  },
+  health: { ok: true, blocking: 0, stateErrors: 0, pending: false },
   activity: [],
   advisories: [],
   acknowledgedAdvisories: 0,
   legacy: [],
   pending: null,
+  bookData: null,
   nextTitle: '',
   nextDetail: '',
   nextTool: '',
@@ -414,6 +445,14 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       tone: row.status === 'passed' ? 'ok' : row.status === 'blocked' ? 'bad' : 'muted',
       details: row.details ?? '',
       stageLabel: stageLabel(row.stage),
+      sceneType: row.sceneType ?? '',
+      hookStrength: row.hookStrength ?? null,
+      finalCheck: row.finalCheck ?? null,
+      reviews: row.reviews ?? 0,
+      revisions: row.revisions ?? 0,
+      checks: row.checks ?? 0,
+      rollbacks: row.rollbacks ?? 0,
+      archivedAt: row.archivedAt ?? null,
     }
   })
   const scored = rows.filter((row) => row.tone === 'ok')
@@ -444,7 +483,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
         : `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章${volumeLabel(summary)}`,
     stageLabel: doneLabel,
     finished,
-    revisionLabel: `第 ${summary.revision} 次修订`,
+    revisionLabel: `第 ${summary.bookData?.current.rounds.revise ?? summary.revision} 次修订`,
     phases: summary.phases.map((phase) => ({ ...phase, label: phaseLabel(phase.id) })),
     rows,
     blocking,
@@ -459,6 +498,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       present: summary.book?.outline.present === true,
       strict: summary.book?.strict === true,
       premise: summary.book?.premise ?? '',
+      logline: summary.book?.logline ?? '',
       target: summary.book?.target ?? null,
       planned: summary.book?.outline.planned ?? 0,
       outlineTotal: summary.book?.outline.total ?? 0,
@@ -485,24 +525,38 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       },
     },
     quality: {
-      averageScore: summary.quality?.averageScore ?? average,
+      averageScore: summary.bookData?.quality.average ?? summary.averageScore ?? average,
+      lastTenAverage: summary.bookData?.quality.last_ten_average ?? summary.quality?.averageScore ?? average,
+      bookMedian: summary.bookData?.quality.median ?? 0,
+      bookMin: summary.bookData?.quality.min ?? 0,
+      bookMax: summary.bookData?.quality.max ?? 0,
+      dimensions: summary.bookData?.quality.dimensions ?? [],
       scores: summary.quality?.scores ?? [],
-      trend: summary.quality?.trend ?? null,
+      trend: summary.bookData?.quality.trend ?? summary.quality?.trend ?? null,
       trendText:
-        summary.quality?.trend === null || summary.quality?.trend === undefined
-          ? summary.quality?.trend_basis === 'insufficient_samples'
+        (summary.bookData?.quality.trend ?? summary.quality?.trend) === null ||
+        (summary.bookData?.quality.trend ?? summary.quality?.trend) === undefined
+          ? summary.quality?.trend_basis === 'insufficient_samples' ||
+            summary.bookData?.quality.trend_basis === 'insufficient_samples'
             ? '样本不足'
-            : summary.quality?.trend_basis === 'insufficient_history'
+            : summary.quality?.trend_basis === 'insufficient_history' ||
+                summary.bookData?.quality.trend_basis === 'insufficient_history'
               ? '历史不足'
               : '—'
-          : `${summary.quality.trend >= 0 ? '+' : ''}${summary.quality.trend}`,
-      samples: summary.quality?.samples ?? summary.totalChapters,
-      attempts: summary.quality?.attempts ?? summary.quality?.samples ?? 0,
+          : `${(summary.bookData?.quality.trend ?? summary.quality!.trend!) >= 0 ? '+' : ''}${
+              summary.bookData?.quality.trend ?? summary.quality!.trend
+            }`,
+      samples: summary.bookData?.quality.samples ?? summary.quality?.samples ?? 0,
+      attempts: Math.max(
+        summary.bookData?.quality.attempts ?? summary.quality?.attempts ?? 0,
+        summary.bookData?.quality.samples ?? summary.quality?.samples ?? 0,
+      ),
     },
     health: {
       ok: summary.health?.ok ?? blocking.length === 0,
       blocking: summary.health?.blocking ?? blocking.length,
       stateErrors: summary.health?.stateErrors ?? 0,
+      pending: summary.health?.pending === true,
     },
     activity: summary.activity ?? [],
     advisories: (summary.advisories ?? []).map((item) => ({
@@ -512,7 +566,8 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     })),
     acknowledgedAdvisories: summary.acknowledgedAdvisories ?? 0,
     legacy: summary.legacy ?? [],
-    pending: summary.pending ?? null,
+    pending: summary.bookData?.health.pending ?? summary.pending ?? null,
+    bookData: summary.bookData ?? null,
     nextTitle: finished ? '' : next === undefined ? '状态已同步' : toolLabel(next.tool),
     nextDetail: finished
       ? ''

@@ -205,6 +205,15 @@ describe('gate evaluation', () => {
     expect(codes(input())).not.toContain('PG-01')
   })
 
+  it('PG-09 matches a repeated quote at every paragraph, not only the first', () => {
+    const repeated =
+      '同一句话落在这一段里，重复。\n\n同一句话落在这一段里，重复。\n\n第三段。\n\n第四段。\n\n第五段。'
+    expect(verifyReference(repeated, { paragraph: 2, quote: '同一句话落在这一段里，重复。' })).toBeNull()
+    expect(verifyReference(repeated, { paragraph: 5, quote: '同一句话落在这一段里，重复。' })).toMatch(
+      /paragraph [12]/,
+    )
+  })
+
   it('PG-02 rejects an operation from the wrong stage', () => {
     expect(codes(input({ stage: 'P4', pipeline: { ...input().pipeline, stage: 'P4' as Stage } }))).toContain(
       'PG-02',
@@ -696,5 +705,58 @@ describe('gate evaluation', () => {
     expect(codes(input({ summary: { ...sampleSummary(), plot_advancement: 'x' as never } }))).toContain(
       'PG-05',
     )
+  })
+
+  it('PG-05 accepts a readable new entity through an explicit anchor', () => {
+    const summary = sampleSummary({
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+    })
+    const gateInput = input({
+      text: `${text}\n\n他爬上三楼尾房，敲了敲门。`,
+      summary,
+    })
+    expect(codes(gateInput)).not.toContain('PG-05')
+  })
+
+  it('PG-05 keeps the name fallback and names the attempted anchors on failure', () => {
+    const withAnchors = sampleSummary({
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+    })
+    const anchored = evaluateGates(input({ summary: withAnchors }), options).blocking.find(
+      (item) => item.code === 'PG-05',
+    )
+    expect(anchored?.detail).toContain('三楼尾房')
+
+    const noAnchors = sampleSummary({
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+    })
+    const fallback = evaluateGates(input({ summary: noAnchors }), options).blocking.find(
+      (item) => item.code === 'PG-05',
+    )
+    expect(fallback?.detail).toContain('new_element_anchors')
+  })
+
+  it('PG-05 treats null world rows as shape errors instead of crashing', () => {
+    const summary = sampleSummary({
+      new_elements: { locations: [], abilities: ['不存在的能力'], artifacts: [] },
+    })
+    const gateInput = input({
+      summary,
+      evidence: {
+        ...input().evidence,
+        world: {
+          schema_version: 1,
+          locations: [],
+          abilities: [null] as never,
+          artifacts: [],
+          factions: [],
+          rules: [],
+        },
+      },
+    })
+    expect(() => evaluateGates(gateInput, options)).not.toThrow()
+    expect(codes(gateInput)).toContain('PG-05')
   })
 })

@@ -1079,4 +1079,76 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     }
     expect(() => run(summary, nullResources, docs)).toThrowError(/resources must be an object/)
   })
+
+  it('accepts a readable entity name through an explicit manuscript anchor and persists it', () => {
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+    })
+    const delta = empty()
+    delta.world['城寨六婶家'] = { action: 'created', kind: 'location', description: '六婶住处' }
+    const result = applyStateDelta({
+      chapter: 1,
+      text: '他爬上三楼尾房，敲了敲门。',
+      summary,
+      delta: delta as never,
+      ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+    })
+    expect(result.world.locations[0]).toMatchObject({
+      name: '城寨六婶家',
+      anchors: ['三楼尾房'],
+    })
+    expect(result.world.locations[0]?.description).toBe('六婶住处')
+  })
+
+  it('rejects a new entity with anchors that do not occur verbatim', () => {
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+    })
+    const delta = empty()
+    delta.world['城寨六婶家'] = { action: 'created', kind: 'location' }
+    expect(() =>
+      applyStateDelta({
+        chapter: 1,
+        text: '他站在街口，没有上楼。',
+        summary,
+        delta: delta as never,
+        ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      }),
+    ).toThrowError(/none of the anchors/)
+  })
+
+  it('keeps the old name fallback when no anchors are supplied', () => {
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      new_elements: { locations: ['城寨六婶家'], abilities: [], artifacts: [] },
+    })
+    const delta = empty()
+    delta.world['城寨六婶家'] = { action: 'created', kind: 'location' }
+    expect(() =>
+      applyStateDelta({
+        chapter: 1,
+        text: '他站在街口，没有上楼。',
+        summary,
+        delta: delta as never,
+        ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+      }),
+    ).toThrowError(/provide summary.new_element_anchors/)
+  })
+
+  it('rejects anchor maps that name an entity outside new_elements', () => {
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      new_elements: { locations: [], abilities: [], artifacts: [] },
+      new_element_anchors: { locations: { 城寨六婶家: ['三楼尾房'] } },
+    })
+    expect(() => run(summary, empty())).toThrowError(/has no such entity/)
+  })
 })

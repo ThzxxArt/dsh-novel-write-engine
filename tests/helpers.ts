@@ -5,6 +5,7 @@ import { join, relative } from 'node:path'
 import { EngineService } from '../src/engine/service.js'
 import type { EngineConfig } from '../src/engine/state.js'
 import { loadRulepack } from '../src/rulepack.js'
+import { splitSentenceSpans } from '../src/domain/text.js'
 import { SEMANTIC_CHECK_IDS } from '../src/engine/semantic.js'
 import type {
   ChapterSummary,
@@ -224,12 +225,9 @@ export async function writeDraft(input: {
 export function semanticQuotes(text: string): string[] {
   const found: string[] = []
   const seen = new Set<string>()
-  const sentences = text.match(/[^。！？!?]+[。！？!?]?/g) ?? []
-  for (const sentence of sentences) {
-    const chars = Array.from(sentence.trim())
-    if (chars.length < 8) continue
-    const quote = chars.slice(0, 8).join('')
-    if (seen.has(quote)) continue
+  for (const span of splitSentenceSpans(text)) {
+    const quote = span.text.trim()
+    if (Array.from(quote).length < 8 || seen.has(quote)) continue
     seen.add(quote)
     found.push(quote)
     if (found.length === 5) break

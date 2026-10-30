@@ -1,3 +1,11 @@
+## 0.2.6 证据、锚点与面板契约
+
+- 语义证据：`novel_check` 的 `semantic[]` 仍是五项；失败时逐项 `items` + `conflicts`（`duplicate|same_sentence|interval_overlap`，带 `other_id/overlap_text/overlap_chars/overlap_ratio/sentence`），submission 错误 message 列出最多 5 条配对摘要，aborted journal 写紧凑 blocking。
+- 实体锚点：`summary.new_element_anchors` 是章级唯一输入；`locations/abilities/artifacts` 的每个 name 映射到 1..8 个 2..120 字正文锚点。PG-05 与归档共用；有锚点时任一命中即可，无锚点才退回 name。新 world 实体持久化 `anchors`，旧文档不需要迁移。
+- 面板 v6：`summary.bookData` additive，含 identity/blueprint/progress/current/worldbook/cast/relationships/foreshadows/timeline/outline/quality/pacing/effort/health；旧 v5 payload 显示刷新。`health` 增加 `pending`，`quality` 明确区分全书 `average` 与 `last_ten_average`。
+- pipeline 恢复：`novel_restore { paths: ["state/pipeline.yaml"], txid }` 只接受损坏 pipeline 的备份恢复，不绕过 journal hash；恢复前 status/doctor 报告 `PIPELINE_UNREADABLE`。
+- summary-only 的 PG-01 旁路只对紧随其后的 P6 check 生效，archive 仍需新的 P8 brief。
+
 # 工具面
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
@@ -110,7 +118,7 @@
 - 中文句密度上限从 8 调到 10/100 字，避免把普通短句叙事当异常；仍是 advisory，不阻塞归档。
 - `novel_doctor` 新增 `legacy-data` warning（旧 check、缺 rounds、extra 角色、pre-0.2.3 无 anchor 伏笔、stale `pipeline.briefs`）和 strict 模式 `worldbook.facts` 为空提醒；只读，不改历史。`state/briefs.yaml` 的跨章历史收据是正常 append-only 审计，不报 stale。
 - `/novel projects --prune [--yes]` 默认只列 `missing/not-project/unreadable` 登记行；`--yes` 才调用 `forgetProject`，只删登记、不删项目目录，active 被清理时同时清空。
-- 面板 payload v5：`summary.advisories[]`、`summary.legacy[]`；`quality.trend` 可为 `null`，并带 `trend_basis/samples/attempts`。旧 v4 标签页显示“需要刷新”。
+- 面板 payload v6：`summary.advisories[]`、`summary.legacy[]`；`quality.trend` 可为 `null`，并带 `trend_basis/samples/attempts`。旧 v5 标签页显示“需要刷新”。
 
 ## 0.2.2 契约补充
 

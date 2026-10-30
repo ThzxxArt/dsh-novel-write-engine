@@ -1,6 +1,14 @@
 import { allocateIds } from '../domain/ids.js'
 import { splitParagraphs } from '../domain/text.js'
 import {
+  anchorsForGroup,
+  anchorsFromSummary,
+  entityMatchHint,
+  matchEntityText,
+  mergeEntityAnchors,
+  type AnchorMap,
+} from './entity-anchors.js'
+import {
   ERROR_CODES,
   EngineInputError,
   type ChapterSummary,
@@ -230,6 +238,12 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       fail(`summary.foreshadows.${key} must be an array`)
     }
   }
+  let anchors: AnchorMap
+  try {
+    anchors = anchorsFromSummary(summary)
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'summary.new_element_anchors is invalid')
+  }
 
   const characters = structuredClone(input.characters)
   const world = structuredClone(input.world)
@@ -432,6 +446,27 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     return null
   }
 
+  const anchorsForKind = (
+    kind: 'location' | 'ability' | 'artifact' | 'faction' | 'rule' | null,
+    name: string,
+  ): string[] => {
+    if (kind === 'location') return anchorsForGroup(anchors, 'locations', name)
+    if (kind === 'ability') return anchorsForGroup(anchors, 'abilities', name)
+    if (kind === 'artifact') return anchorsForGroup(anchors, 'artifacts', name)
+    return []
+  }
+
+  const requireText = (
+    name: string,
+    kind: 'location' | 'ability' | 'artifact' | 'faction' | 'rule' | null,
+    context: string,
+  ): string[] => {
+    const candidates = anchorsForKind(kind, name)
+    const match = matchEntityText(input.text, name, candidates)
+    if (!match.ok) fail(`${context} ${entityMatchHint(name, candidates)}`)
+    return candidates
+  }
+
   // `summary.new_elements` is a narrative intent declaration, not a second
   // write action. Validate its names against the text/kind, but let the world
   // ledger decide whether the actual write is created or updated.
@@ -441,9 +476,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     ['artifact', summary.new_elements.artifacts],
   ] as const) {
     for (const name of names) {
-      if (!input.text.includes(name)) {
-        fail(`summary lists new ${kind} "${name}" but the manuscript never mentions it`)
-      }
+      requireText(name, kind, `summary lists new ${kind} "${name}" but the manuscript never mentions it;`)
       if (!Object.hasOwn(delta.world, name)) {
         fail(`summary lists new ${kind} "${name}" but world.${name} is not declared`)
       }
@@ -480,6 +513,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       fail(`world.${name} is declared as ${declared.kind} but the summary lists it as ${expected}`)
     }
     const existing = findWorld(name)
+    let entityAnchors = anchorsForKind(declared.kind ?? expected, name)
     let action: DeltaAction = declared.action
     if (action === 'created' && existing !== null) {
       if (declared.kind !== undefined && declared.kind !== existing.kind) {
@@ -499,15 +533,19 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           `world.${name} does not exist; declare kind (location|ability|artifact|faction|rule) or list it in summary.new_elements`,
         )
       }
-      if (!input.text.includes(name)) {
-        fail(`world entity "${name}" is new but does not appear in the manuscript`)
-      }
+      entityAnchors = requireText(
+        name,
+        kind,
+        `world entity "${name}" is new but does not appear in the manuscript;`,
+      )
       action = 'created'
       warnReclass(name, 'updated', 'created', 'missing-updated-as-created')
     } else if (action === 'no_change' && existing === null && expected !== null) {
-      if (!input.text.includes(name)) {
-        fail(`world entity "${name}" is new but does not appear in the manuscript`)
-      }
+      entityAnchors = requireText(
+        name,
+        expected,
+        `world entity "${name}" is new but does not appear in the manuscript;`,
+      )
       action = 'created'
       warnReclass(name, 'no_change', 'created', 'missing-no-change-as-created')
     }
@@ -521,11 +559,13 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (action === 'created') {
       if (name.trim() === '') fail('a created world entity has an empty name')
       if (existing !== null) fail(`world entity "${name}" already exists; use updated or no_change`)
-      if (!input.text.includes(name)) {
-        fail(`world entity "${name}" is created but does not appear in the manuscript`)
-      }
       const kind = declared.kind ?? expected
       if (kind === null) fail(`world.${name} must declare kind (location|ability|artifact|faction|rule)`)
+      entityAnchors = requireText(
+        name,
+        kind,
+        `world entity "${name}" is created but does not appear in the manuscript;`,
+      )
       if (!['location', 'ability', 'artifact', 'faction', 'rule'].includes(kind)) {
         fail(`world.${name} has unknown kind "${String(kind)}"`)
       }
@@ -544,6 +584,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           description: declared.description ?? '',
           layout: declared.layout ?? '',
           capacity: declared.capacity ?? 0,
+          ...(entityAnchors.length === 0 ? {} : { anchors: entityAnchors }),
           changes: [],
         })
       } else {
@@ -562,6 +603,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           name,
           first_appearance: chapter,
           description: declared.description ?? '',
+          ...(entityAnchors.length === 0 ? {} : { anchors: entityAnchors }),
         })
       }
       continue
@@ -578,6 +620,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         if (declared.description !== undefined) location.description = declared.description
         if (declared.layout !== undefined) location.layout = declared.layout
         if (declared.capacity !== undefined) location.capacity = declared.capacity
+        if (entityAnchors.length > 0) location.anchors = mergeEntityAnchors(location.anchors, entityAnchors)
         location.changes.push({
           chapter,
           change: declared.reason ?? declared.description ?? 'updated',
@@ -588,6 +631,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           existing.value.description = declared.description
         }
         if (declared.detail !== undefined) Object.assign(existing.value, declared.detail)
+        if (entityAnchors.length > 0) {
+          existing.value.anchors = mergeEntityAnchors(existing.value.anchors, entityAnchors)
+        }
       }
     }
   }

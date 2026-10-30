@@ -120,7 +120,7 @@ describe('architecture rules', () => {
   it('R7: no test is skipped, focused, or marked todo', async () => {
     for (const file of await sources(join(root, 'tests'))) {
       const text = await readFile(file, 'utf8')
-      expect(text, file).not.toMatch(/(?:^|\.)(skip|only|todo)\s*\(/m)
+      expect(text, file).not.toMatch(/(?:^|\.)(skipIf|skip|only|todo)\s*\(/m)
     }
   })
 

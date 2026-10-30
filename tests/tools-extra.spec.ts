@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createNovelTools, emptySummary, toolNames } from '../src/tools/index.js'
 import type { EngineService } from '../src/engine/service.js'
 import { EngineBlockedError, EngineInputError } from '../src/types.js'
+import { TOOL_NAMES } from '../src/constants.js'
 
 const result = <T>(data: T): { data: T; revision: number; warnings: never[] } => ({
   data,
@@ -73,9 +74,10 @@ const tools = (fake: ReturnType<typeof engine>): Map<string, Tool> =>
   )
 
 describe('every tool executes one operation', () => {
-  it('passes arguments through for all twenty-seven tools', async () => {
+  it('passes arguments through for all twenty-eight tools', async () => {
     const fake = engine()
     const map = tools(fake)
+    expect([...map.keys()].sort()).toEqual([...TOOL_NAMES].sort())
     await map.get('novel_brief')!.execute({ stage: 'P1', chapter: 2 }, {})
     expect(fake.getBrief).toHaveBeenCalledWith({ stage: 'P1', chapter: 2 })
     await map.get('novel_plan_world')!.execute(

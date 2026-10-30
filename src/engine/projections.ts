@@ -1,5 +1,6 @@
 import { PANEL_CHAPTER_LIMIT, PANEL_ID, PHASE_STRIP, REMOTE_VERSION } from '../constants.js'
 import type { BlockingItem, ChapterRecord, Stage, StatusReport } from '../types.js'
+import type { PanelBookData } from '../panel-contract.js'
 
 /** The shared read model: everything the panel, status and commands render. */
 export interface PanelDraft {
@@ -48,7 +49,7 @@ export interface PanelSnapshot {
     samples?: number
     attempts?: number
   }
-  health?: { ok: boolean; blocking: number; stateErrors: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number; pending?: boolean }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
   /** Unacknowledged machine advisories; never mixed into `blocking`. */
   advisories?: Array<{ code: string; detail: string; hint?: string }>
@@ -58,6 +59,8 @@ export interface PanelSnapshot {
   legacy?: Array<{ code: string; detail: string }>
   /** Crash-left pending transaction; complete/untouched are warnings. */
   pending?: { state: string; txid: string; detail: string }
+  /** v6 read-only book data; v5 payloads omit it. */
+  bookData?: PanelBookData
 }
 
 export interface PanelBook {
@@ -124,7 +127,7 @@ export interface PanelSummaryDto {
     samples?: number
     attempts?: number
   }
-  health?: { ok: boolean; blocking: number; stateErrors: number }
+  health?: { ok: boolean; blocking: number; stateErrors: number; pending?: boolean }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
   /** Unacknowledged machine advisories; never mixed into `blocking`. */
   advisories?: Array<{ code: string; detail: string; hint?: string }>
@@ -134,6 +137,8 @@ export interface PanelSummaryDto {
   legacy?: Array<{ code: string; detail: string }>
   /** Crash-left pending transaction; complete/untouched are warnings. */
   pending?: { state: string; txid: string; detail: string }
+  /** v6 read-only book data; v5 payloads omit it. */
+  bookData?: PanelBookData
 }
 
 export interface PanelChapterRow {
@@ -145,6 +150,14 @@ export interface PanelChapterRow {
   status: 'passed' | 'blocked' | 'draft'
   /** One-line summary shown when the row is expanded. */
   details: string
+  sceneType?: string
+  hookStrength?: number
+  finalCheck?: 'pass' | 'fail' | null
+  reviews?: number
+  revisions?: number
+  checks?: number
+  rollbacks?: number
+  archivedAt?: string | null
 }
 
 export interface PanelChaptersDto {
@@ -261,6 +274,14 @@ export function projectChapter(record: ChapterRecord): PanelChapterRow {
     stage: record.status === 'reviewed' ? 'done' : 'P3',
     status: record.status === 'reviewed' ? 'passed' : 'draft',
     details: record.summary.events.join('；').slice(0, 240),
+    sceneType: record.scene_type,
+    hookStrength: record.summary.hook_strength,
+    finalCheck: record.final_check ?? null,
+    reviews: record.rounds?.review ?? 0,
+    revisions: record.rounds?.revise ?? 0,
+    checks: record.rounds?.check ?? 0,
+    rollbacks: record.rounds?.rollbacks ?? 0,
+    archivedAt: record.archived_at ?? null,
   }
 }
 
@@ -292,6 +313,8 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     ...(snapshot.book === undefined ? {} : { book: snapshot.book }),
     ...(snapshot.quality === undefined ? {} : { quality: snapshot.quality }),
     ...(snapshot.health === undefined ? {} : { health: snapshot.health }),
+    ...(snapshot.bookData === undefined ? {} : { bookData: snapshot.bookData }),
+    ...(snapshot.pending === undefined ? {} : { pending: snapshot.pending }),
     ...(snapshot.activity === undefined ? {} : { activity: snapshot.activity }),
     ...(snapshot.advisories === undefined ? {} : { advisories: snapshot.advisories }),
     ...(snapshot.acknowledgedAdvisories === undefined

@@ -214,6 +214,48 @@ describe('book report', () => {
     expect(report.warnings).toContainEqual(expect.stringContaining('平均分'))
   })
 
+  it('exposes persisted world anchors in the report without copying the text', () => {
+    const report = buildBookReport(
+      reportInput({
+        world: {
+          schema_version: 1,
+          locations: [
+            {
+              name: '城寨六婶家',
+              anchors: ['三楼尾房', '楼梯底'],
+              first_appearance: 4,
+              locked: true,
+              description: '六婶住处',
+              layout: '三楼',
+              capacity: 3,
+              changes: [],
+            },
+          ],
+          abilities: [],
+          artifacts: [],
+          factions: [],
+          rules: [],
+        },
+      }),
+    )
+    expect(report.worldbook.anchors).toEqual([
+      { name: '城寨六婶家', kind: 'location', anchors: ['三楼尾房', '楼梯底'] },
+    ])
+    const damaged = buildBookReport(
+      reportInput({
+        world: {
+          schema_version: 1,
+          locations: [],
+          abilities: [null as unknown as WorldDocument['abilities'][number]],
+          artifacts: [],
+          factions: [],
+          rules: [],
+        },
+      }),
+    )
+    expect(damaged.worldbook.anchors).toBeUndefined()
+  })
+
   it('handles an empty book without inventing values', () => {
     const report = buildBookReport(
       reportInput({

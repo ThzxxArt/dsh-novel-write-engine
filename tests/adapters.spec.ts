@@ -858,8 +858,8 @@ describe('panel route', () => {
     const get = response()
     await handler({ method: 'GET' }, get)
     expect(get.record.statusCode).toBe(200)
-    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 5 })
-    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(5)
+    expect(JSON.parse(get.record.body)).toMatchObject({ schemaVersion: 6 })
+    expect((await panelPayload(engine as unknown as EngineService)).schemaVersion).toBe(6)
 
     const head = response()
     await handler({ method: 'HEAD' }, head)

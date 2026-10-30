@@ -269,6 +269,7 @@ export interface CheckDocument {
 /** Every persisted document whose damage status/panel can report. */
 export type StateErrorCode =
   | 'PROJECT_UNREADABLE'
+  | 'PIPELINE_UNREADABLE'
   | 'PLAN_UNREADABLE'
   | 'WORLD_PLAN_UNREADABLE'
   | 'REVIEW_UNREADABLE'
@@ -344,6 +345,12 @@ export interface ChapterSummary {
     resolved: string[]
   }
   new_elements: { locations: string[]; abilities: string[]; artifacts: string[] }
+  /** Optional P3/P5 verbatim manuscript anchors for readable entity names. */
+  new_element_anchors?: {
+    locations?: Record<string, string[]>
+    abilities?: Record<string, string[]>
+    artifacts?: Record<string, string[]>
+  }
   resource_changes: Array<{ character: string; resource: string; delta: number; reason: string }>
   opening: string
   continuity: { opens_from: string; ends_with: string }
@@ -505,6 +512,8 @@ export interface WorldDocument {
   schema_version: 1
   locations: Array<{
     name: string
+    /** 0.2.6 additive: readable-name anchors; old ledgers omit this. */
+    anchors?: string[]
     first_appearance: number
     locked: boolean
     description: string
@@ -850,6 +859,8 @@ export interface BookReport {
     glossary: number
     backstory: number
     facts?: number
+    /** 0.2.6 persisted world-ledger anchors, capped for report payloads. */
+    anchors?: Array<{ name: string; kind: string; anchors: string[] }>
   }
   quality: {
     average: number
