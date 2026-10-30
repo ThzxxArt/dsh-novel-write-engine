@@ -602,6 +602,11 @@ const CSS = `
   color: var(--nwe-muted);
   font-size: 11px;
 }
+
+.nwe-pending-section { border-left: 3px solid #c9a227; padding-left: 10px; }
+.nwe-pending-error { border-left-color: #b3261e; }
+.nwe-pending-detail { margin: 8px 0 0; color: var(--nwe-ink); font-size: 11px; line-height: 1.6; }
+.nwe-pending-hint { margin: 4px 0 0; color: var(--nwe-muted); font-size: 10px; line-height: 1.5; }
 .nwe-legacy {
   display: flex;
   gap: 8px;
@@ -1093,6 +1098,32 @@ const advisoriesSection = (view: PanelView): ReactElement | null => {
             ),
           ),
         ),
+  )
+}
+
+const pendingSection = (view: PanelView): ReactElement | null => {
+  if (view.pending === null) return null
+  const partial = view.pending.state === 'partial'
+  return createElement(
+    'section',
+    {
+      className: `nwe-section nwe-pending-section${partial ? ' nwe-pending-error' : ''}`,
+      'aria-label': '待恢复事务',
+    },
+    createElement(
+      'div',
+      { className: 'nwe-section-head' },
+      createElement('h2', { className: 'nwe-section-title' }, partial ? '事务部分完成' : '待恢复事务'),
+      createElement('span', { className: 'nwe-section-note' }, view.pending.state),
+    ),
+    createElement('p', { className: 'nwe-pending-detail' }, view.pending.detail),
+    createElement(
+      'p',
+      { className: 'nwe-pending-hint' },
+      partial
+        ? `检查 backups 与 .staging/${view.pending.txid}/before/，不要整项目恢复。`
+        : '下一次写操作会自动收尾；只读面不会改动事务。',
+    ),
   )
 }
 
@@ -1989,6 +2020,7 @@ export function panelElement(
             phases(view),
             blockingSection(view),
             advisoriesSection(view),
+            pendingSection(view),
             legacySection(view),
             chaptersSection(view),
           ),

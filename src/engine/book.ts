@@ -667,7 +667,7 @@ export function normalizeOutlineChapters(
           raw.volume === undefined ? base.volume : (raw.volume as number | null),
         ),
         status: 'archived',
-        archived_at: base.archived_at ?? options.now,
+        archived_at: base.archived_at ?? record.archived_at ?? null,
         word_count: record.word_count,
         score: record.score,
       })
@@ -1797,6 +1797,15 @@ export function renderWorldbookMarkdown(project: { title: string }, document: Wo
   section(
     '前史',
     document.backstory.map((entry) => `- ${oneLine(entry.time)}：${oneLine(entry.event)}`),
+  )
+  section(
+    '数值事实',
+    (document.facts ?? []).map(
+      (fact) =>
+        `- **${oneLine(fact.alias)}**：${fact.value}${oneLine(fact.unit)}${
+          fact.tolerance === undefined ? '' : `（容差 ${fact.tolerance}）`
+        }${fact.note === undefined || fact.note === '' ? '' : `；${oneLine(fact.note)}`}`,
+    ),
   )
   return parts.join('\n')
 }

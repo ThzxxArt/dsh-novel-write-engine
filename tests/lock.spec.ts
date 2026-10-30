@@ -117,6 +117,25 @@ describe('file lock reclaim', () => {
     }
   })
 
+  it('does not delete a lock file another writer replaced during release', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      const lock = new FileLock(path, 1_000, 500)
+      await lock.acquire()
+      const replacement = JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        nonce: 'replacement',
+      })
+      await writeFile(path, replacement)
+      await lock.release()
+      expect(await readFile(path, 'utf8')).toBe(replacement)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('notifies the audit hook when a dead owner lock is reclaimed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
     const path = join(dir, '.engine.lock')

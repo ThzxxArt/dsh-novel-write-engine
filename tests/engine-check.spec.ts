@@ -8,6 +8,7 @@ import {
   readProjectFile,
   sampleReview,
   sampleSemantic,
+  sampleSummary,
   writeDraft,
 } from './helpers.js'
 
@@ -33,26 +34,97 @@ const pipeline = async (root: string): Promise<Record<string, unknown>> =>
   parseYaml((await readProjectFile(root, 'state/pipeline.yaml'))!) as Record<string, unknown>
 
 describe('semantic check evidence', () => {
-  it('fails the check when an evidence quote is not in the manuscript', async () => {
+  it('rejects an absent evidence quote as a submission error without writing or spending a round', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
       const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
-      const result = await engine.runCheck({
+      const before = await readProjectFile(root, 'checks/ch001.check.yaml')
+      await expect(
+        engine.runCheck({
+          chapter: 1,
+          semantic: sampleSemantic(text, {
+            'L2-SCENE-ANCHOR': {
+              verdict: 'pass',
+              evidence: '第 2 段：这句话根本不在正文里',
+              note: '伪造引用',
+            },
+          }),
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_CHECK_SUBMISSION_INVALID', rounds_consumed: 0 })
+      const state = await pipeline(root)
+      expect(state.stage).toBe('P6')
+      expect(state.blocking).toEqual([])
+      expect(state.rounds).toMatchObject({ check: 0 })
+      expect(await readProjectFile(root, 'checks/ch001.check.yaml')).toBe(before)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('keeps five submission errors at zero rounds and only counts a content failure', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const invalid = sampleSemantic(text, {
+        'L2-SCENE-ANCHOR': { verdict: 'pass', evidence: '这句话完全不在正文里', note: '伪造' },
+      })
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(engine.runCheck({ chapter: 1, semantic: invalid, root })).rejects.toMatchObject({
+          code: 'ENGINE_CHECK_SUBMISSION_INVALID',
+        })
+      }
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 0 })
+      expect((await pipeline(root)).blocking).toEqual([])
+
+      const contentFailure = await engine.runCheck({
         chapter: 1,
         semantic: sampleSemantic(text, {
-          'L2-SCENE-ANCHOR': {
-            verdict: 'pass',
-            evidence: '第 2 段：这句话根本不在正文里',
-            note: '伪造引用',
-          },
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
         }),
         root,
       })
-      expect(result.data.verdict).toBe('fail')
-      expect(result.data.stage).toBe('P6')
-      const state = await pipeline(root)
-      expect(state.stage).toBe('P6')
-      expect(state.blocking).toEqual([expect.objectContaining({ code: 'SEMANTIC_EVIDENCE_INVALID' })])
+      expect(contentFailure.data.verdict).toBe('fail')
+      expect(contentFailure.data).toMatchObject({ counted: true, rounds: { check: 1 } })
+      expect(contentFailure.data.semantic.items).toHaveLength(5)
+      expect(contentFailure.data.semantic.findings).toEqual([
+        expect.objectContaining({ code: 'SEMANTIC_CHECK_FAILED' }),
+      ])
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 1 })
+
+      await engine.getBrief({ stage: 'P6', root })
+      const pass = await engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root })
+      expect(pass.data).toMatchObject({ verdict: 'pass', counted: false, rounds: { check: 1 } })
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 1 })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('repairs only the draft summary without changing prose or consuming a revise round', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const beforeText = await readProjectFile(root, 'chapters/chapter-001.md')
+      const beforePipeline = await pipeline(root)
+      const result = await engine.submitRevision({
+        chapter: 1,
+        summary: sampleSummary({ events: ['只修正摘要中的事件描述'] }),
+        root,
+      })
+      expect(result.data).toMatchObject({ summary_only: true, rounds_consumed: 0, stage: 'P6' })
+      expect(await readProjectFile(root, 'chapters/chapter-001.md')).toBe(beforeText)
+      const afterPipeline = await pipeline(root)
+      expect(afterPipeline.rounds).toMatchObject(beforePipeline.rounds as Record<string, number>)
+      expect((afterPipeline.draft as Record<string, unknown>).summary).toMatchObject({
+        events: ['只修正摘要中的事件描述'],
+      })
+      expect(afterPipeline.blocking).toEqual([])
+      const checked = await engine.runCheck({
+        chapter: 1,
+        semantic: sampleSemantic(beforeText!),
+        root,
+      })
+      expect(checked.data.verdict).toBe('pass')
     } finally {
       await cleanup()
     }
@@ -170,7 +242,7 @@ describe('semantic check evidence', () => {
       await engine.getBrief({ stage: 'P6', root })
       const full = await engine.runCheck({ chapter: 1, semantic, root })
       expect(full.data.verdict).toBe('pass')
-      expect((await pipeline(root)).rounds).toMatchObject({ check: 1 })
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 0 })
       expect((await pipeline(root)).stage).toBe('ready_to_archive')
     } finally {
       await cleanup()

@@ -41,6 +41,9 @@ describe('0.2.4 outline upsert contract', () => {
     try {
       await project(engine, root)
       await expect(
+        engine.submitOutline({ book: { strict_explicit: true } as never, root }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      await expect(
         engine.submitOutline({ chapters: [card(1, '开端之雨', { volume: 9 })], root }),
       ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
       const initial = await engine.submitOutline({
@@ -177,6 +180,35 @@ describe('0.2.4 outline upsert contract', () => {
         code: 'ENGINE_SCHEMA_INVALID',
         message: expect.stringContaining('archived'),
       })
+      await expect(
+        engine.submitBookPlan({
+          volumes: [{ title: '第二卷', start_chapter: 2, end_chapter: 5 }],
+          confirm_remove: true,
+          root,
+        }),
+      ).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: expect.stringContaining('archived'),
+      })
+      const beforeImport = await readProjectFile(root, OUTLINE_FILE)
+      await expect(
+        engine.importOutline({
+          format: 'yaml',
+          content: [
+            'volumes:',
+            '  - title: 第二卷',
+            '    start_chapter: 2',
+            '    end_chapter: 5',
+            'chapters: []',
+          ].join('\n'),
+          dry_run: true,
+          root,
+        }),
+      ).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+        message: expect.stringContaining('archived'),
+      })
+      expect(await readProjectFile(root, OUTLINE_FILE)).toBe(beforeImport)
     } finally {
       await cleanup()
     }
@@ -189,6 +221,11 @@ describe('0.2.4 outline upsert contract', () => {
       await engine.submitOutline({ chapters: [card(1, '开端之雨'), card(2, '旧城之影')], root })
       const beforeOutline = await readProjectFile(root, OUTLINE_FILE)
       const beforeJournal = await readFile(join(root, 'state/journal.jsonl'), 'utf8')
+      await expect(engine.submitOutline({ remove: [1], dry_run: true, root })).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+      expect(await readProjectFile(root, OUTLINE_FILE)).toBe(beforeOutline)
+      expect(await readFile(join(root, 'state/journal.jsonl'), 'utf8')).toBe(beforeJournal)
       const preview = await engine.submitOutline({
         chapters: [card(1, '开端之雨', { goal: '预演目标' }), card(3, '灯下之言')],
         remove: [2],
@@ -302,7 +339,7 @@ describe('0.2.4 outline upsert contract', () => {
         remove_volumes: ['第一卷'],
         root,
       })
-      expect(removed.data).toMatchObject({ volumes: 1, volumes_removed: ['第一卷'] })
+      expect(removed.data).toMatchObject({ volumes: 1, reindexed: [1, 2, 3], volumes_removed: ['第一卷'] })
       const document = await outline(engine, root)
       expect(document.volumes).toHaveLength(1)
       expect(document.volumes[0]).toMatchObject({ title: '第二卷', start_chapter: 3 })

@@ -30,6 +30,8 @@ export interface OutlineMergeResult {
   volumes: OutlineVolume[]
   added: number[]
   updated: number[]
+  /** Omitted cards whose stored volume index was remapped; not a content edit. */
+  reindexed: number[]
   removed: number[]
   volumes_added: string[]
   volumes_updated: string[]
@@ -211,32 +213,26 @@ const remapVolume = (
   }
 }
 
-const assertArchivedVolumes = (
-  options: OutlineMergeOptions,
-  volumes: readonly OutlineVolume[],
-  removedTitles: readonly string[],
+export const assertArchivedCardVolumes = (
+  archivedChapters: readonly ChapterRecord[],
+  cards: readonly OutlineChapter[],
+  oldVolumes: readonly OutlineVolume[],
+  newVolumes: readonly OutlineVolume[],
+  operation = 'outline write',
 ): void => {
-  const removed = new Set(removedTitles)
-  const oldByTitle = volumeByTitle(options.existingVolumes)
-  const newByTitle = volumeByTitle(volumes)
-  for (const record of options.archivedChapters) {
-    const card = options.existing.find((entry) => entry.num === record.num)
+  const byNum = new Map(cards.map((card) => [card.num, card]))
+  const newByTitle = volumeByTitle(newVolumes)
+  for (const record of archivedChapters) {
+    const card = byNum.get(record.num)
     if (card === undefined || card.volume === null) continue
-    const previous = options.existingVolumes[card.volume - 1]
+    const previous = oldVolumes[card.volume - 1]
     if (previous === undefined) continue
-    if (removed.has(previous.title) || !oldByTitle.has(previous.title)) {
-      throw new EngineInputError(
-        ERROR_CODES.SCHEMA_INVALID,
-        `cannot remove volume "${previous.title}": archived chapter ${record.num} belongs to it`,
-        'archived cards are evidence; keep the volume or reopen the chapter first',
-      )
-    }
     const next = newByTitle.get(previous.title)
     if (next === undefined || record.num < next.start_chapter || record.num > next.end_chapter) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
-        `volume "${previous.title}" no longer covers archived chapter ${record.num}`,
-        'keep archived chapter ranges inside their existing volume',
+        `${operation} would leave archived chapter ${record.num} outside its volume "${previous.title}"`,
+        'keep the volume/range that covers archived cards, or call novel_reopen first',
       )
     }
   }
@@ -251,7 +247,13 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
   const submitted = submittedNumbers(options.chapters)
   const removed = parseChapterNumbers(options.remove, 'remove')
   const volumeChanges = mergeVolumes(options)
-  assertArchivedVolumes(options, volumeChanges.volumes, volumeChanges.removed)
+  assertArchivedCardVolumes(
+    options.archivedChapters,
+    options.existing,
+    options.existingVolumes,
+    volumeChanges.volumes,
+    'novel_outline',
+  )
 
   const existingByNum = new Map(options.existing.map((card) => [card.num, card]))
   const archivedByNum = new Map(options.archivedChapters.map((record) => [record.num, record]))
@@ -297,6 +299,7 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
   const byNum = new Map(normalized.map((card) => [card.num, card]))
   const updated = new Set<number>()
   const added = new Set<number>()
+  const reindexed = new Set<number>()
 
   for (const card of normalized) {
     if (!submitted.has(card.num)) continue
@@ -320,6 +323,8 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
       // normalizeOutlineChapters already rebuilt this card from the chapter
       // index. A stale planned copy must never overwrite that archive evidence.
       if (!byNum.has(card.num)) byNum.set(card.num, { ...card, status: 'archived' })
+      const current = byNum.get(card.num)!
+      if (stableJson(card) !== stableJson(current)) reindexed.add(card.num)
       continue
     }
     const remapped = remapVolume(card, options.existingVolumes, volumeChanges.volumes)
@@ -327,11 +332,11 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
       const current = byNum.get(card.num)!
       if (stableJson(current) !== stableJson(remapped)) {
         byNum.set(card.num, remapped)
-        if (card.status === 'planned') updated.add(card.num)
+        reindexed.add(card.num)
       }
     } else {
       byNum.set(card.num, remapped)
-      if (card.status === 'planned' && stableJson(card) !== stableJson(remapped)) updated.add(card.num)
+      if (stableJson(card) !== stableJson(remapped)) reindexed.add(card.num)
     }
   }
   for (const num of removed) byNum.delete(num)
@@ -342,6 +347,7 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
     volumes: volumeChanges.volumes,
     added: [...added].sort((left, right) => left - right),
     updated: [...updated].sort((left, right) => left - right),
+    reindexed: [...reindexed].sort((left, right) => left - right),
     removed: [...removed].sort((left, right) => left - right),
     volumes_added: volumeChanges.added,
     volumes_updated: volumeChanges.updated,

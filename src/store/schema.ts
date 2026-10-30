@@ -109,6 +109,8 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     machine: req('object'),
     semantic: req('object'),
     acknowledged: f('array'),
+    failure_class: f('string', { enum: ['submission', 'content'] }),
+    counted: f('boolean'),
     verdict: req('string', { enum: ['pass', 'fail'] }),
   },
   worldPlan: {
@@ -220,6 +222,21 @@ const validateRecords = (
   }
 }
 
+const duplicateNames = (
+  kind: DocKind,
+  rows: readonly Record<string, unknown>[],
+  path: string,
+  nameOf: (row: Record<string, unknown>) => unknown,
+): void => {
+  const seen = new Set<string>()
+  for (const row of rows) {
+    const name = nameOf(row)
+    if (typeof name !== 'string' || name === '') continue
+    if (seen.has(name)) invalid(kind, `${path} contains duplicate name "${name}"`)
+    seen.add(name)
+  }
+}
+
 const validateSummary = (kind: DocKind, value: unknown, path: string): void => {
   const summary = objectAt(kind, value, path)
   for (const key of ['events', 'characters_appeared', 'pleasure_points'] as const) {
@@ -308,6 +325,12 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         listAt(kind, row.growth, `${path}.growth`)
         integerAt(kind, row.updated_at, `${path}.updated_at`)
       })
+      duplicateNames(
+        kind,
+        record.characters as Array<Record<string, unknown>>,
+        'characters',
+        (row) => row.name,
+      )
       return
     case 'world':
       validateRecords(kind, record.locations, 'locations', (row, path) => {
@@ -321,6 +344,14 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
       })
       for (const key of ['abilities', 'artifacts', 'factions', 'rules'] as const) {
         listAt(kind, record[key], key)
+      }
+      {
+        const names: string[] = []
+        for (const key of ['locations', 'abilities', 'artifacts', 'factions', 'rules'] as const) {
+          const rows = Array.isArray(record[key]) ? (record[key] as Array<Record<string, unknown>>) : []
+          for (const row of rows) if (typeof row.name === 'string') names.push(row.name)
+        }
+        if (new Set(names).size !== names.length) invalid(kind, 'world entities must have unique names')
       }
       return
     case 'locks': {
@@ -397,6 +428,14 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.evidence, `${path}.evidence`)
         if (row.note !== undefined) stringAt(kind, row.note, `${path}.note`)
       })
+      if (semantic.findings !== undefined) {
+        validateRecords(kind, semantic.findings, 'semantic.findings', (row, path) => {
+          stringAt(kind, row.code, `${path}.code`)
+          stringAt(kind, row.detail, `${path}.detail`)
+          if (row.scope !== undefined) stringAt(kind, row.scope, `${path}.scope`)
+          if (row.hint !== undefined) stringAt(kind, row.hint, `${path}.hint`)
+        })
+      }
       return
     }
     case 'outline': {

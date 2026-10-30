@@ -393,6 +393,9 @@ describe('state_delta world and timeline reconciliation', () => {
     extra.timeline['0'] = { action: 'created' }
     extra.timeline['9'] = { action: 'created' }
     fails(summary, extra)
+    const unknownCharacter = empty()
+    unknownCharacter.timeline['0'] = { action: 'created', characters: ['幽灵'] }
+    fails(summary, unknownCharacter)
     const delta = empty()
     delta.timeline['0'] = { action: 'created', story_time: 'Day 1' }
     delta.timeline['1'] = { action: 'created', description: '二' }
@@ -970,5 +973,104 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       roleHints: { 他: '幕后黑手' },
     })
     expect(result.characters.characters[0]!.role).toBe('extra')
+  })
+
+  it('reconciles world actions against the ledger instead of summary intent', () => {
+    const docs = base()
+    ;(docs.world as { locations: Array<Record<string, unknown>> }).locations.push({
+      name: '屋',
+      first_appearance: 1,
+      locked: true,
+      description: '',
+      layout: '',
+      capacity: 0,
+      changes: [],
+    })
+    const summary = sampleSummary({
+      characters_appeared: [],
+      events: [],
+      new_elements: { locations: ['屋'], abilities: [], artifacts: [] },
+    })
+    const delta = empty()
+    delta.world['屋'] = { action: 'created', kind: 'location' }
+    const result = run(summary, delta, docs)
+    expect(result.normalized_world['屋']).toMatchObject({
+      from: 'created',
+      to: 'updated',
+      reason: 'existing-created-as-updated',
+    })
+    expect(result.warnings.map((warning) => warning.code)).toContain(
+      'WORLD_ELEMENT_RECLASSIFIED_CREATED_TO_UPDATED',
+    )
+
+    const fresh = empty()
+    fresh.world['屋'] = { action: 'updated', kind: 'location' }
+    const created = run(
+      sampleSummary({
+        characters_appeared: [],
+        events: [],
+        new_elements: { locations: [], abilities: [], artifacts: [] },
+      }),
+      fresh,
+    )
+    expect(created.normalized_world['屋']).toMatchObject({
+      from: 'updated',
+      to: 'created',
+      reason: 'missing-updated-as-created',
+    })
+
+    const noKind = empty()
+    noKind.world['屋'] = { action: 'updated' }
+    expect(() =>
+      run(
+        sampleSummary({
+          characters_appeared: [],
+          events: [],
+          new_elements: { locations: [], abilities: [], artifacts: [] },
+        }),
+        noKind,
+      ),
+    ).toThrowError(/declare kind/)
+  })
+
+  it('deep-merges current_state resources and rejects invalid balances', () => {
+    const docs = base() as {
+      characters: { characters: Array<Record<string, unknown>> }
+    }
+    docs.characters.characters.push({
+      name: '他',
+      role: 'extra',
+      first_appearance: 1,
+      profile: {},
+      current_state: { resources: { 港币: 5, 银元: 2 } },
+      growth: [],
+      updated_at: 0,
+    })
+    const summary = sampleSummary({ characters_appeared: [], events: [] })
+    const delta = empty()
+    delta.characters['他'] = {
+      action: 'updated',
+      current_state: { resources: { 港币: 7 } },
+    }
+    const result = run(summary, delta, docs)
+    expect(result.characters.characters[0]!.current_state).toMatchObject({
+      resources: { 港币: 7, 银元: 2 },
+    })
+
+    const negative = empty()
+    negative.characters['他'] = {
+      action: 'updated',
+      current_state: { resources: { 港币: -1 } },
+    }
+    expect(() => run(summary, negative, docs)).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_RESOURCE_NEGATIVE_BALANCE' }),
+    )
+
+    const stringBalance = empty()
+    stringBalance.characters['他'] = {
+      action: 'updated',
+      current_state: { resources: { 港币: '7' } },
+    }
+    expect(() => run(summary, stringBalance, docs)).toThrowError(/must be an integer/)
   })
 })

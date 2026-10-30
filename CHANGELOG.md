@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.5
+
+### Fixed
+
+- **语义证据跨句/跨段**：`novel_check` 的引文不再要求落在同一句；支持句末收尾引号、跨段证据，逐条返回 `pass|fail|missing|invalid|not_found|too_short|duplicate|overlap|same_sentence`，并在失败时给出 `nearest`/`conflict_with`。同一段被两条证据复用、或同一句不同子串仍按 `overlap`/`same_sentence` 拒绝；真实 r0076 的四段双句引文全部通过，r0075 的编造 POV 引文只报 `not_found`。
+- **check submission/content 分流**：形状、缺项、引文不存在等提交错误改为 `ENGINE_CHECK_SUBMISSION_INVALID`，不写 check、不增加 blocking、不消耗 `rounds.check`；只有正文/机器门真正的 content failure 才写 check 并 `counted:true`。工具错误行会回传逐条 `items`。
+- **world delta 双真源仲裁**：`summary.new_elements` 只作为意图声明；`state/world.yaml` 的存在性为真源。已有实体写 `created` 归一化为 `updated`，新实体写 `updated`/`no_change` 在 kind/正文可判定时归一化为 `created`；kind/detail 冲突仍拒绝。`archiveChapter` 返回 `delta_warnings` 与 `normalized_world`，warning 不再静默。
+- **pending 只读诊断**：`inspectPending` 分类 `none|complete|untouched|partial`；status/doctor/audit/panel 对 complete/untouched 给 warning、partial 给 `ENGINE_PENDING_PARTIAL`，不再误报 hash mismatch。`novel_init` 会先恢复/拒绝崩溃 init，partial 不被 PROJECT_EXISTS 掩盖。
+- **outline 归档不变量统一**：`novel_blueprint`、`novel_outline_import`（含 dry-run）、`novel_amend(outline)` 与 `novel_outline` 共用 `assertArchivedCardVolumes` 和 active 卡保护；归档章不能失去卷覆盖。`reindexed`/`would_reindex` 显式回显，omitted 归档卡不再伪造 `archived_at`。
+- **summary-only 修复**：`novel_revise` 可只传 `summary`：正文 hash、章文件和历史不变，不消耗 revise 轮次，保持/推进到 P6；不要求 P4/P6 proof，接下来可直接 check/archive。P8 与工具文档已改为先 summary-only、只有正文需要改才走 P5。
+- **PG-05 前置**：P3/P5 即检查 `summary.new_elements` 名字在正文出现、已在 world ledger 时报“remove/use updated”，并校验 `characters_appeared` 正文/叙述者别名，避免错误留到 P8。
+- **资源余额**：`current_state.resources` 与旧余额深合并，保留兄弟资源；created/updated 都校验有限非负整数，负值/字符串拒绝；P8 示例与错误提示改为非负。
+
+### Hardened
+
+- brief digest 绑定完整 project/outline/worldbook/plan/worldPlan，而不只是裁剪后的 context。
+- characters/world 重复实体名在 load 与 amend 均拒绝；`strict_explicit` 只允许内部 provenance，公共 outline 写入拒绝该字段。
+- FsStore 将 EACCES/EPERM/EROFS 包装为 `ENGINE_IO_PERMISSION`；rulepack 对每个 section/nested object 递归 knownKeys。
+- worldbook 导出补 `数值事实`；duplicate paragraph 指回原章真实段落号；time regression 指向正文段落；timeline.characters 必须是已声明角色；export 在 artifact 缺失时使 replay 失效并重写。
+- migration 备份 `backups/migrations/` 不参与 retention prune；无硬链接文件系统（FAT/SMB/WSL）用受控 rename fallback 回收 stale lock；配置 projectRoot 优先于单行 registry；commands 错误行与 tools 一样保留 blocking/items。
+
+### Migration
+
+- check 文档 schema_version 不变；新增字段可选，旧 check 可读。旧项目已消耗的 rounds 不回滚。
+- archive 遇到旧 `summary.new_elements` 与 ledger 冲突时按新规则成功并给 warning；不会回写旧 ledger。
+- summary-only 是新增调用模式，旧 content/patch 修订语义不变。
+- `strict_explicit` 若曾被外部写入，仍可被读取；新的公共写入必须改用 `strict`。
+- 详细验收与真实项目/模型证据见 `docs/0.2.5-acceptance.md`、`docs/0.2.5-real-model-evidence.md`。
+
 ## 0.2.4
 
 ### Changed

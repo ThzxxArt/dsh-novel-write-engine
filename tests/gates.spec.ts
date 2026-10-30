@@ -101,6 +101,9 @@ const codes = (gateInput: GateInput): string[] =>
 
 describe('gate evaluation', () => {
   it('applies only the gates that belong to the operation', () => {
+    expect(codes(input({ briefStage: null }))).toContain('PG-01')
+    expect(codes(input({ briefStage: null, summaryOnlyRevision: true }))).not.toContain('PG-01')
+    expect(codes(input({ briefStage: 'P3', briefDigest: 'sha256:stale' }))).toContain('PG-01')
     expect(applicableGates(input())).toEqual(['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-13'])
     expect(applicableGates(input({ operation: 'submitReview' }))).toEqual([
       'PG-01',
@@ -124,6 +127,14 @@ describe('gate evaluation', () => {
     ])
     expect(applicableGates(input({ operation: 'archiveChapter' }))).toContain('PG-12')
     expect(applicableGates(input({ operation: 'submitWorldPlan' }))).toEqual(['PG-01', 'PG-02'])
+    expect(applicableGates(input({ operation: 'submitRevision', stage: 'P6', summaryOnly: true }))).toEqual([
+      'PG-01',
+      'PG-02',
+      'PG-04',
+      'PG-03',
+      'PG-05',
+      'PG-06',
+    ])
     expect(briefStageFor('submitWorldPlan', 'idle')).toBe('P1')
     expect(briefStageFor('submitRevision', 'P6')).toBe('P6')
     expect(briefStageFor('submitRevision', 'P5')).toBe('P5')
@@ -134,6 +145,8 @@ describe('gate evaluation', () => {
 
   it('covers gate-specific failure and metadata branches', () => {
     expect(codes(input({ briefStage: null }))).toContain('PG-01')
+    expect(codes(input({ briefStage: null, summaryOnlyRevision: true }))).not.toContain('PG-01')
+    expect(codes(input({ briefStage: 'P3', briefDigest: 'sha256:stale' }))).toContain('PG-01')
     expect(codes(input({ briefDigest: 'stale' }))).toContain('PG-01')
     expect(codes(input({ operation: 'submitWorldPlan', stage: 'P3' }))).toContain('PG-02')
     expect(codes(input({ summary: {} as never }))).toContain('PG-05')
@@ -221,6 +234,16 @@ describe('gate evaluation', () => {
     )
     expect(codes(input({ summary: { ...sampleSummary(), opening: ' ' } }))).toContain('PG-05')
     expect(codes(input({ summary: { ...sampleSummary(), opening: '风' } }))).toContain('PG-05')
+    const firstPerson = '我站在雨里，手里捏着一封旧信。'
+    const aliasInput = input({
+      text: firstPerson,
+      summary: { ...sampleSummary(), characters_appeared: ['陈默'], opening: firstPerson.slice(0, 14) },
+      pipeline: {
+        ...input().pipeline,
+        draft: { ...input().pipeline.draft!, narrator: '陈默（第一人称「我」）' },
+      } as never,
+    })
+    expect(codes(aliasInput)).not.toContain('PG-05')
   })
 
   it('PG-06 rejects monotony and back-to-back action chapters', () => {
@@ -656,6 +679,22 @@ describe('gate evaluation', () => {
     ).toContain('PG-09')
     expect(codes(input({ operation: 'submitReview', review: review(100, 0, { dimensions: [] }) }))).toContain(
       'PG-07',
+    )
+    const badForeshadows = sampleSummary() as unknown as Record<string, unknown>
+    badForeshadows.foreshadows = { planted: [{}], advanced: [{}], resolved: [1] }
+    expect(codes(input({ summary: badForeshadows as never }))).toContain('PG-05')
+    const badElements = sampleSummary() as unknown as Record<string, unknown>
+    badElements.new_elements = { locations: [1], abilities: [], artifacts: [] }
+    expect(codes(input({ summary: badElements as never }))).toContain('PG-05')
+    const badChanges = sampleSummary() as unknown as Record<string, unknown>
+    badChanges.resource_changes = [{}]
+    expect(codes(input({ summary: badChanges as never }))).toContain('PG-05')
+    const badContinuity = sampleSummary() as unknown as Record<string, unknown>
+    badContinuity.continuity = {}
+    expect(codes(input({ summary: badContinuity as never }))).toContain('PG-05')
+    expect(codes(input({ summary: { ...sampleSummary(), hook_strength: 9 } }))).toContain('PG-05')
+    expect(codes(input({ summary: { ...sampleSummary(), plot_advancement: 'x' as never } }))).toContain(
+      'PG-05',
     )
   })
 })

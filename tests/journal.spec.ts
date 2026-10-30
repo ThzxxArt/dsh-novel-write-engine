@@ -1,9 +1,9 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { FsStore } from '../src/store/fs.js'
+import { FsStore, sha256 } from '../src/store/fs.js'
 import { listBackups } from '../src/store/backup.js'
-import { appendJournal, assertJournalConsistent, readJournal } from '../src/store/journal.js'
+import { appendJournal, assertJournalConsistent, inspectPending, readJournal } from '../src/store/journal.js'
 import { runTransaction } from '../src/store/txn.js'
 import { harness } from './helpers.js'
 
@@ -176,7 +176,108 @@ describe('pending journal recovery', () => {
         hashes: { 'state/world.yaml': `${before!}-expected` },
         before: { 'state/world.yaml': before! },
       })
-      await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_PENDING_PARTIAL' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('classifies pending transactions without writing a terminal row', async () => {
+    const { root, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/world.yaml', world('LANDED'))
+      const landHash = (await store.hashBytes('state/world.yaml'))!
+      await appendJournal(store, {
+        txid: 'inspect-complete',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 2,
+        files: ['state/world.yaml'],
+        status: 'pending',
+        hashes: { 'state/world.yaml': landHash },
+        before: { 'state/world.yaml': null },
+      })
+      const beforeRows = (await readJournal(store)).records.length
+      expect(await inspectPending(store)).toMatchObject({
+        state: 'complete',
+        txid: 'inspect-complete',
+      })
+      expect((await readJournal(store)).records.length).toBe(beforeRows)
+      expect((await readJournal(store)).records.at(-1)?.status).toBe('pending')
+
+      await store.writeText('state/world.yaml', world('OLD'))
+      const oldHash = (await store.hashBytes('state/world.yaml'))!
+      await appendJournal(store, {
+        txid: 'inspect-untouched',
+        at: new Date().toISOString(),
+        op: 'amend',
+        chapter: 1,
+        revision: 3,
+        files: ['state/world.yaml'],
+        status: 'pending',
+        hashes: { 'state/world.yaml': `${oldHash}-different` },
+        before: { 'state/world.yaml': oldHash },
+      })
+      expect(await inspectPending(store)).toMatchObject({
+        state: 'untouched',
+        txid: 'inspect-untouched',
+      })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('recovers an untouched crashed init before PROJECT_EXISTS', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await appendJournal(store, {
+        txid: 'crashed-init',
+        at: new Date().toISOString(),
+        op: 'initProject',
+        chapter: 1,
+        revision: 1,
+        files: ['novel.yaml'],
+        status: 'pending',
+        hashes: { 'novel.yaml': sha256('new: true\n') },
+        before: { 'novel.yaml': null },
+      })
+      await engine.initProject({ title: '恢复之书', genre: '都市现代', platform: 'fanqie', root })
+      expect(await store.readText('novel.yaml')).toContain('恢复之书')
+      const rows = (await readJournal(store)).records
+      expect(rows.some((row) => row.txid === 'crashed-init' && row.status === 'aborted')).toBe(true)
+      expect(rows.some((row) => row.status === 'committed' && row.op === 'initProject')).toBe(true)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed for a partial crashed init and leaves it untouched', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const store = new FsStore(root)
+      await store.writeText('state/world.yaml', world('LANDED'))
+      await appendJournal(store, {
+        txid: 'partial-init',
+        at: new Date().toISOString(),
+        op: 'initProject',
+        chapter: 1,
+        revision: 1,
+        files: ['novel.yaml', 'state/world.yaml'],
+        status: 'pending',
+        hashes: {
+          'novel.yaml': sha256('new: true\n'),
+          'state/world.yaml': (await store.hashBytes('state/world.yaml'))!,
+        },
+        before: { 'novel.yaml': null, 'state/world.yaml': null },
+      })
+      await expect(
+        engine.initProject({ title: '不得覆盖', genre: '都市现代', platform: 'fanqie', root }),
+      ).rejects.toMatchObject({ code: 'ENGINE_PENDING_PARTIAL' })
+      expect(await store.readText('novel.yaml')).toBeNull()
+      expect((await readJournal(store)).records.at(-1)?.status).toBe('pending')
     } finally {
       await cleanup()
     }

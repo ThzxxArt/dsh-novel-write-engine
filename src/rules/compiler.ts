@@ -141,6 +141,99 @@ export function compileRulepack(raw: unknown): Rulepack {
     ],
     'root',
   )
+  const section = (name: string, keys: readonly string[]): Unknown | null => {
+    const value = root[name]
+    if (value === undefined) return null
+    const objectValue = object(value, name)
+    knownKeys(objectValue, keys, name)
+    return objectValue
+  }
+  const nested = (value: Unknown | null, key: string, keys: readonly string[]): Unknown | null => {
+    if (value === null || value[key] === undefined) return null
+    const objectValue = object(value[key], key)
+    knownKeys(objectValue, keys, key)
+    return objectValue
+  }
+  const format = section('format', [
+    'paragraph_max_words',
+    'forbid_markdown',
+    'forbid_semicolon',
+    'forbid_english_ellipsis',
+    'title',
+    'system_labels',
+    'scene_separators',
+    'markdown_markers',
+  ])
+  nested(format, 'title', ['pattern', 'min_chars', 'max_chars'])
+  const punctuation = section('punctuation', [
+    'dash',
+    'period_density',
+    'ellipsis_run',
+    'uniform_sentence',
+    'consecutive_le',
+    'dialogue_dominant_ratio',
+  ])
+  const dash = nested(punctuation, 'dash', ['base', 'scale_words', 'token'])
+  if (dash !== null && dash.base !== undefined) {
+    const base = object(dash.base, 'punctuation.dash.base')
+    knownKeys(base, SCENE_TYPES, 'punctuation.dash.base')
+  }
+  nested(punctuation, 'period_density', ['min', 'max'])
+  nested(punctuation, 'ellipsis_run', ['max', 'token'])
+  nested(punctuation, 'uniform_sentence', ['min_sentences', 'ratio'])
+  nested(punctuation, 'consecutive_le', ['max', 'char'])
+  const semantics = section('semantics', [
+    'adjective_density',
+    'pleasure_density',
+    'sensory_density',
+    'water_words',
+  ])
+  nested(semantics, 'adjective_density', ['max', 'adjectives'])
+  nested(semantics, 'pleasure_density', ['min', 'keywords', 'window'])
+  nested(semantics, 'sensory_density', ['min', 'senses', 'window'])
+  nested(semantics, 'water_words', ['window', 'threshold', 'scene_thresholds', 'terms'])
+  const lexicon = section('lexicon', [
+    'zero_tolerance',
+    'soft',
+    'contextual',
+    'meta_narration',
+    'reader_intrusion',
+    'god_view',
+    'conclusion_first',
+  ])
+  nested(lexicon, 'conclusion_first', ['verbs', 'causals'])
+  const platform = object(root.platform, 'platform')
+  knownKeys(platform, PLATFORMS, 'platform')
+  for (const name of PLATFORMS) {
+    const profile = object(platform[name], `platform.${name}`)
+    knownKeys(profile, ['words_per_chapter', 'dialogue_ratio'], `platform.${name}`)
+  }
+  const genres = object(root.genres, 'genres')
+  knownKeys(genres, GENRES, 'genres')
+  for (const name of GENRES) object(genres[name], `genres.${name}`)
+  const crosschapter = section('crosschapter', [
+    'duplicate_similarity',
+    'duplicate_advisory',
+    'duplicate_min_chars',
+    'foreshadow_min_dormancy',
+    'foreshadow_dormant_after',
+    'check_time',
+    'lock_similarity',
+  ])
+  void crosschapter
+  const quality = section('quality', ['dimensions'])
+  if (quality?.dimensions !== undefined) {
+    for (const [index, rawDimension] of array(quality.dimensions, 'quality.dimensions').entries()) {
+      const dimension = object(rawDimension, `quality.dimensions[${index}]`)
+      knownKeys(dimension, ['id', 'max'], `quality.dimensions[${index}]`)
+    }
+  }
+  if (root.exclusions !== undefined) {
+    for (const [index, rawEntry] of array(root.exclusions, 'exclusions').entries()) {
+      const entry = object(rawEntry, `exclusions[${index}]`)
+      knownKeys(entry, ['pair', 'family'], `exclusions[${index}]`)
+    }
+  }
   const pack = normalize(raw as Partial<Rulepack>)
   const rawPlatform = object(root.platform, 'platform')
   for (const platform of PLATFORMS) {

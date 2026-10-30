@@ -79,6 +79,8 @@ export interface SummaryDto {
   /** Advisory codes the author has already acknowledged in the current check. */
   acknowledgedAdvisories?: number
   legacy?: Array<{ code: string; detail: string }>
+  /** Crash-left pending transaction; read-only diagnostics. */
+  pending?: { state: string; txid: string; detail: string }
 }
 
 export interface ChapterRowDto {

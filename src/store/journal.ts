@@ -207,6 +207,67 @@ export async function reconcileJournal(store: FsStore): Promise<{
   return { malformed, mismatches }
 }
 
+export type PendingState = 'none' | 'complete' | 'untouched' | 'partial'
+
+export interface PendingInspection {
+  state: PendingState
+  txid?: string
+  files?: string[]
+  detail?: string
+  stagingDir?: string
+}
+
+/**
+ * Read-only classification of the last pending transaction. Status/doctor/
+ * audit must never call recoverPending: recovery writes a terminal journal row,
+ * and a read command is not allowed to mutate the project.
+ */
+export async function inspectPending(store: FsStore): Promise<PendingInspection> {
+  const { records } = await readJournal(store)
+  const last = [...records].reverse().find((record) => record.op !== 'lock_reclaimed')
+  if (last?.status !== 'pending') return { state: 'none' }
+  const matchesExpected = async (): Promise<boolean> => {
+    if (last.hashes === undefined) return false
+    for (const [path, expected] of Object.entries(last.hashes)) {
+      if ((await store.hashBytes(path)) !== expected) return false
+    }
+    return Object.keys(last.hashes).length > 0
+  }
+  const matchesBefore = async (): Promise<boolean> => {
+    if (last.before === undefined) return false
+    for (const [path, expected] of Object.entries(last.before)) {
+      const actual = await store.hashBytes(path)
+      if (expected === null ? actual !== null : actual !== expected) return false
+    }
+    return Object.keys(last.before).length > 0
+  }
+  if (await matchesExpected()) {
+    return {
+      state: 'complete',
+      txid: last.txid,
+      files: last.files,
+      detail: 'all target files match the pending hashes; the next write can promote this transaction',
+      stagingDir: joinRel(STAGING_DIR, last.txid),
+    }
+  }
+  if (await matchesBefore()) {
+    return {
+      state: 'untouched',
+      txid: last.txid,
+      files: last.files,
+      detail: 'no target changed; the next write can close this transaction as aborted',
+      stagingDir: joinRel(STAGING_DIR, last.txid),
+    }
+  }
+  return {
+    state: 'partial',
+    txid: last.txid,
+    files: last.files,
+    detail: 'some targets changed and others did not; automatic recovery is unsafe',
+    stagingDir: joinRel(STAGING_DIR, last.txid),
+  }
+}
+
 /**
  * Resolve a pending transaction left by a crash. The pending row is written
  * after the pre-images are captured and before the first rename, so it is the
@@ -216,34 +277,19 @@ export async function reconcileJournal(store: FsStore): Promise<{
  * is closed as aborted; any mixture is refused as a partial commit.
  */
 export async function recoverPending(store: FsStore): Promise<void> {
+  const inspection = await inspectPending(store)
+  if (inspection.state === 'none' || inspection.txid === undefined) return
   const { records } = await readJournal(store)
-  // Lock reclaim is an audit row, not a transaction. A crashed writer leaves
-  // its pending row behind, then the next writer appends lock_reclaimed; looking
-  // only at the physical last row would hide the pending transaction and make
-  // reconciliation compare the wrong committed hashes.
-  const last = [...records].reverse().find((record) => record.op !== 'lock_reclaimed')
-  if (last?.status !== 'pending') return
-  const matchesExpected = async (): Promise<boolean> => {
-    if (last.hashes === undefined) return false
-    for (const [path, expected] of Object.entries(last.hashes)) {
-      if ((await store.hashBytes(path)) !== expected) return false
-    }
-    return true
-  }
-  const matchesBefore = async (): Promise<boolean> => {
-    if (last.before === undefined) return false
-    for (const [path, expected] of Object.entries(last.before)) {
-      const actual = await store.hashBytes(path)
-      if (expected === null ? actual !== null : actual !== expected) return false
-    }
-    return true
-  }
-  if (await matchesExpected()) {
+  // Lock reclaim is an audit row, not a transaction. inspectPending already
+  // excludes it; find the same row here for the terminal append.
+  const last = [...records].reverse().find((record) => record.txid === inspection.txid)
+  if (last === undefined || last.status !== 'pending') return
+  if (inspection.state === 'complete') {
     await appendJournal(store, { ...last, status: 'committed' })
     await store.removeTree(joinRel(STAGING_DIR, last.txid)).catch(() => undefined)
     return
   }
-  if (await matchesBefore()) {
+  if (inspection.state === 'untouched') {
     await appendJournal(store, {
       ...last,
       status: 'aborted',
@@ -254,9 +300,9 @@ export async function recoverPending(store: FsStore): Promise<void> {
     return
   }
   throw new EngineFaultError(
-    ERROR_CODES.TXN_ABORTED,
+    ERROR_CODES.PENDING_PARTIAL,
     `pending transaction ${last.txid} partially changed the project; automatic recovery is unsafe`,
-    `restore from backups/ or ${STAGING_DIR}/${last.txid}/before/ before retrying`,
+    `inspect ${STAGING_DIR}/${last.txid}/before/ and state/journal.jsonl before restoring anything`,
   )
 }
 

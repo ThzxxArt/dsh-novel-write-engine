@@ -27,6 +27,11 @@ type Gate = (input: GateInput, options: GateOptions) => BlockingItem[]
 
 /** PG-01: the model must have received the current brief before submitting. */
 const briefRequired: Gate = (input) => {
+  // A summary-only repair deliberately changes only draft.summary. The author
+  // already supplied the new summary, and no prose/P4/P6 evidence changed, so
+  // requiring a fresh model-facing brief (and a new proof) would reintroduce
+  // the exact P4/P6 loop this mode removes.
+  if (input.summaryOnlyRevision) return []
   if (input.briefStage === null)
     return [block('PG-01', 'this operation needs a brief, but no brief stage is mapped')]
   const record = input.pipeline.briefs[input.briefStage]
@@ -209,6 +214,37 @@ const summarySchema: Gate = (input) => {
   } else {
     for (const key of ['locations', 'abilities', 'artifacts'] as const) {
       if (!textArray(newElements[key])) problems.push(`new_elements.${key} must be a string array`)
+      for (const name of textArray(newElements[key]) ? newElements[key] : []) {
+        if (!input.text.includes(name)) {
+          problems.push(`new_elements.${key} lists "${name}", but the manuscript never mentions it`)
+        }
+        if (input.operation !== 'archiveChapter') {
+          const ledger = input.evidence.world
+          const already =
+            ledger !== null &&
+            [ledger.locations, ledger.abilities, ledger.artifacts, ledger.factions, ledger.rules].some(
+              (rows) => (rows as Array<{ name: string }>).some((row) => row.name === name),
+            )
+          if (already) {
+            problems.push(
+              `new_elements.${key} lists "${name}", but state/world.yaml already has it; remove it or use updated/no_change`,
+            )
+          }
+        }
+      }
+    }
+  }
+
+  if (textArray(summary.characters_appeared)) {
+    const narrator = input.pipeline.draft?.narrator ?? ''
+    for (const name of summary.characters_appeared) {
+      const alias =
+        narrator.includes(name) &&
+        (narrator.includes('第一人称') || narrator.includes('「我」')) &&
+        input.text.includes('我')
+      if (!input.text.includes(name) && !alias) {
+        problems.push(`characters_appeared lists "${name}", but the manuscript never mentions it`)
+      }
     }
   }
 
@@ -543,6 +579,7 @@ const consistency: Gate = (input, options) => {
 
 /** PG-11: the review/revise budget is enforced by the engine, not self-reported. */
 const rounds: Gate = (input) => {
+  if (input.summaryOnly === true) return []
   const relevant =
     input.operation === 'submitReview' ||
     input.operation === 'submitRevision' ||
@@ -628,7 +665,9 @@ export function applicableGates(input: GateInput): GateId[] {
     case 'submitDraft':
       return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-13']
     case 'submitRevision':
-      return [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08', 'PG-11']
+      return input.summaryOnly === true
+        ? [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06']
+        : [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08', 'PG-11']
     case 'submitReview':
       return [...always, 'PG-09', 'PG-07', 'PG-11']
     case 'runCheck':

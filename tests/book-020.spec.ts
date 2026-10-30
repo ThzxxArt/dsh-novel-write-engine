@@ -333,6 +333,13 @@ describe('0.2.0 whole-book lifecycle', () => {
         format: 'yaml',
         content: [
           'chapters:',
+          '  - num: 1',
+          '    title: 开端之雨',
+          '    scene_type: 日常过渡章',
+          '    goal: 收到无名信',
+          '    conflict: 是否拆开',
+          '    hook: 蜡印上的日期是明天',
+          '    target_words: [80, 400]',
           '  - num: 2',
           '    title: 旧城之影',
           '    scene_type: 纯叙事章',
@@ -345,7 +352,7 @@ describe('0.2.0 whole-book lifecycle', () => {
       })
       const status = await engine.getStatus({ root })
       expect(status.data.book?.strict).toBe(false)
-      expect(status.data.book?.outline).toMatchObject({ total: 1, planned: 1 })
+      expect(status.data.book?.outline).toMatchObject({ total: 2, planned: 2 })
     } finally {
       await cleanup()
     }

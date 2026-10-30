@@ -39,8 +39,12 @@ const fail = (error: unknown): never => {
       error instanceof EngineBlockedError && error.blocking.length > 0
         ? `\nblocking: ${JSON.stringify(error.blocking)}`
         : ''
+    const details =
+      'items' in error && Array.isArray((error as { items?: unknown }).items)
+        ? `\nitems: ${JSON.stringify((error as { items: unknown[] }).items)}`
+        : ''
     throw new Error(
-      `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}`,
+      `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}${details}`,
     )
   }
   throw error
@@ -490,17 +494,20 @@ export function createNovelTools(
           description:
             'Patch mode: {expected_hash, edits:[{old_text,new_text,occurrence?}]}; edits must be unique unless occurrence is set.',
         },
-        summary: { type: 'json' },
+        summary: {
+          type: 'json',
+          description:
+            'Full ten-field summary. Omit content+patch with a summary to repair only pipeline.draft.summary; this does not consume a revise round.',
+        },
         issues: {
           type: 'json',
           description: arraySemanticsDescription('replace', 'Updated issue statuses and evidence for PG-08.'),
         },
         proof: {
           type: 'json',
-          required: true,
           description: arraySemanticsDescription(
             'replace',
-            'Three quotes from the revised text; PG-09 verifies them.',
+            'Three quotes from the revised text; required unless this is a summary-only repair. PG-09 verifies them.',
           ),
         },
         project_root: root,

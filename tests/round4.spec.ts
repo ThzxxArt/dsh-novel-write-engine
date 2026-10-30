@@ -9,6 +9,7 @@ import {
   harness,
   readProjectFile,
   sampleReview,
+  sampleSemantic,
   snapshotTree,
   writeDraft,
 } from './helpers.js'
@@ -161,7 +162,9 @@ it('requires a fresh P6 brief after a failed check, then allows the revision', a
     await engine.getBrief({ stage: 'P6', root })
     const check = await engine.runCheck({
       chapter: 1,
-      semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' }],
+      semantic: sampleSemantic(text, {
+        'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
+      }),
       root,
     })
     expect(check.data.verdict).toBe('fail')

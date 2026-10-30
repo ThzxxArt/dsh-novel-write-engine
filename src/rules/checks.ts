@@ -811,7 +811,7 @@ const duplicateParagraph: Rule = (ctx) => {
       CROSS_RULES.DUPLICATE_PARAGRAPH,
       severity,
       currentParagraph + 1,
-      `paragraph ${currentParagraph + 1} reuses ${Math.round(best.score * 100)}% of paragraph ${previousParagraph - matched.start + 1} from previous source ${matched.source} (advisory ≥${Math.round(advisory * 100)}%, blocker ≥${Math.round(blocker * 100)}%)`,
+      `paragraph ${currentParagraph + 1} reuses ${Math.round(best.score * 100)}% of paragraph ${previousParagraph + 1} from previous source ${matched.source} (advisory ≥${Math.round(advisory * 100)}%, blocker ≥${Math.round(blocker * 100)}%)`,
     ),
   ]
 }
@@ -979,7 +979,8 @@ const timeRegression: Rule = (ctx) => {
   const ordered = [...ledger.items].sort((left, right) => left.chapter - right.chapter)
   const last = ordered[ordered.length - 1]!
   const previous = ordered.length >= 2 ? ordered[ordered.length - 2]! : null
-  const currentFromText = dayOf(ctx.text)
+  const currentMatch = /(?:Day\s*(\d+)|第\s*(\d+)\s*[天日])/i.exec(ctx.text)
+  const currentFromText = currentMatch === null ? null : Number(currentMatch[1] ?? currentMatch[2])
   const current = currentFromText ?? dayOf(last.story_time)
   const before = previous === null ? null : dayOf(previous.story_time)
   if (current === null) return []
@@ -992,7 +993,7 @@ const timeRegression: Rule = (ctx) => {
       v(
         CROSS_RULES.TIME_REGRESSION,
         'advisory',
-        ctx.chapter,
+        paragraphOfIndex(ctx.text, currentMatch!.index),
         `story time goes back from ${last.story_time} to Day ${currentFromText}`,
       ),
     ]

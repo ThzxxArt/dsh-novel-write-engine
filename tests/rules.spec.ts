@@ -71,6 +71,37 @@ describe('rule pack compiler', () => {
     }
   })
 
+  it('rejects unknown keys at every nesting level', () => {
+    const cases: Array<(draft: Record<string, any>) => void> = [
+      (draft) => {
+        draft.format.extra = true
+      },
+      (draft) => {
+        draft.format.title.extra = true
+      },
+      (draft) => {
+        draft.punctuation.dash.extra = true
+      },
+      (draft) => {
+        draft.semantics.water_words.extra = true
+      },
+      (draft) => {
+        draft.lexicon.conclusion_first.extra = true
+      },
+      (draft) => {
+        draft.platform.fanqie.extra = true
+      },
+      (draft) => {
+        draft.quality.dimensions[0].extra = true
+      },
+    ]
+    for (const mutate of cases) {
+      const draft = structuredClone(rawPack) as Record<string, any>
+      mutate(draft)
+      expect(() => compileRulepack(draft)).toThrow(/not a recognised key/)
+    }
+  })
+
   it('rejects the six classes of defect', () => {
     const cases: Array<[string, (draft: Record<string, any>) => void, RegExp]> = [
       [
@@ -314,7 +345,7 @@ describe('rule pack compiler', () => {
     }
     const nested = structuredClone(rawPack) as Record<string, any>
     nested.format.unknown_nested_key = true
-    expect(() => compileRulepack(nested)).not.toThrow()
+    expect(() => compileRulepack(nested)).toThrow(/not a recognised key/)
     const missingPlatform = structuredClone(rawPack) as { platform: Record<string, unknown> }
     delete missingPlatform.platform.fanqie
     expect(() => compileRulepack(missingPlatform)).toThrow(/platform.fanqie/)

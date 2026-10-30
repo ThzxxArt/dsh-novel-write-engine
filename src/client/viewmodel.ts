@@ -109,6 +109,8 @@ export interface PanelView {
   acknowledgedAdvisories: number
   /** Read-only upgrade findings, shown separately from live errors. */
   legacy: Array<{ code: string; detail: string }>
+  /** Crash-left pending transaction, read-only. */
+  pending: { state: string; txid: string; detail: string } | null
   nextTitle: string
   nextDetail: string
   nextTool: string
@@ -221,6 +223,7 @@ const loading = (): PanelView => ({
   advisories: [],
   acknowledgedAdvisories: 0,
   legacy: [],
+  pending: null,
   nextTitle: '',
   nextDetail: '',
   nextTool: '',
@@ -509,6 +512,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     })),
     acknowledgedAdvisories: summary.acknowledgedAdvisories ?? 0,
     legacy: summary.legacy ?? [],
+    pending: summary.pending ?? null,
     nextTitle: finished ? '' : next === undefined ? '状态已同步' : toolLabel(next.tool),
     nextDetail: finished
       ? ''

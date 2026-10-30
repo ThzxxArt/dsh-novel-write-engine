@@ -2,6 +2,15 @@
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
+## 0.2.5 证据、修订与恢复契约
+
+- `novel_check.semantic` 的五条引文可跨句/跨段；每条返回 `state`、`quote`、`nearest`、`conflict_with`。形状错误/引文不存在属于 submission error：`ENGINE_CHECK_SUBMISSION_INVALID`，不写 check、不消耗 `rounds.check`，错误行带 `items`。
+- 只有正文/机器门真的 content failure 才写 `failure_class:"content"`、`counted:true` 并增加 `rounds.check`；pass 不增加。
+- `novel_revise` 新增 summary-only：只传 `chapter` + `summary`（不带 `content`/`patch`/`proof`），正文 hash/章历史不变，不消耗 revise 轮次；从 P6/ready_to_archive 可直接继续 check/archive。content/patch 修订仍要求 `proof`。
+- `novel_archive` 的 `state_delta.world` 以 `state/world.yaml` 存在性为准，返回 `delta_warnings`/`normalized_world`；`summary.new_elements` 只是意图声明。
+- status/doctor/audit/panel 会报告 `PENDING_RECOVERABLE`、`PENDING_ABORTABLE` 或 `ENGINE_PENDING_PARTIAL`；只读面不写 pending 的 terminal row。
+- 错误行统一：`[CODE] message — hint`，`EngineBlockedError` 附 `blocking`，submission 错误附 `items`（tools 与 commands 一致）。
+
 ## 0.2.4 大纲写入契约
 
 - `novel_outline.chapters` **按 `num` upsert**，`volumes` **按 `title` upsert**；未提交的卡不删。
@@ -20,7 +29,7 @@
 | `novel_plan_chapter` | P2       | `submitChapterPlan`；标题长度读 rulepack、5–8 个节拍、narrator/opening/ending 非空；可选 `cast` 1–8 人                                   | 是                                                                           |
 | `novel_write_draft`  | P3       | `submitDraft`                                                                                                                            | 是                                                                           |
 | `novel_review`       | P4       | `submitReview`                                                                                                                           | 是（`total` 必填；issue 维度/段落校验；blocker 不可 waived）                 |
-| `novel_revise`       | P5/P6    | `submitRevision`；`content` 与 `patch:{expected_hash,edits}` 二选一                                                                       | 是（blocker 不可降级或 waived；issue 只能改 status/evidence）                |
+| `novel_revise`       | P5/P6    | `submitRevision`；`content` 与 `patch:{expected_hash,edits}` 二选一；或只传 `summary` 做 summary-only | 是（blocker 不可降级或 waived；issue 只能改 status/evidence；content/patch 需 `proof`） |
 | `novel_check`        | P6       | `runCheck`；`acknowledge` 只能列 advisory code，blocker 不可被知悉放行                                                                   | 是（五个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
 | `novel_archive`      | 归档     | `archiveChapter`                                                                                                                         | 事务（必须带 `state_delta`；旧 review 无 digest 时拒绝）                     |
 | `novel_word_count`   | 任意     | `countWords`；纯文本模式不读项目，`project_root` 仅用于项目模式                                                                           | 项目正文否；项目模式显式 `project_root` 会写会话绑定                          |

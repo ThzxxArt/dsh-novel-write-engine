@@ -1,6 +1,6 @@
 import type { EngineCaller, EngineService } from '../engine/service.js'
 import { NEXT_DETAILS } from '../next-reasons.js'
-import { EngineError } from '../types.js'
+import { EngineBlockedError, EngineError } from '../types.js'
 import { adminHelp, runAdminOperation } from './admin.js'
 
 /** Result shape accepted by `ctx.commands.register`. */
@@ -37,10 +37,20 @@ export interface CommandDefinition {
 const ok = (text: string): CommandResultShape => ({ kind: 'success', text })
 const bad = (text: string): CommandResultShape => ({ kind: 'error', text })
 
-const failure = (error: unknown): CommandResultShape =>
-  error instanceof EngineError
-    ? bad(`[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}`)
-    : bad(String(error))
+const failure = (error: unknown): CommandResultShape => {
+  if (!(error instanceof EngineError)) return bad(String(error))
+  const blocking =
+    error instanceof EngineBlockedError && error.blocking.length > 0
+      ? `\nblocking: ${JSON.stringify(error.blocking)}`
+      : ''
+  const items =
+    'items' in error && Array.isArray((error as { items?: unknown }).items)
+      ? `\nitems: ${JSON.stringify((error as { items: unknown[] }).items)}`
+      : ''
+  return bad(
+    `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}${items}`,
+  )
+}
 
 const formatPercent = (value: number | null | undefined): string =>
   value === null || value === undefined ? '—' : `${Math.round(value * 1000) / 10}%`

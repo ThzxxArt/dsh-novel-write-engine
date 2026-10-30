@@ -99,6 +99,21 @@ describe('maintenance operations', () => {
       expect(result.data.path).toBe('state/characters.yaml')
       const after = await engine.queryState({ kind: 'characters', root })
       expect((after.data as { characters: unknown[] }).characters).toHaveLength(1)
+      const duplicated = {
+        ...(after.data as Record<string, unknown>),
+        characters: [
+          ...(after.data as { characters: unknown[] }).characters,
+          (after.data as { characters: unknown[] }).characters[0],
+        ],
+      }
+      await expect(
+        engine.amend({
+          path: 'state/characters.yaml',
+          content: duplicated,
+          reason: '重复姓名应被拒绝',
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
       const audit = await engine.auditHistory({ root, limit: 5 })
       expect(audit.data.at(-1)?.op).toBe('amend')
     } finally {
@@ -312,7 +327,9 @@ describe('revision paths', () => {
       await engine.getBrief({ stage: 'P6', root })
       const checked = await engine.runCheck({
         chapter: 1,
-        semantic: [{ id: 'L2-VOICE', verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' }],
+        semantic: sampleSemantic(text, {
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
+        }),
         root,
       })
       expect(checked.data.verdict).toBe('fail')
@@ -345,7 +362,9 @@ describe('revision paths', () => {
       await engine.getBrief({ stage: 'P6', root })
       await engine.runCheck({
         chapter: 1,
-        semantic: [{ id: 'X', verdict: 'fail', evidence: 'q', note: 'n' }],
+        semantic: sampleSemantic(cleanText(), {
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
+        }),
         root,
       })
       await engine.getBrief({ stage: 'P6', root })
@@ -733,7 +752,9 @@ describe('branch coverage exercises', () => {
       await engine.getBrief({ stage: 'P6', root })
       await engine.runCheck({
         chapter: 1,
-        semantic: [{ id: 'X', verdict: 'fail', evidence: 'q', note: 'n' }],
+        semantic: sampleSemantic(cleanText(), {
+          'L2-VOICE': { verdict: 'fail', evidence: '没有抬头，只把笔', note: '声音无区分' },
+        }),
         root,
       })
       await engine.getBrief({ stage: 'P6', root })

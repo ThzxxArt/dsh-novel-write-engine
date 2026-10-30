@@ -6,6 +6,7 @@ import { createCommands } from '../src/commands/index.js'
 import { runAdminOperation } from '../src/commands/admin.js'
 import { createNovelTools } from '../src/tools/index.js'
 import { EngineService } from '../src/engine/service.js'
+import { EngineBlockedError } from '../src/types.js'
 import { loadRulepack } from '../src/rulepack.js'
 import { TEST_CONFIG, harness } from './helpers.js'
 
@@ -295,6 +296,182 @@ describe('selection commands', () => {
       await cleanup()
       await rm(other, { recursive: true, force: true })
     }
+  })
+})
+
+describe('command error formatting', () => {
+  it('keeps blocking and submission items instead of dropping them', async () => {
+    const blocked = new EngineBlockedError(
+      'ENGINE_GATE_BLOCKED',
+      'blocked',
+      [{ code: 'PG-03', scope: 'check', detail: 'too short' }],
+      'write more',
+    )
+    Object.assign(blocked, { items: [{ id: 'L2-POV', state: 'not_found' }] })
+    const engine = {
+      getStatus: async () => {
+        throw blocked
+      },
+    } as unknown as EngineService
+    const result = await novel(engine).handler(invocation('status'))
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('blocking:')
+    expect(result.text).toContain('PG-03')
+    expect(result.text).toContain('items:')
+    expect(result.text).toContain('L2-POV')
+  })
+})
+
+describe('status command family', () => {
+  it('covers stats, outline, guide, report, doctor, next and argument errors', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await init(engine, root, '命令族')
+      const command = novel(engine)
+      for (const raw of ['status', 'next', 'stats', 'outline', 'guide', 'report', 'doctor']) {
+        const result = await command.handler(invocation(raw))
+        expect(result.kind, raw).toBe('success')
+      }
+      expect((await command.handler(invocation('search'))).kind).toBe('error')
+      expect((await command.handler(invocation('export pdf'))).kind).toBe('error')
+      expect((await command.handler(invocation('projects --yes'))).kind).toBe('error')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('formats stats with missing cards and no target', async () => {
+    const engine = {
+      stats: async () => ({
+        chapters: 1,
+        totalWords: 100,
+        averageScore: 120,
+        openForeshadows: 1,
+        totalCards: 2,
+        outlineCoverage: 0.5,
+        archivedCoverage: 0.5,
+        missingCards: 1,
+        blueprintReady: false,
+        strictOutline: false,
+        targetChapters: null,
+        worldbookEntries: 3,
+        revision: 2,
+        rulepack: 'default@1.0.1',
+      }),
+    } as unknown as EngineService
+    const result = await novel(engine).handler(invocation('stats'))
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('缺卡 1')
+    expect(result.text).toContain('目标 未设')
+  })
+
+  it('formats projects with prune no-ops and damaged rows', async () => {
+    const engine = {
+      pruneProjects: async () => ({ candidates: [{}], removed: [] }),
+      listProjects: async () => ({
+        projects: [
+          {
+            root: '/tmp/book',
+            title: '旧书',
+            state: 'missing',
+            identity_changed: true,
+          },
+        ],
+        active: null,
+      }),
+      currentProject: async () => ({
+        selection: { root: '/tmp/book', source: 'session' },
+        bound: true,
+      }),
+    } as unknown as EngineService
+    const command = novel(engine)
+    expect((await command.handler(invocation('projects --prune --yes'))).text).toContain('没有行实际被删除')
+    const listed = await command.handler(invocation('projects'))
+    expect(listed.text).toContain('旧书')
+    expect(listed.text).toContain('missing')
+  })
+
+  it('formats current-project selection and damage states', async () => {
+    let current: unknown = { selection: null, error: '没有候选项目', bound: false }
+    const engine = {
+      currentProject: async () => current,
+    } as unknown as EngineService
+    const command = novel(engine)
+    expect((await command.handler(invocation('current'))).text).toContain('没有候选项目')
+    current = {
+      selection: { root: '/tmp/book', title: '书', source: 'session' },
+      bound: true,
+      state: 'missing',
+    }
+    expect((await command.handler(invocation('current'))).text).toContain('项目目录不在了')
+    current = {
+      selection: { root: '/tmp/book', title: '书', source: 'session' },
+      bound: true,
+      state: 'not-project',
+    }
+    expect((await command.handler(invocation('current'))).text).toContain('没有 novel.yaml')
+    current = {
+      selection: { root: '/tmp/book', title: '书', source: 'config' },
+      bound: false,
+      state: undefined,
+    }
+    expect((await command.handler(invocation('current'))).text).toContain('当前会话未绑定')
+  })
+
+  it('formats report warnings and search results', async () => {
+    const engine = {
+      report: async () => ({
+        data: {
+          progress: { archived: 0, target: null, words: 0, percent: 0 },
+          outline: { planned: 0, archived: 0, drift: [] },
+          quality: { average: 0, median: 0, trend: null, samples: 0, attempts: 0 },
+          foreshadows: { open: 0, overdue: 0 },
+          warnings: ['旧数据'],
+        },
+      }),
+      search: async () => ({
+        data: { total: 1, results: [{ kind: 'chapter', snippet: '片段' }] },
+      }),
+    } as unknown as EngineService
+    const command = novel(engine)
+    expect((await command.handler(invocation('report'))).text).toContain('警告：旧数据')
+    const found = await command.handler(invocation('search 词'))
+    expect(found.text).toContain('片段')
+  })
+
+  it('formats planning errors and missing/complete outline data', async () => {
+    let status: unknown = {
+      data: {
+        state_errors: [{ code: 'OUTLINE_UNREADABLE', path: 'outline/outline.yaml', message: 'bad' }],
+      },
+    }
+    const engine = {
+      getStatus: async () => status,
+    } as unknown as EngineService
+    const command = novel(engine)
+    expect((await command.handler(invocation('outline'))).kind).toBe('error')
+    status = { data: { state_errors: [], book: undefined } }
+    expect((await command.handler(invocation('outline'))).text).toContain('还没有书级规划数据')
+    status = {
+      data: {
+        state_errors: [],
+        book: {
+          premise: '',
+          strict: true,
+          outline: {
+            total: 2,
+            planned_coverage: 0.5,
+            archived_coverage: null,
+            missing_cards: 1,
+            current: { num: 1, title: '开端', scene_type: '日常过渡章' },
+          },
+          worldbook: { characters: 1, locations: 2, factions: 3, rules: 4 },
+        },
+      },
+    }
+    const complete = await command.handler(invocation('outline'))
+    expect(complete.kind).toBe('success')
+    expect(complete.text).toContain('当前章卡')
   })
 })
 

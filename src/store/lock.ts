@@ -194,6 +194,7 @@ export class FileLock {
     // only unlink if the original path still carries the same record; a newer
     // lock created in the meantime is left alone.
     const claimPath = `${this.absolutePath}.reclaim-${randomUUID()}`
+    let claimByRename = false
     try {
       await fs.link(this.absolutePath, claimPath)
     } catch (error) {
@@ -202,7 +203,20 @@ export class FileLock {
       // A Windows sharing/AV window can make link fail while the owner is
       // still releasing. Do not fail the writer; retry until the deadline.
       if (code === 'EPERM' || code === 'EACCES') return false
-      throw error
+      // FAT/SMB/WSL mounts may not support hard links. Rename is the only
+      // atomic claim primitive left; verify the moved record before deleting
+      // it and restore it if another writer won the race.
+      if (['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EINVAL'].includes(code ?? '')) {
+        try {
+          await fs.rename(this.absolutePath, claimPath)
+          claimByRename = true
+        } catch (renameError) {
+          if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') return true
+          throw renameError
+        }
+      } else {
+        throw error
+      }
     }
     const moved = await this.readAt(claimPath)
     const claimMtime = await fs
@@ -217,17 +231,31 @@ export class FileLock {
           moved.startedAt === record.startedAt &&
           moved.nonce === record.nonce
     if (!same) {
-      await fs.rm(claimPath, { force: true }).catch(() => undefined)
+      if (claimByRename) {
+        await fs.access(this.absolutePath).then(
+          async () => {
+            await fs.rm(claimPath, { force: true }).catch(() => undefined)
+          },
+          async () => {
+            await fs.rename(claimPath, this.absolutePath).catch(async () => {
+              await fs.rm(claimPath, { force: true }).catch(() => undefined)
+            })
+          },
+        )
+      } else {
+        await fs.rm(claimPath, { force: true }).catch(() => undefined)
+      }
       return false
     }
-    const current = await this.readAt(this.absolutePath)
+    const current = claimByRename ? null : await this.readAt(this.absolutePath)
     const currentMatches =
-      record === null
+      claimByRename ||
+      (record === null
         ? current === null
         : current !== null &&
           current.pid === record.pid &&
           current.startedAt === record.startedAt &&
-          current.nonce === record.nonce
+          current.nonce === record.nonce)
     if (!currentMatches) {
       await fs.rm(claimPath, { force: true }).catch(() => undefined)
       return false

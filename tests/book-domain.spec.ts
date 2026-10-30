@@ -104,6 +104,10 @@ describe('book plan and titles', () => {
     expect(() => mergeBookPlan(emptyBookPlan(), { themes: 'x' as never })).toThrow(EngineInputError)
     expect(() => mergeBookPlan(emptyBookPlan(), { themes: ['a', 'a'] })).toThrow(EngineInputError)
     expect(() => mergeBookPlan(emptyBookPlan(), { strict: 'yes' as never })).toThrow(EngineInputError)
+    expect(() => mergeBookPlan(emptyBookPlan(), { strict_explicit: 'yes' as never })).toThrow(
+      EngineInputError,
+    )
+    expect(() => mergeBookPlan(emptyBookPlan(), [] as never)).toThrow(/book must be an object/)
     expect(() => mergeBookPlan(emptyBookPlan(), { premise: 'x'.repeat(2001) })).toThrow(EngineInputError)
   })
 })
@@ -189,7 +193,7 @@ describe('chapter cards', () => {
       defaultTargetWords: [80, 400],
       now: '2026-01-01',
     })
-    expect(archived[0]).toMatchObject({ status: 'archived', word_count: 120, archived_at: '2026-01-01' })
+    expect(archived[0]).toMatchObject({ status: 'archived', word_count: 120, archived_at: null })
   })
 
   it('rejects malformed planned cards', () => {
@@ -429,6 +433,7 @@ describe('worldbook', () => {
         characters: [{ name: '角色', role: '主角', description: '说明', arc: '' }],
         glossary: [{ term: '术语', definition: '定义' }],
         backstory: [{ time: '十年前', event: '旧事' }],
+        facts: [{ alias: '船费', value: 300, unit: '蚊', note: '旧账' }],
       },
       '2026-01-02',
     )
@@ -679,6 +684,7 @@ describe('outline import and render', () => {
         characters: [{ name: '角色', role: '主角', description: '说明', arc: '弧线' }],
         glossary: [{ term: '术语', definition: '定义' }],
         backstory: [{ time: '十年前', event: '旧事' }],
+        facts: [{ alias: '船费', value: 300, unit: '蚊', note: '旧账' }],
       },
       '2026-01-02',
     )
@@ -688,6 +694,9 @@ describe('outline import and render', () => {
     expect(rendered).toContain('弧线')
     expect(rendered).toContain('术语')
     expect(rendered).toContain('旧事')
+    expect(rendered).toContain('数值事实')
+    expect(rendered).toContain('船费')
+    expect(rendered).toContain('300蚊')
     const parsed = parseOutlineData(
       JSON.stringify({
         book: { logline: 'JSON 梗概' },

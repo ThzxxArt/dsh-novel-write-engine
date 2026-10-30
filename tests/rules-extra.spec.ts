@@ -129,14 +129,15 @@ describe('rule edge cases', () => {
   it('names the duplicated paragraph and both thresholds in its evidence', () => {
     const repeated = '这是一段足够长的重复段落，用来验证跨章相似度会命中。'.repeat(2)
     const prefix = '第一段是完整而独立的叙述，和后面的重复段落没有任何关系，也不应该被误判。'
+    const previousPrefix = '上一章另有完整开头，重复段落在它的第二段。'
     const result = runMachineChecks(
       `${prefix}\n\n${repeated}`,
       options({
         chapter: 4,
         evidence: {
           ...options().evidence,
-          previousText: repeated,
-          previousTexts: [repeated],
+          previousText: `${previousPrefix}\n\n${repeated}`,
+          previousTexts: [`${previousPrefix}\n\n${repeated}`],
         },
       }),
     )
@@ -144,6 +145,7 @@ describe('rule edge cases', () => {
     expect(violation?.severity).toBe('blocker')
     expect(violation?.location.paragraph).toBe(2)
     expect(violation?.detail).toContain('paragraph 2')
+    expect(violation?.detail).toContain('of paragraph 2')
     expect(violation?.detail).toContain('blocker ≥')
     expect(violation?.detail).not.toContain('advisory threshold')
   })
@@ -262,6 +264,20 @@ describe('rule edge cases', () => {
         },
       }),
     ).toContain('TIME_REGRESSION')
+    const located = runMachineChecks(
+      '第一段没有任何时间词。\n\n第二天，Day 2，雨还在下。',
+      options({
+        chapter: 3,
+        evidence: {
+          ...options().evidence,
+          timeline: {
+            ...timeline,
+            items: [timeline.items[0]!],
+          },
+        },
+      }),
+    )
+    expect(located.violations.find((entry) => entry.code === 'TIME_REGRESSION')?.location.paragraph).toBe(2)
   })
 
   it('finds two known characters in one paragraph without a relationship row', () => {

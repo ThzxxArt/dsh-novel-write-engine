@@ -137,6 +137,74 @@ describe('archive state_delta reconciliation', () => {
     }
   })
 
+  it('normalizes a stale new_elements declaration against the existing world ledger', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      await readyToArchive({ root, engine, summary, text: ledgerText() })
+      const before = await readYaml(root, 'state/world.yaml')
+      await engine.amend({
+        path: 'state/world.yaml',
+        content: {
+          ...before,
+          locations: [
+            {
+              name: '旧办公室',
+              first_appearance: 1,
+              locked: true,
+              description: '旧办公室',
+              layout: '',
+              capacity: 0,
+              changes: [],
+            },
+          ],
+        },
+        reason: 'simulate an entity introduced by an earlier archive',
+        root,
+      })
+      const result = (await archive(engine, root, fullDelta(summary))) as {
+        data: { delta_warnings: Array<{ code: string }>; normalized_world: Record<string, unknown> }
+      }
+      expect(result.data.normalized_world['旧办公室']).toMatchObject({
+        from: 'created',
+        to: 'updated',
+        reason: 'existing-created-as-updated',
+      })
+      expect(result.data.delta_warnings.map((warning) => warning.code)).toContain(
+        'WORLD_ELEMENT_RECLASSIFIED_CREATED_TO_UPDATED',
+      )
+      const world = await readYaml(root, 'state/world.yaml')
+      expect(
+        (world.locations as Array<Record<string, unknown>>).filter((row) => row.name === '旧办公室'),
+      ).toHaveLength(1)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('archives after a summary-only repair without a new P4/P6 round or brief', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      const summary = summaryWithLedgerEntities()
+      await readyToArchive({ root, engine, summary, text: ledgerText() })
+      const repaired = await engine.submitRevision({
+        chapter: 1,
+        summary: { ...summary, opening: summary.opening },
+        root,
+      })
+      expect(repaired.data).toMatchObject({
+        summary_only: true,
+        rounds_consumed: 0,
+        stage: 'ready_to_archive',
+      })
+      const archived = await archive(engine, root, fullDelta(summary))
+      expect((archived as { data: { chapter: number } }).data.chapter).toBe(1)
+      expect((await engine.getStatus({ root })).data.stage).toBe('done')
+    } finally {
+      await cleanup()
+    }
+  })
+
   it('writes characters, world, locks, relationships and the full timeline', async () => {
     const { root, engine, cleanup } = await harness()
     try {

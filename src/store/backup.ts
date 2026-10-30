@@ -32,6 +32,9 @@ export const BACKUP_MANIFEST = 'manifest.json'
 export async function listBackups(store: FsStore): Promise<BackupEntry[]> {
   const entries: BackupEntry[] = []
   for (const name of await store.list(BACKUP_DIR)) {
+    // Migration pre-images are an audit trail, not transaction backups. They
+    // must never be aged out by the chapter-retention pruner.
+    if (name === 'migrations') continue
     const info = await store.stat(joinRel(BACKUP_DIR, name))
     if (info === null || !info.isDirectory) continue
     if (!(await store.exists(joinRel(BACKUP_DIR, name, BACKUP_MARKER)))) continue

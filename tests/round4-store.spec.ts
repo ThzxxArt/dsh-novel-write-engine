@@ -28,7 +28,7 @@ it('keeps a recovery pre-image in staging for a crashed pending transaction', as
       hashes: { 'state/world.yaml': hash('new: true\n') },
       before: { 'state/world.yaml': hash('old: true\n') },
     })
-    await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+    await expect(assertJournalConsistent(store)).rejects.toMatchObject({ code: 'ENGINE_PENDING_PARTIAL' })
     expect(await store.readText('.staging/crash/before/state/world.yaml')).toBe('old: true\n')
   } finally {
     await rm(root, { recursive: true, force: true })
@@ -70,10 +70,12 @@ it('never prunes an unmarked user file under backups/', async () => {
       backupRetention: 1,
     })
     await store.writeText(joinRel('backups', 'tx-one', BACKUP_MARKER), '1')
+    await store.writeText(joinRel('backups', 'migrations', 'v1', 'before.yaml'), 'old: true\n')
     expect(await store.readText(joinRel('backups', 'README.md'))).toBe('用户文件')
     expect((await listBackups(store)).length).toBeGreaterThanOrEqual(1)
     await pruneBackups(store, 1)
     expect(await store.readText(joinRel('backups', 'README.md'))).toBe('用户文件')
+    expect(await store.readText(joinRel('backups', 'migrations', 'v1', 'before.yaml'))).toBe('old: true\n')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

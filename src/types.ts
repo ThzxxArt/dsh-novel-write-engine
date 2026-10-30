@@ -126,6 +126,9 @@ export const ERROR_CODES = {
   /** The exact same keyed submission already failed in the same context. */
   RETRY_UNCHANGED: 'ENGINE_RETRY_UNCHANGED',
   GATE_BLOCKED: 'ENGINE_GATE_BLOCKED',
+  CHECK_SUBMISSION_INVALID: 'ENGINE_CHECK_SUBMISSION_INVALID',
+  PENDING_PARTIAL: 'ENGINE_PENDING_PARTIAL',
+  IO_PERMISSION: 'ENGINE_IO_PERMISSION',
   READING_PROOF_INVALID: 'ENGINE_READING_PROOF_INVALID',
   SCORE_MISMATCH: 'ENGINE_SCORE_MISMATCH',
   /** A revision tried to rewrite reviewer-owned issue fields. */
@@ -252,9 +255,14 @@ export interface CheckDocument {
   machine: { violations: Violation[]; advisories?: Violation[]; metrics: WordMetrics }
   semantic: {
     items: Array<{ id: string; verdict: 'pass' | 'fail'; evidence: string; note: string }>
+    /** 0.2.5: explain a persisted content failure; historical checks omit it. */
+    findings?: BlockingItem[]
   }
   /** Advisory codes the author has explicitly acknowledged for this content. */
   acknowledged?: string[]
+  /** 0.2.5: content failures consume the check budget; submission errors never persist. */
+  failure_class?: 'submission' | 'content'
+  counted?: boolean
   verdict: 'pass' | 'fail'
 }
 
@@ -983,6 +991,10 @@ export interface GateInput {
   summary: ChapterSummary | null
   /** P5 may omit `summary`; when omitted, the previous plan summary is reused. */
   summaryProvided?: boolean
+  /** Summary-only repair: no manuscript change, no P4/P6 proof requirement. */
+  summaryOnly?: boolean
+  /** The last write was a summary-only repair; P6 may continue without a new brief. */
+  summaryOnlyRevision?: boolean
   review: ReviewDocument | null
   check: CheckDocument | null
   /** When set, result-bearing gates run only the named check scopes. */
@@ -1053,6 +1065,8 @@ export interface StatusReport {
   stage: Stage
   rounds: RoundCounters
   blocking: BlockingItem[]
+  /** Non-blocking recovery notes, e.g. a recoverable pending transaction. */
+  warnings?: Warning[]
   /** plan/review/check/ledger files that exist but cannot be read safely. */
   state_errors: StateError[]
   metrics: WordMetrics | null

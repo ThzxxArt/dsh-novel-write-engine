@@ -56,7 +56,7 @@ export class FsStore {
         }
       } catch (error) {
         if (isMissing(error)) break
-        throw error
+        throw ioFailure(error)
       }
     }
     return absolute
@@ -75,7 +75,7 @@ export class FsStore {
       return true
     } catch (error) {
       if (isMissing(error)) return false
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -85,7 +85,7 @@ export class FsStore {
       return { size: stat.size, mtimeMs: stat.mtimeMs, isDirectory: stat.isDirectory() }
     } catch (error) {
       if (isMissing(error)) return null
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -94,7 +94,7 @@ export class FsStore {
       return (await fs.readdir(await this.safePath(relativeDir))).sort()
     } catch (error) {
       if (isMissing(error)) return []
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -117,7 +117,7 @@ export class FsStore {
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     } catch (error) {
       if (isMissing(error)) return []
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -138,7 +138,7 @@ export class FsStore {
       }
     } catch (error) {
       if (isMissing(error)) return null
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -164,7 +164,7 @@ export class FsStore {
       }
     } catch (error) {
       if (isMissing(error)) return null
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -173,7 +173,7 @@ export class FsStore {
       return await fs.readFile(await this.safePath(relativePath), 'utf8')
     } catch (error) {
       if (isMissing(error)) return null
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -227,7 +227,7 @@ export class FsStore {
         await fs.mkdir(current)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
-        throw error
+        throw ioFailure(error)
       }
     }
   }
@@ -249,7 +249,7 @@ export class FsStore {
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -293,7 +293,7 @@ export class FsStore {
       return await fs.readFile(await this.safePath(relativePath))
     } catch (error) {
       if (isMissing(error)) return null
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -313,7 +313,7 @@ export class FsStore {
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
-      throw error
+      throw ioFailure(error)
     }
   }
 
@@ -351,6 +351,23 @@ function isMissing(error: unknown): boolean {
     'code' in error &&
     ((error as { code?: string }).code === 'ENOENT' || (error as { code?: string }).code === 'ENOTDIR')
   )
+}
+
+function ioFailure(error: unknown): unknown {
+  if (error instanceof EngineFaultError) return error
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : ''
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+    return new EngineFaultError(
+      ERROR_CODES.IO_PERMISSION,
+      `filesystem permission denied (${code}): ${error instanceof Error ? error.message : String(error)}`,
+      'fix the project directory permissions, or restore a readable copy before retrying',
+      { cause: error },
+    )
+  }
+  return error
 }
 
 /** Join project-relative segments with forward slashes. */

@@ -33,7 +33,7 @@ const response = () => {
   }
 }
 
-describe('panel bundle v4', () => {
+describe('panel bundle v5', () => {
   it('offers every project and chooses active or an explicit query root', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
     const other = await mkdtemp(join(tmpdir(), 'novel-panel-b-'))
@@ -249,7 +249,7 @@ describe('panel bundle v4', () => {
     }
   })
 
-  it('parses ?root= in the remote handler and serves v4', async () => {
+  it('parses ?root= in the remote handler and serves v5', async () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'novel-panel-state-'))
     const other = await mkdtemp(join(tmpdir(), 'novel-panel-b-'))
     const { root, engine, cleanup } = await harness({ stateDir })

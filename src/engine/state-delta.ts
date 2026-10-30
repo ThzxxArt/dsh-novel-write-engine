@@ -17,6 +17,7 @@ import {
   type TimelineDocument,
   type WorldDelta,
   type WorldDocument,
+  type Warning,
 } from '../types.js'
 
 const SECTIONS = ['characters', 'foreshadows', 'timeline', 'world', 'relationships'] as const
@@ -28,6 +29,37 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Define an own property even for names such as `__proto__` or `constructor`. */
 const setOwn = <T>(record: Record<string, T>, key: string, value: T): void => {
   Object.defineProperty(record, key, { value, enumerable: true, configurable: true, writable: true })
+}
+
+/** Validate resource balances without accepting numeric strings or fractions. */
+const validateResources = (state: Record<string, unknown>, who: string): void => {
+  if (state.resources === undefined) return
+  if (!isRecord(state.resources)) fail(`${who}.current_state.resources must be an object`)
+  for (const [name, value] of Object.entries(state.resources)) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+      fail(`${who}.current_state.resources.${name} must be an integer`)
+    }
+    if (value < 0) {
+      throw new EngineInputError(
+        ERROR_CODES.RESOURCE_NEGATIVE_BALANCE,
+        `${who}'s ${name} balance is ${value}`,
+        'state a non-negative integer balance; spend the resource before the balance reaches zero',
+      )
+    }
+  }
+}
+
+/** Current state is a patch; resources are a nested map, not a whole replacement. */
+const mergeCurrentState = (
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> => {
+  const merged = { ...base, ...patch }
+  if (patch.resources !== undefined) {
+    const baseResources = isRecord(base.resources) ? base.resources : {}
+    merged.resources = { ...baseResources, ...(patch.resources as Record<string, unknown>) }
+  }
+  return merged
 }
 
 function fail(detail: string): never {
@@ -102,6 +134,15 @@ export interface DeltaResult {
   timeline: TimelineDocument
   relationships: RelationshipsDocument
   assigned: Record<string, string>
+  warnings: Warning[]
+  normalized_world: Record<
+    string,
+    {
+      from: DeltaAction
+      to: DeltaAction
+      reason: 'existing-created-as-updated' | 'missing-updated-as-created' | 'missing-no-change-as-created'
+    }
+  >
 }
 
 export interface DeltaInput {
@@ -194,6 +235,29 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const timeline = structuredClone(input.timeline)
   const relationships = structuredClone(input.relationships)
   const assigned: Record<string, string> = Object.create(null) as Record<string, string>
+  const warnings: Warning[] = []
+  const normalizedWorld: DeltaResult['normalized_world'] = Object.create(
+    null,
+  ) as DeltaResult['normalized_world']
+
+  const warnReclass = (
+    name: string,
+    from: DeltaAction,
+    to: DeltaAction,
+    reason: DeltaResult['normalized_world'][string]['reason'],
+  ): void => {
+    normalizedWorld[name] = { from, to, reason }
+    const code =
+      reason === 'existing-created-as-updated'
+        ? 'WORLD_ELEMENT_RECLASSIFIED_CREATED_TO_UPDATED'
+        : reason === 'missing-updated-as-created'
+          ? 'WORLD_ELEMENT_RECLASSIFIED_UPDATED_TO_CREATED'
+          : 'WORLD_ELEMENT_RECLASSIFIED_NO_CHANGE_TO_CREATED'
+    warnings.push({
+      code,
+      message: `world.${name}: ${from} normalized to ${to} against state/world.yaml (${reason})`,
+    })
+  }
 
   const appeared = [...new Set(summary.characters_appeared)]
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
@@ -228,7 +292,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         fail(
           `characters.${name}.${field} must be an object; expected ${
             field === 'current_state'
-              ? '{"resources":{"港币":-3},"status":"..."}'
+              ? '{"resources":{"港币":3},"status":"..."}'
               : field === 'profile'
                 ? '{"age":31,"occupation":"..."}'
                 : '{"change":"...","status_change":"..."}'
@@ -254,12 +318,14 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       const hinted =
         canonicalRole(rawHint) ??
         (rawHint === undefined && (name === narratorName || name === narrator) ? 'protagonist' : 'extra')
+      const currentState = (declared.current_state ?? {}) as Record<string, unknown>
+      validateResources(currentState, `characters.${name}`)
       const created = {
         name,
         role: normalizeRole(declared.role, hinted),
         first_appearance: chapter,
         profile: declared.profile ?? {},
-        current_state: declared.current_state ?? {},
+        current_state: currentState,
         growth: [] as Array<{ chapter: number; change: string; status_change: string }>,
         updated_at: chapter,
       }
@@ -287,7 +353,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (declared.action === 'updated') {
       if (declared.profile !== undefined) existing.profile = { ...existing.profile, ...declared.profile }
       if (declared.current_state !== undefined) {
-        existing.current_state = { ...existing.current_state, ...declared.current_state }
+        const merged = mergeCurrentState(existing.current_state, declared.current_state)
+        validateResources(merged, `characters.${name}`)
+        existing.current_state = merged
       }
       if (declared.growth !== undefined) {
         existing.growth.push({ ...declared.growth, chapter })
@@ -334,6 +402,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     resources[change.resource] = next
     character.current_state = { ...state, resources }
+    validateResources(character.current_state, `characters.${change.character}`)
   }
 
   const findWorld = (
@@ -360,9 +429,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     return null
   }
 
-  // The inverse direction matters as much as the lookup above: every element
-  // the summary announces must be declared as created. Otherwise a chapter can
-  // announce a new location and never write it into the world ledger.
+  // `summary.new_elements` is a narrative intent declaration, not a second
+  // write action. Validate its names against the text/kind, but let the world
+  // ledger decide whether the actual write is created or updated.
   for (const [kind, names] of [
     ['location', summary.new_elements.locations],
     ['ability', summary.new_elements.abilities],
@@ -376,11 +445,14 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         fail(`summary lists new ${kind} "${name}" but world.${name} is not declared`)
       }
       const declared = delta.world[name]!
-      if (declared.action !== 'created') {
-        fail(`world.${name} is new in this chapter; its action must be created`)
-      }
       if (declared.kind !== undefined && declared.kind !== kind) {
         fail(`world.${name} is declared as ${declared.kind} but the summary lists it as ${kind}`)
+      }
+      if (findWorld(name) !== null) {
+        warnings.push({
+          code: 'WORLD_ELEMENT_ALREADY_IN_LEDGER',
+          message: `summary.new_elements lists "${name}", but state/world.yaml already has it; ledger existence wins`,
+        })
       }
     }
   }
@@ -400,26 +472,50 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (declared.detail !== undefined && !isRecord(declared.detail)) {
       fail(`world.${name}.detail must be an object`)
     }
-    if (declared.detail !== undefined) {
-      if (declared.action !== 'created') {
-        for (const reserved of ['name', 'first_appearance', 'description'] as const) {
-          if (Object.hasOwn(declared.detail, reserved)) {
-            fail(`world.${name}.detail cannot rewrite the reserved field "${reserved}"`)
-          }
+    const expected = expectedKind(name)
+    if (expected !== null && declared.kind !== undefined && declared.kind !== expected) {
+      fail(`world.${name} is declared as ${declared.kind} but the summary lists it as ${expected}`)
+    }
+    const existing = findWorld(name)
+    let action: DeltaAction = declared.action
+    if (action === 'created' && existing !== null) {
+      if (declared.kind !== undefined && declared.kind !== existing.kind) {
+        fail(
+          `world.${name} is declared as ${declared.kind} but the ledger has ${existing.kind}; kind cannot change`,
+        )
+      }
+      if (expected !== null && expected !== existing.kind) {
+        fail(`world.${name} is listed as ${expected} but the ledger has ${existing.kind}`)
+      }
+      action = 'updated'
+      warnReclass(name, 'created', 'updated', 'existing-created-as-updated')
+    } else if (action === 'updated' && existing === null) {
+      const kind = declared.kind ?? expected
+      if (kind === null) {
+        fail(
+          `world.${name} does not exist; declare kind (location|ability|artifact|faction|rule) or list it in summary.new_elements`,
+        )
+      }
+      if (!input.text.includes(name)) {
+        fail(`world entity "${name}" is new but does not appear in the manuscript`)
+      }
+      action = 'created'
+      warnReclass(name, 'updated', 'created', 'missing-updated-as-created')
+    } else if (action === 'no_change' && existing === null && expected !== null) {
+      if (!input.text.includes(name)) {
+        fail(`world entity "${name}" is new but does not appear in the manuscript`)
+      }
+      action = 'created'
+      warnReclass(name, 'no_change', 'created', 'missing-no-change-as-created')
+    }
+    if (declared.detail !== undefined && action !== 'created') {
+      for (const reserved of ['name', 'first_appearance', 'description'] as const) {
+        if (Object.hasOwn(declared.detail, reserved)) {
+          fail(`world.${name}.detail cannot rewrite the reserved field "${reserved}"`)
         }
       }
     }
-    const expected = expectedKind(name)
-    if (expected !== null) {
-      if (declared.action !== 'created') {
-        fail(`world.${name} is new in this chapter; its action must be created`)
-      }
-      if (declared.kind !== undefined && declared.kind !== expected) {
-        fail(`world.${name} is declared as ${declared.kind} but the summary lists it as ${expected}`)
-      }
-    }
-    const existing = findWorld(name)
-    if (declared.action === 'created') {
+    if (action === 'created') {
       if (name.trim() === '') fail('a created world entity has an empty name')
       if (existing !== null) fail(`world entity "${name}" already exists; use updated or no_change`)
       if (!input.text.includes(name)) {
@@ -430,7 +526,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       if (!['location', 'ability', 'artifact', 'faction', 'rule'].includes(kind)) {
         fail(`world.${name} has unknown kind "${String(kind)}"`)
       }
-      if (expected === null && (kind === 'location' || kind === 'ability' || kind === 'artifact')) {
+      if (
+        declared.action === 'created' &&
+        expected === null &&
+        (kind === 'location' || kind === 'ability' || kind === 'artifact')
+      ) {
         fail(`world.${name} is created but is not listed in summary.new_elements`)
       }
       if (kind === 'location') {
@@ -464,7 +564,12 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       continue
     }
     if (existing === null) fail(`world entity "${name}" does not exist; created must be used first`)
-    if (declared.action === 'updated') {
+    if (declared.kind !== undefined && existing.kind !== declared.kind) {
+      fail(
+        `world.${name} is declared as ${declared.kind} but the ledger has ${existing.kind}; kind cannot change`,
+      )
+    }
+    if (action === 'updated') {
       if (existing.kind === 'location') {
         const location = existing.value as WorldDocument['locations'][number]
         if (declared.description !== undefined) location.description = declared.description
@@ -660,6 +765,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     ) {
       fail(`timeline.${key}.characters must be a string array`)
     }
+    for (const character of declared.characters ?? []) {
+      if (byName.get(character) === undefined) {
+        fail(`timeline.${key} names unknown character "${character}"`)
+      }
+    }
     const allocated = allocateIds('TE', timeline.next_seq, 1)
     const id = allocated.ids[0]!
     if (timeline.items.some((item) => item.id === id)) {
@@ -735,5 +845,15 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     assigned[key] = existing.id
   }
 
-  return { characters, world, locks, foreshadows, timeline, relationships, assigned }
+  return {
+    characters,
+    world,
+    locks,
+    foreshadows,
+    timeline,
+    relationships,
+    assigned,
+    warnings,
+    normalized_world: normalizedWorld,
+  }
 }

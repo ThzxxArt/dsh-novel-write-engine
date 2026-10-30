@@ -56,6 +56,8 @@ export interface PanelSnapshot {
   acknowledgedAdvisories?: number
   /** Read-only upgrade findings; null when the project needs no explanation. */
   legacy?: Array<{ code: string; detail: string }>
+  /** Crash-left pending transaction; complete/untouched are warnings. */
+  pending?: { state: string; txid: string; detail: string }
 }
 
 export interface PanelBook {
@@ -130,6 +132,8 @@ export interface PanelSummaryDto {
   acknowledgedAdvisories?: number
   /** Read-only upgrade findings; null when the project needs no explanation. */
   legacy?: Array<{ code: string; detail: string }>
+  /** Crash-left pending transaction; complete/untouched are warnings. */
+  pending?: { state: string; txid: string; detail: string }
 }
 
 export interface PanelChapterRow {

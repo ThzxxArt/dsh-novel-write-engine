@@ -349,7 +349,7 @@ describe('third full review regressions', () => {
           semantic: [{ id: 'L2-VOICE', verdict: 'fail' } as never],
           root,
         }),
-      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      ).rejects.toMatchObject({ code: 'ENGINE_CHECK_SUBMISSION_INVALID' })
       expect(await readProjectFile(root, 'checks/ch001.check.yaml')).toBeNull()
     } finally {
       await cleanup()

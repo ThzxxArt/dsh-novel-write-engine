@@ -288,10 +288,11 @@ describe('P5 summary validation and P6 semantic completeness', () => {
       await engine.getBrief({ stage: 'P4', root })
       await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
       await engine.getBrief({ stage: 'P6', root })
-      const result = await engine.runCheck({ chapter: 1, semantic: [], root })
-      expect(result.data.verdict).toBe('fail')
+      await expect(engine.runCheck({ chapter: 1, semantic: [], root })).rejects.toMatchObject({
+        code: 'ENGINE_CHECK_SUBMISSION_INVALID',
+      })
       expect((await engine.queryState({ kind: 'pipeline', root })).data).toMatchObject({
-        blocking: expect.arrayContaining([expect.objectContaining({ code: 'SEMANTIC_MISSING' })]),
+        rounds: expect.objectContaining({ check: 0 }),
       })
     } finally {
       await cleanup()
