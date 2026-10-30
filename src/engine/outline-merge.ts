@@ -224,8 +224,10 @@ export const assertArchivedCardVolumes = (
   const newByTitle = volumeByTitle(newVolumes)
   for (const record of archivedChapters) {
     const card = byNum.get(record.num)
-    if (card === undefined || card.volume === null) continue
-    const previous = oldVolumes[card.volume - 1]
+    const previous =
+      card !== undefined && card.volume !== null && card.volume !== undefined
+        ? oldVolumes[card.volume - 1]
+        : oldVolumes.find((volume) => record.num >= volume.start_chapter && record.num <= volume.end_chapter)
     if (previous === undefined) continue
     const next = newByTitle.get(previous.title)
     if (next === undefined || record.num < next.start_chapter || record.num > next.end_chapter) {
@@ -233,6 +235,36 @@ export const assertArchivedCardVolumes = (
         ERROR_CODES.SCHEMA_INVALID,
         `${operation} would leave archived chapter ${record.num} outside its volume "${previous.title}"`,
         'keep the volume/range that covers archived cards, or call novel_reopen first',
+      )
+    }
+  }
+}
+
+/**
+ * Final-document guard: every archived chapter with a volume-aware outline
+ * must point at a volume that actually covers it. The old-card guard above
+ * only proves the volume list did not drop the old range; an amend can still
+ * write a card with `volume:null` or a stale index.
+ */
+export const assertArchivedCardsInVolumes = (
+  archivedChapters: readonly ChapterRecord[],
+  cards: readonly Pick<OutlineChapter, 'num' | 'volume'>[],
+  volumes: readonly OutlineVolume[],
+  operation = 'outline write',
+): void => {
+  if (volumes.length === 0) return
+  const byNum = new Map(cards.map((card) => [card.num, card]))
+  for (const record of archivedChapters) {
+    const card = byNum.get(record.num)
+    const volume =
+      card !== undefined && card.volume !== null && card.volume !== undefined
+        ? volumes[card.volume - 1]
+        : undefined
+    if (volume === undefined || record.num < volume.start_chapter || record.num > volume.end_chapter) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `${operation} would leave archived chapter ${record.num} without a covering volume`,
+        'keep a volume/range that covers every archived card, or call novel_reopen first',
       )
     }
   }
@@ -287,9 +319,15 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
     }
   }
 
+  // Archived cards keep their evidence identity, but a volume reorder changes
+  // only the positional index. Remap by title before normalization so the
+  // archived branch does not reuse a stale index for a different volume.
+  const existingForNormalize = options.existing.map((card) =>
+    archivedNums.has(card.num) ? remapVolume(card, options.existingVolumes, volumeChanges.volumes) : card,
+  )
   const normalized = normalizeOutlineChapters(options.chapters, {
     volumes: volumeChanges.volumes,
-    existing: options.existing,
+    existing: existingForNormalize,
     archived: options.archivedChapters,
     titleRule: options.titleRule,
     totalChapters: options.totalChapters,
@@ -342,6 +380,7 @@ export const mergeOutline = (options: OutlineMergeOptions): OutlineMergeResult =
   for (const num of removed) byNum.delete(num)
 
   const chapters = [...byNum.values()].sort((left, right) => left.num - right.num)
+  assertArchivedCardsInVolumes(options.archivedChapters, chapters, volumeChanges.volumes, 'novel_outline')
   return {
     chapters,
     volumes: volumeChanges.volumes,

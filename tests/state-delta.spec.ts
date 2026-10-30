@@ -1072,5 +1072,11 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       current_state: { resources: { 港币: '7' } },
     }
     expect(() => run(summary, stringBalance, docs)).toThrowError(/must be an integer/)
+    const nullResources = empty()
+    nullResources.characters['他'] = {
+      action: 'updated',
+      current_state: { resources: null },
+    }
+    expect(() => run(summary, nullResources, docs)).toThrowError(/resources must be an object/)
   })
 })

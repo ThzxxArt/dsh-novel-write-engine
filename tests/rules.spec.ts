@@ -89,6 +89,15 @@ describe('rule pack compiler', () => {
         draft.lexicon.conclusion_first.extra = true
       },
       (draft) => {
+        draft.lexicon.reader_intrusion[0].extra = true
+      },
+      (draft) => {
+        draft.genres[Object.keys(draft.genres)[0]].extra = true
+      },
+      (draft) => {
+        draft.semantics.water_words.scene_thresholds = { extra: 0.5 }
+      },
+      (draft) => {
         draft.platform.fanqie.extra = true
       },
       (draft) => {

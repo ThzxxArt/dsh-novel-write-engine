@@ -341,7 +341,7 @@ describe('panel view model', () => {
   })
 })
 
-describe('panel v4 project selection', () => {
+describe('panel v5 project selection', () => {
   const twoProjects = (): PanelPayloadDto => {
     const value = payload()
     value.projects = [

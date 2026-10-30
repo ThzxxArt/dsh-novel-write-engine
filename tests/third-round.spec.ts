@@ -108,28 +108,32 @@ describe('0.1.3 third-round review regressions', () => {
     const { root, engine, cleanup } = await harness()
     try {
       await readyToArchive({ root, engine })
-      const internals = engine as unknown as {
-        load(root?: string): Promise<unknown>
-        roundsLimitBlock(snapshot: unknown): { code: string; detail: string } | null
+      const pipelinePath = join(root, 'state', 'pipeline.yaml')
+      const pipeline = parseYaml(await readFile(pipelinePath, 'utf8')) as {
+        stage: string
+        rounds: { review: number; revise: number; check: number }
+        blocking: Array<{ code: string; detail: string }>
       }
-      const snapshot = (await internals.load(root)) as {
-        pipeline: {
-          stage: string
-          rounds: { review: number; revise: number; check: number }
-          blocking: Array<{ code: string; detail: string }>
-        }
-        check: unknown
-        checkError: string | null
-      }
-      snapshot.pipeline.stage = 'P6'
-      snapshot.pipeline.blocking = [{ code: 'SEMANTIC_CHECK_FAILED', detail: 'needs revision' }]
-      snapshot.check = null
-      snapshot.checkError = null
-      snapshot.pipeline.rounds = { review: 0, revise: 3, check: 0 }
-      expect(internals.roundsLimitBlock(snapshot)?.detail).toContain('revise')
-      snapshot.checkError = 'check is unreadable'
-      snapshot.pipeline.rounds = { review: 0, revise: 0, check: 3 }
-      expect(internals.roundsLimitBlock(snapshot)?.detail).toContain('check')
+      pipeline.stage = 'P6'
+      pipeline.blocking = [{ code: 'SEMANTIC_CHECK_FAILED', detail: 'needs revision' }]
+      pipeline.rounds = { review: 0, revise: 3, check: 0 }
+      await writeFile(pipelinePath, stringifyYaml(pipeline))
+      let status = await engine.getStatus({ root })
+      expect(status.data.blocking).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'PG-11', detail: expect.stringContaining('revise') }),
+        ]),
+      )
+
+      pipeline.blocking = []
+      pipeline.rounds = { review: 0, revise: 0, check: 3 }
+      await writeFile(pipelinePath, stringifyYaml(pipeline))
+      status = await engine.getStatus({ root })
+      expect(status.data.blocking).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'PG-11', detail: expect.stringContaining('check') }),
+        ]),
+      )
     } finally {
       await cleanup()
     }

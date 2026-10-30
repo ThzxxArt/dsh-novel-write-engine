@@ -728,7 +728,7 @@ export function normalizeOutlineChapters(
       ...base,
       volume: volumeForChapter(options.volumes, record.num, base.volume),
       status: 'archived',
-      archived_at: base.archived_at ?? options.now,
+      archived_at: base.archived_at ?? record.archived_at ?? null,
       word_count: record.word_count,
       score: record.score,
     })

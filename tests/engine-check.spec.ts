@@ -106,6 +106,15 @@ describe('semantic check evidence', () => {
     try {
       const beforeText = await readProjectFile(root, 'chapters/chapter-001.md')
       const beforePipeline = await pipeline(root)
+      await expect(
+        engine.submitRevision({
+          chapter: 1,
+          summary: sampleSummary(),
+          proof: sampleReview(1, beforeText!).proof,
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+
       const result = await engine.submitRevision({
         chapter: 1,
         summary: sampleSummary({ events: ['只修正摘要中的事件描述'] }),

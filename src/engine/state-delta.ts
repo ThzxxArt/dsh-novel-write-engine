@@ -55,6 +55,9 @@ const mergeCurrentState = (
   patch: Record<string, unknown>,
 ): Record<string, unknown> => {
   const merged = { ...base, ...patch }
+  if (patch.resources !== undefined && !isRecord(patch.resources)) {
+    fail('current_state.resources must be an object')
+  }
   if (patch.resources !== undefined) {
     const baseResources = isRecord(base.resources) ? base.resources : {}
     merged.resources = { ...baseResources, ...(patch.resources as Record<string, unknown>) }

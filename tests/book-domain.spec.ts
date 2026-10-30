@@ -28,6 +28,7 @@ import {
   worldbookCounts,
 } from '../src/engine/book.js'
 import { EngineFaultError, EngineInputError } from '../src/types.js'
+import { assertArchivedCardVolumes, assertArchivedCardsInVolumes } from '../src/engine/outline-merge.js'
 import type { ChapterRecord, OutlineChapter, OutlineVolume } from '../src/types.js'
 
 const titleRule = { pattern: '^', min_chars: 4, max_chars: 8 }
@@ -223,6 +224,31 @@ describe('chapter cards', () => {
     expect(() => normalizeOutlineChapters([{ ...card(), status: 'archived' }], options)).toThrow(
       EngineInputError,
     )
+  })
+
+  it('does not fabricate archived_at for an omitted archived card and protects its volume', () => {
+    const archived = normalizeOutlineChapters([], {
+      volumes: [volume()],
+      existing: [],
+      archived: [record()],
+      titleRule,
+      totalChapters: 3,
+      defaultTargetWords: [80, 400],
+      now: '2026-01-01',
+    })
+    expect(archived[0]).toMatchObject({ status: 'archived', archived_at: null })
+    expect(() =>
+      assertArchivedCardVolumes(
+        [record()],
+        [],
+        [volume()],
+        [volume({ title: '第二卷', start_chapter: 2, end_chapter: 3 })],
+        'test',
+      ),
+    ).toThrow(/outside its volume/)
+    expect(() =>
+      assertArchivedCardsInVolumes([record()], [{ ...archived[0]!, volume: null }], [volume()], 'test'),
+    ).toThrow(/without a covering volume/)
   })
 
   it('protects every archived field', () => {

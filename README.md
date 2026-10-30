@@ -1336,8 +1336,8 @@ tests/            # 单测、集成、falsify、e2e
 
 0.2.5 在 Node 24.19 / DSH 0.2.1-rc.3 上完成：
 
-- `npm test` 全绿：**81 个测试文件 / 873 项**；
-- 覆盖率：**语句 93.46% / 分支 89.02% / 函数 98.05% / 行 93.46%**；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
+- `npm test` 全绿：**81 个测试文件 / 875 项**；
+- 覆盖率：**语句 93.51% / 分支 89.07% / 函数 98.05% / 行 93.51%**；`test:coverage` 与逐文件 domain/book/insight/viewmodel 门禁全过；
 - `typecheck`、`lint`、`build` 通过；`check:hygiene`（144 files，0 v8 ignore）、`test:isolated`（60 源文件）、`validate:rulepack`、`check:pack`（25 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash` 全绿；
 - M1–M7、S1–S8 与 P2/P3 硬化见 [0.2.5 验收](docs/0.2.5-acceptance.md)；
 - 真实模型：`agnes-2.5-flash` 与 `agnes-3.0-flash` 各输出一篇正文，经公开引擎 P3→P8/归档成功（score 145，stage done）；P1/P2/P4/P6/P8 为确定性夹具，详见 [0.2.5 真实模型证据](docs/0.2.5-real-model-evidence.md)。

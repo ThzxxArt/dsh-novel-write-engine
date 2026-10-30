@@ -191,7 +191,14 @@ export function compileRulepack(raw: unknown): Rulepack {
   nested(semantics, 'adjective_density', ['max', 'adjectives'])
   nested(semantics, 'pleasure_density', ['min', 'keywords', 'window'])
   nested(semantics, 'sensory_density', ['min', 'senses', 'window'])
-  nested(semantics, 'water_words', ['window', 'threshold', 'scene_thresholds', 'terms'])
+  const waterWords = nested(semantics, 'water_words', ['window', 'threshold', 'scene_thresholds', 'terms'])
+  if (waterWords !== null && waterWords.scene_thresholds !== undefined) {
+    knownKeys(
+      object(waterWords.scene_thresholds, 'semantics.water_words.scene_thresholds'),
+      SCENE_TYPES,
+      'semantics.water_words.scene_thresholds',
+    )
+  }
   const lexicon = section('lexicon', [
     'zero_tolerance',
     'soft',
@@ -202,6 +209,12 @@ export function compileRulepack(raw: unknown): Rulepack {
     'conclusion_first',
   ])
   nested(lexicon, 'conclusion_first', ['verbs', 'causals'])
+  for (const key of ['reader_intrusion', 'god_view'] as const) {
+    if (lexicon === null || lexicon[key] === undefined) continue
+    for (const [index, raw] of array(lexicon[key], `lexicon.${key}`).entries()) {
+      knownKeys(object(raw, `lexicon.${key}[${index}]`), ['pattern'], `lexicon.${key}[${index}]`)
+    }
+  }
   const platform = object(root.platform, 'platform')
   knownKeys(platform, PLATFORMS, 'platform')
   for (const name of PLATFORMS) {
@@ -210,7 +223,9 @@ export function compileRulepack(raw: unknown): Rulepack {
   }
   const genres = object(root.genres, 'genres')
   knownKeys(genres, GENRES, 'genres')
-  for (const name of GENRES) object(genres[name], `genres.${name}`)
+  for (const name of GENRES) {
+    knownKeys(object(genres[name], `genres.${name}`), ['note'], `genres.${name}`)
+  }
   const crosschapter = section('crosschapter', [
     'duplicate_similarity',
     'duplicate_advisory',

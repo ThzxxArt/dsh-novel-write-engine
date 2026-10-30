@@ -105,7 +105,7 @@ import {
   type VolumeInput,
   type WorldbookPatch,
 } from './book.js'
-import { assertArchivedCardVolumes, mergeOutline } from './outline-merge.js'
+import { assertArchivedCardVolumes, assertArchivedCardsInVolumes, mergeOutline } from './outline-merge.js'
 import { buildBookReport, buildGuide, searchSnapshot } from './insight.js'
 import { historyTexts, listHistory, type HistoryEntry } from './history.js'
 import { BriefLibrary } from './brief.js'
@@ -1245,6 +1245,7 @@ export class EngineService {
             snapshot.project.targets.words_per_chapter,
           ).chapters
         }
+        assertArchivedCardsInVolumes(snapshot.chapters.chapters, chapters, volumes, 'novel_blueprint')
         const outline: OutlineDocument = {
           ...snapshot.outline,
           updated_at: now,
@@ -1521,6 +1522,7 @@ export class EngineService {
       defaultTargetWords: snapshot.project.targets.words_per_chapter,
       now,
     })
+    assertArchivedCardsInVolumes(snapshot.chapters.chapters, chapters, volumes, 'novel_outline_import')
     const candidate: OutlineDocument = { schema_version: 1, updated_at: now, book, volumes, chapters }
     assertArchivedCardVolumes(
       snapshot.chapters.chapters,
@@ -4416,6 +4418,13 @@ export class EngineService {
         ERROR_CODES.SCHEMA_INVALID,
         'novel_revise accepts only one of content or patch',
         'send the full revised text, or a patch with expected_hash and unique edits',
+      )
+    }
+    if (summaryOnly && (input.issues !== undefined || input.proof !== undefined)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'summary-only repair cannot change review issues or reading proof',
+        'send only chapter and summary; use content/patch for a prose revision that needs a new proof',
       )
     }
     if (!summaryOnly && input.proof === undefined) {
@@ -9753,6 +9762,15 @@ const amendProblems = (
           snapshot.chapters.chapters,
           snapshot.outline.chapters,
           snapshot.outline.volumes,
+          nextVolumes,
+          'novel_amend',
+        )
+        assertArchivedCardsInVolumes(
+          snapshot.chapters.chapters,
+          [...byNum.values()].map((row) => ({
+            num: row.num as number,
+            volume: (row.volume ?? null) as number | null,
+          })),
           nextVolumes,
           'novel_amend',
         )
