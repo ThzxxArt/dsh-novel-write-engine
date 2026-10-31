@@ -1,5 +1,5 @@
 import { PANEL_CHAPTER_LIMIT, PANEL_ID, PHASE_STRIP, REMOTE_VERSION } from '../constants.js'
-import type { BlockingItem, ChapterRecord, Stage, StatusReport } from '../types.js'
+import type { BlockingItem, ChapterProgress, ChapterRecord, Stage, StatusReport } from '../types.js'
 import type { PanelBookData } from '../panel-contract.js'
 
 /** The shared read model: everything the panel, status and commands render. */
@@ -19,6 +19,8 @@ export interface PanelSnapshot {
   platform: string
   chapter: number
   stage: Stage
+  /** Chapter-boundary projection; `chapter`/`stage` stay as the protocol pair. */
+  progress?: ChapterProgress
   revision: number
   rounds: { review: number; revise: number; check: number }
   blocking: BlockingItem[]
@@ -33,8 +35,12 @@ export interface PanelSnapshot {
   chapters: ChapterRecord[]
   /** The active, not-yet-archived chapter; archived rows come from `chapters`. */
   draft?: PanelDraft | null
-  /** Total words across the index, for the header. */
+  /** Archived words plus the active draft; the header shows this total. */
   totalWords: number
+  /** Words in archived chapters only. */
+  archivedWords?: number
+  /** Active draft words, zero when no draft exists. */
+  draftWords?: number
   /** Book-wide archived average, not just the panel's capped rows. */
   averageScore?: number
   /** The nine-phase strip state, derived from the pipeline stage. */
@@ -103,8 +109,14 @@ export interface PanelSummaryDto {
   platform: string
   chapter: number
   stage: Stage
+  /** Chapter-boundary projection; absent on older payloads. */
+  progress?: ChapterProgress
   revision: number
   totalWords: number
+  /** Words in archived chapters only; `totalWords` also counts the active draft. */
+  archivedWords?: number
+  /** Active draft words, zero when no draft exists. */
+  draftWords?: number
   totalChapters: number
   /** Book-wide archived average; absent on older payloads. */
   averageScore?: number
@@ -212,20 +224,85 @@ export interface PanelBundle {
   error?: string
 }
 
+export interface ChapterProgressInput {
+  activeChapter: number
+  stage: Stage
+  archived: readonly number[]
+  target: number | null
+}
+
+/**
+ * Turn the protocol pair (`chapter` + `stage`) into the only human-readable
+ * chapter boundary. After archiving chapter N the protocol intentionally keeps
+ * `stage: 'done'` and advances `chapter` to N+1; `done` describes chapter N,
+ * not the chapter the pipeline now points at.
+ */
+export function projectChapterProgress(input: ChapterProgressInput): ChapterProgress {
+  const archived = [...new Set(input.archived)]
+    .filter((num) => Number.isInteger(num) && num > 0)
+    .sort((left, right) => left - right)
+  const lastArchived = archived.length === 0 ? null : archived[archived.length - 1]!
+  const finished = input.stage === 'done' && input.target !== null && archived.length >= input.target
+  const base = {
+    active_chapter: input.activeChapter,
+    stage: input.stage,
+    last_archived: lastArchived,
+    finished,
+  }
+  if (finished) {
+    return {
+      ...base,
+      current: null,
+      next: null,
+      label: `全书完成：已归档 ${archived.length} 章`,
+      resume: `全书已完成（已归档 ${archived.length} 章）；如需续写，先用 novel_amend 提高 targets.total_chapters。`,
+    }
+  }
+  if (input.stage === 'done') {
+    if (lastArchived === null) {
+      return {
+        ...base,
+        current: null,
+        next: null,
+        label: `当前第 ${input.activeChapter} 章 · 阶段 done（尚无归档章）`,
+        resume: `引擎处于 done，但章节索引里还没有已归档章；先核对项目状态。`,
+      }
+    }
+    const nextChapter = input.activeChapter > lastArchived ? input.activeChapter : lastArchived + 1
+    return {
+      ...base,
+      current: null,
+      next: { chapter: nextChapter, stage: 'P1' },
+      label: `第 ${lastArchived} 章已归档 · 下一章第 ${nextChapter} 章待开始（P1）`,
+      resume: `第 ${lastArchived} 章已归档；当前不处于写作阶段，下一章第 ${nextChapter} 章从 P1 开始。`,
+    }
+  }
+  return {
+    ...base,
+    current: { chapter: input.activeChapter, stage: input.stage },
+    next: null,
+    label: `第 ${input.activeChapter} 章 · 阶段 ${input.stage}`,
+    resume: `当前第 ${input.activeChapter} 章，阶段 ${input.stage}。`,
+  }
+}
+
 export interface ResumePromptInput {
   title: string
   root: string
   chapter: number | string
   stage: string
   nextTool: string
+  /** When supplied, replaces the protocol pair with the chapter boundary text. */
+  progress?: ChapterProgress
 }
 
 /** One shared prompt template for `/novel resume` and the panel copy button. */
 export function formatResumePrompt(input: ResumePromptInput): string {
+  if (input.progress?.finished === true) return ''
   return [
     `请继续《${input.title}》。`,
     `项目根：${input.root}（第一次工具调用必须显式传 project_root=${input.root}）。`,
-    `当前第 ${input.chapter} 章，阶段 ${input.stage}。`,
+    input.progress?.resume ?? `当前第 ${input.chapter} 章，阶段 ${input.stage}。`,
     `下一步：${input.nextTool}。`,
     '先调用 novel_status 核对项目根与书名，再按 novel_pipeline 的下一步执行；',
     '只操作这个项目，不要读取或写入其他书。',
@@ -297,8 +374,11 @@ export function projectSummary(snapshot: PanelSnapshot): PanelSummaryDto {
     platform: snapshot.platform,
     chapter: snapshot.chapter,
     stage: snapshot.stage,
+    ...(snapshot.progress === undefined ? {} : { progress: snapshot.progress }),
     revision: snapshot.revision,
     totalWords: snapshot.totalWords,
+    ...(snapshot.archivedWords === undefined ? {} : { archivedWords: snapshot.archivedWords }),
+    ...(snapshot.draftWords === undefined ? {} : { draftWords: snapshot.draftWords }),
     totalChapters: snapshot.chapters.length,
     averageScore:
       snapshot.averageScore ??

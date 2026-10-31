@@ -378,7 +378,8 @@ export interface CharacterDelta {
   role?: string
   profile?: Record<string, unknown>
   current_state?: Record<string, unknown>
-  growth?: { chapter: number; change: string; status_change: string }
+  /** Chapter is engine-assigned from the archive transaction, not caller-supplied. */
+  growth?: { change: string; status_change: string }
 }
 
 /** One world entity declaration inside `state_delta.world`. */
@@ -999,6 +1000,8 @@ export interface GateInput {
   briefStage: BriefStage | null
   draftTitle: string | null
   sceneType: SceneType | null
+  /** The submitted/active plan narrator; PG-05 uses it before a draft exists. */
+  narrator?: string | null
   summary: ChapterSummary | null
   /** P5 may omit `summary`; when omitted, the previous plan summary is reused. */
   summaryProvided?: boolean
@@ -1062,6 +1065,31 @@ export interface Selection {
   created_at?: string
 }
 
+/**
+ * One human-readable projection of the pipeline's chapter boundary.
+ *
+ * `pipeline.chapter`/`stage` are protocol values: after archiving chapter N the
+ * pipeline points at N+1 and still says `done` because `done` describes the
+ * chapter that was just archived. This projection is the only place that turns
+ * those values into "chapter N archived; chapter N+1 starts at P1".
+ */
+export interface ChapterProgress {
+  active_chapter: number
+  stage: Stage
+  /** The chapter currently being written; null while `stage === 'done'`. */
+  current: { chapter: number; stage: Stage } | null
+  /** Highest archived chapter, or null before the first archive. */
+  last_archived: number | null
+  /** Next chapter to start at P1; null while writing or after the book is finished. */
+  next: { chapter: number; stage: 'P1' } | null
+  /** True only when the configured target has been reached at `stage === 'done'`. */
+  finished: boolean
+  /** One line for status cards, commands and the panel. */
+  label: string
+  /** Sentence used by the resume prompt instead of "当前第 N 章，阶段 done". */
+  resume: string
+}
+
 /** The `getStatus` payload. */
 export interface StatusReport {
   project: { title: string; genre: Genre; platform: Platform; root: string }
@@ -1074,6 +1102,8 @@ export interface StatusReport {
   /** SHA-256 of the active manuscript, or null when the stage has no draft. */
   manuscript_hash: string | null
   stage: Stage
+  /** Chapter-boundary projection shared by every human-readable surface. */
+  progress?: ChapterProgress
   rounds: RoundCounters
   blocking: BlockingItem[]
   /** Non-blocking recovery notes, e.g. a recoverable pending transaction. */
@@ -1123,6 +1153,8 @@ export interface StatusReport {
 export interface AdviceReport {
   stage: Stage
   chapter: number
+  /** Same chapter-boundary projection as getStatus. */
+  progress?: ChapterProgress
   tool: string
   args: Record<string, unknown>
   reason: string

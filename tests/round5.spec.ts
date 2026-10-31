@@ -1,6 +1,8 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
+import { createCommands } from '../src/commands/index.js'
+import { createNovelTools } from '../src/tools/index.js'
 import { FsStore, joinRel } from '../src/store/fs.js'
 import { appendJournal, assertJournalConsistent, readJournal } from '../src/store/journal.js'
 import {
@@ -413,6 +415,202 @@ it('reads a historical review and check by chapter after the next chapter starts
   }
 })
 
+it('splits total words into archived and active-draft counts', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    const draft = await engine.stats({ root })
+    expect(draft.archivedWords).toBe(0)
+    expect(draft.draftWords).toBeGreaterThan(0)
+    expect(draft.totalWords).toBe(draft.archivedWords + draft.draftWords)
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
+    const archived = await engine.stats({ root })
+    expect(archived.archivedWords).toBeGreaterThan(0)
+    expect(archived.draftWords).toBe(0)
+    expect(archived.totalWords).toBe(archived.archivedWords + archived.draftWords)
+    expect((await engine.panelSummary({ root })).totalWords).toBe(archived.totalWords)
+  } finally {
+    await cleanup()
+  }
+})
+
+it('does not serve a cached healthy panel after an external ledger edit', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    const warm = await engine.panelSummary({ root })
+    expect(warm.health?.ok).toBe(true)
+    const characters = await readProjectFile(root, 'state/characters.yaml')
+    expect(characters).not.toBeNull()
+    await writeFile(join(root, 'state', 'characters.yaml'), `${characters}\n# external edit\n`)
+    const status = await engine.getStatus({ root })
+    expect(status.data.blocking.some((item) => item.code === 'JOURNAL_HASH_MISMATCH')).toBe(true)
+    const panel = await engine.panelSummary({ root })
+    expect(panel.health?.ok).toBe(false)
+    expect(panel.health?.blocking).toBeGreaterThan(0)
+  } finally {
+    await cleanup()
+  }
+})
+
+it('fetches a missing P8 brief before running the archive preflight', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    await writeFile(join(root, 'state', 'briefs.yaml'), 'schema_version: 1\nreceipts: []\n')
+    const status = await engine.getStatus({ root })
+    expect(status.data.stage).toBe('ready_to_archive')
+    expect(status.data.next).toMatchObject({ tool: 'novel_brief', args: { stage: 'P8' } })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('projects the archived chapter boundary on every read surface', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
+    const status = await engine.getStatus({ root })
+    expect(status.data.chapter).toBe(2)
+    expect(status.data.progress).toMatchObject({
+      active_chapter: 2,
+      last_archived: 1,
+      finished: false,
+      current: null,
+      next: { chapter: 2, stage: 'P1' },
+    })
+    expect(status.data.progress!.label).toContain('第 1 章已归档')
+    expect(status.data.progress!.label).toContain('下一章第 2 章待开始（P1）')
+
+    const resume = await engine.withCaller({ sessionId: 'boundary-session' }, () =>
+      engine.resumePrompt({ root }),
+    )
+    expect(resume.data.text).toContain('第 1 章已归档')
+    expect(resume.data.text).not.toContain('当前第 2 章，阶段 done')
+
+    const advice = await engine.advise({ root })
+    expect(advice.data.progress.label).toContain('第 1 章已归档')
+    await engine.setActiveProject({ root })
+    const command = createCommands(engine).find((entry) => entry.name === 'novel')!
+    const commandResult = await command.handler({
+      rawInput: 'status',
+      signal: new AbortController().signal,
+    })
+    expect(commandResult.text).toContain('进度：第 1 章已归档')
+    const statusTool = createNovelTools(engine).find((tool) => tool.name === 'novel_status')!
+    const renderedStatus = JSON.stringify(statusTool.output.render({}, status as never))
+    expect(renderedStatus).toContain('进度：第 1 章已归档')
+
+    const guide = await engine.guide({ root })
+    expect(guide.data.title).toContain('第 1 章已归档')
+    const doctor = await engine.doctor({ root })
+    expect(doctor.data.checks.find((check) => check.id === 'pipeline')?.detail).toContain('第 1 章已归档')
+    const bundle = await engine.panelBundle({ root })
+    expect(bundle.summary?.progress?.label).toContain('第 1 章已归档')
+    expect(bundle.resume?.text).toContain('第 1 章已归档')
+    const summary = await engine.panelSummary({ root })
+    expect(summary.progress).toMatchObject({ last_archived: 1, next: { chapter: 2, stage: 'P1' } })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('refuses amend changes to archived outline prose fields', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    await readyToArchive({ root, engine })
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
+    const outline = (await engine.queryState({ kind: 'outline', root })).data as {
+      chapters: Array<Record<string, unknown>>
+    }
+    const card = outline.chapters.find((entry) => entry.num === 1)
+    expect(card).toBeDefined()
+    for (const field of ['goal', 'conflict', 'hook', 'notes']) {
+      await expect(
+        engine.amend({
+          path: 'outline/outline.yaml',
+          content: {
+            ...outline,
+            chapters: [{ ...card!, [field]: `changed-${field}` }],
+          },
+          reason: `change archived ${field}`,
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    }
+    // A damaged chapter index must not become a window to rewrite the card.
+    await writeFile(join(root, 'state/chapters.yaml'), 'chapters: [\n')
+    await expect(
+      engine.amend({
+        path: 'outline/outline.yaml',
+        content: {
+          ...outline,
+          chapters: [{ ...card!, goal: 'DAMAGED-INDEX REWRITE' }],
+        },
+        reason: 'try to rewrite while chapters is unreadable',
+        root,
+      }),
+    ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+  } finally {
+    await cleanup()
+  }
+})
+
+it('archives a first-person plan whose narrator has no quoted alias', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    const text = `我站在雨里，手里捏着一封旧信。\n\n${cleanText(5)}`
+    const summary = sampleSummary({
+      characters_appeared: ['林砚'],
+      opening: '我站在雨里，手里捏着一封',
+    })
+    await readyToArchive({
+      root,
+      engine,
+      text,
+      summary,
+      narrator: '林砚（第一人称）',
+    })
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+    const status = await engine.getStatus({ root })
+    expect(status.data.stage).toBe('done')
+    expect(status.data.progress?.last_archived).toBe(1)
+    const locks = await engine.queryState({ kind: 'locks', root })
+    expect(
+      (locks.data as { characters: Record<string, { appearance: string }> }).characters['林砚']?.appearance,
+    ).toContain('我站在雨里')
+  } finally {
+    await cleanup()
+  }
+})
+
+it('uses the submitted narrator before the plan narrator for PG-05', async () => {
+  const { root, engine, cleanup } = await harness()
+  try {
+    const text = `我站在雨里，手里捏着一封旧信。\n\n${cleanText(5)}`
+    const summary = sampleSummary({
+      characters_appeared: ['乙'],
+      opening: Array.from('我站在雨里，手里捏着一封旧信。').slice(0, 14).join(''),
+    })
+    await bootstrapToDraft({ root, engine, narrator: '甲（第一人称）' })
+    await writeDraft({ root, engine, text, narrator: '乙（第一人称）', summary })
+    await engine.getBrief({ stage: 'P4', root })
+    await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+    await engine.getBrief({ stage: 'P6', root })
+    await engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root })
+    await engine.getBrief({ stage: 'P8', root })
+    await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(summary), root })
+    expect((await engine.getStatus({ root })).data.stage).toBe('done')
+    const characters = (await engine.queryState({ kind: 'characters', root })).data as {
+      characters: Array<{ name: string }>
+    }
+    expect(characters.characters.some((entry) => entry.name === '乙')).toBe(true)
+  } finally {
+    await cleanup()
+  }
+})
+
 it('reports a finished book without advising another chapter', async () => {
   const { root, engine, cleanup } = await harness()
   try {
@@ -465,6 +663,26 @@ it('reports a finished book without advising another chapter', async () => {
     await engine.archiveChapter({ chapter: 1, state_delta: archiveDelta(sampleSummary()), root })
     const status = await engine.getStatus({ root })
     expect(status.data.next.tool).toBe('novel_export')
+    expect(status.data.progress).toMatchObject({ finished: true, current: null, next: null })
+    expect(status.data.progress!.label).toContain('全书完成')
+    expect(status.data.progress!.resume).toContain('全书已完成')
+    const resume = await engine.withCaller({ sessionId: 'finished-session' }, () =>
+      engine.resumePrompt({ root }),
+    )
+    expect(resume.data.text).toBeNull()
+    const command = createCommands(engine).find((entry) => entry.name === 'novel')!
+    const finishedResume = await command.handler({
+      rawInput: 'resume',
+      agent: { id: 'finished-resume-command' },
+      signal: new AbortController().signal,
+    })
+    expect(finishedResume.kind).toBe('success')
+    expect(finishedResume.text).toContain('全书已完成')
+    const bundle = await engine.panelBundle({ root })
+    expect(bundle.resume).toBeUndefined()
+    expect(bundle.summary?.progress?.finished).toBe(true)
+    const guide = await engine.guide({ root })
+    expect(guide.data.title).toBe('全书已完成')
     const summary = await engine.panelSummary({ root })
     expect(summary.finished).toBe(true)
     expect(summary.next).toBeUndefined()

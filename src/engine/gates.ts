@@ -3,6 +3,7 @@ import { LIMITS } from '../constants.js'
 import { stripChapterPrefix } from './book.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
+import { isNarratorAlias } from '../domain/narrator.js'
 import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
 import {
   anchorsForGroup,
@@ -252,13 +253,11 @@ const summarySchema: Gate = (input) => {
   }
 
   if (textArray(summary.characters_appeared)) {
-    const narrator = input.pipeline.draft?.narrator ?? ''
+    // At P3 the draft (and its narrator) is not written yet; use the narrator
+    // the caller is submitting, then fall back to the stored draft/plan.
+    const narrator = input.narrator ?? input.pipeline.draft?.narrator ?? ''
     for (const name of summary.characters_appeared) {
-      const alias =
-        narrator.includes(name) &&
-        (narrator.includes('第一人称') || narrator.includes('「我」')) &&
-        input.text.includes('我')
-      if (!input.text.includes(name) && !alias) {
+      if (!isNarratorAlias(name, narrator, input.text)) {
         problems.push(`characters_appeared lists "${name}", but the manuscript never mentions it`)
       }
     }

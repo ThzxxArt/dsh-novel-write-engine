@@ -142,6 +142,8 @@ describe('FsStore', () => {
       await expect(store.writeText('../escape', 'x')).rejects.toThrow()
       await store.ensureDir('chapters')
       expect(await store.exists('chapters')).toBe(true)
+      await writeFile(join(root, 'conflict'), 'file')
+      await expect(store.ensureDir('conflict')).rejects.toMatchObject({ code: 'ENGINE_IO_PERMISSION' })
       await writeFile(join(root, 'state', 'bad.yaml'), 'a: [')
       await expect(store.readDoc('state/bad.yaml', 'world')).rejects.toMatchObject({
         code: 'ENGINE_SCHEMA_INVALID',

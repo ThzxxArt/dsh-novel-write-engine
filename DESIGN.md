@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.7`                                                                                                  |
+| 插件版本 | `0.2.8`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -106,7 +106,7 @@ Agent 预设  1 个（「网文工坊」）
 | **影子**   | `state/*.yaml`                   | 只有 `novel_archive` 的事务（模型提交 delta，引擎落盘）         | 一致性校验、后续章节上下文 |
 | **规划**   | `outline/*.yaml`、`plans/*.yaml` | 人可以随便改                                                    | 写作指导，**不是数据来源** |
 
-`novel_amend` 是状态文档的维护通道：只能改 allowlist 内的 `state/*.yaml`、`novel.yaml` 与 `outline/*.yaml`，不能写 `chapters/`；不参与阶段门控，但必须给出非空 `reason`。outline 的归档卡 title/scene/target_words/cast/word_count/score/archived_at 仍受不可变保护。
+`novel_amend` 是状态文档的维护通道：只能改 allowlist 内的 `state/*.yaml`、`novel.yaml` 与 `outline/*.yaml`，不能写 `chapters/`；不参与阶段门控，但必须给出非空 `reason`。outline 的归档卡 title/scene_type/target_words/cast/goal/conflict/hook/notes/word_count/score/archived_at 仍受不可变保护。
 
 铁律的落地方式：**引擎没有任何「从 outline 写 state」的代码路径**。大纲里的角色不会自动进角色库——只有正文写了、且归档事务提交了 delta，才会存在。
 
@@ -1385,6 +1385,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.8 是边界与可信性版本：新增 `ChapterProgress` 单一投影，修正归档后 `pipeline.chapter` 指向下一章而 `stage` 仍为 `done` 被读成“下一章已完成”；`backups/` 经 `safePath`/`ensureDir` 创建，拒绝符号链接逃逸；PG-05 与 state_delta 共用 `isNarratorAlias`；panel 缓存纳入 journal 健康；`ready_to_archive` 缺 P8 任务书的既有 brief 顺序补回归；归档卡的 `goal/conflict/hook/notes` 不可改写，`chapters.yaml` 损坏时也以旧卡为证据；created 角色的 `growth` 落盘。无 schema、工具、阶段、门控或配置键变化。
+
 0.2.7 是通用性与发布边界版本：产品示例、任务书与测试夹具去具体项目化，新增三题材归档矩阵与发布面隐私守卫；无 schema、工具、阶段或门控变化。
 
 0.2.5 把不变量扩到全入口：blueprint/import（含 dry-run）/amend(outline)/outline 共用归档卷与 active 卡保护；`reindexed` 显式回显，归档卡不伪造 `archived_at`。语义证据允许跨句/跨段，check 区分 submission 与 content 轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 恢复；summary-only 修订不改正文、不消耗 revise、可直接 check/archive；resources 深合并且只接受非负整数。详见 CHANGELOG 的 0.2.5 条目。
@@ -1693,6 +1695,7 @@ output.schema: {
     chapter:        { type: 'integer', required: true }, // 请求章
     active_chapter: { type: 'integer', required: true }, // pipeline.chapter
     stage:          { type: 'string', required: true },
+    progress:       { type: 'object', required: true, additionalProperties: true }, // 章节边界投影
     rounds:         { type: 'object', required: true, additionalProperties: true },
     blocking:       { type: 'array', required: true, items: { type: 'object' } },
     state_errors:   { type: 'array', required: true, items: { type: 'object' } },
@@ -1708,7 +1711,7 @@ output.schema: {
 }
 ```
 
-`chapter` 只影响字数查询，`active_chapter` 才是管线正在写的章。`next.tool` 必须是当前阶段合法、且参数可用的下一步：任何阶段只要该阶段 brief 缺失或 digest 过期，先返回 `novel_brief`（`args` 带 `stage` 与 `chapter`）；brief 当前后才返回实际写操作。P5/P6 有阻塞时返回 `novel_revise`；`ready_to_archive` 在 P8 brief 当前后返回 `novel_archive`；`done` 未完成时先取 P1。不能返回只读的 `novel_status`，也不能用已过期的 brief 硬推下一步。
+`chapter` 只影响字数查询，`active_chapter` 才是管线正在写的章。`progress` 是唯一的章节边界读模型：`stage === 'done'` 时 `current` 为 null，`last_archived` 是刚归档的章，`next` 是下一章（`stage: 'P1'`），全书达到目标时 `finished: true`、`next: null`；`label`/`resume` 供所有人类可读面复用，禁止再直接拼 `第 ${active_chapter} 章 · ${stage}`。`next.tool` 必须是当前阶段合法、且参数可用的下一步：任何阶段只要该阶段 brief 缺失或 digest 过期，先返回 `novel_brief`（`args` 带 `stage` 与 `chapter`）；brief 当前后才返回实际写操作。P5/P6 有阻塞时返回 `novel_revise`；`ready_to_archive` 在 P8 brief 当前后返回 `novel_archive`；`done` 未完成时先取 P1。不能返回只读的 `novel_status`，也不能用已过期的 brief 硬推下一步。
 
 `state_errors` 是 `{path, code, message}` 数组，覆盖 `novel.yaml`、plan/review/check、worldPlan、八个 ledger 与 outline/worldbook。plan/review/check 文件缺失或无法读取时，status 仍可建立快照；当前阶段晚于重建点时 `next` 指向 `novel_rollback`，已经处在 P2/P4/P6 时直接指向 `novel_brief` 与对应的 `novel_plan_chapter`/`novel_review`/`novel_check`。ledger/project/规划文档损坏时 `next` 指向 `novel_amend`，`novel_state` 返回 `{error,message,path,raw}`；amend 为当前所有不可读状态文档豁免 journal 的既有 hash，其他可读文件的外部改动仍 fail-closed。`STATE_UNREADABLE` 同时进入 `blocking`，需要该文档的写操作会在落盘前拒绝。
 

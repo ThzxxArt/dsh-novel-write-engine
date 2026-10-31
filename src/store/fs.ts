@@ -65,7 +65,24 @@ export class FsStore {
   /** Absolute path of an internal file outside the project root (locks live at root). */
   async ensureDir(relativePath: string): Promise<string> {
     const absolute = await this.safePath(relativePath)
-    await fs.mkdir(absolute, { recursive: true })
+    // Do not use recursive mkdir here. If the project root was deleted between
+    // safePath and this call, recursive mkdir would recreate the whole root.
+    // Walk the existing parents one segment at a time; the first missing root
+    // then fails with ENOENT and the deleted project stays deleted.
+    await this.ensureParent(absolute)
+    try {
+      await fs.mkdir(absolute)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw ioFailure(error)
+      const info = await fs.lstat(absolute)
+      if (!info.isDirectory()) {
+        throw new EngineFaultError(
+          ERROR_CODES.IO_PERMISSION,
+          `refusing to use "${relativePath}": it exists but is not a directory`,
+          'remove or rename the conflicting file, then retry',
+        )
+      }
+    }
     return absolute
   }
 

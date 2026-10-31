@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -119,6 +119,70 @@ describe('transaction compensation', () => {
       ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
       expect(await store.exists('backups/tx-backup-fail')).toBe(false)
     } finally {
+      await cleanup()
+    }
+  })
+
+  it('fails closed instead of recreating a root deleted before backups are created', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '目录在备份前删除',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      const store = new FsStore(root)
+      const original = store.ensureDir.bind(store)
+      let removed = false
+      store.ensureDir = async (path) => {
+        if (!removed) {
+          removed = true
+          await rm(root, { recursive: true, force: true })
+        }
+        return original(path)
+      }
+      await expect(
+        runTransaction(store, {
+          txid: 'tx-root-deleted-before-backup-dir',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('refuses a symlinked backups directory and writes nothing outside the project', async () => {
+    const { root, engine, cleanup } = await harness()
+    const outside = await mkdtemp(join(tmpdir(), 'nwe-backup-outside-'))
+    try {
+      await engine.initProject({
+        title: '事务之书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+      })
+      await rm(join(root, 'backups'), { recursive: true, force: true })
+      await symlink(outside, join(root, 'backups'), 'dir')
+      await expect(
+        runTransaction(new FsStore(root), {
+          txid: 'tx-backup-symlink',
+          op: 'amend',
+          chapter: 1,
+          revision: 2,
+          files: files(),
+          backup: true,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_PATH_ESCAPE' })
+      expect(await readdir(outside)).toEqual([])
+    } finally {
+      await rm(outside, { recursive: true, force: true })
       await cleanup()
     }
   })

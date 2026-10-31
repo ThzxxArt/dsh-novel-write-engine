@@ -239,6 +239,7 @@ export function createNovelTools(
             chapter: number
             active_chapter?: number
             stage: string
+            progress?: { label: string }
             rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
             next: { tool: string; reason: string }
@@ -269,13 +270,14 @@ export function createNovelTools(
             }
           }
           const active = value.active_chapter ?? value.chapter
-          const where =
-            active === value.chapter
-              ? `第 ${value.chapter} 章`
-              : `当前第 ${active} 章 · 查询第 ${value.chapter} 章字数`
+          const progressLabel = value.progress?.label ?? `第 ${value.chapter} 章 · 阶段 ${value.stage}`
           return text(
             [
-              `《${value.project.title}》 ${where} · ${value.stage}`,
+              `《${value.project.title}》`,
+              `进度：${progressLabel}`,
+              ...(active === value.chapter
+                ? []
+                : [`字数查询：第 ${value.chapter} 章（活动章第 ${active} 章）`]),
               ...(value.selection === undefined
                 ? []
                 : [`项目根 ${value.selection.root} · 选择来源 ${value.selection.source}`]),

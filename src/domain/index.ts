@@ -1,4 +1,5 @@
 export * from './ids.js'
+export * from './narrator.js'
 export * from './scoring.js'
 export * from './simhash.js'
 export * from './text.js'

@@ -253,6 +253,19 @@ describe('gate evaluation', () => {
       } as never,
     })
     expect(codes(aliasInput)).not.toContain('PG-05')
+    const unquotedAlias = input({
+      text: firstPerson,
+      summary: {
+        ...sampleSummary(),
+        characters_appeared: ['林砚'],
+        opening: firstPerson.slice(0, 14),
+      },
+      pipeline: {
+        ...input().pipeline,
+        draft: { ...input().pipeline.draft!, narrator: '林砚（第一人称）' },
+      } as never,
+    })
+    expect(codes(unquotedAlias)).not.toContain('PG-05')
   })
 
   it('PG-06 rejects monotony and back-to-back action chapters', () => {

@@ -57,9 +57,13 @@ const formatPercent = (value: number | null | undefined): string =>
 
 const statusText = async (engine: EngineService): Promise<string> => {
   const { data } = await engine.getStatus({})
+  const progressLabel = data.progress?.label ?? `第 ${data.chapter} 章 · 阶段 ${data.stage}`
   const lines = [
     `《${data.project.title}》 ${data.project.genre} · ${data.project.platform}`,
-    `第 ${data.chapter} 章 · 阶段 ${data.stage}`,
+    `进度：${progressLabel}`,
+    ...(data.chapter === data.active_chapter
+      ? []
+      : [`字数查询：第 ${data.chapter} 章（活动章第 ${data.active_chapter} 章）`]),
     ...(data.selection === undefined
       ? []
       : [`项目根 ${data.selection.root} · 选择来源 ${data.selection.source}`]),
@@ -128,13 +132,13 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
           const { data } = await engine.advise({})
           const reason = NEXT_DETAILS[data.tool] ?? data.reason
           return ok(
-            `下一步：${data.tool}\n理由：${reason}${data.blocking.length === 0 ? '' : `\n阻塞 ${data.blocking.length} 条`}`,
+            `进度：${data.progress?.label ?? `第 ${data.chapter} 章 · 阶段 ${data.stage}`}\n下一步：${data.tool}\n理由：${reason}${data.blocking.length === 0 ? '' : `\n阻塞 ${data.blocking.length} 条`}`,
           )
         }
         case 'stats': {
           const stats = await engine.stats({})
           return ok(
-            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords}（已归档 ${stats.archivedWords} + 草稿 ${stats.draftWords}） · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
           )
         }
         case 'outline': {
@@ -359,10 +363,12 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
         }
         case 'resume': {
           const { data } = await engine.resumePrompt({})
-          if (data.text === null) {
-            return bad('当前项目没有可续写的下一步；先用 /novel status 查看项目状态。')
+          if (data.text !== null) return ok(data.text)
+          const status = await engine.getStatus({})
+          if (status.data.progress?.finished === true) {
+            return ok(status.data.progress.resume)
           }
-          return ok(data.text)
+          return bad('当前项目没有可续写的下一步；先用 /novel status 查看项目状态。')
         }
         case 'admin': {
           if (rest.length === 0) return ok(adminHelp())
@@ -445,7 +451,7 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
         try {
           const stats = await engine.stats({})
           return ok(
-            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords} · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
+            `章节 ${stats.chapters} 章 · 总字数 ${stats.totalWords}（已归档 ${stats.archivedWords} + 草稿 ${stats.draftWords}） · 平均分 ${stats.averageScore} · 未回收伏笔 ${stats.openForeshadows} · 大纲 ${stats.totalCards} 卡（规划覆盖 ${formatPercent(stats.outlineCoverage)} · 归档覆盖 ${formatPercent(stats.archivedCoverage)}${stats.missingCards > 0 ? ` · 缺卡 ${stats.missingCards}` : ''}）· 蓝图 ${stats.blueprintReady ? '就绪' : '未就绪'} · 严格 ${stats.strictOutline ? '开' : '关'} · 目标 ${stats.targetChapters ?? '未设'} 章 · 世界观 ${stats.worldbookEntries} 条 · revision ${stats.revision} · 规则包 ${stats.rulepack}`,
           )
         } catch (error) {
           return failure(error)

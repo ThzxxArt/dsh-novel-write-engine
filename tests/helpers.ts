@@ -169,6 +169,7 @@ export async function bootstrapToDraft(input: {
   engine: EngineService
   title?: string
   scene?: SceneType
+  narrator?: string
 }): Promise<void> {
   const root = input.root
   await input.engine.initProject({
@@ -193,7 +194,7 @@ export async function bootstrapToDraft(input: {
     chapter: 0,
     title: '开端之雨',
     scene_type: input.scene ?? '日常过渡章',
-    narrator: '他',
+    narrator: input.narrator ?? '他',
     beats: ['风起', '信到', '拆封', '读信', '决定'],
     opening: '风从窗缝里挤进来',
     ending: '蜡印',
@@ -208,6 +209,7 @@ export async function writeDraft(input: {
   engine: EngineService
   text?: string
   summary?: ChapterSummary
+  narrator?: string
 }): Promise<void> {
   await input.engine.getBrief({ stage: 'P3', root: input.root })
   await input.engine.submitDraft({
@@ -215,7 +217,7 @@ export async function writeDraft(input: {
     content: input.text ?? cleanText(),
     chapter_title: '开端之雨',
     scene_type: '日常过渡章',
-    narrator: '他',
+    narrator: input.narrator ?? '他',
     summary: input.summary ?? sampleSummary(),
     root: input.root,
   })
@@ -259,6 +261,7 @@ export async function readyToArchive(input: {
   engine: EngineService
   text?: string
   summary?: ChapterSummary
+  narrator?: string
 }): Promise<string> {
   const text = input.text ?? cleanText()
   await bootstrapToDraft(input)

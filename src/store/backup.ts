@@ -31,7 +31,13 @@ export const BACKUP_MANIFEST = 'manifest.json'
 /** Backup transaction directories, newest first by filesystem mtime. */
 export async function listBackups(store: FsStore): Promise<BackupEntry[]> {
   const entries: BackupEntry[] = []
-  for (const name of await store.list(BACKUP_DIR)) {
+  for (const entry of await store.entries(BACKUP_DIR)) {
+    // A user file or (more importantly) a symlink under backups/ is not an
+    // engine-created transaction. Skip it before stat/read so one hostile or
+    // accidental link cannot make listBackups, retention and novel_state
+    // {kind:"backups"} fail as a whole.
+    if (!entry.directory || entry.symbolicLink) continue
+    const name = entry.name
     // Migration pre-images are an audit trail, not transaction backups. They
     // must never be aged out by the chapter-retention pruner.
     if (name === 'migrations') continue

@@ -1,4 +1,5 @@
 import { allocateIds } from '../domain/ids.js'
+import { isNarratorAlias, narratorAliasesFor, narratorName as narratorNameOf } from '../domain/narrator.js'
 import { splitParagraphs } from '../domain/text.js'
 import {
   anchorsForGroup,
@@ -122,12 +123,18 @@ const requireForeshadowFields = (value: ForeshadowDelta, where: string): void =>
   }
 }
 
+const withoutQuotedSpeech = (text: string): string =>
+  text.replace(/"[^"]*"|“[^”]*”|「[^」]*」|『[^』]*』/g, '')
+
 const appearanceOf = (text: string, name: string, aliases: readonly string[] = []): string => {
   const paragraphs = splitParagraphs(text)
+  // Prefer plain narration over dialogue. A pronoun inside another character's
+  // quoted line must not become the narrator's locked appearance.
   const source =
-    paragraphs.find(
-      (paragraph) =>
-        paragraph.includes(name) || aliases.some((alias) => alias !== '' && paragraph.includes(alias)),
+    paragraphs.find((paragraph) => withoutQuotedSpeech(paragraph).includes(name)) ??
+    paragraphs.find((paragraph) => paragraph.includes(name)) ??
+    paragraphs.find((paragraph) =>
+      aliases.some((alias) => alias !== '' && withoutQuotedSpeech(paragraph).includes(alias)),
     ) ??
     paragraphs[0] ??
     ''
@@ -279,18 +286,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const appeared = [...new Set(summary.characters_appeared)]
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
   const narrator = input.narrator ?? ''
-  const narratorName = narrator.split(/[（(]/, 1)[0]!.trim()
-  const narratorAliases = [...narrator.matchAll(/[「『"]([^」』"]+)[」』"]/g)].map((match) =>
-    match[1]!.trim(),
-  )
-  const appearsInManuscript = (name: string): boolean => {
-    if (input.text.includes(name)) return true
-    // A first-person plan names the protagonist in `narrator`, while the
-    // manuscript itself says 「我」. Accept that declared alias.
-    return (
-      name === narratorName && narratorAliases.some((alias) => alias !== '' && input.text.includes(alias))
-    )
-  }
+  const narratorName = narratorNameOf(narrator)
+  // A first-person plan names the protagonist in `narrator`, while the
+  // manuscript itself says 「我」. The helper owns that alias so PG-05, the
+  // delta and lock capture cannot disagree.
+  const appearsInManuscript = (name: string): boolean => isNarratorAlias(name, narrator, input.text)
 
   for (const name of appeared) {
     if (!appearsInManuscript(name)) {
@@ -337,13 +337,17 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         (rawHint === undefined && (name === narratorName || name === narrator) ? 'protagonist' : 'extra')
       const currentState = (declared.current_state ?? {}) as Record<string, unknown>
       validateResources(currentState, `characters.${name}`)
+      const growth =
+        declared.growth === undefined
+          ? []
+          : [{ ...(declared.growth as { change: string; status_change: string }), chapter }]
       const created = {
         name,
         role: normalizeRole(declared.role, hinted),
         first_appearance: chapter,
         profile: declared.profile ?? {},
         current_state: currentState,
-        growth: [] as Array<{ chapter: number; change: string; status_change: string }>,
+        growth,
         updated_at: chapter,
       }
       characters.characters.push(created)
@@ -644,7 +648,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       setOwn(locks.characters, name, {
         first_appearance: character.first_appearance,
         locked_at: chapter,
-        appearance: appearanceOf(input.text, name, name === narratorName ? narratorAliases : []),
+        appearance: appearanceOf(input.text, name, narratorAliasesFor(name, narrator)),
       })
     }
   }

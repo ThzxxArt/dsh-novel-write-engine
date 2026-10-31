@@ -650,6 +650,11 @@ describe('command edge branches', () => {
         revision: 1,
         warnings: [],
       }),
+      getStatus: async () => ({
+        data: { progress: undefined },
+        revision: 1,
+        warnings: [],
+      }),
     } as unknown as EngineService
     const command = createCommands(fake).find((entry) => entry.name === 'novel')!
     const result = await command.handler(invocation('resume', { id: 'session-a' }))

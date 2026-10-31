@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.8
+
+0.2.8 是边界与可信性版本，不改工具、阶段、门控、schema、导出或配置键。
+
+### Fixed
+
+- **章节边界读模型**：归档第 N 章后 `pipeline.chapter` 指向 N+1、`stage` 仍为 `done`，旧读面把它拼成“当前第 N+1 章，阶段 done”。新增 `ChapterProgress` 单一投影，`/novel status`、`/novel resume`、`novel_status`、`novel_pipeline`、`novel_guide`、`novel_doctor`、面板摘要与复制续写指令统一显示“第 N 章已归档；下一章第 N+1 章从 P1 开始”。全书达到目标后 `finished=true`，引擎续写文本返回 `null`；`/novel resume` 改为显示“全书已完成”，不再把它当成故障态。
+- **备份路径安全**：`backups/` 改用 `FsStore.ensureDir` + `safePath` 创建和解析，符号链接目录返回 `ENGINE_PATH_ESCAPE`，项目外零写入；备份 staging 写入前重复检查项目根，避免删除根后被 `mkdir` 重建；备份列表/retention 跳过 `backups/` 下的符号链接子项，不再因一个用户文件整体失败。
+- **叙述者别名**：新增 `src/domain/narrator.ts`，PG-05、`state_delta` 的存在性与 locks 取证共用 `isNarratorAlias`；`narrator: "林砚（第一人称）"` 不再因为正文只写“我”而卡在 PG-05 或归档；只接受第一人称“我”，排除第三人称与无关括号引号，locks 优先非对白段落。
+- **面板健康缓存**：`panelCacheKey` 纳入 journal 行数、末尾行与 `journalBlocking` 摘要，外部 ledger 改动或 journal 追加后不再返回旧 `health.ok`/旧 activity。
+- **归档卡字段**：归档卡的 `goal/conflict/hook/notes` 与 `title/scene_type/target_words/cast` 一样不可改写；省略字段仍保留原值。`novel_amend` 在 `chapters.yaml` 不可读时也以旧大纲卡为证据，不能借损坏窗口改写。
+- **created growth**：`state_delta` 的 `created` 角色不再丢弃已声明的 `growth`，按当前章写入 ledger。
+
+### Changed
+
+- `stats()` 与 `/novel stats` 的 `totalWords` 统一为“归档 + 活动草稿”，并新增 `archivedWords`/`draftWords` 拆分；面板同步新增 `archivedWords`/`draftWords`，头部总字数与命令口径一致。
+- 面板九阶段名称改为与 README/DESIGN 一致：P7 状态同步、P8 终审、P9 归档；教程注明首次章卡提交默认 strict、纯文本 `novel_word_count`/`novel_diff` 不绑定会话。
+
+### Tests
+
+- 91 个测试文件 / 923 项测试全绿；覆盖率 93.55 / 89.23 / 98.14 / 93.55，逐文件门禁通过。新增归档边界、完结续写与命令文案、P8 brief 回归、面板缓存、字数拆分、备份符号链接、第一人称归档、created growth、归档字段保护、损坏 chapters 下的 amend 保护、空 legacy 卡重交、locks 对白取证、提交叙述者优先级回归。
+
+### Migration
+
+- `progress`、`archivedWords`、`draftWords` 均为 additive 字段；`REMOTE_VERSION` 保持 6，旧标签页刷新即可。
+- 无 schema、工具、阶段、门控、导出或配置键变更；项目文件不需要迁移。
+
 ## 0.2.7
 
 0.2.7 是通用性与发布边界版本，不改工具、阶段、门控、schema 或规则阈值。

@@ -727,7 +727,7 @@ const TUTORIAL_STEPS: readonly TutorialStep[] = [
     title: '写书级蓝图与卷结构',
     tool: 'novel_blueprint',
     body: '让模型先定 premise（故事前提）、logline（一句话卖点）、themes（主题）、tone（基调）、pov（视角）、audience（读者）、selling_points（卖点）、ending（结局方向）和 volumes（每卷起止章、目标、弧线、高潮）。',
-    note: '蓝图不是正文，可以后补。严格大纲是可选开关：strict:true 时每章必须先有章卡；不开启也能先写，但章卡一旦存在，标题、场景、目标字数和 cast 仍会校验。',
+    note: '蓝图不是正文，可以后补。首次提交章卡时 strict 默认开启；要宽松写作可在蓝图里显式 strict:false 关闭。strict 开启后每章必须先有章卡；章卡一旦存在，标题、场景、目标字数和 cast 仍会校验。',
   },
   {
     title: '排章卡，或导入现成大纲',
@@ -802,7 +802,7 @@ brief P6 → check → brief P8 → archive 的顺序推进。
 
 const TUTORIAL_NEXT_PROMPT = `继续写当前项目的下一章。先调用 novel_pipeline（或 novel_status）确认当前阶段、项目根目录和下一步工具，不要猜阶段。
 如果当前会话还没绑定或不确定是哪本书：先用 /novel current 看会话绑定，再调用 novel_status 看 selection；需要切换时用 /novel use <路径|书名|.>，不要靠 active 猜。
-第一次调用带 project_root 时，它会成为当前会话的持久绑定；后续无 root 调用会继续这本书。
+第一次带 project_root 的项目调用会成为当前会话的持久绑定；后续无 root 调用会继续这本书。纯文本的 novel_word_count 和 novel_diff 不读取项目，也不会建立绑定。
 
 如果下一章还没有章卡：用 novel_outline 只提交下一章的卡（按 num upsert），省略的已有卡会保持不动；不要重交全量，也不要用空数组清空。要删卡必须显式传 remove。
 如果 targets.total_chapters 已经写满：先用 novel_amend 把 total_chapters 调到至少包含下一章，不能低于已归档章数。
@@ -1788,7 +1788,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
       createElement(
         'div',
         { className: 'nwe-modal-foot' },
-        '教程基于 0.2.7 · 具体字段以当前任务书和工具返回为准 · 面板只读',
+        '教程基于 0.2.8 · 具体字段以当前任务书和工具返回为准 · 面板只读',
       ),
     ),
   )
@@ -1960,6 +1960,12 @@ const v6Card = (
 const bookDataSection = (view: PanelView): ReactElement | null => {
   const data = view.bookData
   if (data === null) return null
+  const currentLabel =
+    data.current.stage === 'done'
+      ? data.progress.target !== null && data.progress.archived >= data.progress.target
+        ? '全书完成'
+        : `下一章 ${data.current.chapter} · 未开始`
+      : `${data.current.chapter} · ${data.current.stage}`
   const dims = data.quality.dimensions.map((dimension) =>
     createElement(
       'div',
@@ -2039,10 +2045,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               ? '—'
               : `${data.progress.remaining_words} 字（${data.progress.remaining_words_basis}）`,
           ],
-          [
-            '当前章',
-            `${data.current.chapter} · ${data.current.stage} · ${data.current.card?.title ?? '无章卡'}`,
-          ],
+          ['当前章', `${currentLabel} · ${data.current.card?.title ?? '无章卡'}`],
           [
             '轮次',
             `评 ${data.current.rounds.review} / 修 ${data.current.rounds.revise} / 检 ${data.current.rounds.check}`,
@@ -2307,7 +2310,13 @@ export function panelElement(
           'div',
           { className: 'nwe-stats', role: 'group', 'aria-label': '项目统计' },
           stat('已归档', String(view.stats.chapters), '章'),
-          stat('总字数', view.stats.words.toLocaleString('zh-CN'), '字'),
+          stat(
+            '总字数',
+            view.stats.words.toLocaleString('zh-CN'),
+            (view.stats.draftWords ?? 0) > 0
+              ? `字（归档 ${(view.stats.archivedWords ?? 0).toLocaleString('zh-CN')} + 草稿 ${view.stats.draftWords!.toLocaleString('zh-CN')}）`
+              : '字',
+          ),
           stat('全书均分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
           stat('待处理', String(view.stats.blocking), '项'),
         )

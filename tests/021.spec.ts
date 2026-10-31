@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { outlineSummary, emptyOutline, worldbookBrief, worldbookCounts } from '../src/engine/book.js'
@@ -596,6 +596,12 @@ describe('0.2.1 history and backup readers', () => {
         files: ['chapters/chapter-001.md'],
       })
       expect(listed.find((entry) => entry.name === noManifest)).toMatchObject({ op: null, chapter: null })
+      // A symlink under backups/ is a user artifact, not an engine backup. It
+      // must not make the whole list (and therefore retention) fail.
+      await symlink(join(root, 'outside'), join(root, 'backups', 'evil'))
+      const tolerant = await listBackups(store)
+      expect(tolerant.some((entry) => entry.name === 'evil')).toBe(false)
+      expect(tolerant.find((entry) => entry.name === valid)).toBeDefined()
     } finally {
       await cleanup()
     }

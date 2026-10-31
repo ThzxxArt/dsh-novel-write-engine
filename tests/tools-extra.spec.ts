@@ -257,7 +257,7 @@ describe('every tool executes one operation', () => {
       revision: 2,
       warnings: [],
     } as never)
-    expect(status[0]!.text).toContain('查询第 2 章')
+    expect(status[0]!.text).toContain('字数查询：第 2 章')
     expect(status[0]!.text).toContain('当前章卡：（无）')
     expect(map.get('novel_review')!.output.render({}, 'plain' as never)).toBeTruthy()
 

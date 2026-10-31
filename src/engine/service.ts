@@ -117,6 +117,7 @@ import { advanceHandoff, parseActProgress, projectHandoff } from './handoff.js'
 import {
   formatResumePrompt,
   phaseStrip,
+  projectChapterProgress,
   projectChapters,
   projectGates,
   projectSummary,
@@ -181,6 +182,7 @@ import {
   type ReviewInput,
   type RevisionInput,
   type RoundCounters,
+  type ChapterProgress,
   type ScoreDimension,
   type Selection,
   type SemanticItem,
@@ -2531,6 +2533,12 @@ export class EngineService {
    */
   private async statusFor(snapshot: Snapshot, chapter: number): Promise<OpResult<StatusReport>> {
     const metrics = await this.metricsFor(snapshot, chapter)
+    const progress = projectChapterProgress({
+      activeChapter: snapshot.pipeline.chapter,
+      stage: snapshot.pipeline.stage,
+      archived: snapshot.chapters.chapters.map((record) => record.num),
+      target: snapshot.project.targets.total_chapters,
+    })
     const journal = await this.journalBlocking(snapshot)
     const pending = await inspectPending(this.storeFor(snapshot.root))
     const pendingWarnings: Warning[] =
@@ -2562,6 +2570,7 @@ export class EngineService {
       manuscript_hash:
         snapshot.pipeline.draft !== undefined && snapshot.text !== null ? sha256(snapshot.text) : null,
       stage: snapshot.pipeline.stage,
+      progress,
       rounds: { ...snapshot.pipeline.rounds },
       blocking: [...this.effectiveBlocking(snapshot), ...journal],
       ...(pendingWarnings.length === 0 ? {} : { warnings: pendingWarnings }),
@@ -2876,6 +2885,7 @@ export class EngineService {
     OpResult<{
       stage: Stage
       chapter: number
+      progress: ChapterProgress
       tool: string
       args: Record<string, unknown>
       reason: string
@@ -2884,6 +2894,12 @@ export class EngineService {
     }>
   > {
     const snapshot = await this.load(input.root)
+    const progress = projectChapterProgress({
+      activeChapter: snapshot.pipeline.chapter,
+      stage: snapshot.pipeline.stage,
+      archived: snapshot.chapters.chapters.map((record) => record.num),
+      target: snapshot.project.targets.total_chapters,
+    })
     const journal = await this.journalBlocking(snapshot)
     const next =
       journal.length > 0 && this.stateErrors(snapshot).length === 0
@@ -2897,6 +2913,7 @@ export class EngineService {
       data: {
         stage: snapshot.pipeline.stage,
         chapter: snapshot.pipeline.chapter,
+        progress,
         tool: next.tool,
         args: next.args,
         reason: next.reason,
@@ -3187,7 +3204,14 @@ export class EngineService {
       id: 'pipeline',
       severity: 'ok',
       title: '流水线',
-      detail: `revision ${snapshot.pipeline.revision} · 第 ${snapshot.pipeline.chapter} 章 · ${snapshot.pipeline.stage}`,
+      detail: `revision ${snapshot.pipeline.revision} · ${
+        projectChapterProgress({
+          activeChapter: snapshot.pipeline.chapter,
+          stage: snapshot.pipeline.stage,
+          archived: snapshot.chapters.chapters.map((record) => record.num),
+          target: snapshot.project.targets.total_chapters,
+        }).label
+      }`,
     })
     for (const error of this.stateErrors(snapshot)) {
       add({
@@ -3721,8 +3745,13 @@ export class EngineService {
     const snapshot = await this.loadAt(selection)
     await this.recordSelectionBestEffort(selection, snapshot)
     const target = snapshot.project.targets.total_chapters
-    const finished =
-      snapshot.pipeline.stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
+    const progress = projectChapterProgress({
+      activeChapter: snapshot.pipeline.chapter,
+      stage: snapshot.pipeline.stage,
+      archived: snapshot.chapters.chapters.map((record) => record.num),
+      target,
+    })
+    const finished = progress.finished
     const journalBlocking = await this.journalBlocking(snapshot)
     const next =
       journalBlocking.length > 0 && this.stateErrors(snapshot).length === 0
@@ -3737,6 +3766,7 @@ export class EngineService {
         projectPresent: true,
         chapter: snapshot.pipeline.chapter,
         stage: snapshot.pipeline.stage,
+        progress,
         archived: snapshot.chapters.chapters.length,
         target,
         finished,
@@ -4219,6 +4249,7 @@ export class EngineService {
           summary: input.summary,
           draftTitle: input.chapter_title,
           sceneType: input.scene_type,
+          narrator: input.narrator,
           planTargetWords: snapshot.plan?.target_words ?? null,
           planCast:
             snapshot.plan?.cast === undefined ? null : snapshot.plan.cast.map((member) => member.name),
@@ -6213,7 +6244,7 @@ export class EngineService {
     // keep the header and the copy-resume prompt from inventing a placeholder.
     if (option.state !== 'ok' && option.title !== '') summary.title = option.title
     const resume =
-      summary.next === undefined
+      summary.next === undefined || summary.progress?.finished === true
         ? undefined
         : {
             text: formatResumePrompt({
@@ -6222,6 +6253,7 @@ export class EngineService {
               chapter: summary.chapter,
               stage: summary.stage,
               nextTool: summary.next.tool,
+              ...(summary.progress === undefined ? {} : { progress: summary.progress }),
             }),
           }
     return {
@@ -6253,7 +6285,7 @@ export class EngineService {
     const status = await this.statusFor(snapshot, snapshot.pipeline.chapter)
     const nextTool = status.data.next?.tool
     const text =
-      nextTool === undefined
+      nextTool === undefined || status.data.progress?.finished === true
         ? null
         : formatResumePrompt({
             title: status.data.project.title,
@@ -6261,6 +6293,7 @@ export class EngineService {
             chapter: status.data.chapter,
             stage: status.data.stage,
             nextTool,
+            ...(status.data.progress === undefined ? {} : { progress: status.data.progress }),
           })
     return {
       data: { text, selection: status.data.selection },
@@ -6271,6 +6304,8 @@ export class EngineService {
 
   async stats(input: { root?: string } = {}): Promise<{
     totalWords: number
+    archivedWords: number
+    draftWords: number
     chapters: number
     revision: number
     rulepack: string
@@ -6288,7 +6323,15 @@ export class EngineService {
     targetChapters: number | null
   }> {
     const snapshot = await this.load(input.root)
-    const totalWords = snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0)
+    const archivedWords = snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0)
+    const activeIndexed = snapshot.chapters.chapters.some(
+      (chapter) => chapter.num === snapshot.pipeline.chapter,
+    )
+    const draftWords =
+      snapshot.text === null || activeIndexed || snapshot.pipeline.stage === 'done'
+        ? 0
+        : countWordMetrics(snapshot.text).total_word_count
+    const totalWords = archivedWords + draftWords
     const scores = snapshot.chapters.chapters.map((chapter) => chapter.score)
     const outline = outlineSummary(
       snapshot.outline,
@@ -6299,6 +6342,8 @@ export class EngineService {
     const counts = worldbookCounts(snapshot.worldbook)
     return {
       totalWords,
+      archivedWords,
+      draftWords,
       chapters: snapshot.chapters.chapters.length,
       revision: snapshot.pipeline.revision,
       rulepack: `${this.rulepack.name}@${this.rulepack.version}`,
@@ -6993,17 +7038,39 @@ export class EngineService {
     const archived = snapshot.chapters.chapters
     const archivedCurrent = archived.some((chapter) => chapter.num === snapshot.pipeline.chapter)
     const target = snapshot.project.targets.total_chapters
-    const finished = snapshot.pipeline.stage === 'done' && target !== null && archived.length >= target
-    const draftWords = snapshot.text === null ? 0 : countWordMetrics(snapshot.text).total_word_count
+    const progress = projectChapterProgress({
+      activeChapter: snapshot.pipeline.chapter,
+      stage: snapshot.pipeline.stage,
+      archived: archived.map((record) => record.num),
+      target,
+    })
+    const finished = progress.finished
+    const draftWords =
+      snapshot.text === null || archivedCurrent || snapshot.pipeline.stage === 'done'
+        ? 0
+        : countWordMetrics(snapshot.text).total_word_count
+    const archivedWords = archived.reduce((total, chapter) => total + chapter.word_count, 0)
     const pending = await inspectPending(this.storeFor(snapshot.root))
     const stateErrorCount = this.stateErrors(snapshot).length
-    const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
-      snapshot.outlineError ?? ''
-    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}`
-    const cachedPanel = this.panelCache.get(snapshot.root)
-    if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
+    // Journal health and activity are part of the panel read model. Hashing the
+    // journal identity into the cache key prevents an external ledger edit or a
+    // fresh append from serving a stale "health.ok" card after the underlying
+    // status already reports a mismatch.
     const journal = await readJournal(this.storeFor(snapshot.root))
     const journalBlocking = await this.journalBlocking(snapshot)
+    const journalTail = journal.rows[journal.rows.length - 1]
+    const journalKey = sha256(
+      stableJson({
+        rows: journal.rows.length,
+        tail: journalTail === undefined ? null : [journalTail.seq, journalTail.at, journalTail.status],
+        blocking: journalBlocking,
+      }),
+    )
+    const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
+      snapshot.outlineError ?? ''
+    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}:${journalKey}`
+    const cachedPanel = this.panelCache.get(snapshot.root)
+    if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
     const outline = outlineSummary(
       snapshot.outline,
       archived.length,
@@ -7210,6 +7277,7 @@ export class EngineService {
       platform: snapshot.project.platform,
       chapter: snapshot.pipeline.chapter,
       stage: snapshot.pipeline.stage,
+      progress,
       revision: snapshot.pipeline.revision,
       rounds: snapshot.pipeline.rounds,
       blocking,
@@ -7236,9 +7304,9 @@ export class EngineService {
       finished,
       chapters: archived,
       draft,
-      totalWords:
-        archived.reduce((total, chapter) => total + chapter.word_count, 0) +
-        (draft === null ? 0 : draft.wordCount),
+      totalWords: archivedWords + draftWords,
+      archivedWords,
+      draftWords,
       averageScore:
         archived.length === 0
           ? 0
@@ -7365,6 +7433,12 @@ export class EngineService {
   private nextStep(snapshot: Snapshot): StatusReport['next'] {
     const stage = snapshot.pipeline.stage
     const chapter = snapshot.pipeline.chapter
+    const progress = projectChapterProgress({
+      activeChapter: chapter,
+      stage,
+      archived: snapshot.chapters.chapters.map((record) => record.num),
+      target: snapshot.project.targets.total_chapters,
+    })
     const activeIndexed = snapshot.chapters.chapters.some((record) => record.num === chapter)
     if (activeIndexed) {
       return {
@@ -7429,9 +7503,7 @@ export class EngineService {
       }
     }
     const step = STAGE_NEXT[stage]
-    const target = snapshot.project.targets.total_chapters
-    const finished = stage === 'done' && target !== null && snapshot.chapters.chapters.length >= target
-    if (finished) {
+    if (progress.finished) {
       return {
         tool: 'novel_export',
         args: { kind: 'epub' },
@@ -8218,6 +8290,7 @@ export class EngineService {
         | 'summaryOnlyRevision'
         | 'draftTitle'
         | 'sceneType'
+        | 'narrator'
         | 'review'
         | 'check'
         | 'proof'
@@ -8266,6 +8339,7 @@ export class EngineService {
         this.rulepack.format.title.pattern,
       ),
       sceneType: extras.sceneType ?? snapshot.pipeline.draft?.scene_type ?? snapshot.plan?.scene_type ?? null,
+      narrator: extras.narrator ?? snapshot.pipeline.draft?.narrator ?? snapshot.plan?.narrator ?? null,
       summary: extras.summary ?? snapshot.pipeline.draft?.summary ?? snapshot.plan?.summary ?? null,
       summaryProvided: extras.summaryProvided,
       summaryOnly: extras.summaryOnly,
@@ -8315,6 +8389,7 @@ export class EngineService {
         | 'summaryOnlyRevision'
         | 'draftTitle'
         | 'sceneType'
+        | 'narrator'
         | 'review'
         | 'check'
         | 'proof'
@@ -10001,6 +10076,11 @@ const amendProblems = (
         )
         continue
       }
+      for (const field of ['goal', 'conflict', 'hook', 'notes'] as const) {
+        if (stableJson(before[field]) !== stableJson(card[field])) {
+          problems.push(`archived chapter ${record.num} cannot change its ${field}`)
+        }
+      }
       if (JSON.stringify(before.target_words) !== JSON.stringify(card.target_words)) {
         problems.push(`archived chapter ${record.num} cannot change its target_words`)
       }
@@ -10026,6 +10106,46 @@ const amendProblems = (
         problems.push(
           `cannot verify archived cards while chapters.yaml is unreadable; keep archived cards for ${missing.join(', ')}`,
         )
+      }
+      // The chapter index is the normal source for archived title/scene/word/
+      // score. When it is unreadable, the old outline card is the only
+      // remaining evidence; still compare every immutable field so an amend
+      // cannot use the damaged-index window to rewrite an archived card.
+      for (const [num, before] of oldCards) {
+        if (before.status !== 'archived') continue
+        const card = byNum.get(num)
+        if (card === undefined) continue
+        if (card.status !== 'archived') {
+          problems.push(`archived chapter ${num} cannot be changed back to planned`)
+        }
+        for (const field of [
+          'title',
+          'scene_type',
+          'word_count',
+          'score',
+          'goal',
+          'conflict',
+          'hook',
+          'notes',
+        ] as const) {
+          if (stableJson(before[field]) !== stableJson(card[field])) {
+            problems.push(`archived chapter ${num} cannot change its ${field}`)
+          }
+        }
+        if (JSON.stringify(before.target_words) !== JSON.stringify(card.target_words)) {
+          problems.push(`archived chapter ${num} cannot change its target_words`)
+        }
+        const beforeCast = Array.isArray(before.cast) ? before.cast : []
+        const afterCast = Array.isArray(card.cast) ? card.cast : []
+        if (beforeCast.length !== afterCast.length || afterCast.some((name) => !beforeCast.includes(name))) {
+          problems.push(`archived chapter ${num} cannot change its cast`)
+        }
+        if (
+          before.archived_at !== card.archived_at &&
+          !(before.archived_at === null && typeof card.archived_at === 'string')
+        ) {
+          problems.push(`archived chapter ${num} cannot change archived_at`)
+        }
       }
     }
     return problems

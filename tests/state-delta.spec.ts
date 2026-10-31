@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyStateDelta, type DeltaInput } from '../src/engine/state-delta.js'
+import { isNarratorAlias } from '../src/domain/narrator.js'
 import { sampleSummary } from './helpers.js'
 import type { ChapterSummary } from '../src/types.js'
 
@@ -70,6 +71,56 @@ describe('state_delta shape and character reconciliation', () => {
     expect(result.locks.characters['主角']!.appearance).toContain('我站在雨里')
   })
 
+  it('accepts an unquoted first-person narrator and captures the 我 paragraph', () => {
+    const summary = sampleSummary({ characters_appeared: ['林砚'], events: [] })
+    const delta = empty()
+    delta.characters['林砚'] = character('林砚')
+    const result = applyStateDelta({
+      chapter: 1,
+      text: '雨落在旧城的瓦上。我站在檐下，手里捏着一封旧信。',
+      summary,
+      delta: delta as never,
+      narrator: '林砚（第一人称）',
+      ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+    })
+    expect(result.locks.characters['林砚']!.appearance).toContain('我站在檐下')
+  })
+
+  it('does not treat unrelated parenthetical quotes as narrator aliases', () => {
+    expect(isNarratorAlias('林砚', '林砚（第一人称，同行者「老陈」）', '老陈推门进来。')).toBe(false)
+    expect(isNarratorAlias('林砚', '林砚（第三人称，内心独白用「我」）', '我推门进来。')).toBe(false)
+    expect(isNarratorAlias('林砚', '林砚（第一人称）', '我推门进来。')).toBe(true)
+    expect(isNarratorAlias('林砚', '林砚（第一人称）', '雨落在瓦上。')).toBe(false)
+  })
+
+  it('prefers narrative prose over a quoted pronoun when capturing locks', () => {
+    const summary = sampleSummary({ characters_appeared: ['林砚'], events: [] })
+    const delta = empty()
+    delta.characters['林砚'] = character('林砚')
+    const result = applyStateDelta({
+      chapter: 1,
+      text: '"我不去。"老陈说。\n\n我站在雨里，手里捏着一封旧信。\n\n雨更大了。',
+      summary,
+      delta: delta as never,
+      narrator: '林砚（第一人称）',
+      ...(base() as Omit<DeltaInput, 'chapter' | 'text' | 'summary' | 'delta'>),
+    })
+    expect(result.locks.characters['林砚']!.appearance).toContain('我站在雨里')
+    expect(result.locks.characters['林砚']!.appearance).not.toContain('老陈说')
+  })
+
+  it('stores growth declared on a created character', () => {
+    const summary = sampleSummary({ characters_appeared: ['甲'], events: [] })
+    const delta = empty()
+    delta.characters['甲'] = character('甲', {
+      growth: { change: '学会拒绝', status_change: '从犹豫到坚定' },
+    })
+    const result = run(summary, delta)
+    expect(result.characters.characters[0]!.growth).toEqual([
+      { chapter: 1, change: '学会拒绝', status_change: '从犹豫到坚定' },
+    ])
+  })
+
   it('requires all five sections and valid actions', () => {
     expect(() => run(sampleSummary(), {})).toThrowError(/missing section/)
     const unknownSection = { ...empty(), extra: {} }
@@ -123,7 +174,7 @@ describe('state_delta shape and character reconciliation', () => {
     const secondDelta = empty()
     secondDelta.characters['甲'] = {
       action: 'updated',
-      growth: { chapter: 99, change: '成长', status_change: 'S' },
+      growth: { change: '成长', status_change: 'S' },
     }
     secondDelta.timeline['0'] = { action: 'created' }
     const second = run(secondSummary, secondDelta, first as unknown as Record<string, unknown>, 2)

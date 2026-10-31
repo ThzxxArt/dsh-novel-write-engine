@@ -19,9 +19,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.7**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.8**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.7 是通用性与发布边界版本：没有改工具、阶段、门控、schema 或规则阈值。它把产品示例、任务书和测试夹具里的具体书稿痕迹清理干净，并补上三题材归档矩阵与发布面隐私守卫。历史版本的内部方案与验收稿留在对应发布 tag，不再复制进 `main`。
+> 0.2.8 是边界与可信性版本：修正归档后“下一章被误标为 done”的读模型、备份路径符号链接逃逸、PG-05 与归档叙述者别名不一致、面板健康缓存假绿、完结书仍生成续写指令；同时保护归档章卡字段并修复 created growth 丢失。没有改工具、阶段、门控、schema 或配置键；改变的是人类读法、路径安全和少量状态契约，不迁移项目数据。历史版本的内部方案与验收稿留在对应发布 tag，不再复制进 `main`。
 
 ---
 
@@ -119,6 +119,8 @@ flowchart TB
 
 P7、P8、P9 在 `novel_archive` 一次事务里完成。单章归档后状态是 `done`；下一章仍从 P1 开始。只有项目配置的 `total_chapters` 全部归档，面板才显示“全书完成”。
 
+`pipeline.chapter` + `pipeline.stage` 是协议对，不是人类读法：归档第 N 章后，管线指向 N+1，`stage` 仍是 `done`，因为 `done` 描述的是**刚刚归档的第 N 章**。所有读面统一使用 `progress` 投影：`/novel status`、`novel_status`、`novel_pipeline`、`novel_guide`、`novel_doctor`、面板和“复制续写指令”都会显示“第 N 章已归档；下一章第 N+1 章从 P1 开始”。全书完成时 `progress.finished=true`，引擎续写文本为 `null`，`/novel resume` 显示“全书已完成”；要继续写，先用 `novel_amend` 提高 `targets.total_chapters`。
+
 ### 十三道门控
 
 门控按固定顺序求值，并且**收集全部失败项**，不是遇到第一个就返回。这样模型可以一次改完，而不是来回撞墙。
@@ -201,7 +203,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.7
+dsh plugin --profile web add dsh-novel-write-engine@0.2.8
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -249,10 +251,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.7.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.8.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.7.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.8.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -264,7 +266,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.7`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.8`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -332,9 +334,9 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 归档后打开左侧 **网文工坊**：
 
-- 紧凑顶栏：书名、类型、平台、当前章、阶段；
-- 首屏“当前章 / 下一步”卡与“复制续写指令”；
-- 统计条：已归档章节、总字数、平均分、待处理门控；
+- 紧凑顶栏：书名、类型、平台、当前章边界（例如“第 1 章已归档 · 下一章第 2 章待开始”）；
+- 首屏“当前章 / 下一步”卡与“复制续写指令”；归档后显示下一章 P1，全书完成时隐藏复制按钮；
+- 统计条：已归档章节、总字数（归档 + 活动草稿）、平均分、待处理门控；
 - 双栏工作台：阶段轨、门控、提示、旧数据、全书规划、质量趋势、健康度、最近活动；
 - 底部章节卡。
 
@@ -439,9 +441,9 @@ novel_write_draft, novel_review, novel_revise, novel_check, novel_archive
 | `novel_outline` | 按 `num` upsert 章卡、按 `title` upsert 卷；省略不删，显式 `remove`；`dry_run` 预览 |
 | `novel_outline_import` | 从 Markdown / YAML / JSON 导入大纲；`dry_run` 先预览 |
 | `novel_worldbook` | 增量更新世界观设定集（设定/规则/势力/地点/角色/术语/前史） |
-| `novel_status` | 当前章、阶段、轮次、阻塞项、`state_errors`、`manuscript_hash`、下一步 |
+| `novel_status` | `progress` 章节边界、轮次、阻塞项、`state_errors`、`manuscript_hash`、下一步 |
 | `novel_guide` | 上手引导：当前状态、已完成步骤、下一步工具；无项目也能用 |
-| `novel_pipeline` | “下一步该做什么”的建议 |
+| `novel_pipeline` | “下一步该做什么”的建议，带同一份 `progress` |
 
 ### 单章流水线（8）
 
@@ -620,18 +622,18 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.7
+### 升级到 0.2.8
 
-0.2.7 没有 schema、工具、阶段、门控、导出或配置键变更，不需要迁移项目文件。
+0.2.8 没有 schema、工具、阶段、门控、导出或配置键变更，不需要迁移项目文件。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.7
+dsh plugin --profile web add dsh-novel-write-engine@0.2.8
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.6 升到 0.2.7；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.7 升到 0.2.8；旧标签页显示“需要刷新”时刷新即可。
 
-历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.7 不再在 `main` 保留旧版方案与验收稿；需要溯源时使用对应发布 tag 或 Release 快照。
+历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.8 不再在 `main` 保留旧版方案与验收稿；需要溯源时使用对应发布 tag 或 Release 快照。
 
 ### 从源码目录升级
 
@@ -786,14 +788,14 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 本次 0.2.7 验证
+### 本次 0.2.8 验证
 
 以本次发布实际跑出的结果为准：
 
-- `corepack pnpm test`：**91 个测试文件 / 910 项全部通过**；
-- 覆盖率：**语句 93.51% / 分支 89.13% / 函数 98.12% / 行 93.51%**；逐文件门禁通过；
+- `corepack pnpm test`：**91 个测试文件 / 923 项全部通过**；
+- 覆盖率：**语句 93.55% / 分支 89.23% / 函数 98.14% / 行 93.55%**；逐文件门禁通过；
 - `typecheck`、`lint`、`build`：通过；
-- `check:hygiene`（156 files，0 v8 ignore）、`test:isolated`（62 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash`：通过；
+- `check:hygiene`（157 files，0 v8 ignore）、`test:isolated`（63 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash`：通过；
 - 三题材矩阵：玄幻修仙、都市现代、西方奇幻各跑一遍 `init → archive`；
 - 隐私守卫：`src / briefs / skills / presets / rulepacks / docs` 与根文档均无具体项目身份。
 

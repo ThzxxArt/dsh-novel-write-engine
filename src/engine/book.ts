@@ -643,24 +643,41 @@ export function normalizeOutlineChapters(
           'call novel_reopen first if the manuscript must be revised',
         )
       }
+      // Resubmitting the unchanged card must stay valid even when a legacy
+      // archived card has an empty goal/conflict/hook: the text() validators
+      // are for new content, not for preserving an existing value byte-for-byte.
+      const goal =
+        raw.goal === undefined || raw.goal === base.goal ? base.goal : text(raw.goal, `chapter ${num} goal`)
+      const conflict =
+        raw.conflict === undefined || raw.conflict === base.conflict
+          ? base.conflict
+          : text(raw.conflict, `chapter ${num} conflict`)
+      const hook =
+        raw.hook === undefined || raw.hook === base.hook ? base.hook : text(raw.hook, `chapter ${num} hook`)
+      const notes =
+        raw.notes === undefined || raw.notes === base.notes
+          ? base.notes
+          : optionalText(raw.notes, `chapter ${num} notes`, LIMITS.maxOutlineNotesChars)
+      for (const [field, value, previous] of [
+        ['goal', goal, base.goal],
+        ['conflict', conflict, base.conflict],
+        ['hook', hook, base.hook],
+        ['notes', notes, base.notes],
+      ] as const) {
+        if (value !== previous) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `chapter ${num} is archived; its ${field} cannot change`,
+            'call novel_reopen first if the manuscript must be revised',
+          )
+        }
+      }
       normalized.set(num, {
         ...base,
-        goal:
-          raw.goal === undefined || raw.goal === base.goal
-            ? base.goal
-            : text(raw.goal, `chapter ${num} goal`),
-        conflict:
-          raw.conflict === undefined || raw.conflict === base.conflict
-            ? base.conflict
-            : text(raw.conflict, `chapter ${num} conflict`),
-        hook:
-          raw.hook === undefined || raw.hook === base.hook
-            ? base.hook
-            : text(raw.hook, `chapter ${num} hook`),
-        notes:
-          raw.notes === undefined || raw.notes === base.notes
-            ? base.notes
-            : optionalText(raw.notes, `chapter ${num} notes`, LIMITS.maxOutlineNotesChars),
+        goal,
+        conflict,
+        hook,
+        notes,
         volume: volumeForChapter(
           options.volumes,
           num,

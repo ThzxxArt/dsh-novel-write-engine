@@ -262,6 +262,12 @@ describe('chapter cards', () => {
       now: '2026-01-01',
     }
     const archivedCard = { ...card(), status: 'archived' as const }
+    // Legacy non-strict archives may legitimately have empty goal/conflict/hook.
+    // Resubmitting the exact same card must preserve it, not fail validation.
+    const emptyArchived = { ...archivedCard, goal: '', conflict: '', hook: '', notes: '' }
+    expect(() =>
+      normalizeOutlineChapters([emptyArchived], { ...options, existing: [emptyArchived] }),
+    ).not.toThrow()
     expect(() => normalizeOutlineChapters([{ ...archivedCard, title: '另一个标题' }], options)).toThrow(
       EngineInputError,
     )
@@ -272,6 +278,18 @@ describe('chapter cards', () => {
       normalizeOutlineChapters([{ ...archivedCard, target_words: [2000, 3000] }], options),
     ).toThrow(EngineInputError)
     expect(() => normalizeOutlineChapters([{ ...archivedCard, cast: ['她'] }], options)).toThrow(
+      EngineInputError,
+    )
+    expect(() => normalizeOutlineChapters([{ ...archivedCard, goal: '改写目标' }], options)).toThrow(
+      EngineInputError,
+    )
+    expect(() => normalizeOutlineChapters([{ ...archivedCard, conflict: '改写冲突' }], options)).toThrow(
+      EngineInputError,
+    )
+    expect(() => normalizeOutlineChapters([{ ...archivedCard, hook: '改写钩子' }], options)).toThrow(
+      EngineInputError,
+    )
+    expect(() => normalizeOutlineChapters([{ ...archivedCard, notes: '新备注' }], options)).toThrow(
       EngineInputError,
     )
     expect(() => normalizeOutlineChapters([{ ...archivedCard, status: 'planned' }], options)).toThrow(

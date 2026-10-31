@@ -78,7 +78,14 @@ export interface PanelView {
   rows: PanelChapter[]
   blocking: Array<{ code: string; scope: string; detail: string; hint: string }>
   blockingTitle: string
-  stats: { chapters: number; words: number; averageScore: number; blocking: number }
+  stats: {
+    chapters: number
+    words: number
+    archivedWords?: number
+    draftWords?: number
+    averageScore: number
+    blocking: number
+  }
   book: {
     present: boolean
     strict: boolean
@@ -147,9 +154,9 @@ const PHASE_LABELS: Record<string, string> = {
   P4: '评审',
   P5: '修订',
   P6: '一致性',
-  P7: '终审',
-  P8: '归档',
-  P9: '完成',
+  P7: '状态同步',
+  P8: '终审',
+  P9: '归档',
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -465,9 +472,17 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       ? summary.averageScore
       : rowAverage
   const next = summary.next
-  const finished = summary.finished === true
+  const progress = summary.progress
+  const finished = progress?.finished ?? summary.finished === true
   const doneLabel =
     summary.stage === 'done' ? (finished ? '全书完成' : '本章已归档') : stageLabel(summary.stage)
+  const progressLine =
+    progress?.label ??
+    (summary.stage === 'done'
+      ? finished
+        ? `共 ${summary.totalChapters} 章`
+        : `下一章 第 ${summary.chapter} 章`
+      : `第 ${summary.chapter} 章`)
   const selected = base.projects.find((project) => project.selected)
   return {
     ...base,
@@ -477,12 +492,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     damaged: selected?.state === 'damaged',
     resumeText: payload.resume?.text ?? '',
     volumeNumber: summary.volume,
-    subtitle:
-      summary.stage === 'done'
-        ? `${summary.genre} · ${platformLabel(summary.platform)} · ${
-            finished ? `共 ${summary.totalChapters} 章` : `下一章 第 ${summary.chapter} 章`
-          }${volumeLabel(summary)}`
-        : `${summary.genre} · ${platformLabel(summary.platform)} · 第 ${summary.chapter} 章${volumeLabel(summary)}`,
+    subtitle: `${summary.genre} · ${platformLabel(summary.platform)} · ${progressLine}${volumeLabel(summary)}`,
     stageLabel: doneLabel,
     finished,
     revisionLabel: `第 ${summary.bookData?.current.rounds.revise ?? summary.revision} 次修订`,
@@ -493,6 +503,8 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     stats: {
       chapters: summary.totalChapters,
       words: summary.totalWords,
+      ...(summary.archivedWords === undefined ? {} : { archivedWords: summary.archivedWords }),
+      ...(summary.draftWords === undefined ? {} : { draftWords: summary.draftWords }),
       averageScore: Math.round(average * 10) / 10,
       blocking: blocking.length,
     },

@@ -9,6 +9,8 @@
 
 P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` 表示**当前章已归档**；下一章从 `done` 回到 P1，只有项目配置的 `targets.total_chapters` 已全部归档时面板才显示全书完成。
 
+归档第 N 章后，`pipeline.chapter` 指向 N+1，`pipeline.stage` 仍是 `done`——`done` 属于刚归档的第 N 章，不属于 N+1。`getStatus`/`advise`/panel 在 JSON 中返回 `progress`；`guide`/`doctor` 用同一投影渲染标题与流水线 detail：`stage === 'done'` 时 `current=null`、`last_archived=N`、`next={chapter:N+1,stage:'P1'}`，全书完成时 `finished=true`、`next=null`。`label`/`resume` 是人类读法的唯一来源；不要再从 `chapter`+`stage` 直接拼“当前第 N+1 章，阶段 done”。
+
 ## 迁移表
 
 | 从                 | 操作                | 到                                                      | 门控                          |

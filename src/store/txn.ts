@@ -186,6 +186,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     for (const file of input.files) {
       const existing = before.get(file.path)
       if (existing === null || existing === undefined) continue
+      await assertRootPresent()
       await store.writeBytes(joinRel(staging, 'before', file.path), existing)
     }
 
@@ -198,8 +199,10 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       for (const file of input.files) {
         const existing = before.get(file.path)
         if (existing === null || existing === undefined) continue
+        await assertRootPresent()
         await store.writeBytes(joinRel(stagingBackup, file.path), existing)
       }
+      await assertRootPresent()
       await store.writeText(joinRel(stagingBackup, BACKUP_MARKER), '1')
       await store.writeText(
         joinRel(stagingBackup, BACKUP_MANIFEST),
@@ -220,9 +223,13 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
           2,
         )}\n`,
       )
-      const targetBackup = store.path(backupDir(input.txid))
-      await fs.mkdir(dirname(targetBackup), { recursive: true })
-      await fs.rename(store.path(stagingBackup), targetBackup)
+      // `backups/` is project data. Create and resolve it through the store so a
+      // symlinked directory cannot redirect the rename outside the project.
+      await assertRootPresent()
+      await store.ensureDir(BACKUP_DIR)
+      await assertRootPresent()
+      const targetBackup = await store.safePath(backupDir(input.txid))
+      await fs.rename(await store.safePath(stagingBackup), targetBackup)
       await syncDirectory(dirname(targetBackup))
       backupMarked = true
       backupComplete = true

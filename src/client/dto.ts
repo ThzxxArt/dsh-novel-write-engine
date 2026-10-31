@@ -14,6 +14,18 @@ export interface BlockingDto {
   hint?: string
 }
 
+/** Chapter-boundary projection; absent on older payloads. */
+export interface ProgressDto {
+  active_chapter: number
+  stage: string
+  current: { chapter: number; stage: string } | null
+  last_archived: number | null
+  next: { chapter: number; stage: 'P1' } | null
+  finished: boolean
+  label: string
+  resume: string
+}
+
 export interface SummaryDto {
   schemaVersion: number
   panelId: string
@@ -24,8 +36,11 @@ export interface SummaryDto {
   platform: string
   chapter: number
   stage: string
+  progress?: ProgressDto
   revision: number
   totalWords: number
+  archivedWords?: number
+  draftWords?: number
   totalChapters: number
   /** Book-wide archived average; absent on older payloads. */
   averageScore?: number

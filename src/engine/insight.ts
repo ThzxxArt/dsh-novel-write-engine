@@ -5,6 +5,7 @@ import { splitParagraphs } from '../domain/text.js'
 import type {
   AuditRow,
   BookReport,
+  ChapterProgress,
   ChapterRecord,
   CharactersDocument,
   ForeshadowsDocument,
@@ -387,6 +388,8 @@ export interface GuideInput {
   projectPresent: boolean
   chapter: number
   stage: Stage
+  /** Chapter-boundary projection; omitted by older synthetic callers. */
+  progress?: ChapterProgress
   archived: number
   target: number | null
   finished: boolean
@@ -486,10 +489,16 @@ export function buildGuide(input: GuideInput): GuideReport {
     },
     {
       id: 'write',
-      title: input.finished ? '全书章节已写完' : `写第 ${input.chapter} 章`,
+      title: input.finished
+        ? '全书章节已写完'
+        : input.progress?.current !== null && input.progress?.current !== undefined
+          ? `写第 ${input.progress.current.chapter} 章`
+          : input.progress?.next !== null && input.progress?.next !== undefined
+            ? `准备第 ${input.progress.next.chapter} 章（P1）`
+            : `写第 ${input.chapter} 章`,
       detail: input.finished
         ? `已完成 ${input.archived} 章；下一步是导出成书。`
-        : `当前阶段 ${input.stage}；${input.blocking === 0 ? '没有阻塞' : `${input.blocking} 条阻塞`}。`,
+        : `${input.progress?.label ?? `当前阶段 ${input.stage}`}；${input.blocking === 0 ? '没有阻塞' : `${input.blocking} 条阻塞`}。`,
       done: input.finished,
       tool: input.next.tool,
     },
@@ -512,7 +521,9 @@ export function buildGuide(input: GuideInput): GuideReport {
           : 'writing'
   return {
     state,
-    title: input.finished ? '全书已完成' : `第 ${input.chapter} 章 · ${input.stage}`,
+    title: input.finished
+      ? '全书已完成'
+      : (input.progress?.label ?? `第 ${input.chapter} 章 · ${input.stage}`),
     steps,
     next: input.next,
     commands: [

@@ -2,6 +2,13 @@
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。
 
+## 0.2.8 边界与可信性
+
+- 工具名、参数、服务操作、阶段与门控与 0.2.7 完全一致；`novel_status`/`novel_pipeline` 增加 `progress` 读模型，`/novel stats` 增加归档/草稿字数拆分。
+- 归档后 `progress.label` 显示“第 N 章已归档；下一章第 N+1 章从 P1 开始”，`novel_pipeline` 的 JSON 与面板共用同一投影；全书完成时 `progress.finished=true`、续写指令为 `null`。
+- `ready_to_archive` 缺 P8 任务书时的 `novel_brief {stage:"P8"}` 行为已由 `STATUS_BRIEF` 保证，0.2.8 补回归覆盖；归档卡的 `goal/conflict/hook/notes` 与 `title/scene_type/target_words/cast` 一样不可改写，`chapters.yaml` 损坏时也以旧卡为证据。
+- 不改变任何工具 schema、门控阈值或导出格式。
+
 ## 0.2.7 通用性与边界
 
 - 工具名、参数、服务操作、阶段与门控与 0.2.6 完全一致；0.2.7 只收口通用性、测试夹具与发布面隐私边界。
@@ -105,7 +112,7 @@
 
 - `novel_state` 新增 `kind: outline | worldbook`；损坏时返回 `{error,message,path,raw}`。
 - `novel_blueprint` / `novel_outline` / `novel_worldbook` 是书级写操作，不受阶段门控，但会推进 revision 与 journal；严格大纲首次提交默认开启，已有蓝图内容时尊重显式 `strict:false`。`novel_blueprint` 的卷列表仍是 replace，删卷必须 `confirm_remove:true`；`novel_outline` 的 chapters/volumes 是 upsert，省略不删，删除走 `remove`/`remove_volumes`。
-- `novel_amend` 允许修复 `outline/outline.yaml` 与 `outline/worldbook.yaml`；已归档卡的 title/scene/target_words/cast/word_count/score/archived_at 仍不可改。
+- `novel_amend` 允许修复 `outline/outline.yaml` 与 `outline/worldbook.yaml`；已归档卡的 title/scene_type/target_words/cast/goal/conflict/hook/notes/word_count/score/archived_at 仍不可改。
 - `novel_doctor` 新增大纲覆盖率与当前阶段产物检查；`novel_report` 的 outline/worldbook `present` 以内容为准。
 - `novel_outline_import` 的 `dry_run=true` 不写盘；解析失败带 Markdown 行号。
 - `novel_export` 新增 `outline | worldbook | proposal`；`chapter` 只对 `md/txt/epub` 有效。
