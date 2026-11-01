@@ -155,3 +155,77 @@ export function worldEntityName(row: unknown): string | null {
   if (!isRecord(row) || typeof row.name !== 'string' || row.name.trim() === '') return null
   return row.name.trim()
 }
+
+export interface LockBaseline {
+  source: 'worldbook' | 'world_anchors' | 'locks'
+  texts: string[]
+}
+
+const shortAnchors = (text: string): string[] =>
+  text
+    .split(/[。！？；;\n]/)
+    .map((part) => part.trim())
+    .filter((part) => Array.from(part).length >= 8 && Array.from(part).length <= 60)
+    .slice(0, 3)
+
+/**
+ * 0.2.13 canonical lock baseline: the worldbook description first, then
+ * readable short anchors. A raw first-appearance paragraph is evidence, not
+ * the standard every later chapter must repeat verbatim.
+ */
+export function resolveLockBaseline(
+  name: string,
+  kind: 'character' | 'location',
+  input: {
+    worldbook?: import('../types.js').WorldbookDocument | null
+    world?: import('../types.js').WorldDocument | null
+    locks?: import('../types.js').LocksDocument | null
+  },
+): LockBaseline | null {
+  const texts: string[] = []
+  let source: LockBaseline['source'] = 'locks'
+  const add = (value: string | undefined): void => {
+    if (value === undefined) return
+    const trimmed = value.trim()
+    if (trimmed !== '' && !texts.includes(trimmed)) texts.push(trimmed)
+  }
+  if (kind === 'character') {
+    const fromBook = input.worldbook?.characters.find((entry) => entry.name === name)
+    if (fromBook !== undefined) {
+      // `description` is a biography in real worldbooks; comparing prose to it
+      // is exactly the false positive 0.2.13 retires. Only an explicit
+      // appearance is a canonical visual baseline. When a worldbook row exists
+      // without appearance, do not fall back to the first-appearance paragraph:
+      // that re-creates the same three false positives. Doctor reports the
+      // missing baseline instead.
+      add(fromBook.appearance)
+      if (texts.length > 0) source = 'worldbook'
+      return texts.length === 0 ? null : { source, texts }
+    }
+  } else {
+    const fromBook = input.worldbook?.locations.find((entry) => entry.name === name)
+    add(fromBook?.description)
+    add(fromBook?.layout)
+    if (texts.length > 0) source = 'worldbook'
+    const fromWorld = input.world?.locations.find((entry) => entry.name === name)
+    if ((fromWorld?.anchors?.length ?? 0) > 0) {
+      const hadWorldbookText = texts.length > 0
+      for (const anchor of fromWorld!.anchors!) add(anchor)
+      // The worldbook remains the canonical owner when it supplied text;
+      // world anchors are only the fallback source when it did not.
+      if (!hadWorldbookText) source = 'world_anchors'
+    }
+  }
+  if (texts.length === 0) {
+    const lock = kind === 'character' ? input.locks?.characters[name] : input.locks?.locations[name]
+    const raw =
+      kind === 'character'
+        ? (lock as { appearance?: string } | undefined)?.appearance
+        : (lock as { layout?: string } | undefined)?.layout
+    if (raw !== undefined) {
+      for (const anchor of shortAnchors(raw)) add(anchor)
+      if (texts.length > 0) source = 'locks'
+    }
+  }
+  return texts.length === 0 ? null : { source, texts }
+}

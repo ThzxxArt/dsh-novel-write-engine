@@ -1,3 +1,13 @@
+## 0.2.13 工具契约
+
+- 仍是 28 个工具、13 个门控、15 维评分、5 个语义项、6 种导出；只增加可选输入/输出字段。
+- `novel_init` 新增 `min_cjk_chars`、`dialogue_ratio_metric`；`novel_amend` 可通过 `targets` 修改这两项。
+- `novel_check` 新增 `acknowledge_reasons: Record<code|id, string>`；每个 `acknowledge` 项必须有非空理由，结果含 `acknowledged_findings` 与 `numeric` 汇总。
+- `novel_state` 新增 `limit`、`cursor`、`status`、`include_history`、`current_only`。分页 section 保留旧顶层字段并附 `page:{total,returned,limit,next_cursor,has_more,filters}`；`cursor` 绑定 section + filters，不匹配返回 `ENGINE_SCHEMA_INVALID`。`briefs` 还可用 `chapter` 过滤某一章的收据。
+- `foreshadows` 默认 50 条且只返回 `advance_count`；`include_history:true` 才返回完整 `advance_log`。`briefs` 的 `current_only:true` 只返回每章每阶段最新收据。
+- `state_delta.relationships[].type_code` 是新建关系的必填枚举；`state_delta.timeline` 接受 `summary.events` 下标或 `event_key`；伏笔 `resolved` 必须带 `resolved_anchor`，`planned_resolve`/`kind` 也可用于 update/advance/resolve。
+- `novel_brief` 的 `fields` 新增 `min_cjk_chars`、`word_count_basis`、`dialogue_char_ratio`、`punctuation_breakdown`、`timeline_event_keys`、`previous_chapter_effort`。
+
 ## 0.2.9 工具契约
 
 - 28 个工具的 148 个入参中，不再有 author-only `type:"json"`；`summary`、review、check、archive、handoff、worldbook 均为显式对象/数组 schema。
@@ -90,10 +100,10 @@
 ## 0.1.3 契约补充
 
 - 八个 ledger 损坏时 `state_errors` 的 code 为 `CHAPTERS_UNREADABLE`、`CHARACTERS_UNREADABLE`、`WORLD_UNREADABLE`、`LOCKS_UNREADABLE`、`TIMELINE_UNREADABLE`、`FORESHADOWS_UNREADABLE`、`RELATIONSHIPS_UNREADABLE`、`HANDOFF_UNREADABLE`，plan/review/check/worldPlan 有对应 `*_UNREADABLE`，`novel.yaml` 为 `PROJECT_UNREADABLE`，规划文档为 `OUTLINE_UNREADABLE` / `WORLDBOOK_UNREADABLE`。status/panel 仍可读，损坏 ledger/project/规划文档的 `next.tool = novel_amend`。
-- `novel_state` 对损坏 ledger/project/review/check/outline/worldbook 返回 `{error,message,path,raw}`；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters；损坏时接受完整项目文档。
+- `novel_state` 对损坏 ledger/project/review/check/outline/worldbook 返回 `{error,message,path,raw}`；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters、targets.min_cjk_chars 与 targets.dialogue_ratio_metric；损坏时接受完整项目文档。
 - `novel_plan_chapter.cast` 可选 1–8 人：`{name,entry_state?,goal?,knowledge?,exit_change?}`；名字必须来自 P1 世界计划或角色台账；标题不得自带 `第N章` 前缀。
 - P2/P3/P4/P5/P6 brief 的 `context.world_plan` 来自 P1；P3/P4 的 `context.characters` 是本章活跃卡，`other_characters` 是压缩索引；P6 的 `context.active_cast` 受预算保护。world_plan 的目标/约束受保护，角色/地点名单可裁剪。
-- `novel_state {kind:"chapters"}` 默认不含 summary；`include_summary:true` 或 `chapter_range:[start,end]` 按需取。panel 只返回最近 30 行。
+- `novel_state {kind:"chapters"}` 默认返回紧凑索引且不带 summary；`chapter_range:[start,end]` 只做范围过滤，完整 summary 仍须同时传 `include_summary:true`。panel 只返回最近 30 行。
 - 只跑 `content` 或 `integrity` 的 `novel_check` 仍返回 `verdict:"pass"`，但 `stage` 保持 `P6` 并附 `CHECK_SCOPE_PARTIAL`；partial pass 不消耗 check 轮次；必须再跑完整 scope。
 - `novel_archive` 继承 handoff 的 volume/volume_name；`act`/`act_progress` 默认按幕内位置派生，handoff 可覆盖。
 
@@ -162,7 +172,7 @@
 ## 0.2.1 契约补充
 
 - 通过参数形状校验并进入项目锁后，被 gate/delta/state 拒绝的写操作会追加 `status:"aborted"`、`attempt:true` 的 journal 行，带 `code`、`reason`、`hint` 与 `blocking`；内容文件不动，`novel_audit` 可按章、操作、状态和时间过滤，用 `seq` 游标翻页。锁前的纯参数形状错误不会写 journal（此时还没有可证明的项目上下文）。
-- `novel_state {kind:"history"}` 列出 `history/` 下的评审/校验/正文/废弃稿/计划版本，返回 `entries` 全量（不静默截断）与 `total`；带 `chapter` 与正整数 `revision` 时返回该章该版本文本，未带 chapter 时默认活动章。`kind:"backups"` 返回 manifest（op/chapter/revision/files/reason）；没有 manifest 的旧备份只可列出。
+- `novel_state {kind:"history"}` 列出 `history/` 下的评审/校验/正文/废弃稿/计划版本，默认 `limit:50` 并返回 `page`（`total/returned/next_cursor`）；用 `limit`/`cursor` 继续翻页，不会静默截断。带 `chapter` 与正整数 `revision` 时返回该章该版本文本，未带 chapter 时默认活动章。`kind:"backups"` 返回 manifest（op/chapter/revision/files/reason）；没有 manifest 的旧备份只可列出。
 - `novel_revise` 的 `patch` 模式必须带 `expected_hash`；`old_text` 默认必须唯一，`occurrence` 才允许多处；hash 不匹配时零写入。
 - `novel_check` 把 blocker 放 `machine.violations`，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code，未知 code 或 blocker 返回 `ENGINE_SCHEMA_INVALID`。
 - `novel_restore` 可恢复活动章、`paths: ["outline/outline.yaml"]` 的整份大纲，或 `paths: ["state/pipeline.yaml"]` 的损坏 pipeline（只在该文件不可读时）；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。

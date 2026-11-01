@@ -69,7 +69,7 @@ export interface PanelBookData {
     total: number
     top: Array<{ name: string; role: string; appearances: number; last_seen: number }>
   }
-  relationships: { total: number; types: Record<string, number> }
+  relationships: { total: number; types: Record<string, number>; type_codes?: Record<string, number> }
   foreshadows: BookReport['foreshadows']
   timeline: BookReport['timeline']
   outline: { drift: BookReport['outline']['drift'] }
@@ -82,7 +82,9 @@ export interface PanelBookData {
     trend: number | null
     trend_basis: BookReport['quality']['trend_basis']
     samples: number
+    sample_basis?: BookReport['quality']['sample_basis']
     attempts: number
+    attempt_basis?: BookReport['quality']['attempt_basis']
     dimensions: BookReport['quality']['dimensions']
   }
   pacing: BookReport['pacing']

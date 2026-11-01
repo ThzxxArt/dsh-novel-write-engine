@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { allocateIds } from '../domain/ids.js'
 import { isNarratorAlias, narratorAliasesFor, narratorName as narratorNameOf } from '../domain/narrator.js'
 import { splitParagraphs } from '../domain/text.js'
@@ -24,6 +25,8 @@ import {
   type StateDelta,
   type TimelineDelta,
   type TimelineDocument,
+  type RelationshipTypeCode,
+  RELATIONSHIP_TYPE_CODES,
   type WorldDelta,
   type WorldDocument,
   type Warning,
@@ -34,6 +37,10 @@ const ACTIONS: readonly DeltaAction[] = ['created', 'updated', 'no_change']
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** Stable event key shared by new writes and read-time compatibility. */
+export const eventKeyFor = (chapter: number, index: number, event: string): string =>
+  `E${chapter}-${index + 1}-${createHash('sha256').update(event).digest('hex').slice(0, 8)}`
 
 /** Define an own property even for names such as `__proto__` or `constructor`. */
 const setOwn = <T>(record: Record<string, T>, key: string, value: T): void => {
@@ -120,6 +127,17 @@ const requireForeshadowFields = (value: ForeshadowDelta, where: string): void =>
   if (value.note !== undefined && typeof value.note !== 'string') fail(`${where}.note must be a string`)
   if (value.new_info !== undefined && typeof value.new_info !== 'boolean') {
     fail(`${where}.new_info must be a boolean`)
+  }
+  if (value.planned_resolve !== undefined && value.planned_resolve !== null) {
+    if (!Number.isInteger(value.planned_resolve) || value.planned_resolve < 1) {
+      fail(`${where}.planned_resolve must be a positive integer or null`)
+    }
+  }
+  if (value.resolved_anchor !== undefined && !anchorIsStrong(value.resolved_anchor)) {
+    fail(`${where}.resolved_anchor must be a verbatim quote of at least ${ANCHOR_MIN_CHARS} characters`)
+  }
+  if (value.kind !== undefined && value.kind !== 'plot' && value.kind !== 'motif') {
+    fail(`${where}.kind must be plot|motif`)
   }
 }
 
@@ -686,11 +704,24 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         `foreshadow "${plant.key}" anchor must be a verbatim quote of at least ${ANCHOR_MIN_CHARS} characters`,
       )
     }
+    if (
+      plant.planned_resolve !== undefined &&
+      plant.planned_resolve !== null &&
+      (!Number.isInteger(plant.planned_resolve) || plant.planned_resolve < 1)
+    ) {
+      fail(`foreshadow "${plant.key}" planned_resolve must be a positive integer or null`)
+    }
+    if (plant.kind !== undefined && plant.kind !== 'plot' && plant.kind !== 'motif') {
+      fail(`foreshadow "${plant.key}" kind must be plot|motif`)
+    }
     if (declared.title !== undefined && typeof declared.title !== 'string') {
       fail(`foreshadows.${plant.key}.title must be a string`)
     }
     const title = declared.title ?? plant.title
     if (title.trim() === '') fail(`foreshadow "${plant.key}" has an empty title`)
+    if (Array.from(title.trim()).length < 2 || Array.from(title.trim()).length > 16) {
+      fail(`foreshadow "${plant.key}" title must contain 2..16 characters`)
+    }
     // `title` is the human-readable ledger label. Verification uses the
     // explicit anchor when supplied; old chapters without anchors keep the
     // previous "title must appear" rule, so both formats stay valid.
@@ -722,10 +753,20 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       resolved_at: null,
       description: declared.description ?? plant.description,
       ...(anchor === undefined ? {} : { anchor }),
+      ...(Object.hasOwn(declared, 'planned_resolve') || Object.hasOwn(plant, 'planned_resolve')
+        ? {
+            planned_resolve: Object.hasOwn(declared, 'planned_resolve')
+              ? (declared.planned_resolve ?? null)
+              : (plant.planned_resolve ?? null),
+          }
+        : {}),
+      ...(declared.kind === undefined && plant.kind === undefined
+        ? {}
+        : { kind: declared.kind ?? plant.kind }),
       // Read-model compatibility marker: old rows keep working, while a new
       // anchorless title verified against the manuscript is not legacy data.
       format_version: 1 as const,
-      advance_log: [] as Array<{ chapter: number; note: string; new_info: boolean }>,
+      advance_log: [] as Array<{ chapter: number; note: string; new_info: boolean; anchor?: string }>,
     }
     foreshadows.items.push(item)
     byId.set(item.id, item)
@@ -742,6 +783,9 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const declared = entry<ForeshadowDelta>(delta.foreshadows[advance.key], `foreshadows.${advance.key}`)
     requireReason(declared, `foreshadows.${advance.key}`)
     requireForeshadowFields(declared, `foreshadows.${advance.key}`)
+    if (declared.anchor !== undefined && !input.text.includes(declared.anchor)) {
+      fail(`foreshadows.${advance.key}.anchor does not appear verbatim in the manuscript`)
+    }
     if (declared.action !== 'updated') {
       fail(`foreshadows.${advance.key} is advanced; its action must be updated`)
     }
@@ -751,10 +795,15 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (item.status === 'resolved') fail(`foreshadow "${advance.key}" is already resolved`)
     item.last_touched = chapter
     item.status = 'advanced'
+    if (Object.hasOwn(declared, 'planned_resolve')) {
+      item.planned_resolve = declared.planned_resolve ?? null
+    }
+    if (declared.kind !== undefined) item.kind = declared.kind
     item.advance_log.push({
       chapter,
       note: declared.note ?? advance.note,
       new_info: declared.new_info ?? advance.new_info,
+      ...(declared.anchor === undefined ? {} : { anchor: declared.anchor }),
     })
     assigned[advance.key] = item.id
   }
@@ -773,13 +822,25 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const item = byId.get(id)
     if (item === undefined) fail(`foreshadow "${key}" does not exist; no fallback is allowed`)
     if (item.status === 'resolved') fail(`foreshadow "${key}" is already resolved`)
+    if (declared.resolved_anchor === undefined) {
+      fail(`foreshadow "${key}" resolved without resolved_anchor; a note cannot replace manuscript evidence`)
+    }
+    if (!input.text.includes(declared.resolved_anchor)) {
+      fail(`foreshadow "${key}" resolved_anchor does not appear verbatim in the manuscript`)
+    }
     item.status = 'resolved'
     item.last_touched = chapter
     item.resolved_at = chapter
+    item.resolved_anchor = declared.resolved_anchor
+    if (Object.hasOwn(declared, 'planned_resolve')) {
+      item.planned_resolve = declared.planned_resolve ?? null
+    }
+    if (declared.kind !== undefined) item.kind = declared.kind
     item.advance_log.push({
       chapter,
       note: declared.note?.trim() === '' || declared.note === undefined ? 'resolved' : declared.note,
       new_info: declared.new_info ?? true,
+      anchor: declared.resolved_anchor,
     })
     assigned[key] = item.id
   }
@@ -794,33 +855,48 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const declared = entry<ForeshadowDelta>(raw, `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
     requireForeshadowFields(declared, `foreshadows.${key}`)
+    if (declared.anchor !== undefined && !input.text.includes(declared.anchor)) {
+      fail(`foreshadows.${key}.anchor does not appear verbatim in the manuscript`)
+    }
     const item = byId.get(key)
     if (item === undefined) fail(`foreshadow "${key}" is not in the ledger`)
     if (declared.action === 'created') fail(`foreshadow "${key}" already exists`)
     if (declared.action === 'updated') {
       item.last_touched = chapter
+      if (declared.planned_resolve !== undefined) item.planned_resolve = declared.planned_resolve
+      if (declared.kind !== undefined) item.kind = declared.kind
       if (declared.note !== undefined) {
-        item.advance_log.push({ chapter, note: declared.note, new_info: declared.new_info ?? false })
+        item.advance_log.push({
+          chapter,
+          note: declared.note,
+          new_info: declared.new_info ?? false,
+          ...(declared.anchor === undefined ? {} : { anchor: declared.anchor }),
+        })
       }
     }
   }
 
+  const eventKeys = summary.events.map((event, index) => eventKeyFor(chapter, index, event))
   for (const [index, event] of summary.events.entries()) {
     const key = String(index)
-    const declared = entry<TimelineDelta>(delta.timeline[key], `timeline.${key}`)
+    const stableKey = eventKeys[index]!
+    const declared = entry<TimelineDelta>(
+      delta.timeline[stableKey] ?? delta.timeline[key],
+      `timeline.${stableKey}`,
+    )
     if (declared.action !== 'created') {
-      fail(`timeline.${key} is a new event; its action must be created`)
+      fail(`timeline.${stableKey} is a new event; its action must be created`)
     }
     if (
       declared.characters !== undefined &&
       (!Array.isArray(declared.characters) ||
         declared.characters.some((character) => typeof character !== 'string'))
     ) {
-      fail(`timeline.${key}.characters must be a string array`)
+      fail(`timeline.${stableKey}.characters must be a string array`)
     }
     for (const character of declared.characters ?? []) {
       if (byName.get(character) === undefined) {
-        fail(`timeline.${key} names unknown character "${character}"`)
+        fail(`timeline.${stableKey} names unknown character "${character}"`)
       }
     }
     const allocated = allocateIds('TE', timeline.next_seq, 1)
@@ -836,11 +912,14 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       description: declared.description ?? event,
       location: declared.location ?? '',
       characters: declared.characters ?? appeared,
+      event_key: stableKey,
     })
     assigned[`timeline:${index}`] = id
+    assigned[`timeline:${stableKey}`] = id
   }
+  const validTimelineKeys = new Set([...summary.events.map((_event, index) => String(index)), ...eventKeys])
   for (const key of Object.keys(delta.timeline)) {
-    if (!/^\d+$/.test(key) || Number(key) >= summary.events.length) {
+    if (!validTimelineKeys.has(key)) {
       fail(`timeline.${key} does not match any event in summary.events`)
     }
   }
@@ -860,11 +939,22 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (byName.get(a) === undefined || byName.get(b) === undefined) {
       fail(`relationships.${key} names a character that is not declared in characters`)
     }
+    if (
+      declared.type_code !== undefined &&
+      !RELATIONSHIP_TYPE_CODES.includes(declared.type_code as RelationshipTypeCode)
+    ) {
+      fail(`relationships.${key}.type_code must be one of ${RELATIONSHIP_TYPE_CODES.join('|')}`)
+    }
     const existing = findRelationship(a, b)
     if (declared.action === 'created') {
       if (existing !== undefined) fail(`relationship ${pairKey(a, b)} already exists`)
       if (typeof declared.type !== 'string' || declared.type.trim() === '') {
         fail(`relationships.${key} is created but has no type`)
+      }
+      if (declared.type_code === undefined) {
+        fail(
+          `relationships.${key} is created but has no type_code; use one of ${RELATIONSHIP_TYPE_CODES.join('|')}`,
+        )
       }
       const allocated = allocateIds('RL', relationships.next_seq, 1)
       const id = allocated.ids[0]!
@@ -877,6 +967,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         a,
         b,
         type: declared.type!,
+        type_code: declared.type_code!,
         since: chapter,
         description: declared.description ?? '',
         evolution: [],
@@ -892,6 +983,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         }
         existing.type = declared.type
       }
+      if (declared.type_code !== undefined) existing.type_code = declared.type_code
       if (declared.description !== undefined) existing.description = declared.description
       if (declared.note !== undefined) existing.evolution.push({ chapter, note: declared.note })
     }

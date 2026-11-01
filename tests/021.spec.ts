@@ -201,6 +201,7 @@ describe('0.2.1 state truth', () => {
         chapter: 1,
         semantic: sampleSemantic(text),
         acknowledge: ['DIALOGUE_RATIO'],
+        acknowledge_reasons: { DIALOGUE_RATIO: '对白密度是有意为之' },
         root,
       })
       expect(check.data.acknowledged).toContain('DIALOGUE_RATIO')
@@ -1138,7 +1139,20 @@ describe('0.2.1 closure regressions', () => {
         )
       }
       const history = await engine.queryState({ kind: 'history', chapter: 1, root })
-      expect((history.data as { entries: unknown[] }).entries).toHaveLength(201)
+      const firstHistory = history.data as {
+        entries: unknown[]
+        page: { total: number; has_more: boolean; next_cursor: string | null }
+      }
+      expect(firstHistory.entries).toHaveLength(50)
+      expect(firstHistory.page).toMatchObject({ total: 201, has_more: true })
+      const secondHistory = await engine.queryState({
+        kind: 'history',
+        chapter: 1,
+        limit: 200,
+        cursor: firstHistory.page.next_cursor!,
+        root,
+      })
+      expect((secondHistory.data as { entries: unknown[] }).entries).toHaveLength(151)
 
       await engine.submitWorldbook({
         facts: [{ alias: '车费', value: 300, unit: '元' }],

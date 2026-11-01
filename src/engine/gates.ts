@@ -80,14 +80,20 @@ const stageOrder: Gate = (input) => {
 /** PG-03: word count against the project's lower target. */
 const wordCount: Gate = (input) => {
   const min = input.project.targets.words_per_chapter[0]
-  if (min <= 0) return []
+  const minCjk = input.project.targets.min_cjk_chars ?? 0
   const metrics = countWordMetrics(input.text)
-  if (metrics.total_word_count >= min) return []
+  const totalShort = min > 0 && metrics.total_word_count < min
+  const cjkShort = minCjk > 0 && metrics.cjk_chars < minCjk
+  if (!totalShort && !cjkShort) return []
+  const reasons = [
+    ...(totalShort ? [`counted words ${metrics.total_word_count} < ${min}`] : []),
+    ...(cjkShort ? [`CJK chars ${metrics.cjk_chars} < ${minCjk}`] : []),
+  ]
   return [
     block(
       'PG-03',
-      `text has ${metrics.total_word_count} counted words (${metrics.cjk_chars} 汉字 + ${metrics.punctuation_chars} 标点 + ${metrics.english_words} 英文词 + ${metrics.numbers} 数字), minimum is ${min}`,
-      `the engine counts punctuation as words; write at least ${min - metrics.total_word_count} more counted words, then call novel_word_count to verify the same metric`,
+      `text fails the project length target: ${reasons.join('; ')} (${metrics.cjk_chars} 汉字 + ${metrics.punctuation_chars} 标点 + ${metrics.english_words} 英文词 + ${metrics.numbers} 数字)`,
+      `the engine counts punctuation as words, while the optional CJK lower bound is checked separately; add ${Math.max(0, min - metrics.total_word_count)} counted words / ${Math.max(0, minCjk - metrics.cjk_chars)} CJK chars, then call novel_word_count to verify`,
     ),
   ]
 }
@@ -214,6 +220,33 @@ const summarySchema: Gate = (input) => {
     if (Array.isArray(planted)) {
       const keys = planted.map((item) => (item as Record<string, unknown>).key)
       if (new Set(keys).size !== keys.length) problems.push('foreshadows.planted contains a duplicate key')
+      for (const [index, raw] of planted.entries()) {
+        const item = raw as Record<string, unknown>
+        const title = item.title
+        if (typeof title === 'string') {
+          const length = Array.from(title.trim()).length
+          if (length < 2 || length > 16) {
+            problems.push(`foreshadows.planted[${index}].title must contain 2..16 characters`)
+          }
+        }
+        if (item.anchor !== undefined) {
+          if (!isText(item.anchor) || Array.from(item.anchor.trim()).length < 8) {
+            problems.push(
+              `foreshadows.planted[${index}].anchor must be a verbatim quote of at least 8 characters`,
+            )
+          }
+        }
+        if (
+          item.planned_resolve !== undefined &&
+          item.planned_resolve !== null &&
+          (!Number.isInteger(item.planned_resolve) || (item.planned_resolve as number) < 1)
+        ) {
+          problems.push(`foreshadows.planted[${index}].planned_resolve must be a positive integer or null`)
+        }
+        if (item.kind !== undefined && item.kind !== 'plot' && item.kind !== 'motif') {
+          problems.push(`foreshadows.planted[${index}].kind must be plot or motif`)
+        }
+      }
     }
   }
 
@@ -572,7 +605,6 @@ const consistency: Gate = (input, options) => {
       'FS_REVISITED_TOO_SOON',
       'RESOURCE_MISMATCH',
       'TIME_REGRESSION',
-      'RELATION_UNKNOWN',
       'LOCKED_DETAIL_DRIFT',
     ],
     input.text,
@@ -592,6 +624,7 @@ const consistency: Gate = (input, options) => {
         relationships: input.evidence.relationships,
         world: input.evidence.world,
         locks: input.evidence.locks,
+        worldbook: input.evidence.worldbook ?? null,
       },
     },
   )

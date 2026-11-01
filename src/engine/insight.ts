@@ -209,11 +209,65 @@ export function buildBookReport(input: ReportInput): BookReport {
     .slice(0, 10)
   const latestChapter = records.length === 0 ? 0 : records[records.length - 1]!.num
   const open = input.foreshadows.items.filter((item) => item.status !== 'resolved')
-  const dormant = open.filter((item) => item.status === 'dormant')
-  const overdue = open.filter((item) => latestChapter - item.last_touched >= input.foreshadowDormantAfter)
+  const dormant = open.filter((item) => item.status === 'dormant' && item.kind !== 'motif')
+  const overdue = open.filter(
+    (item) =>
+      item.kind !== 'motif' &&
+      item.planned_resolve !== null &&
+      item.planned_resolve !== undefined &&
+      item.planned_resolve < latestChapter,
+  )
+  const planned = input.foreshadows.items.filter(
+    (item) => item.planned_resolve !== null && item.planned_resolve !== undefined,
+  ).length
+  const unplanned = input.foreshadows.items.length - planned
+  /** An empty or one-character anchor is not manuscript evidence. */
+  const hasReadableAnchor = (value: unknown): boolean =>
+    typeof value === 'string' && Array.from(value.trim()).length >= 8
+  const resolvedWithoutEvidence = input.foreshadows.items.filter(
+    (item) =>
+      item.status === 'resolved' &&
+      !hasReadableAnchor(item.resolved_anchor) &&
+      !item.advance_log.some((log) => hasReadableAnchor(log.anchor)),
+  ).length
+  const normalizedTitle = (value: string): string => value.replace(/[\s\p{P}]+/gu, '')
+  const duplicateTitles = (() => {
+    let duplicates = 0
+    for (let first = 0; first < open.length; first += 1) {
+      for (let second = first + 1; second < open.length; second += 1) {
+        const left = normalizedTitle(open[first]!.title)
+        const right = normalizedTitle(open[second]!.title)
+        if (left === '' || right === '') continue
+        if (left === right || left.includes(right) || right.includes(left)) {
+          duplicates += 1
+          continue
+        }
+        const grams = new Set<string>()
+        for (let index = 0; index + 1 < left.length; index += 1) grams.add(left.slice(index, index + 2))
+        let hits = 0
+        for (let index = 0; index + 1 < right.length; index += 1) {
+          if (grams.has(right.slice(index, index + 2))) hits += 1
+        }
+        if (hits / Math.max(1, grams.size) >= 0.8) duplicates += 1
+      }
+    }
+    return duplicates
+  })()
   const relationshipTypes: Record<string, number> = {}
+  const relationshipTypeCodes: Record<string, number> = {}
   for (const relationship of input.relationships.items) {
     relationshipTypes[relationship.type] = (relationshipTypes[relationship.type] ?? 0) + 1
+    relationshipTypeCodes[relationship.type_code ?? 'uncategorized'] =
+      (relationshipTypeCodes[relationship.type_code ?? 'uncategorized'] ?? 0) + 1
+  }
+  const hook13 = (hookStrength['1'] ?? 0) + (hookStrength['2'] ?? 0) + (hookStrength['3'] ?? 0)
+  const plotLow = plotAdvancement.low ?? 0
+  const calibration = {
+    hook_1_3_count: hook13,
+    plot_low_count: plotLow,
+    flat: records.length >= 10 && hook13 === 0 && plotLow === 0,
+    anchor_note:
+      '5=最后两段出现新威胁/新决定并断在动作中；4=有新信息但已收束；3=只有气氛/反应，没有新选择；2=重复已知信息；1=无前向压力。low=没有改变目标/关系/资源/信息状态，mid=改变一项，high=改变两项以上。',
   }
   const outline = outlineSummary(
     input.outline,
@@ -331,7 +385,9 @@ export function buildBookReport(input: ReportInput): BookReport {
       trend,
       trend_basis: trendBasis,
       samples: qualitySamples,
+      sample_basis: 'final_review_per_chapter',
       attempts: qualityAttempts,
+      attempt_basis: 'committed_review_submissions',
       dimensions: [...dimensions.entries()]
         .map(([id, value]) => ({
           id,
@@ -342,6 +398,7 @@ export function buildBookReport(input: ReportInput): BookReport {
         .sort((left, right) => compareText(left.id, right.id)),
     },
     effort: {
+      review_basis: 'committed_review_submissions',
       reviews: effortChapters.reduce((total, chapter) => total + chapter.reviews, 0),
       revisions: effortChapters.reduce((total, chapter) => total + chapter.revisions, 0),
       checks: effortChapters.reduce((total, chapter) => total + chapter.checks, 0),
@@ -354,6 +411,7 @@ export function buildBookReport(input: ReportInput): BookReport {
       plot_advancement: plotAdvancement,
       longest,
       shortest,
+      calibration,
     },
     cast: { total: input.characters.characters.length, top: castTop },
     foreshadows: {
@@ -361,6 +419,11 @@ export function buildBookReport(input: ReportInput): BookReport {
       dormant: dormant.length,
       overdue: overdue.length,
       resolved: input.foreshadows.items.length - open.length,
+      planned,
+      unplanned,
+      resolved_without_evidence: resolvedWithoutEvidence,
+      duplicate_titles: duplicateTitles,
+      motifs: input.foreshadows.items.filter((item) => item.kind === 'motif').length,
       oldest: [...open]
         .sort((left, right) => left.last_touched - right.last_touched || compareText(left.id, right.id))
         .slice(0, 5)
@@ -382,7 +445,11 @@ export function buildBookReport(input: ReportInput): BookReport {
           ? null
           : Math.max(...input.timeline.items.map((item) => item.chapter)),
     },
-    relationships: { total: input.relationships.items.length, types: relationshipTypes },
+    relationships: {
+      total: input.relationships.items.length,
+      types: relationshipTypes,
+      type_codes: relationshipTypeCodes,
+    },
     activity: input.activity.map((row) => ({
       at: row.at,
       op: row.op,
@@ -896,6 +963,12 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
           status: card.status,
         }
   const quality = report.quality
+  const calibration = report.pacing.calibration ?? {
+    hook_1_3_count: 0,
+    plot_low_count: 0,
+    flat: false,
+    anchor_note: '',
+  }
   const counts = {
     present: report.worldbook.present,
     characters: report.worldbook.characters,
@@ -963,7 +1036,11 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       total: report.cast.total,
       top: report.cast.top.slice(0, 5).map((entry) => ({ ...entry })),
     },
-    relationships: { total: report.relationships.total, types: { ...report.relationships.types } },
+    relationships: {
+      total: report.relationships.total,
+      types: { ...report.relationships.types },
+      type_codes: { ...report.relationships.type_codes },
+    },
     foreshadows: {
       ...report.foreshadows,
       oldest: report.foreshadows.oldest.slice(0, 5).map((entry) => ({ ...entry })),
@@ -979,7 +1056,9 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       trend: quality.trend,
       trend_basis: quality.trend_basis,
       samples: quality.samples,
+      sample_basis: quality.sample_basis,
       attempts: quality.attempts,
+      attempt_basis: quality.attempt_basis,
       dimensions: quality.dimensions.slice(0, 15).map((entry) => ({ ...entry })),
     },
     pacing: {
@@ -988,6 +1067,7 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       plot_advancement: { ...report.pacing.plot_advancement },
       longest: report.pacing.longest === null ? null : { ...report.pacing.longest },
       shortest: report.pacing.shortest === null ? null : { ...report.pacing.shortest },
+      calibration: { ...calibration },
     },
     effort: {
       ...report.effort,

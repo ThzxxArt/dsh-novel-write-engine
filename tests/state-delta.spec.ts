@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyStateDelta, type DeltaInput } from '../src/engine/state-delta.js'
+import { applyStateDelta, eventKeyFor, type DeltaInput } from '../src/engine/state-delta.js'
 import { isNarratorAlias } from '../src/domain/narrator.js'
 import { sampleSummary } from './helpers.js'
 import type { ChapterSummary } from '../src/types.js'
@@ -512,10 +512,19 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     const plantSummary = sampleSummary({
       characters_appeared: [],
       events: [],
-      foreshadows: { planted: [{ key: 'fs1', title: 't', description: 'd' }], advanced: [], resolved: [] },
+      foreshadows: {
+        planted: [{ key: 'fs1', title: 'tt', description: 'd', anchor: '甲和乙站在屋前，术法还没散' }],
+        advanced: [],
+        resolved: [],
+      },
     })
     const plantDelta = empty()
-    plantDelta.foreshadows['fs1'] = { action: 'created', title: 't', description: 'd' }
+    plantDelta.foreshadows['fs1'] = {
+      action: 'created',
+      title: 'tt',
+      description: 'd',
+      anchor: '甲和乙站在屋前，术法还没散',
+    }
     const first = run(plantSummary, plantDelta)
 
     const note = empty()
@@ -542,10 +551,19 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
   it('allocates foreshadow ids and resolves them later', () => {
     const plantSummary = sampleSummary({
       characters_appeared: [],
-      foreshadows: { planted: [{ key: 'fs1', title: 't', description: 'd' }], advanced: [], resolved: [] },
+      foreshadows: {
+        planted: [{ key: 'fs1', title: 'tt', description: 'd', anchor: '甲和乙站在屋前，术法还没散' }],
+        advanced: [],
+        resolved: [],
+      },
     })
     const plantDelta = empty()
-    plantDelta.foreshadows['fs1'] = { action: 'created', title: 't', description: 'd' }
+    plantDelta.foreshadows['fs1'] = {
+      action: 'created',
+      title: 'tt',
+      description: 'd',
+      anchor: '甲和乙站在屋前，术法还没散',
+    }
     plantDelta.timeline['0'] = { action: 'created' }
     const first = run(plantSummary, plantDelta)
     expect(first.foreshadows.items[0]!.id).toBe('FS-001')
@@ -554,12 +572,20 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       foreshadows: { planted: [], advanced: [], resolved: ['FS-001'] },
     })
     const resolveDelta = empty()
-    resolveDelta.foreshadows['FS-001'] = { action: 'updated' }
+    resolveDelta.foreshadows['FS-001'] = {
+      action: 'updated',
+      resolved_anchor: '甲和乙站在屋前，术法还没散',
+    }
     resolveDelta.timeline['0'] = { action: 'created' }
     const second = run(resolveSummary, resolveDelta, first as unknown as Record<string, unknown>, 2)
     expect(second.foreshadows.items[0]).toMatchObject({ status: 'resolved', resolved_at: 2 })
     expect(second.foreshadows.items[0]!.advance_log).toEqual([
-      { chapter: 2, note: 'resolved', new_info: true },
+      {
+        chapter: 2,
+        note: 'resolved',
+        new_info: true,
+        anchor: '甲和乙站在屋前，术法还没散',
+      },
     ])
   })
 
@@ -578,7 +604,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     fails(summary, nonStringType)
     const delta: Record<string, Record<string, unknown>> = {
       ...chars,
-      relationships: { '甲|乙': { action: 'created', type: '同事' } },
+      relationships: { '甲|乙': { action: 'created', type: '同事', type_code: 'colleague' } },
     }
     const result = run(summary, delta)
     expect(result.relationships.items[0]).toMatchObject({ id: 'RL-001', a: '甲', b: '乙' })
@@ -591,7 +617,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     }
     docs.characters.characters.push({ name: '甲' }, { name: '乙' })
     const create = empty()
-    create.relationships['甲|乙'] = { action: 'created', type: '朋友' }
+    create.relationships['甲|乙'] = { action: 'created', type: '朋友', type_code: 'ally' }
     const first = run(
       sampleSummary({ events: [], characters_appeared: [] }),
       create,
@@ -837,15 +863,19 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       characters_appeared: [],
       events: [],
       foreshadows: {
-        planted: [{ key: '旧信', title: '风', description: '旧信' }],
+        planted: [{ key: '旧信', title: '旧风', description: '旧信', anchor: '甲和乙站在屋前，术法还没散' }],
         advanced: [],
         resolved: [],
       },
     })
     const plant = empty()
-    plant.foreshadows['旧信'] = { action: 'created', title: '风' }
+    plant.foreshadows['旧信'] = {
+      action: 'created',
+      title: '旧风',
+      anchor: '甲和乙站在屋前，术法还没散',
+    }
     const first = run(plantSummary, plant)
-    expect(first.foreshadows.items[0]).toMatchObject({ id: 'FS-001', title: '风' })
+    expect(first.foreshadows.items[0]).toMatchObject({ id: 'FS-001', title: '旧风' })
 
     const advance = empty()
     advance.foreshadows['FS-001'] = { action: 'updated', note: '推进' }
@@ -866,7 +896,10 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     expect(second.foreshadows.items[0]).toMatchObject({ status: 'advanced' })
 
     const resolve = empty()
-    resolve.foreshadows['FS-001'] = { action: 'updated' }
+    resolve.foreshadows['FS-001'] = {
+      action: 'updated',
+      resolved_anchor: '甲和乙站在屋前，术法还没散',
+    }
     const third = run(
       sampleSummary({
         characters_appeared: [],
@@ -888,6 +921,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     create.relationships['甲|乙'] = {
       action: 'created',
       type: '旧识',
+      type_code: 'ally',
       description: '认识',
     }
     const first = run(sampleSummary({ characters_appeared: [], events: [] }), create, docs)
@@ -1201,5 +1235,261 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
     })
     expect(() => run(summary, empty())).toThrowError(/has no such entity/)
+  })
+})
+
+describe('0.2.13 foreshadow and timeline enrichment', () => {
+  it('stores planned resolution, motif kind, event keys and updates the plan', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const summary = sampleSummary({
+      events: ['收到信'],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [
+          {
+            key: 'hook',
+            title: '欠账',
+            description: '旧账',
+            anchor,
+            planned_resolve: 3,
+            kind: 'motif',
+          },
+        ],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows.hook = {
+      action: 'created',
+      title: '欠账',
+      anchor,
+      planned_resolve: 3,
+      kind: 'motif',
+    }
+    delta.timeline[eventKeyFor(1, 0, '收到信')] = { action: 'created', description: '收到信' }
+    const first = run(summary, delta)
+    expect(first.foreshadows.items[0]).toMatchObject({ planned_resolve: 3, kind: 'motif' })
+    expect(first.timeline.items[0]?.event_key).toMatch(/^E1-1-/)
+
+    const update = empty()
+    update.foreshadows['FS-001'] = {
+      action: 'updated',
+      planned_resolve: 4,
+      kind: 'plot',
+      note: '改计划',
+      anchor,
+    }
+    const second = run(
+      sampleSummary({ events: [], characters_appeared: [] }),
+      update,
+      first as unknown as Record<string, unknown>,
+      2,
+    )
+    expect(second.foreshadows.items[0]).toMatchObject({ planned_resolve: 4, kind: 'plot' })
+    expect(second.foreshadows.items[0]!.advance_log[0]?.anchor).toBe(anchor)
+  })
+
+  it('applies plan and kind on an advanced foreshadow', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [
+          {
+            key: 'hook',
+            title: '欠账',
+            description: '旧账',
+            anchor,
+            planned_resolve: 3,
+            kind: 'plot',
+          },
+        ],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows.hook = {
+      action: 'created',
+      title: '欠账',
+      anchor,
+      planned_resolve: 3,
+      kind: 'plot',
+    }
+    const first = run(summary, delta)
+    const advanced = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [],
+        advanced: [{ key: 'FS-001', note: '推进', new_info: true }],
+        resolved: [],
+      },
+    })
+    const update = empty()
+    update.foreshadows['FS-001'] = {
+      action: 'updated',
+      note: '推进',
+      new_info: true,
+      planned_resolve: 4,
+      kind: 'motif',
+      anchor,
+    }
+    const second = run(advanced, update, first as unknown as Record<string, unknown>, 2)
+    expect(second.foreshadows.items[0]).toMatchObject({ planned_resolve: 4, kind: 'motif' })
+  })
+
+  it('requires advance and update anchors to appear verbatim in the manuscript', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const plantSummary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [{ key: 'hook', title: '欠账', description: '旧账', anchor }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const plant = empty()
+    plant.foreshadows.hook = { action: 'created', title: '欠账', anchor }
+    const first = run(plantSummary, plant)
+    const fakeAnchor = '这句话根本不在正文里任何地方'
+
+    const advanceSummary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [],
+        advanced: [{ key: 'FS-001', note: '推进', new_info: true }],
+        resolved: [],
+      },
+    })
+    const advance = empty()
+    advance.foreshadows['FS-001'] = {
+      action: 'updated',
+      note: '推进',
+      new_info: true,
+      anchor: fakeAnchor,
+    }
+    expect(() => run(advanceSummary, advance, first as unknown as Record<string, unknown>, 2)).toThrowError(
+      /anchor does not appear verbatim/,
+    )
+
+    const update = empty()
+    update.foreshadows['FS-001'] = { action: 'updated', note: '推进', anchor: fakeAnchor }
+    expect(() =>
+      run(
+        sampleSummary({ events: [], characters_appeared: [] }),
+        update,
+        first as unknown as Record<string, unknown>,
+        2,
+      ),
+    ).toThrowError(/anchor does not appear verbatim/)
+  })
+
+  it('keeps an explicit null planned_resolve on a new plant', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [
+          {
+            key: 'hook',
+            title: '欠账',
+            description: '旧账',
+            anchor,
+            planned_resolve: 3,
+          },
+        ],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const delta = empty()
+    delta.foreshadows.hook = {
+      action: 'created',
+      title: '欠账',
+      anchor,
+      planned_resolve: null,
+    }
+    expect(run(summary, delta).foreshadows.items[0]?.planned_resolve).toBeNull()
+  })
+})
+
+describe('0.2.13 invalid enrichment is rejected', () => {
+  it('rejects bad planned_resolve, kind and relationship type_code', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const summary = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [{ key: 'bad', title: '欠账', description: 'd', anchor }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const planned = empty()
+    planned.foreshadows.bad = {
+      action: 'created',
+      title: '欠账',
+      anchor,
+      planned_resolve: 0,
+    }
+    expect(() => run(summary, planned)).toThrowError(/planned_resolve/)
+
+    const kind = empty()
+    kind.foreshadows.bad = { action: 'created', title: '欠账', anchor, kind: 'other' }
+    expect(() => run(summary, kind)).toThrowError(/kind must be plot\|motif/)
+
+    const type = empty()
+    type.relationships['甲|乙'] = { action: 'created', type: '友', type_code: 'bogus' }
+    const docs = base()
+    ;(docs.characters as { characters: Array<{ name: string }> }).characters.push(
+      { name: '甲' },
+      { name: '乙' },
+    )
+    expect(() => run(sampleSummary({ events: [], characters_appeared: [] }), type, docs)).toThrowError(
+      /type_code must be one of/,
+    )
+  })
+
+  it('rejects bad summary-level planned_resolve and kind', () => {
+    const anchor = '甲和乙站在屋前，术法还没散'
+    const badPlan = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [
+          {
+            key: 'bad',
+            title: '欠账',
+            description: 'd',
+            anchor,
+            planned_resolve: 0,
+          },
+        ],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const planDelta = empty()
+    planDelta.foreshadows.bad = { action: 'created', title: '欠账', anchor }
+    expect(() => run(badPlan, planDelta)).toThrowError(/planned_resolve/)
+
+    const badKind = sampleSummary({
+      events: [],
+      characters_appeared: [],
+      foreshadows: {
+        planted: [{ key: 'bad', title: '欠账', description: 'd', anchor, kind: 'other' as never }],
+        advanced: [],
+        resolved: [],
+      },
+    })
+    const kindDelta = empty()
+    kindDelta.foreshadows.bad = { action: 'created', title: '欠账', anchor }
+    expect(() => run(badKind, kindDelta)).toThrowError(/kind must be plot\|motif/)
   })
 })

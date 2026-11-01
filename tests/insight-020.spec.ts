@@ -128,6 +128,7 @@ const foreshadows: ForeshadowsDocument = {
       status: 'planted',
       resolved_at: null,
       description: '',
+      planned_resolve: 1,
       advance_log: [],
     },
     {
@@ -421,6 +422,7 @@ describe('insight edge branches', () => {
     worldbook.characters = [{ name: '主角', role: '主角', description: '档案员', arc: '入局' }]
     worldbook.glossary = [{ term: '蜡印', definition: '封缄' }]
     worldbook.backstory = [{ time: '十年前', event: '旧案' }]
+    worldbook.facts = [{ alias: '船价', value: 300, unit: '元', tolerance: 5, note: '旧船价' }]
     const world: WorldDocument = {
       schema_version: 1,
       locations: [],
@@ -472,6 +474,10 @@ describe('insight edge branches', () => {
     )
     const worldbookResult = searchSnapshot({ ...input, query: '灵气', scope: 'worldbook' })
     expect(worldbookResult.results[0]).toMatchObject({ kind: 'worldbook', title: '灵气不能离体' })
+    expect(searchSnapshot({ ...input, query: '船价', scope: 'worldbook' }).results[0]).toMatchObject({
+      kind: 'worldbook',
+      title: '船价',
+    })
   })
 
   it('covers search scopes, truncation and tolerant score dimensions', () => {
@@ -550,8 +556,115 @@ describe('insight edge branches', () => {
     expect(all.truncated).toBe(true)
     expect(searchSnapshot({ ...input, scope: 'summaries', query: '事件1' }).total).toBe(1)
     expect(searchSnapshot({ ...input, scope: 'outline' }).results[0]).toMatchObject({ kind: 'outline' })
+    expect(searchSnapshot({ ...input, query: '不存在', scope: 'outline' }).results).toEqual([])
     expect(() => searchSnapshot({ ...input, query: '   ' })).toThrow('search query must not be empty')
     const report = buildBookReport(reportInput({ targetChapters: 1 }))
     expect(report.warnings).toContainEqual(expect.stringContaining('超过目标'))
+  })
+})
+
+describe('0.2.13 pacing calibration', () => {
+  it('marks a ten-chapter all-4/5 all-mid/high report flat and a low chapter not flat', () => {
+    const summary = {
+      ...record(1, 120).summary,
+      hook_strength: 4,
+      plot_advancement: 'mid' as const,
+    }
+    const chapters = Array.from({ length: 10 }, (_, index) => record(index + 1, 120, { summary }))
+    const reviews = chapters.map((chapter) => review(chapter.num, chapter.score))
+    const flat = buildBookReport(
+      reportInput({
+        chapters,
+        reviews,
+        foreshadows: { ...foreshadows, items: [] },
+      }),
+    )
+    expect(flat.pacing.calibration).toMatchObject({
+      hook_1_3_count: 0,
+      plot_low_count: 0,
+      flat: true,
+    })
+    const low = buildBookReport(
+      reportInput({
+        chapters: [
+          ...chapters.slice(0, 9),
+          record(10, 120, {
+            summary: { ...chapters[9]!.summary, plot_advancement: 'low', hook_strength: 3 },
+          }),
+        ],
+        reviews,
+      }),
+    )
+    expect(low.pacing.calibration?.flat).toBe(false)
+  })
+})
+
+describe('0.2.13 report edge branches', () => {
+  it('reports null remaining basis, unreadable sources and duplicate titles', () => {
+    const empty = buildBookReport(
+      reportInput({
+        chapters: [],
+        reviews: [],
+        targetChapters: null,
+        outlineError: 'bad outline',
+        worldbookError: 'bad worldbook',
+      }),
+    )
+    expect(empty.progress.remaining_words_basis).toBe('none')
+    expect(empty.progress.remaining_words).toBeNull()
+    expect(empty.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('大纲不可读'),
+        expect.stringContaining('世界观设定集不可读'),
+      ]),
+    )
+    const duplicated = buildBookReport(
+      reportInput({
+        foreshadows: {
+          ...foreshadows,
+          items: [
+            { ...foreshadows.items[0]!, title: '同一线索' },
+            { ...foreshadows.items[1]!, title: '同一线索' },
+            { ...foreshadows.items[1]!, id: 'FS-004', title: '同一线索嘅数' },
+          ],
+        },
+      }),
+    )
+    expect(duplicated.foreshadows.duplicate_titles).toBeGreaterThan(0)
+  })
+})
+
+describe('0.2.13 quality tolerant branches', () => {
+  it('ignores reviews for unarchived chapters and dimensions without deductions arrays', () => {
+    const extra = review(9, 140)
+    const malformed = review(1, 100)
+    malformed.dimensions[0] = {
+      ...malformed.dimensions[0]!,
+      deductions: undefined as never,
+    }
+    const report = buildBookReport(
+      reportInput({
+        reviews: [malformed, review(2, 140), extra],
+      }),
+    )
+    expect(report.quality.samples).toBe(2)
+    expect(
+      report.quality.dimensions.find((dimension) => dimension.id === malformed.dimensions[0]!.id)?.average,
+    ).toBeGreaterThan(0)
+  })
+})
+
+describe('0.2.13 invalid world anchor entries', () => {
+  it('ignores malformed persisted anchor rows instead of crashing the report', () => {
+    const world = {
+      schema_version: 1 as const,
+      locations: [{} as never],
+      abilities: [],
+      artifacts: [],
+      factions: [],
+      rules: [],
+    }
+    const report = buildBookReport(reportInput({ world }))
+    expect(report.worldbook.anchors).toBeUndefined()
   })
 })

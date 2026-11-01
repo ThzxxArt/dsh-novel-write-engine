@@ -321,7 +321,10 @@ export function archiveDelta(summary: ChapterSummary, options: { existing?: stri
     }
   }
   for (const key of summary.foreshadows.resolved) {
-    foreshadows[key] = { action: 'updated' }
+    foreshadows[key] = {
+      action: 'updated',
+      ...(summary.opening.length >= 8 ? { resolved_anchor: summary.opening } : {}),
+    }
   }
   const timeline: StateDelta['timeline'] = {}
   for (const [index, event] of summary.events.entries()) {

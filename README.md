@@ -10,7 +10,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-novel-write-engine?style=flat-square&logo=npm&label=downloads)](https://www.npmjs.com/package/dsh-novel-write-engine)
 [![CI](https://img.shields.io/github/actions/workflow/status/ThzxxArt/dsh-novel-write-engine/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/ThzxxArt/dsh-novel-write-engine/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ThzxxArt/dsh-novel-write-engine?style=flat-square&logo=github&label=release)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases)
-[![version](https://img.shields.io/badge/version-0.2.12-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.12)
+[![version](https://img.shields.io/badge/version-0.2.13-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.13)
 [![Node](https://img.shields.io/badge/Node-%3E%3D24.9.0-339933?style=flat-square&logo=node.js&logoColor=white)](#1-兼容性)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%20~%200.3-6f42c1?style=flat-square)](#1-兼容性)
 [![License](https://img.shields.io/github/license/ThzxxArt/dsh-novel-write-engine?style=flat-square)](LICENSE)
@@ -20,9 +20,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.12**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.13**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.12 是工作台滚动与角色标签修复版本：页面在宿主固定高度裁切盒内恢复整页滚动，顶栏与下一步卡随内容移动；人物、时间线、线索、设定、全书资料等长列表改为有界局部滚动，展开的设定/线索卡片跨整行；修复全书资料标题行被额外伪元素挤到最右，以及角色 `antagonist` 显示英文。没有新增或改变阶段、工具、操作、门控、语义项、导出、schema 或配置键。
+> 0.2.13 是台账可信度与自评校准版本：新增汉字下限、对话双口径、标点细分、数字/算式结果块、锁定基线、关系 `type_code`、伏笔计划与兑现锚点、稳定时间线 key、brief 收据 current 视图、告警实例 id 与理由、`novel_state` 分页，以及自评 1–3/low 锚点与题材 profile。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；旧 `schema_version:1` 文档可读，不自动改写历史。
 
 ---
 
@@ -204,7 +204,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.12
+dsh plugin --profile web add dsh-novel-write-engine@0.2.13
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -252,10 +252,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.12.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.13.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.12.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.13.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -267,7 +267,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.12`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.13`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -627,16 +627,16 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.12
+### 升级到 0.2.13
 
-0.2.12 是工作台滚动与角色标签修复更新，没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；面板协议 `payload_version` 保持 7，`PANEL_VERSION` 从 0.2.11 升到 0.2.12。
+0.2.13 是台账可信度与自评校准更新：新增汉字下限、对话双口径、数字结果块、锁定基线、关系 `type_code`、伏笔计划/兑现锚点、稳定时间线 key、brief 收据 current 视图、告警实例 id 与理由、`novel_state` 分页和自评锚点。没有破坏性 schema 迁移；旧文档仍可读，不自动改写历史。面板协议 `payload_version` 保持 7，`PANEL_VERSION` 从 0.2.12 升到 0.2.13。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.12
+dsh plugin --profile web add dsh-novel-write-engine@0.2.13
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.11 升到 0.2.12；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.12 升到 0.2.13；旧标签页显示“需要刷新”时刷新即可。
 
 历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
@@ -793,15 +793,15 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 当前工作树验证（0.2.12 基线）
+### 当前工作树验证（0.2.13 基线）
 
 以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**95 个测试文件 / 1011 项全部通过**；
-- 覆盖率：**语句 94.00% / 分支 89.20% / 函数 96.86% / 行 94.00%**；逐文件门禁通过；client 函数覆盖 85.34%；client bundle 239.97 KB（react-dom 外置）；
+- `corepack pnpm test`：**98 个测试文件 / 1071 项全部通过**；
+- 覆盖率：**语句 94.01% / 分支 89.02% / 函数 96.88% / 行 94.01%**；逐文件与 `src/rules` 分支门禁通过；client 函数覆盖 87.02%；client bundle 239.97 KB（react-dom 外置）；
 - `typecheck`、`lint`、`build`：通过；
 - 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行”；未做触屏真机与屏幕阅读器验收；
-- 0.2.12 未改引擎写路径；本轮没有重新跑真实模型。
+- 0.2.13 已改引擎规则、归档校验、读模型与任务书；真实 21 章项目只读验收已跑，`pipeline.yaml`、`briefs.yaml`、第 21 章正文 mtime 未变；本轮没有重新跑真实模型。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
 

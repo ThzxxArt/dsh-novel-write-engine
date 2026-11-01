@@ -5,6 +5,7 @@ import { parse as parseYaml } from 'yaml'
 import { CheckSubmissionError } from '../src/engine/semantic.js'
 import {
   bootstrapToDraft,
+  cleanText,
   harness,
   readProjectFile,
   sampleReview,
@@ -363,6 +364,39 @@ describe('semantic check evidence', () => {
         scope: string[]
       }
       expect(fullCheck.scope).toEqual(['content', 'integrity'])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('keeps numeric findings inside the selected check scope', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await bootstrapToDraft({ root, engine })
+      const text = `${cleanText()}\n\n账上写着 2 × 3 = 7，他没有改。`
+      await writeDraft({ root, engine, text })
+      await engine.getBrief({ stage: 'P4', root })
+      await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+      await engine.getBrief({ stage: 'P6', root })
+
+      const result = await engine.runCheck({
+        chapter: 1,
+        scope: ['integrity'],
+        semantic: sampleSemantic(text),
+        root,
+      })
+      expect(result.data.verdict).toBe('pass')
+      expect(result.data.numeric).toMatchObject({
+        facts_declared: 0,
+        facts_checked: 0,
+        equations_checked: 0,
+        findings: 0,
+      })
+
+      const stored = parseYaml((await readProjectFile(root, 'checks/ch001.check.yaml'))!) as {
+        machine: { numeric?: { equations_checked: number; findings: number } }
+      }
+      expect(stored.machine.numeric).toMatchObject({ equations_checked: 0, findings: 0 })
     } finally {
       await cleanup()
     }

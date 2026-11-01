@@ -67,6 +67,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
     duplicate_advisory: 0.75,
     duplicate_min_chars: 20,
     foreshadow_min_dormancy: 2,
+    motif_min_dormancy: 1,
     foreshadow_dormant_after: 20,
     check_time: true,
     lock_similarity: 0.75,
@@ -228,7 +229,19 @@ export function compileRulepack(raw: unknown): Rulepack {
     knownKeys(entry, ['note', 'profile'], `genres.${name}`)
     if (entry.profile !== undefined) {
       const profile = object(entry.profile, `genres.${name}.profile`)
-      knownKeys(profile, ['period_density', 'water_words', 'pleasure_density'], `genres.${name}.profile`)
+      knownKeys(
+        profile,
+        [
+          'period_density',
+          'water_words',
+          'pleasure_density',
+          'pleasure_keywords',
+          'foreshadow_min_dormancy',
+          'motif_min_dormancy',
+          'foreshadow_dormant_after',
+        ],
+        `genres.${name}.profile`,
+      )
       if (profile.period_density !== undefined) {
         const density = object(profile.period_density, `genres.${name}.profile.period_density`)
         knownKeys(density, ['min', 'max'], `genres.${name}.profile.period_density`)
@@ -257,6 +270,7 @@ export function compileRulepack(raw: unknown): Rulepack {
     'duplicate_advisory',
     'duplicate_min_chars',
     'foreshadow_min_dormancy',
+    'motif_min_dormancy',
     'foreshadow_dormant_after',
     'check_time',
     'lock_similarity',
@@ -312,6 +326,28 @@ export function compileRulepack(raw: unknown): Rulepack {
   const textList = (value: readonly string[], path: string): void => {
     if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
       invalid(`${path} must be a non-empty string array`)
+    }
+  }
+  for (const genre of GENRES) {
+    const profile = pack.genres[genre].profile
+    if (profile === undefined) continue
+    if (profile.pleasure_keywords !== undefined) {
+      if (
+        !Array.isArray(profile.pleasure_keywords) ||
+        profile.pleasure_keywords.some((item) => typeof item !== 'string' || item.trim() === '')
+      ) {
+        invalid(`genres.${genre}.profile.pleasure_keywords must be a string array`)
+      }
+    }
+    for (const key of [
+      'foreshadow_min_dormancy',
+      'motif_min_dormancy',
+      'foreshadow_dormant_after',
+    ] as const) {
+      const value = profile[key]
+      if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+        invalid(`genres.${genre}.profile.${key} must be a positive integer`)
+      }
     }
   }
   const validateTermList = (list: readonly unknown[], listName: string, kind: 'term' | 'limit'): void => {
@@ -480,8 +516,9 @@ export function compileRulepack(raw: unknown): Rulepack {
     invalid('crosschapter.duplicate_advisory must not exceed duplicate_similarity')
   }
   positiveInt(pack.crosschapter.duplicate_min_chars, 'crosschapter.duplicate_min_chars')
-  for (const key of ['foreshadow_min_dormancy', 'foreshadow_dormant_after'] as const) {
-    if (!Number.isInteger(pack.crosschapter[key]) || pack.crosschapter[key] <= 0) {
+  for (const key of ['foreshadow_min_dormancy', 'motif_min_dormancy', 'foreshadow_dormant_after'] as const) {
+    const value = pack.crosschapter[key]
+    if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
       invalid(`crosschapter.${key} must be a positive integer; 0 silently disables the check`)
     }
   }
@@ -603,6 +640,10 @@ export function normalize(raw: Partial<Rulepack>): Rulepack {
   merged.crosschapter.foreshadow_min_dormancy = num(
     merged.crosschapter.foreshadow_min_dormancy,
     'crosschapter.foreshadow_min_dormancy',
+  )
+  merged.crosschapter.motif_min_dormancy = num(
+    merged.crosschapter.motif_min_dormancy,
+    'crosschapter.motif_min_dormancy',
   )
   merged.crosschapter.foreshadow_dormant_after = num(
     merged.crosschapter.foreshadow_dormant_after,

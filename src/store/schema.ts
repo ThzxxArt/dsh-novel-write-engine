@@ -1,4 +1,12 @@
-import { GENRES, PLATFORMS, SCENE_TYPES, SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
+import {
+  GENRES,
+  PLATFORMS,
+  RELATIONSHIP_TYPE_CODES,
+  SCENE_TYPES,
+  SCHEMA_VERSION,
+  ERROR_CODES,
+  EngineFaultError,
+} from '../types.js'
 
 /** Every persisted document the engine knows how to load. */
 export type DocKind =
@@ -109,6 +117,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     machine: req('object'),
     semantic: req('object'),
     acknowledged: f('array'),
+    acknowledged_findings: f('array'),
     failure_class: f('string', { enum: ['submission', 'content'] }),
     counted: f('boolean'),
     verdict: req('string', { enum: ['pass', 'fail'] }),
@@ -309,6 +318,17 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         for (const [index, item] of pair.entries()) numberAt(kind, item, `targets.${key}[${index}]`)
       }
       if (targets.total_chapters !== null) integerAt(kind, targets.total_chapters, 'targets.total_chapters')
+      if (targets.min_cjk_chars !== undefined && targets.min_cjk_chars !== null) {
+        if (integerAt(kind, targets.min_cjk_chars, 'targets.min_cjk_chars') <= 0) {
+          invalid(kind, 'targets.min_cjk_chars must be a positive integer or null')
+        }
+      }
+      if (targets.dialogue_ratio_metric !== undefined) {
+        const metric = stringAt(kind, targets.dialogue_ratio_metric, 'targets.dialogue_ratio_metric')
+        if (!['lines', 'chars', 'both'].includes(metric)) {
+          invalid(kind, 'targets.dialogue_ratio_metric must be one of lines, chars, both')
+        }
+      }
       return
     }
     case 'pipeline': {
@@ -431,7 +451,40 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.status, `${path}.status`)
         stringAt(kind, row.description, `${path}.description`)
         optionalString(kind, row.anchor, `${path}.anchor`)
-        listAt(kind, row.advance_log, `${path}.advance_log`)
+        if (row.planned_resolve !== undefined && row.planned_resolve !== null) {
+          if (integerAt(kind, row.planned_resolve, `${path}.planned_resolve`) <= 0) {
+            invalid(kind, `${path}.planned_resolve must be a positive integer or null`)
+          }
+        }
+        if (row.resolved_anchor !== undefined) {
+          const resolvedAnchor = stringAt(kind, row.resolved_anchor, `${path}.resolved_anchor`)
+          if (Array.from(resolvedAnchor.trim()).length < 8) {
+            invalid(kind, `${path}.resolved_anchor must be a verbatim quote of at least 8 characters`)
+          }
+        }
+        if (row.kind !== undefined) {
+          const foreshadowKind = stringAt(kind, row.kind, `${path}.kind`)
+          if (foreshadowKind !== 'plot' && foreshadowKind !== 'motif') {
+            invalid(kind, `${path}.kind must be one of plot, motif`)
+          }
+        }
+        const advanceLog = listAt(kind, row.advance_log, `${path}.advance_log`)
+        for (const [advanceIndex, rawAdvance] of advanceLog.entries()) {
+          const advance = objectAt(kind, rawAdvance, `${path}.advance_log[${advanceIndex}]`)
+          integerAt(kind, advance.chapter, `${path}.advance_log[${advanceIndex}].chapter`)
+          stringAt(kind, advance.note, `${path}.advance_log[${advanceIndex}].note`)
+          booleanAt(kind, advance.new_info, `${path}.advance_log[${advanceIndex}].new_info`)
+          optionalString(kind, advance.anchor, `${path}.advance_log[${advanceIndex}].anchor`)
+          if (advance.anchor !== undefined) {
+            const anchor = stringAt(kind, advance.anchor, `${path}.advance_log[${advanceIndex}].anchor`)
+            if (Array.from(anchor.trim()).length < 8) {
+              invalid(
+                kind,
+                `${path}.advance_log[${advanceIndex}].anchor must be a verbatim quote of at least 8 characters`,
+              )
+            }
+          }
+        }
       })
       return
     case 'timeline':
@@ -443,6 +496,7 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.description, `${path}.description`)
         stringAt(kind, row.location, `${path}.location`)
         listAt(kind, row.characters, `${path}.characters`)
+        optionalString(kind, row.event_key, `${path}.event_key`)
       })
       return
     case 'relationships':
@@ -452,6 +506,12 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.a, `${path}.a`)
         stringAt(kind, row.b, `${path}.b`)
         stringAt(kind, row.type, `${path}.type`)
+        if (row.type_code !== undefined) {
+          const typeCode = stringAt(kind, row.type_code, `${path}.type_code`)
+          if (!(RELATIONSHIP_TYPE_CODES as readonly string[]).includes(typeCode)) {
+            invalid(kind, `${path}.type_code must be one of ${RELATIONSHIP_TYPE_CODES.join(', ')}`)
+          }
+        }
         integerAt(kind, row.since, `${path}.since`)
         stringAt(kind, row.description, `${path}.description`)
         listAt(kind, row.evolution, `${path}.evolution`)
@@ -476,6 +536,14 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         stringAt(kind, row.evidence, `${path}.evidence`)
         if (row.note !== undefined) stringAt(kind, row.note, `${path}.note`)
       })
+      if (record.acknowledged_findings !== undefined) {
+        validateRecords(kind, record.acknowledged_findings, 'acknowledged_findings', (row, path) => {
+          stringAt(kind, row.id, `${path}.id`)
+          stringAt(kind, row.code, `${path}.code`)
+          stringAt(kind, row.reason, `${path}.reason`)
+          stringAt(kind, row.at, `${path}.at`)
+        })
+      }
       if (semantic.findings !== undefined) {
         validateRecords(kind, semantic.findings, 'semantic.findings', (row, path) => {
           stringAt(kind, row.code, `${path}.code`)
@@ -558,6 +626,7 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         for (const key of ['name', 'role', 'description', 'arc'] as const) {
           stringAt(kind, row[key], `${path}.${key}`)
         }
+        optionalString(kind, row.appearance, `${path}.appearance`)
       })
       validateRecords(kind, record.glossary, 'glossary', (row, path) => {
         stringAt(kind, row.term, `${path}.term`)

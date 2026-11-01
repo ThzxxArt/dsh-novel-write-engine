@@ -1018,6 +1018,7 @@ export function mergeWorldbook(
       role: text(raw.role, `characters[${index}].role`, 60),
       description: text(raw.description, `characters[${index}].description`, LIMITS.maxWorldbookTextChars),
       arc: optionalText(raw.arc, `characters[${index}].arc`),
+      appearance: optionalText(raw.appearance, `characters[${index}].appearance`),
     }))
     uniqueNames(result.characters, 'characters')
   }

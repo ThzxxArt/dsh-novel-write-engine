@@ -76,6 +76,10 @@ export interface Rulepack {
         period_density?: { min: number; max: number }
         water_words?: number
         pleasure_density?: number
+        pleasure_keywords?: string[]
+        foreshadow_min_dormancy?: number
+        motif_min_dormancy?: number
+        foreshadow_dormant_after?: number
       }
     }
   >
@@ -85,6 +89,7 @@ export interface Rulepack {
     /** Paragraphs shorter than this many non-whitespace chars are not duplicate candidates. */
     duplicate_min_chars: number
     foreshadow_min_dormancy: number
+    motif_min_dormancy?: number
     foreshadow_dormant_after: number
     check_time: boolean
     lock_similarity: number
@@ -113,14 +118,22 @@ export interface RuleContext {
     relationships: import('../types.js').RelationshipsDocument | null
     world: import('../types.js').WorldDocument | null
     locks: import('../types.js').LocksDocument | null
+    /** 0.2.13 canonical lock descriptions and readable names. */
+    worldbook?: import('../types.js').WorldbookDocument | null
   }
   /** Project targets are optional so pre-0.2.1 tests that build a RuleContext still typecheck. */
   targets?: {
     words_per_chapter: [number, number]
     dialogue_ratio: [number, number]
+    min_cjk_chars?: number | null
+    dialogue_ratio_metric?: 'lines' | 'chars' | 'both'
   }
   /** Declared numeric canon from the worldbook; empty means no fact check. */
   facts?: Array<{ alias: string; value: number; unit: string; tolerance?: number }>
+  /** Book-level strict mode; enables numeric facts-empty advisory, never a blocker. */
+  strict?: boolean
+  /** 0.2.13: P6 no longer owns RELATION_UNKNOWN; archive runs it after delta merge. */
+  disableRelationUnknown?: boolean
 }
 
 /** A rule implementation. Each code has exactly one owner. */

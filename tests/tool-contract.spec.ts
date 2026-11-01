@@ -10,6 +10,7 @@ import {
 type Tool = ReturnType<typeof createNovelTools>[number]
 type Schema = {
   type?: string
+  oneOf?: Schema[]
   description?: string
   properties?: Record<string, Schema & { type?: string; items?: Schema; required?: boolean }>
 }
@@ -23,7 +24,12 @@ describe('0.2.4 tool array semantics contract', () => {
       for (const [name, parameter] of Object.entries(parameters)) {
         const contract = ARRAY_PARAMETER_CONTRACT[tool.name]?.[name]
         const key = `${tool.name}.${name}`
-        if (parameter.type !== 'array' && parameter.type === undefined && contract === undefined) {
+        if (
+          parameter.type !== 'array' &&
+          parameter.type === undefined &&
+          parameter.oneOf === undefined &&
+          contract === undefined
+        ) {
           expect(
             NON_ARRAY_JSON_PARAMS.has(key),
             `${key} is an untyped JSON parameter without a contract or non-array allowlist entry`,

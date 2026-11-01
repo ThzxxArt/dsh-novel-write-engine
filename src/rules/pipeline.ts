@@ -1,8 +1,9 @@
 import { ALL_RULE_CODES, CROSS_RULES } from '../codes.js'
 import type { Violation, WordMetrics } from '../types.js'
+import { sha256Hex } from '../domain/hash.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { sentenceRhythm, splitParagraphs, type SentenceRhythm } from '../domain/text.js'
-import { BUILTIN_RULES } from './checks.js'
+import { BUILTIN_RULES, countArithmeticEquations, hasNumericFactMatch } from './checks.js'
 import { RuleRegistry } from './registry.js'
 import type { RuleContext, Rulepack } from './types.js'
 
@@ -16,6 +17,12 @@ export interface MachineResult {
   rhythm: SentenceRhythm
   quoteRatio: number
   paragraphCount: number
+  numeric: {
+    facts_declared: number
+    facts_checked: number
+    equations_checked: number
+    findings: number
+  }
 }
 
 /** The five ordered steps. The order is semantic, not an implementation detail. */
@@ -40,6 +47,9 @@ const lexiconCodes = new Set([
 ])
 
 const integrityCodes = new Set<string>(Object.values(CROSS_RULES))
+
+const advisoryId = (code: string, paragraph: number, detail: string): string =>
+  `${code}:${paragraph}:${sha256Hex(detail).slice(0, 12)}`
 
 /** Which runCheck scope owns one machine finding. */
 export function scopeOfRule(code: string): 'content' | 'integrity' {
@@ -83,13 +93,29 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
     (violation) => !options.rulepack.exemptions.includes(violation.code),
   )
 
-  const violations = dedupe([...kept, ...finalLexicon])
+  const violations = dedupe([...kept, ...finalLexicon]).map((violation) => ({
+    ...violation,
+    id: violation.id ?? advisoryId(violation.code, violation.location.paragraph, violation.detail),
+  }))
+  const numericFindings = violations.filter((violation) =>
+    ['NUMERIC_CONTRADICTION', 'NUMERIC_FACT_MISMATCH', 'NUMERIC_FACTS_EMPTY'].includes(violation.code),
+  ).length
   return {
     violations,
     metrics,
     rhythm,
     quoteRatio,
     paragraphCount: paragraphs.length,
+    numeric: {
+      facts_declared: options.facts?.length ?? 0,
+      facts_checked:
+        options.facts?.filter(
+          (fact) =>
+            Number.isFinite(fact.value) && fact.alias.trim() !== '' && hasNumericFactMatch(text, fact),
+        ).length ?? 0,
+      equations_checked: countArithmeticEquations(text),
+      findings: numericFindings,
+    },
   }
 }
 
@@ -101,15 +127,17 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
 export function dedupeAdvisories(violations: readonly Violation[]): Violation[] {
   const groups = new Map<string, { first: Violation; details: string[] }>()
   for (const violation of violations) {
-    const current = groups.get(violation.code)
+    const key = violation.id ?? violation.code
+    const current = groups.get(key)
     if (current === undefined) {
-      groups.set(violation.code, { first: violation, details: [violation.detail] })
+      groups.set(key, { first: violation, details: [violation.detail] })
     } else if (!current.details.includes(violation.detail)) {
       current.details.push(violation.detail)
     }
   }
   return [...groups.values()].map(({ first, details }) => ({
     ...first,
+    id: first.id ?? advisoryId(first.code, first.location.paragraph, first.detail),
     detail: details.join('；'),
   }))
 }

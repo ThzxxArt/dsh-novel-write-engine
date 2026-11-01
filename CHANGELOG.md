@@ -1,3 +1,44 @@
+## 0.2.13
+
+0.2.13 是台账可信度与自评校准版本。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，所有新字段可选，旧文档不迁移。
+
+### Added
+
+- **计量**：`WordMetrics` 新增 `dialogue_chars`、`dialogue_char_ratio`、`punctuation_breakdown`；`targets.min_cjk_chars` 与 `dialogue_ratio_metric` 进入 `novel_init`/`novel_amend`，PG-03 同时判总字数与汉字下限，`DIALOGUE_RATIO` 支持行/字符/两者口径。
+- **数字**：`check.machine.numeric` 汇总 `facts_declared/facts_checked/equations_checked/findings`；算式扩展到 `+ - × ÷`，strict 模式 facts 为空时出 `NUMERIC_FACTS_EMPTY` advisory。
+- **锁定**：新增 `resolveLockBaseline`，世界书地点描述优先，人物只认显式 `appearance`（`description` 里的传记不再被误当外貌基准），`locks` 只在没有世界书条目时提供 1–3 条短锚点；无基线的实体不报漂移，doctor 给 `LOCK_BASELINE_MISSING` 提示。
+- **关系**：`type_code` 枚举与 `RELATIONSHIP_TYPE_CODES`；新建关系必须给 `type_code`，旧关系不猜；`RELATION_UNKNOWN` 只保留归档合并后的唯一 owner，P6 不再先报。
+- **伏笔**：`planned_resolve`、`resolved_anchor`、`kind`（`plot|motif`）、`advance_log[].anchor`；新 resolve 必须有正文证据；新增 `FORESHADOW_OVERDUE`/`FORESHADOW_DUPLICATE_TITLE` advisory；report 增加 planned/unplanned/overdue/resolved_without_evidence/duplicate_titles/motifs。
+- **时间线**：稳定 `event_key`（`E{chapter}-{index+1}-{hash}`），P8 支持下标或 event_key；旧条目读取时计算，不重写。
+- **brief**：收据增加 `id/current/superseded_at/superseded_by`；同章同阶段同 digest replay 不写盘，旧 digest 可重新提升为 current；`novel_state {kind:"briefs", current_only:true}`。
+- **告警**：`Violation.id`，`acknowledge` 接受 code 或实例 id，`acknowledge_reasons` 强制理由，`CheckDocument.machine.acknowledged_findings`（兼容读旧顶层位置）；`DUPLICATE_PARAGRAPH` 给出章/段与 40 字重合片段。
+- **分页**：`novel_state` 新增 `limit/cursor/status/include_history/current_only`，返回统一 `page`；cursor 绑定 section+filters；foreshadows 默认 50 条且只给 `advance_count`；`novel_amend` 拒绝把截断/过滤页当完整文档。
+- **自评**：P3/P4 写死 1–5 与 low/mid/high 锚点；`BookReport.pacing.calibration` 与 doctor `QUALITY_SELF_SCORE_FLAT`；题材 profile 支持 `pleasure_keywords`、`motif_min_dormancy`、`foreshadow_dormant_after`，并校验类型/正整数。
+- **返工**：`StatusReport.previous_chapter_effort` 与 P1 brief 字段，归档后仍能看到上一章 review/revise/check/rollbacks。
+
+### Fixed
+
+- advisory id 改为 `sha256(detail).slice(0,12)`，不再用 48 位 SimHash 截断；同码不同详情不再并成一条。
+- 旧 timeline 的 `event_key` 以章节记录的 `summary.events` 为准，不再用被覆盖的 `description`；真实 209 条只读校验 0 个 key 不一致。
+- 角色 worldbook 行存在但无 `appearance` 时不再回退首现段落，避免第 21 章 3 条锁定误报；`locks` 只在 worldbook 无该实体时提供短锚点。
+- legacy brief 收据只追加/晋升受影响行，不再在第一次新 digest 时物化全部旧行；旧行保持原顺序与字段。loader 与 `novel_state` 共用 current 派生：提升较旧的无 current 行后，PG-01 与 current 视图不会再分别相信不同 digest。
+- `planned_resolve`/`kind` 在 advance/resolve delta 上真正落账；P3 PG-05 先拒绝非法 planned_resolve/kind/anchor；`advance_log` 的 advance/update anchor 与 resolve 一样必须逐字出现在正文，条目校验 chapter/note/new_info/anchor。
+- 普通动作段不再因为只提到实体名就被判 `LOCKED_DETAIL_DRIFT`；只有带外貌/布局/改写线索的低覆盖段才进入漂移比较，world anchors 单独存在的实体也纳入检查。
+- 旧 timeline 的稀疏行从 `summary.events` 下标派生事件键；显式 `event_key` 按章+数字事件序排序，不再按字符串把 10 排在 2 前。
+- integrity-only check 的 `numeric` 汇总不再保留未执行的 content 计数；foreshadows 的 advance/update anchor 也做逐字正文校验；`novel_amend` 带 anchor 的新增/变更 resolved 行同样按章正文校验，无 anchor 的旧行保留迁移入口。
+- 超过单页上限的 world/characters/locks 台账去掉 `page` 后仍不能静默删行；错误提示明确要求合并所有 cursor 页。
+
+### Compatibility
+
+- `english_punct`、`types`、`acknowledged`、timeline 数字下标、旧 `briefs.yaml` 都保留；旧记录不自动改写。
+- `SCHEMA_VERSION` 仍为 1；`REMOTE_VERSION` 仍为 6；`PANEL_VERSION` 升到 0.2.13。
+- 未提交、未推送、未打 tag；发布需单独授权。
+
+### Tests
+
+- 98 个测试文件 / 1071 项全绿；覆盖率 94.01 / 89.02 / 96.88 / 94.01，逐文件与 `src/rules` 分支门禁通过。
+- 新增 0.2.13 回归覆盖：纯 SHA-256 向量、分页/过滤页写回拒绝、旧 timeline 键规范化与稀疏派生、数字序排序、同码 advisory 实例 id、确认实例不替同码其他实例背书、收据 current 与 PG-01 一致性、旧行不物化、legacy 页脚、archive motif/题材阈值、PG-05 非法 planned_resolve、关系 type_code 与 resolved_anchor 迁移守卫、advance/update anchor 逐字校验、普通叙事不误报锁定漂移、world anchors 单独基线。
+
 ## 0.2.12
 
 0.2.12 是工作台滚动与角色标签修复版本，不新增或改变阶段、工具、操作、门控、语义项、导出、schema 或配置键。

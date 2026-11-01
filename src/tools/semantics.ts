@@ -17,6 +17,7 @@ export interface ArrayParameterContract {
 export const ARRAY_PARAMETER_CONTRACT: Record<string, Record<string, ArrayParameterContract>> = {
   novel_init: {
     words_per_chapter: { semantics: 'replace' },
+    dialogue_ratio: { semantics: 'replace' },
     themes: { semantics: 'replace' },
     selling_points: { semantics: 'replace' },
   },

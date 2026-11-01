@@ -1,6 +1,7 @@
 import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
 import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
 import { textSimilarity } from '../domain/simhash.js'
+import { resolveLockBaseline } from '../engine/entity-anchors.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import type { Severity, Violation } from '../types.js'
 import type { Rule, RuleContext } from './types.js'
@@ -412,14 +413,23 @@ export const slidingWindows = (text: string, size: number): string[] => {
 const dialogueRatio: Rule = (ctx) => {
   const target = ctx.targets?.dialogue_ratio
   if (target === undefined) return []
-  const ratio = countWordMetrics(ctx.text).dialogue_ratio
-  if (ratio >= target[0] && ratio <= target[1]) return []
+  const metrics = countWordMetrics(ctx.text)
+  const lineRatio = metrics.dialogue_ratio
+  const charRatio = metrics.dialogue_char_ratio ?? 0
+  const metric = ctx.targets?.dialogue_ratio_metric ?? 'both'
+  // A 0.5-point rounding boundary is not an authorship defect.
+  const lower = Math.max(0, target[0] - 0.005)
+  const upper = Math.min(1, target[1] + 0.005)
+  const lineOut = lineRatio < lower || lineRatio > upper
+  const charOut = charRatio < lower || charRatio > upper
+  const failed = metric === 'lines' ? lineOut : metric === 'chars' ? charOut : lineOut && charOut
+  if (!failed) return []
   return [
     v(
       SEMANTIC_RULES.DIALOGUE_RATIO,
       'advisory',
       1,
-      `dialogue ratio ${Math.round(ratio * 1000) / 10}% is outside target ${Math.round(target[0] * 1000) / 10}%..${Math.round(target[1] * 1000) / 10}% (quoted lines / non-empty lines)`,
+      `dialogue ratio outside ${Math.round(target[0] * 1000) / 10}%..${Math.round(target[1] * 1000) / 10}% (${metric}): lines ${Math.round(lineRatio * 1000) / 10}%, chars ${Math.round(charRatio * 1000) / 10}%`,
     ),
   ]
 }
@@ -477,6 +487,40 @@ function parseSmallNumber(raw: string): number | null {
 }
 
 const NUMBER_TOKEN = '[零一二两三四五六七八九十百千万]+|\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?'
+const ARITHMETIC_UNIT = '(?:人|个|元|块|蚊|斤|件|张|条|里|米)?'
+const ARITHMETIC_MULTIPLY = '(?:×|x|X|\\*|乘以|乘)'
+const ARITHMETIC_EQUALS = '(?:=|等于|得|共|合计|总共|一共)'
+const arithmeticPatterns = (): RegExp[] => [
+  new RegExp(
+    `(${NUMBER_TOKEN})[ \\t\\u3000]*${ARITHMETIC_UNIT}[ \\t\\u3000]*${ARITHMETIC_MULTIPLY}[ \\t\\u3000]*(${NUMBER_TOKEN})[ \\t\\u3000]*${ARITHMETIC_UNIT}[ \\t\\u3000]*${ARITHMETIC_EQUALS}[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${ARITHMETIC_UNIT})?(?=$|[。！？，, \\t\\u3000])`,
+    'g',
+  ),
+  new RegExp(
+    `(${NUMBER_TOKEN})[ \\t\\u3000]*(?:人|个人)[，,、 \\t\\u3000]*(?:每人|每个)[ \\t\\u3000]*(${NUMBER_TOKEN})[^。！？\\n]{0,24}(?:共|合计|总共|一共)(?:花了|用了|要|付|得|是|有)?[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${ARITHMETIC_UNIT})?(?=$|[。！？，, \\t\\u3000])`,
+    'g',
+  ),
+]
+const arithmeticOperatorPattern = (): RegExp =>
+  new RegExp(
+    `(${NUMBER_TOKEN})[ \\t\\u3000]*${ARITHMETIC_UNIT}[ \\t\\u3000]*([+＋加\\-−减×xX*÷/])[ \\t\\u3000]*(${NUMBER_TOKEN})[ \\t\\u3000]*${ARITHMETIC_UNIT}[ \\t\\u3000]*${ARITHMETIC_EQUALS}[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${ARITHMETIC_UNIT})?(?=$|[。！？，, \\t\\u3000])`,
+    'g',
+  )
+
+/** Count distinct textual equations the arithmetic rule actually considered. */
+export const countArithmeticEquations = (text: string): number => {
+  const starts = new Set<number>()
+  for (const pattern of [...arithmeticPatterns(), arithmeticOperatorPattern()]) {
+    for (const match of text.matchAll(pattern)) {
+      const groups = match.slice(1).filter((value): value is string => typeof value === 'string')
+      if (groups.some((value) => approximateNumber(value))) continue
+      if (approximatePrefix(text, match.index ?? 0)) continue
+      if (/[数近约几上余]/.test(match[0])) continue
+      starts.add(match.index ?? 0)
+    }
+  }
+  return starts.size
+}
+
 const DISTANCE_RE = new RegExp(`(${NUMBER_TOKEN})\\s*(海里|公里|千米|米|里)`, 'g')
 const DURATION_RE = new RegExp(`(${NUMBER_TOKEN})\\s*个?\\s*(小时|钟头|分钟)`, 'g')
 const SPEED_RE = new RegExp(`(?:时速|每小时|速度(?:是|为)?)\\s*(${NUMBER_TOKEN})\\s*(海里|公里|千米|米)`, 'g')
@@ -524,19 +568,7 @@ const approximatePrefix = (text: string, index: number): boolean =>
 const arithmeticMismatches = (ctx: RuleContext): Violation[] => {
   const results: Violation[] = []
   const seen = new Set<string>()
-  const unit = '(?:人|个|元|块|蚊|斤|件|张|条|里|米)?'
-  const multiply = '(?:×|x|X|\\*|乘以|乘)'
-  const equals = '(?:=|等于|得|共|合计|总共|一共)'
-  const patterns = [
-    new RegExp(
-      `(${NUMBER_TOKEN})[ \\t\\u3000]*${unit}[ \\t\\u3000]*${multiply}[ \\t\\u3000]*(${NUMBER_TOKEN})[ \\t\\u3000]*${unit}[ \\t\\u3000]*${equals}[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${unit})?(?=$|[。！？，, \\t\\u3000])`,
-      'g',
-    ),
-    new RegExp(
-      `(${NUMBER_TOKEN})[ \\t\\u3000]*(?:人|个人)[，,、 \\t\\u3000]*(?:每人|每个)[ \\t\\u3000]*(${NUMBER_TOKEN})[^。！？\\n]{0,24}(?:共|合计|总共|一共)(?:花了|用了|要|付|得|是|有)?[ \\t\\u3000]*(${NUMBER_TOKEN})(?:${unit})?(?=$|[。！？，, \\t\\u3000])`,
-      'g',
-    ),
-  ]
+  const patterns = arithmeticPatterns()
   for (const pattern of patterns) {
     for (const match of ctx.text.matchAll(pattern)) {
       // NUMBER_TOKEN only captures strings parseSmallNumber accepts; the
@@ -552,7 +584,7 @@ const arithmeticMismatches = (ctx: RuleContext): Violation[] => {
       const shown = parseSmallNumber(match[3] ?? '')!
       const expected = left * right
       if (Math.abs(expected - shown) < 0.001) continue
-      const key = `${left}x${right}=${shown}`
+      const key = `${left}×${right}=${shown}`
       if (seen.has(key)) continue
       seen.add(key)
       results.push(
@@ -564,6 +596,50 @@ const arithmeticMismatches = (ctx: RuleContext): Violation[] => {
         ),
       )
     }
+  }
+  const operators: Array<{ symbol: string; compute: (left: number, right: number) => number }> = [
+    { symbol: '+', compute: (left, right) => left + right },
+    { symbol: '-', compute: (left, right) => left - right },
+    { symbol: '×', compute: (left, right) => left * right },
+    { symbol: '÷', compute: (left, right) => left / right },
+  ]
+  const operatorPattern = arithmeticOperatorPattern()
+  for (const match of ctx.text.matchAll(operatorPattern)) {
+    if (
+      [match[1], match[3], match[4]].some((value) => approximateNumber(value ?? '')) ||
+      approximatePrefix(ctx.text, match.index ?? 0) ||
+      /[数近约几上余]/.test(match[0])
+    )
+      continue
+    const rawSymbol = match[2] ?? ''
+    const symbol =
+      rawSymbol === '+' || rawSymbol === '＋' || rawSymbol === '加'
+        ? '+'
+        : rawSymbol === '-' || rawSymbol === '−' || rawSymbol === '减'
+          ? '-'
+          : ['×', 'x', 'X', '*'].includes(rawSymbol)
+            ? '×'
+            : '÷'
+    const left = parseSmallNumber(match[1] ?? '')!
+    const right = parseSmallNumber(match[3] ?? '')!
+    const shown = parseSmallNumber(match[4] ?? '')!
+    if (symbol === '÷' && right === 0) continue
+    const operator =
+      operators.find((entry) => entry.symbol === symbol) ??
+      ({ symbol, compute: (first: number, second: number) => first / second } as const)
+    const expected = operator.compute(left, right)
+    if (Math.abs(expected - shown) < 0.001) continue
+    const key = `${left}${symbol}${right}=${shown}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    results.push(
+      v(
+        SEMANTIC_RULES.NUMERIC_CONTRADICTION,
+        'advisory',
+        paragraphOfIndex(ctx.text, match.index ?? 0),
+        `arithmetic mismatch: ${left} ${symbol} ${right} = ${expected}, but the text shows ${shown}`,
+      ),
+    )
   }
   return results
 }
@@ -624,21 +700,44 @@ const numericContradiction: Rule = (ctx) => {
 
 const escapePattern = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+const numericFactPattern = (fact: { alias: string; unit: string }): RegExp =>
+  new RegExp(
+    `${escapePattern(fact.alias)}\\s*(?:是|为|约|有|：|:)?\\s*(${NUMBER_TOKEN})\\s*${escapePattern(fact.unit)}(?:\\s*([零一二两三四五六七八九]))?(?![零一二两三四五六七八九十百千万\\d])`,
+    'g',
+  )
+
+/** The same alias+unit pattern the rule checks; used for the numeric summary. */
+export const hasNumericFactMatch = (text: string, fact: { alias: string; unit: string }): boolean => {
+  if (fact.alias.trim() === '') return false
+  return numericFactPattern(fact).test(text)
+}
+
+const numericFactsEmpty: Rule = (ctx) => {
+  const facts = ctx.facts ?? []
+  if (facts.length > 0 || ctx.strict !== true || !new RegExp(NUMBER_TOKEN).test(ctx.text)) return []
+  return [
+    v(
+      SEMANTIC_RULES.NUMERIC_FACTS_EMPTY,
+      'advisory',
+      1,
+      'strict=true but worldbook.facts is empty; numeric claims have no declared canon to check against',
+    ),
+  ]
+}
+
 const numericFactMismatch: Rule = (ctx) => {
-  if (ctx.facts === undefined || ctx.facts.length === 0) return []
+  const facts = ctx.facts ?? []
+  if (facts.length === 0) return []
   const results: Violation[] = []
   const paragraphs = splitParagraphs(ctx.text)
-  for (const fact of ctx.facts) {
+  for (const fact of facts) {
     if (fact.alias.trim() === '' || !Number.isFinite(fact.value)) continue
     const tolerance = fact.tolerance ?? 0
     // Require alias + optional copula/colon + number + the declared unit.
     // A bare number anywhere in a ±40-char window is usually another noun
     // (「数了三遍」 next to 「船价」), and ignoring the unit makes the advisory
     // permanently noisy.
-    const pattern = new RegExp(
-      `${escapePattern(fact.alias)}\\s*(?:是|为|约|有|：|:)?\\s*(${NUMBER_TOKEN})\\s*${escapePattern(fact.unit)}(?:\\s*([零一二两三四五六七八九]))?(?![零一二两三四五六七八九十百千万\\d])`,
-      'g',
-    )
+    const pattern = numericFactPattern(fact)
     for (const match of ctx.text.matchAll(pattern)) {
       const base = parseSmallNumber(match[1] ?? '')
       if (base === null) continue
@@ -661,9 +760,13 @@ const numericFactMismatch: Rule = (ctx) => {
 }
 
 const pleasureDensity: Rule = (ctx) => {
-  const { keywords, window } = ctx.rulepack.semantics.pleasure_density
-  const min =
-    ctx.rulepack.genres[ctx.genre]?.profile?.pleasure_density ?? ctx.rulepack.semantics.pleasure_density.min
+  const { window } = ctx.rulepack.semantics.pleasure_density
+  const profile = ctx.rulepack.genres[ctx.genre]?.profile
+  const keywords =
+    profile?.pleasure_keywords !== undefined && profile.pleasure_keywords.length > 0
+      ? profile.pleasure_keywords
+      : ctx.rulepack.semantics.pleasure_density.keywords
+  const min = profile?.pleasure_density ?? ctx.rulepack.semantics.pleasure_density.min
   if (keywords.length === 0) return []
   const results: Violation[] = []
   const windows = slidingWindows(ctx.text, window)
@@ -727,6 +830,23 @@ const waterWords: Rule = (ctx) => {
 }
 
 /* ------------------------------------------------------------ crosschapter */
+
+const sharedDuplicateSnippet = (current: string, previous: string): string => {
+  const left = Array.from(current.replace(/\s+/g, ''))
+  const right = Array.from(previous.replace(/\s+/g, ''))
+  for (const size of [40, 24, 16, 8]) {
+    if (left.length < size || right.length < size) continue
+    const grams = new Set<string>()
+    for (let index = 0; index + size <= left.length; index += 1) {
+      grams.add(left.slice(index, index + size).join(''))
+    }
+    for (let index = 0; index + size <= right.length; index += 1) {
+      const candidate = right.slice(index, index + size).join('')
+      if (grams.has(candidate)) return candidate
+    }
+  }
+  return right.slice(0, 40).join('')
+}
 
 const duplicateParagraph: Rule = (ctx) => {
   const previous =
@@ -812,12 +932,14 @@ const duplicateParagraph: Rule = (ctx) => {
   }
   const blocker = ctx.rulepack.crosschapter.duplicate_similarity
   const severity = best.score >= blocker ? 'blocker' : 'advisory'
+  const previousChapter = Math.max(1, ctx.chapter - matched.source)
+  const overlap = sharedDuplicateSnippet(currentUnit.text, matched.text)
   return [
     v(
       CROSS_RULES.DUPLICATE_PARAGRAPH,
       severity,
       currentParagraph + 1,
-      `paragraph ${currentParagraph + 1} reuses ${Math.round(best.score * 100)}% of paragraph ${previousParagraph + 1} from previous source ${matched.source} (advisory ≥${Math.round(advisory * 100)}%, blocker ≥${Math.round(blocker * 100)}%)`,
+      `paragraph ${currentParagraph + 1} reuses ${Math.round(best.score * 100)}% of paragraph ${previousParagraph + 1} from previous source ${matched.source} (chapter ${previousChapter} paragraph ${previousParagraph + 1}; advisory ≥${Math.round(advisory * 100)}%, blocker ≥${Math.round(blocker * 100)}%); overlap "${overlap}"`,
     ),
   ]
 }
@@ -825,9 +947,14 @@ const duplicateParagraph: Rule = (ctx) => {
 const foreshadowDormant: Rule = (ctx) => {
   const ledger = ctx.evidence.foreshadows
   if (ledger === null) return []
-  const after = ctx.rulepack.crosschapter.foreshadow_dormant_after
+  const after =
+    ctx.rulepack.genres[ctx.genre]?.profile?.foreshadow_dormant_after ??
+    ctx.rulepack.crosschapter.foreshadow_dormant_after
   return ledger.items
-    .filter((item) => item.status !== 'resolved' && ctx.chapter - item.last_touched >= after)
+    .filter(
+      (item) =>
+        item.kind !== 'motif' && item.status !== 'resolved' && ctx.chapter - item.last_touched >= after,
+    )
     .map((item) =>
       v(
         CROSS_RULES.FORESHADOW_DORMANT,
@@ -838,13 +965,78 @@ const foreshadowDormant: Rule = (ctx) => {
     )
 }
 
+const foreshadowOverdue: Rule = (ctx) => {
+  const ledger = ctx.evidence.foreshadows
+  if (ledger === null) return []
+  return ledger.items
+    .filter(
+      (item) =>
+        item.kind !== 'motif' &&
+        item.status !== 'resolved' &&
+        item.planned_resolve !== null &&
+        item.planned_resolve !== undefined &&
+        item.planned_resolve < ctx.chapter,
+    )
+    .map((item) =>
+      v(
+        CROSS_RULES.FORESHADOW_OVERDUE,
+        'advisory',
+        1,
+        `foreshadow ${item.id} was planned for chapter ${item.planned_resolve}, current chapter is ${ctx.chapter}`,
+      ),
+    )
+}
+
+const normalizedForeshadowTitle = (value: string): string => value.replace(/[\s\p{P}]+/gu, '')
+
+const foreshadowDuplicateTitle: Rule = (ctx) => {
+  const ledger = ctx.evidence.foreshadows
+  if (ledger === null) return []
+  const open = ledger.items.filter((item) => item.status !== 'resolved')
+  const results: Violation[] = []
+  for (let first = 0; first < open.length; first += 1) {
+    for (let second = first + 1; second < open.length; second += 1) {
+      const left = normalizedForeshadowTitle(open[first]!.title)
+      const right = normalizedForeshadowTitle(open[second]!.title)
+      if (left === '' || right === '') continue
+      let duplicate = left === right || left.includes(right) || right.includes(left)
+      if (!duplicate) {
+        const grams = new Set<string>()
+        for (let index = 0; index + 1 < left.length; index += 1) grams.add(left.slice(index, index + 2))
+        let hits = 0
+        for (let index = 0; index + 1 < right.length; index += 1) {
+          if (grams.has(right.slice(index, index + 2))) hits += 1
+        }
+        duplicate = hits / Math.max(1, grams.size) >= 0.8
+      }
+      if (duplicate) {
+        results.push(
+          v(
+            CROSS_RULES.FORESHADOW_DUPLICATE_TITLE,
+            'advisory',
+            1,
+            `foreshadow titles ${open[first]!.id} "${open[first]!.title}" and ${open[second]!.id} "${open[second]!.title}" are similar; merge is manual, no automatic change`,
+          ),
+        )
+      }
+    }
+  }
+  return results
+}
+
 const revisitedTooSoon: Rule = (ctx) => {
   const ledger = ctx.evidence.foreshadows
   if (ledger === null) return []
-  const min = ctx.rulepack.crosschapter.foreshadow_min_dormancy
   const advances = ctx.summary?.foreshadows.advanced ?? []
   return ledger.items
     .filter((item) => {
+      const min =
+        item.kind === 'motif'
+          ? (ctx.rulepack.genres[ctx.genre]?.profile?.motif_min_dormancy ??
+            ctx.rulepack.crosschapter.motif_min_dormancy ??
+            1)
+          : (ctx.rulepack.genres[ctx.genre]?.profile?.foreshadow_min_dormancy ??
+            ctx.rulepack.crosschapter.foreshadow_min_dormancy)
       if (!ctx.text.includes(item.title)) return false
       if (ctx.chapter - item.last_touched >= min || ctx.chapter <= item.last_touched) return false
       // A genuine advance with new information is the documented exception.
@@ -852,14 +1044,21 @@ const revisitedTooSoon: Rule = (ctx) => {
         (advance) => (advance.key === item.id || advance.key === item.title) && advance.new_info === true,
       )
     })
-    .map((item) =>
-      v(
+    .map((item) => {
+      const min =
+        item.kind === 'motif'
+          ? (ctx.rulepack.genres[ctx.genre]?.profile?.motif_min_dormancy ??
+            ctx.rulepack.crosschapter.motif_min_dormancy ??
+            1)
+          : (ctx.rulepack.genres[ctx.genre]?.profile?.foreshadow_min_dormancy ??
+            ctx.rulepack.crosschapter.foreshadow_min_dormancy)
+      return v(
         CROSS_RULES.FS_REVISITED_TOO_SOON,
         'advisory',
         1,
         `foreshadow ${item.id} reappears after ${ctx.chapter - item.last_touched} chapters (minimum ${min})`,
-      ),
-    )
+      )
+    })
 }
 
 const isClauseBoundary = (text: string, index: number): boolean => {
@@ -1053,26 +1252,32 @@ const mentionedNames = (text: string, names: readonly string[]): string[] => {
   return found
 }
 
-const relationUnknown: Rule = (ctx) => {
-  const characters = ctx.evidence.characters
+/**
+ * Pure relation check shared by P6 (disabled) and the archive transaction.
+ * It runs after `state_delta.relationships` is merged, so a relation created by
+ * this very chapter is already known when the text is inspected.
+ */
+export const relationUnknownFindings = (
+  text: string,
+  characters: import('../types.js').CharactersDocument | null,
+  relationships: import('../types.js').RelationshipsDocument | null,
+): Violation[] => {
   const known = characters === null ? [] : characters.characters.map((character) => character.name)
   const names = new Set(known)
-  if (ctx.evidence.relationships !== null) {
-    for (const item of ctx.evidence.relationships.items) {
-      names.add(item.a)
-      names.add(item.b)
-    }
+  for (const item of relationships?.items ?? []) {
+    names.add(item.a)
+    names.add(item.b)
   }
   if (names.size < 2) return []
   const results: Violation[] = []
-  for (const [index, paragraph] of splitParagraphs(ctx.text).entries()) {
+  for (const [index, paragraph] of splitParagraphs(text).entries()) {
     const present = mentionedNames(paragraph, [...names])
     for (let first = 0; first < present.length; first += 1) {
       for (let second = first + 1; second < present.length; second += 1) {
         const a = present[first]!
         const b = present[second]!
         const declared =
-          ctx.evidence.relationships?.items.some(
+          relationships?.items.some(
             (item) => (item.a === a && item.b === b) || (item.a === b && item.b === a),
           ) ?? false
         if (!declared) {
@@ -1091,10 +1296,24 @@ const relationUnknown: Rule = (ctx) => {
   return results
 }
 
+const relationUnknown: Rule = (ctx) => {
+  if (ctx.disableRelationUnknown === true) return []
+  return relationUnknownFindings(ctx.text, ctx.evidence.characters, ctx.evidence.relationships)
+}
+
+const looksLikeLockedDescription = (text: string, kind: 'character' | 'location'): boolean => {
+  const characterCue =
+    /(穿着|穿了|身穿|换上|换成|身高|身材|长相|脸上|眉眼|眼睛|皮肤|头发|衣服|西装|长衫|铠甲|帽子|鞋|伤疤|疤痕|旧伤|新伤|个子|很高|很矮|很胖|很瘦|雪白|鲜红)/
+  const locationCue =
+    /(换成|换了|改成|改作|变成|成了|不再是|不再|没有|空荡|空着|光秃|装修|重建|刷成|刷得|粉刷|墙面|墙皮|屋顶|地板|门窗|陈设|布局|白墙|红瓦|雪白|鲜红)/
+  return (kind === 'character' ? characterCue : locationCue).test(text)
+}
+
 const describedMentions = (
   name: string,
   locked: string,
   text: string,
+  kind: 'character' | 'location',
 ): Array<{ index: number; text: string; coverage: number }> => {
   const candidates: Array<{ index: number; text: string; coverage: number }> = []
   const strippedLock = locked.split(name).join('')
@@ -1109,10 +1328,16 @@ const describedMentions = (
     const speech = /^(?:说|问|答|喊|道|叫|笑道|低声说|沉声道|开口)[：:，,]?[“"「『]/.test(
       strippedParagraph.trim(),
     )
-    // Zero overlap is a passing mention unless the remaining prose is long
-    // enough to be a real (but completely wrong) description. Short speech
-    // tags are not descriptions of the locked appearance.
-    if (coverage === 0 && (content.length < 16 || speech)) continue
+    // Zero overlap is usually a passing mention, not a description. Only a
+    // paragraph with an explicit appearance/change cue can be a real drift;
+    // otherwise ordinary actions such as "林砚把账本合上，走到窗边" are
+    // reported as if they contradicted the locked appearance.
+    if (
+      coverage === 0 &&
+      (content.length < 16 || speech || !looksLikeLockedDescription(strippedParagraph, kind))
+    ) {
+      continue
+    }
     candidates.push({ index, text: paragraph, coverage })
   }
   return candidates
@@ -1127,39 +1352,37 @@ const bestMention = (
   )
 
 const lockedDetailDrift: Rule = (ctx) => {
-  if (ctx.evidence.locks === null) return []
-  const locks = ctx.evidence.locks
+  const names = new Set<string>([
+    ...Object.keys(ctx.evidence.locks?.locations ?? {}),
+    ...Object.keys(ctx.evidence.locks?.characters ?? {}),
+    ...(ctx.evidence.world?.locations ?? []).map((entry) => entry.name),
+    ...(ctx.evidence.worldbook?.characters ?? []).map((entry) => entry.name),
+    ...(ctx.evidence.worldbook?.locations ?? []).map((entry) => entry.name),
+  ])
   const results: Violation[] = []
-  for (const [name, lock] of Object.entries(locks.locations)) {
+  for (const name of names) {
     if (!ctx.text.includes(name)) continue
-    if (lock.layout.trim() === '') continue
-    const mention = bestMention(describedMentions(name, lock.layout, ctx.text))
-    if (mention === null) continue
-    if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
-      results.push(
-        v(
-          CROSS_RULES.LOCKED_DETAIL_DRIFT,
-          'advisory',
-          mention.index + 1,
-          `${name} is described differently from its locked layout; expected "${lock.layout.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
-        ),
+    for (const kind of ['location', 'character'] as const) {
+      const baseline = resolveLockBaseline(name, kind, {
+        worldbook: ctx.evidence.worldbook ?? null,
+        world: ctx.evidence.world,
+        locks: ctx.evidence.locks,
+      })
+      if (baseline === null) continue
+      const mention = bestMention(
+        baseline.texts.flatMap((text) => describedMentions(name, text, ctx.text, kind)),
       )
-    }
-  }
-  for (const [name, lock] of Object.entries(locks.characters)) {
-    if (!ctx.text.includes(name)) continue
-    if (lock.appearance.trim() === '') continue
-    const mention = bestMention(describedMentions(name, lock.appearance, ctx.text))
-    if (mention === null) continue
-    if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
-      results.push(
-        v(
-          CROSS_RULES.LOCKED_DETAIL_DRIFT,
-          'advisory',
-          mention.index + 1,
-          `${name} is described differently from its locked appearance; expected "${lock.appearance.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
-        ),
-      )
+      if (mention === null) continue
+      if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
+        results.push(
+          v(
+            CROSS_RULES.LOCKED_DETAIL_DRIFT,
+            'advisory',
+            mention.index + 1,
+            `${name} (${kind}) is described differently from its canonical ${baseline.source} baseline; expected "${baseline.texts[0]!.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
+          ),
+        )
+      }
     }
   }
   return results
@@ -1230,8 +1453,11 @@ export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
   [SEMANTIC_RULES.DIALOGUE_RATIO]: dialogueRatio,
   [SEMANTIC_RULES.NUMERIC_CONTRADICTION]: numericContradiction,
   [SEMANTIC_RULES.NUMERIC_FACT_MISMATCH]: numericFactMismatch,
+  [SEMANTIC_RULES.NUMERIC_FACTS_EMPTY]: numericFactsEmpty,
   [CROSS_RULES.DUPLICATE_PARAGRAPH]: duplicateParagraph,
   [CROSS_RULES.FORESHADOW_DORMANT]: foreshadowDormant,
+  [CROSS_RULES.FORESHADOW_OVERDUE]: foreshadowOverdue,
+  [CROSS_RULES.FORESHADOW_DUPLICATE_TITLE]: foreshadowDuplicateTitle,
   [CROSS_RULES.FS_REVISITED_TOO_SOON]: revisitedTooSoon,
   [CROSS_RULES.RESOURCE_MISMATCH]: resourceMismatch,
   [CROSS_RULES.TIME_REGRESSION]: timeRegression,

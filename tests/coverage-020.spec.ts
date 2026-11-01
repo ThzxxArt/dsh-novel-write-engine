@@ -227,7 +227,8 @@ describe('0.2.0 service validation coverage', () => {
       expect(report.data.progress.archived).toBe(1)
       const chapters = structuredClone(
         (await engine.queryState({ kind: 'chapters', include_summary: true, root })).data,
-      ) as { chapters: Array<Record<string, unknown>> }
+      ) as { chapters: Array<Record<string, unknown>>; page?: unknown }
+      delete chapters.page
       chapters.chapters[0]!.word_count = Number(chapters.chapters[0]!.word_count) + 1
       await writeFile(join(root, 'state/chapters.yaml'), JSON.stringify(chapters), 'utf8')
       const panel = await engine.panelSummary({ root })

@@ -8,6 +8,7 @@ const CHINESE_PUNCT = /[\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014
 const ENGLISH_PUNCT = /[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014\u2026]/gu
 /** A line participates in dialogue if it contains any of the four common quote pairs. */
 const DIALOGUE_MARKS = /["“”「」『』]/
+const DIALOGUE_SPAN = /["“「『]([\s\S]*?)["”」』]/g
 
 const matchCount = (text: string, pattern: RegExp): number => text.match(pattern)?.length ?? 0
 
@@ -29,6 +30,12 @@ export function countWordMetrics(text: string): WordMetrics {
   const dialogueLines = nonEmptyLines.filter((line) => DIALOGUE_MARKS.test(line)).length
   const paragraphs = splitParagraphs(text)
   const punctuation = chinesePunct + englishPunct
+  const dialogueChars = Array.from(text.matchAll(DIALOGUE_SPAN)).reduce(
+    (total, match) => total + match[1]!.replace(/\s+/g, '').length,
+    0,
+  )
+  const nonWsChars = matchCount(text, /\S/g)
+  const dialogueQuotes = matchCount(text, /["“”「」『』]/g)
 
   return {
     total_word_count: cjkChars + englishWords + numbers + punctuation,
@@ -38,13 +45,21 @@ export function countWordMetrics(text: string): WordMetrics {
     chinese_punct: chinesePunct,
     english_punct: englishPunct,
     punctuation_chars: punctuation,
-    non_ws_chars: matchCount(text, /\S/g),
+    non_ws_chars: nonWsChars,
     total_lines: lines.length,
     non_empty_lines: nonEmptyLines.length,
     dialogue_lines: dialogueLines,
     dialogue_ratio: nonEmptyLines.length === 0 ? 0 : dialogueLines / nonEmptyLines.length,
     paragraph_count: paragraphs.length,
     paragraph_max_words: paragraphs.reduce((max, p) => Math.max(max, countWordMetricsOfParagraph(p)), 0),
+    dialogue_chars: dialogueChars,
+    dialogue_char_ratio: nonWsChars === 0 ? 0 : Math.min(1, dialogueChars / nonWsChars),
+    punctuation_breakdown: {
+      chinese: chinesePunct,
+      ascii: englishPunct,
+      dialogue_quotes: dialogueQuotes,
+      other: Math.max(0, punctuation - chinesePunct - englishPunct),
+    },
   }
 }
 

@@ -235,6 +235,8 @@ export interface Violation {
   severity: Severity
   location: { paragraph: number }
   detail: string
+  /** Stable instance id for per-finding acknowledgement; computed for new checks. */
+  id?: string
 }
 
 /** Metric block produced by the machine pass. */
@@ -252,7 +254,19 @@ export interface CheckDocument {
   chapter: number
   scope: string[]
   content_hash: string
-  machine: { violations: Violation[]; advisories?: Violation[]; metrics: WordMetrics }
+  machine: {
+    violations: Violation[]
+    advisories?: Violation[]
+    metrics: WordMetrics
+    numeric?: {
+      facts_declared: number
+      facts_checked: number
+      equations_checked: number
+      findings: number
+    }
+    /** 0.2.13 per-finding acknowledgements; kept under machine so 0.2.12 can read the document. */
+    acknowledged_findings?: Array<{ id: string; code: string; reason: string; at: string }>
+  }
   semantic: {
     items: Array<{ id: string; verdict: 'pass' | 'fail'; evidence: string; note: string }>
     /** 0.2.5: explain a persisted content failure; historical checks omit it. */
@@ -260,6 +274,8 @@ export interface CheckDocument {
   }
   /** Advisory codes the author has explicitly acknowledged for this content. */
   acknowledged?: string[]
+  /** Legacy pre-0.2.13.1 location; kept for reading documents written by 0.2.13. */
+  acknowledged_findings?: Array<{ id: string; code: string; reason: string; at: string }>
   /** 0.2.5: content failures consume the check budget; submission errors never persist. */
   failure_class?: 'submission' | 'content'
   counted?: boolean
@@ -309,6 +325,16 @@ export interface WordMetrics {
   dialogue_ratio: number
   paragraph_count: number
   paragraph_max_words: number
+  /** 0.2.13: characters inside quoted dialogue, and their share of non-whitespace chars. */
+  dialogue_chars?: number
+  dialogue_char_ratio?: number
+  /** 0.2.13: explicit split behind chinese_punct + english_punct. */
+  punctuation_breakdown?: {
+    chinese: number
+    ascii: number
+    dialogue_quotes: number
+    other: number
+  }
 }
 
 /** Protected evidence copied from the archived outline card at archive time. */
@@ -357,7 +383,14 @@ export interface ChapterSummary {
   events: string[]
   characters_appeared: string[]
   foreshadows: {
-    planted: Array<{ key: string; title: string; description: string; anchor?: string }>
+    planted: Array<{
+      key: string
+      title: string
+      description: string
+      anchor?: string
+      planned_resolve?: number | null
+      kind?: 'plot' | 'motif'
+    }>
     advanced: Array<{ key: string; note: string; new_info: boolean }>
     resolved: string[]
   }
@@ -420,9 +453,13 @@ export interface ForeshadowDelta {
   description?: string
   note?: string
   new_info?: boolean
+  planned_resolve?: number | null
+  /** Verbatim quote that proves a resolve; required for new resolves. */
+  resolved_anchor?: string
+  kind?: 'plot' | 'motif'
 }
 
-/** One timeline-event declaration; keys are `summary.events` indices. */
+/** One timeline-event declaration; keys are `summary.events` indices or stable event keys. */
 export interface TimelineDelta {
   action: DeltaAction
   reason?: string
@@ -432,13 +469,31 @@ export interface TimelineDelta {
   characters?: string[]
 }
 
+export const RELATIONSHIP_TYPE_CODES = [
+  'family',
+  'ally',
+  'employer_employee',
+  'creditor_debtor',
+  'buyer_supplier',
+  'patron_client',
+  'rival',
+  'enemy',
+  'colleague',
+  'romance',
+  'other',
+] as const
+export type RelationshipTypeCode = (typeof RELATIONSHIP_TYPE_CODES)[number]
+
 /** One relationship declaration; keys are `"a|b"`. */
 export interface RelationshipDelta {
   action: DeltaAction
   reason?: string
   a?: string
   b?: string
+  /** Readable label; kept for compatibility and display. */
   type?: string
+  /** 0.2.13 canonical enum for aggregation and new created relationships. */
+  type_code?: RelationshipTypeCode
   description?: string
   note?: string
 }
@@ -470,6 +525,12 @@ export interface BriefReceipt {
   stage: BriefStage
   digest: string
   issued_at: string
+  /** 0.2.13 stable receipt id; old files derive it on read. */
+  id?: string
+  /** 0.2.13 current marker; old files derive the newest per chapter/stage. */
+  current?: boolean
+  superseded_at?: string
+  superseded_by?: string
 }
 
 /** `state/briefs.yaml`: append-only task-book evidence outside content transactions. */
@@ -566,9 +627,15 @@ export interface ForeshadowsDocument {
     resolved_at: number | null
     description: string
     anchor?: string
+    /** 0.2.13: planned payoff chapter; old rows omit it and are reported unplanned. */
+    planned_resolve?: number | null
+    /** 0.2.13: verbatim quote that proves a resolve. */
+    resolved_anchor?: string
+    /** 0.2.13: motif is exempt from dormant/overdue plot pressure. */
+    kind?: 'plot' | 'motif'
     /** New 0.2.3 writes are distinguishable from pre-0.2.3 rows by this marker. */
     format_version?: 1
-    advance_log: Array<{ chapter: number; note: string; new_info: boolean }>
+    advance_log: Array<{ chapter: number; note: string; new_info: boolean; anchor?: string }>
   }>
 }
 
@@ -583,6 +650,8 @@ export interface TimelineDocument {
     description: string
     location: string
     characters: string[]
+    /** 0.2.13 stable key; legacy rows derive it on read without rewriting. */
+    event_key?: string
   }>
 }
 
@@ -595,6 +664,8 @@ export interface RelationshipsDocument {
     a: string
     b: string
     type: string
+    /** 0.2.13 canonical type; old rows omit it and are reported uncategorized. */
+    type_code?: RelationshipTypeCode
     since: number
     description: string
     evolution: Array<{ chapter: number; note: string }>
@@ -628,6 +699,10 @@ export interface NovelProject {
     words_per_chapter: [number, number]
     total_chapters: number | null
     dialogue_ratio: [number, number]
+    /** 0.2.13 optional CJK-only lower bound; null/omitted keeps old behavior. */
+    min_cjk_chars?: number | null
+    /** 0.2.13 which dialogue measure the advisory uses; default both. */
+    dialogue_ratio_metric?: 'lines' | 'chars' | 'both'
   }
 }
 
@@ -748,6 +823,8 @@ export interface WorldbookCharacter {
   role: string
   description: string
   arc: string
+  /** 0.2.13 optional physical/visual baseline; biography stays in description. */
+  appearance?: string
 }
 
 /** One glossary entry. */
@@ -891,12 +968,16 @@ export interface BookReport {
     trend_basis: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
     /** Number of chapters represented by a final review. */
     samples: number
+    /** The unit behind `samples`; 0.2.13 makes the old ambiguity explicit. */
+    sample_basis?: 'final_review_per_chapter'
     /** Committed review rounds for this report, including history. */
     attempts: number
+    attempt_basis?: 'committed_review_submissions'
     dimensions: Array<{ id: string; average: number; samples: number; max: number }>
   }
   /** Per-chapter effort survives archive (pipeline rounds are reset). */
   effort: {
+    review_basis?: 'committed_review_submissions'
     reviews: number
     revisions: number
     checks: number
@@ -917,6 +998,12 @@ export interface BookReport {
     plot_advancement: Record<string, number>
     longest: { chapter: number; words: number } | null
     shortest: { chapter: number; words: number } | null
+    calibration?: {
+      hook_1_3_count: number
+      plot_low_count: number
+      flat: boolean
+      anchor_note: string
+    }
   }
   cast: {
     total: number
@@ -927,10 +1014,19 @@ export interface BookReport {
     dormant: number
     overdue: number
     resolved: number
+    planned?: number
+    unplanned?: number
+    resolved_without_evidence?: number
+    duplicate_titles?: number
+    motifs?: number
     oldest: Array<{ id: string; title: string; last_touched: number; age: number }>
   }
   timeline: { events: number; first_chapter: number | null; last_chapter: number | null }
-  relationships: { total: number; types: Record<string, number> }
+  relationships: {
+    total: number
+    types: Record<string, number>
+    type_codes?: Record<string, number>
+  }
   activity: Array<{ at: string; op: string; chapter: number; status: string }>
   warnings: string[]
 }
@@ -1042,6 +1138,7 @@ export interface GateInput {
     relationships: RelationshipsDocument | null
     world: WorldDocument | null
     locks: LocksDocument | null
+    worldbook?: WorldbookDocument | null
   }
   previousText: string | null
   /** The three preceding chapters, newest first, for the duplicate rule. */
@@ -1122,6 +1219,22 @@ export interface StatusReport {
   /** Chapter-boundary projection shared by every human-readable surface. */
   progress?: ChapterProgress
   rounds: RoundCounters
+  /** 0.2.13: the last archived chapter's lifetime effort, so P1 sees it after rounds reset. */
+  previous_chapter_effort?: {
+    chapter: number
+    reviews: number
+    revisions: number
+    checks: number
+    rollbacks: number
+    final_check: 'pass' | 'fail' | null
+    archived_at: string | null
+    totals: {
+      reviews: number
+      revisions: number
+      checks: number
+      rollbacks: number
+    }
+  } | null
   blocking: BlockingItem[]
   /** Non-blocking recovery notes, e.g. a recoverable pending transaction. */
   warnings?: Warning[]

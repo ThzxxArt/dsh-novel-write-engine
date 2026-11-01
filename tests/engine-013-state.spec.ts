@@ -520,8 +520,17 @@ describe('0.1.3 state repair and context truth', () => {
       )
       const compact = await engine.queryState({ kind: 'chapters', root })
       expect(Buffer.byteLength(JSON.stringify(compact.data), 'utf8')).toBeLessThanOrEqual(64 * 1024)
-      const compactRows = (compact.data as { chapters: Array<Record<string, unknown>> }).chapters
-      expect(compactRows).toHaveLength(300)
+      const compactRows = (
+        compact.data as {
+          chapters: Array<Record<string, unknown>>
+          page: { total: number; has_more: boolean; next_cursor: string | null }
+        }
+      ).chapters
+      expect(compactRows).toHaveLength(50)
+      expect((compact.data as { page: { total: number; has_more: boolean } }).page).toMatchObject({
+        total: 300,
+        has_more: true,
+      })
       expect(compactRows[0]).not.toHaveProperty('summary')
       const ranged = await engine.queryState({ kind: 'chapters', chapter_range: [299, 300], root })
       expect((ranged.data as { chapters: Array<{ num: number }> }).chapters.map((row) => row.num)).toEqual([

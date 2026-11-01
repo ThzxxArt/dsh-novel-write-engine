@@ -187,7 +187,13 @@ genres:
     profile: { water_words: 0.30, pleasure_density: 2 }
   都市现代:
     note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。"
-    profile: { water_words: 0.32, pleasure_density: 1 }
+    profile:
+      water_words: 0.32
+      pleasure_density: 1
+      pleasure_keywords: [钱, 账, 数, 铺, 租, 工钱, 生意, 招牌]
+      foreshadow_min_dormancy: 2
+      motif_min_dormancy: 1
+      foreshadow_dormant_after: 20
   西方奇幻: { note: "种族、语言与力量来源要建条目；奇观不能替代人物选择。" }
   悬疑推理:
     note: "线索先于解答出现；每个伏笔都要在归档台账中可核销。"
@@ -208,6 +214,7 @@ crosschapter:
   duplicate_advisory: 0.75
   duplicate_min_chars: 20
   foreshadow_min_dormancy: 2
+  motif_min_dormancy: 1
   foreshadow_dormant_after: 20
   check_time: true
   lock_similarity: 0.75

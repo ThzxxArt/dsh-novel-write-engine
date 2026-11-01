@@ -79,7 +79,12 @@ const fullDelta = (summary: ChapterSummary): Record<string, Record<string, unkno
     foreshadows,
     timeline,
     relationships: {
-      '他|配角A': { action: 'created', type: '同事', description: '同处一间办公室' },
+      '他|配角A': {
+        action: 'created',
+        type: '同事',
+        type_code: 'colleague',
+        description: '同处一间办公室',
+      },
     },
   }
 }

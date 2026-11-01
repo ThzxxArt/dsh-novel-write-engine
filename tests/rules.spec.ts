@@ -390,7 +390,7 @@ describe('rule pack compiler', () => {
 describe('machine pipeline', () => {
   it('runs the five steps in order and never emits the lexicon first', () => {
     expect(PIPELINE_STEPS).toEqual(['segment', 'density', 'quote', 'exemption', 'lexicon'])
-    expect(Object.keys(BUILTIN_RULES)).toHaveLength(33)
+    expect(Object.keys(BUILTIN_RULES)).toHaveLength(36)
   })
 
   it('detects format, punctuation and lexicon violations', () => {
@@ -473,7 +473,8 @@ describe('machine pipeline', () => {
   })
 
   it('flags cross-chapter problems from evidence', () => {
-    const text = '主角和配角一起走进旧办公室。主角数了数铜钱，多了 200。Day 4 的风很大。'
+    const text =
+      '主角和配角一起走进旧办公室。桌子全换成了红木桌，墙角空荡荡的。主角数了数铜钱，多了 200。Day 4 的风很大。'
     const result = runMachineChecks(
       text,
       options({

@@ -1,3 +1,14 @@
+## 0.2.13 可选字段与分页
+
+- `outline/worldbook.yaml` 的 `characters[].appearance` 是可选外貌基准；`description` 继续放人物传记，不再被 `LOCKED_DETAIL_DRIFT` 当作外貌标准。worldbook 有该角色但没有 `appearance` 时不回退首现段落；只有 worldbook 完全没有该角色才使用 `locks` 短句。
+- `novel.yaml` 的 `targets.min_cjk_chars`（正整数或 null）和 `dialogue_ratio_metric`（`lines|chars|both`）可选；缺省不改变旧项目。
+- `foreshadows.items[]` 可带 `planned_resolve`、`resolved_anchor`、`kind:'plot'|'motif'`；`advance_log[]` 可带 `anchor`。旧 51 条保持 `planned=0`，report 显示 `unplanned`，不自动补计划。`novel_amend` 是显式迁移入口：可导入旧的/手工确认的 resolved 行；带 `resolved_anchor` 的新增或变更行会按该章正文逐字校验，无 anchor 的旧 resolved 行仍可迁移；它不替代 `state_delta` 的写入链，doctor 会把旧行列为 `LEGACY_FORESHADOW_ANCHOR`。
+- `relationships.items[]` 可带 `type_code`；旧关系不猜类型，doctor 报 `uncategorized`。新建关系必须给 `type_code`。
+- `timeline.items[]` 可带 `event_key`；旧条目读取时计算，不重写文件。
+- `state/briefs.yaml` 的 `BriefReceipt` 可带 `id/current/superseded_at/superseded_by`；旧文件读取时按章节/阶段取最新为 current，不删除历史。
+- `checks/*.check.yaml` 的 `machine.numeric` 与 `machine.acknowledged_findings` 是 0.2.13 字段；旧 check 文档仍可读。旧 0.2.13 顶层 `acknowledged_findings` 也继续读取，但新写入放在 `machine` 下，避免 0.2.12 拒绝整个文档。
+- `novel_state` 的 `page` 是读取包装，不是持久化字段；不要把 `page` 写回 ledger。
+
 ## 0.2.9 archive_card
 
 `state/chapters.yaml` 的归档行可带两个可选字段：
@@ -95,7 +106,7 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 - `pipeline.draft` 是活动章的标题/场景/叙述者/摘要/正文 hash 的唯一 owner；`plans/chNNN.chapter.yaml` 是 P2 不可变证据，不再被 P3/P5 写入 summary。旧项目没有 draft 时回退读 plan.summary。
 - `state/briefs.yaml` 保存任务书收据，`pipeline.briefs` 仅作旧项目回退；重复 digest 直接 replay，不重复写事务。
-- `history/` 保存历史评审/校验/正文/废弃稿/计划；`novel_state {kind:"history"}` 全量列出（带 `total`），按 chapter+正整数 revision 读取；`chapter.rounds`（含 lifetime `rollbacks`）/`final_check`/`archived_at` 在归档时写入，`novel_report.effort` 保留本章难度；amend 不能改写这些证据字段。
+- `history/` 保存历史评审/校验/正文/废弃稿/计划；`novel_state {kind:"history"}` 默认 50 条分页（带 `page.total/returned/next_cursor`），用 `limit`/`cursor` 继续翻页，不会静默截断；按 chapter+正整数 revision 读取；`chapter.rounds`（含 lifetime `rollbacks`）/`final_check`/`archived_at` 在归档时写入，`novel_report.effort` 保留本章难度；amend 不能改写这些证据字段。
 - 通过参数形状校验、进入项目锁后被 gate/delta/state 拒绝的写操作追加 `aborted` + `attempt:true` journal 行，带 code；事务提交失败追加的 aborted 行也带 code；内容文件零写入。锁前的参数形状错误不写 journal。
 - 备份目录新增 `manifest.json`；`novel_state {kind:"backups"}` 可列；P2/P4/P6 在旧文件存在时也建备份，`novel_restore` 因此能恢复正文/计划/世界观计划/评审/校验。只恢复活动章，恢复本身再建备份且不 replay；旧版无 manifest 备份只可列出。
 - 只跑 `content` 或 `integrity` 的 check 通过后停留 P6，返回 `CHECK_SCOPE_PARTIAL`，必须再跑完整 scope 才能归档。

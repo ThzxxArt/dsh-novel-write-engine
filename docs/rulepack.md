@@ -1,3 +1,17 @@
+## 0.2.13 genre profile 扩展
+
+`genres.<题材>.profile` 还可选：
+
+```yaml
+profile:
+  pleasure_keywords: [钱, 账, 数, 铺, 租, 工钱, 生意, 招牌]
+  foreshadow_min_dormancy: 2
+  motif_min_dormancy: 1
+  foreshadow_dormant_after: 20
+```
+
+`pleasure_keywords` 优先于全局词表；`foreshadow_dormant_after` 优先于全局休眠阈值；`motif_min_dormancy` 只作用于 `kind='motif'`。缺省回退全局值，所有 profile 仍只影响 advisory，不改变 blocker/门控/评分。`pleasure_keywords` 必须是字符串数组；空数组与缺省一样回退全局词表；三个 profile 休眠阈值必须是正整数；否则 `RULEPACK_INVALID`，不会让一次 `novel_check` 在运行时崩溃。默认包不得写入具体书稿的专有词。
+
 ## 0.2.9 genre profile
 
 `genres.<题材>` 可增加可选的 `profile`，只影响 advisory：

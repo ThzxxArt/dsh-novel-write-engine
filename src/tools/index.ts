@@ -244,6 +244,8 @@ const summarySchema = required(
               title: required(str),
               description: required(str),
               anchor: str,
+              planned_resolve: nullableInt,
+              kind: { type: 'string', enum: ['plot', 'motif'] as const },
             }),
           ),
         ),
@@ -317,13 +319,21 @@ const stateDeltaSchema = required(
       dynamicSection('人物名到 {action,reason?,role?,profile?,current_state?,growth?} 的映射'),
     ),
     foreshadows: required(
-      dynamicSection('key 到 {action,title?,anchor?,description?,note?,new_info?} 的映射'),
+      dynamicSection(
+        'key 到 {action,title?,anchor?,planned_resolve?,kind?,resolved_anchor?,description?,note?,new_info?} 的映射',
+      ),
     ),
     timeline: required(
-      dynamicSection('summary.events 下标到 {action,story_time?,description?,location?,characters?} 的映射'),
+      dynamicSection(
+        'summary.events 下标或稳定 event_key 到 {action,story_time?,description?,location?,characters?} 的映射',
+      ),
     ),
     world: required(dynamicSection('名称到 {action,kind?,description?,layout?,capacity?} 的映射')),
-    relationships: required(dynamicSection('"甲|乙" 到 {action,type?,description?,note?} 的映射')),
+    relationships: required(
+      dynamicSection(
+        '"甲|乙" 到 {action,type?,type_code?,description?,note?} 的映射；created 必须带 type_code',
+      ),
+    ),
   }),
 )
 const handoffSchema = objectOf({
@@ -349,6 +359,7 @@ const worldbookCharacter = objectOf({
   role: required(str),
   description: required(str),
   arc: str,
+  appearance: str,
 })
 const worldbookGlossary = objectOf({ term: required(str), definition: required(str) })
 const worldbookBackstory = objectOf({ time: required(str), event: required(str) })
@@ -399,6 +410,21 @@ export function createNovelTools(
           description: arraySemanticsDescription('replace', 'Fixed [min,max] word target for chapters.'),
         },
         total_chapters: { type: 'integer' },
+        dialogue_ratio: {
+          type: 'array',
+          items: { type: 'number' },
+          description: arraySemanticsDescription('replace', 'Dialogue ratio [min,max] within 0..1.'),
+        },
+        min_cjk_chars: {
+          ...nullableInt,
+          description:
+            'Optional CJK-only lower bound; null disables it (the total word target still applies).',
+        },
+        dialogue_ratio_metric: {
+          type: 'string',
+          enum: ['lines', 'chars', 'both'] as const,
+          description: 'Which dialogue measure the advisory uses; default both.',
+        },
         premise: { type: 'string', description: 'Optional one-sentence premise for the book plan.' },
         logline: { type: 'string' },
         themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
@@ -420,6 +446,9 @@ export function createNovelTools(
           description: args.description as string,
           words_per_chapter: args.words_per_chapter as [number, number],
           total_chapters: args.total_chapters as number,
+          dialogue_ratio: args.dialogue_ratio as [number, number] | undefined,
+          min_cjk_chars: args.min_cjk_chars as number | null | undefined,
+          dialogue_ratio_metric: args.dialogue_ratio_metric as 'lines' | 'chars' | 'both' | undefined,
           premise: args.premise as string,
           logline: args.logline as string,
           themes: args.themes as string[],
@@ -786,9 +815,10 @@ export function createNovelTools(
           items: { type: 'string' },
           description: arraySemanticsDescription(
             'replace',
-            'Advisory codes read and accepted; blockers cannot be acknowledged.',
+            'Advisory codes or instance ids read and accepted; blockers cannot be acknowledged.',
           ),
         },
+        acknowledge_reasons: openObject('Token 到理由的映射；每个 acknowledge 项都必须有非空理由。'),
         project_root: root,
       },
       output: jsonOutput,
@@ -798,6 +828,9 @@ export function createNovelTools(
           scope: args.scope as string[],
           semantic: asJson(args.semantic, 'semantic') as never[],
           ...(args.acknowledge === undefined ? {} : { acknowledge: args.acknowledge }),
+          ...(args.acknowledge_reasons === undefined
+            ? {}
+            : { acknowledge_reasons: args.acknowledge_reasons as Record<string, string> }),
           root: args.project_root,
         }),
       ),
@@ -903,8 +936,28 @@ export function createNovelTools(
           items: { type: 'integer' },
           description: arraySemanticsDescription(
             'replace',
-            'For kind=chapters: inclusive [start, end] range.',
+            'Inclusive [start, end] range for chapters/timeline/foreshadows/relationships.',
           ),
+        },
+        limit: {
+          type: 'integer',
+          description: 'Page size 1..200; omitted uses 50 for ledgers and 200 for characters/world/locks.',
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor from page.next_cursor; bound to one section and its filters.',
+        },
+        status: {
+          type: 'string',
+          description: 'For kind=foreshadows: open|planted|dormant|advanced|resolved.',
+        },
+        include_history: {
+          type: 'boolean',
+          description: 'For kind=foreshadows: include full advance_log; default false returns advance_count.',
+        },
+        current_only: {
+          type: 'boolean',
+          description: 'For kind=briefs: only the current receipt per chapter/stage.',
         },
         project_root: root,
       },
@@ -918,6 +971,11 @@ export function createNovelTools(
           ...(args.chapter_range === undefined
             ? {}
             : { chapter_range: args.chapter_range as [number, number] }),
+          ...(args.limit === undefined ? {} : { limit: args.limit }),
+          ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
+          ...(args.status === undefined ? {} : { status: args.status }),
+          ...(args.include_history === undefined ? {} : { include_history: args.include_history }),
+          ...(args.current_only === undefined ? {} : { current_only: args.current_only }),
           root: args.project_root,
         }),
       ),
