@@ -10,7 +10,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-novel-write-engine?style=flat-square&logo=npm&label=downloads)](https://www.npmjs.com/package/dsh-novel-write-engine)
 [![CI](https://img.shields.io/github/actions/workflow/status/ThzxxArt/dsh-novel-write-engine/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/ThzxxArt/dsh-novel-write-engine/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ThzxxArt/dsh-novel-write-engine?style=flat-square&logo=github&label=release)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases)
-[![version](https://img.shields.io/badge/version-0.2.11-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.11)
+[![version](https://img.shields.io/badge/version-0.2.12-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.12)
 [![Node](https://img.shields.io/badge/Node-%3E%3D24.9.0-339933?style=flat-square&logo=node.js&logoColor=white)](#1-兼容性)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%20~%200.3-6f42c1?style=flat-square)](#1-兼容性)
 [![License](https://img.shields.io/github/license/ThzxxArt/dsh-novel-write-engine?style=flat-square)](LICENSE)
@@ -20,9 +20,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.11**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.12**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.11 是工作台内容层与命令教程版本：七栏内容区固定在面板高度内独立滚动，所有折叠详情、资料卡、章节/质量详情与章节表改为有界滚动；教程新增「全部命令」，覆盖 5 个入口、`/novel` 的 25 种带名写法、6 种导出、25 个 admin 操作与常用组合。没有新增或改变阶段、工具、操作、门控、语义项、导出、schema 或配置键。
+> 0.2.12 是工作台滚动与角色标签修复版本：页面在宿主固定高度裁切盒内恢复整页滚动，顶栏与下一步卡随内容移动；人物、时间线、线索、设定、全书资料等长列表改为有界局部滚动，展开的设定/线索卡片跨整行；修复全书资料标题行被额外伪元素挤到最右，以及角色 `antagonist` 显示英文。没有新增或改变阶段、工具、操作、门控、语义项、导出、schema 或配置键。
 
 ---
 
@@ -204,7 +204,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.11
+dsh plugin --profile web add dsh-novel-write-engine@0.2.12
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -252,10 +252,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.11.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.12.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.11.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.12.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -267,7 +267,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.11`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.12`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -627,16 +627,16 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.11
+### 升级到 0.2.12
 
-0.2.11 是工作台内容层与命令教程更新，没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；面板协议 `payload_version` 保持 7，`PANEL_VERSION` 从 0.2.10 升到 0.2.11。
+0.2.12 是工作台滚动与角色标签修复更新，没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；面板协议 `payload_version` 保持 7，`PANEL_VERSION` 从 0.2.11 升到 0.2.12。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.11
+dsh plugin --profile web add dsh-novel-write-engine@0.2.12
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.10 升到 0.2.11；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.11 升到 0.2.12；旧标签页显示“需要刷新”时刷新即可。
 
 历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
@@ -793,15 +793,15 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 当前工作树验证（0.2.11 基线）
+### 当前工作树验证（0.2.12 基线）
 
 以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**95 个测试文件 / 1009 项全部通过**；
-- 覆盖率：**语句 93.99% / 分支 89.21% / 函数 96.86% / 行 93.99%**；逐文件门禁通过；client 函数覆盖 85.34%；client bundle 238.90 KB（react-dom 外置）；
+- `corepack pnpm test`：**95 个测试文件 / 1011 项全部通过**；
+- 覆盖率：**语句 94.00% / 分支 89.20% / 函数 96.86% / 行 94.00%**；逐文件门禁通过；client 函数覆盖 85.34%；client bundle 239.97 KB（react-dom 外置）；
 - `typecheck`、`lint`、`build`：通过；
-- 视觉：主工作台沿用上一轮 Chromium 1440×900 与 390×844 检查；新增命令教程由 client 测试打开弹框并逐项断言，**未做真实浏览器截图**；有项目态真实宿主、触屏真机与屏幕阅读器未验收；
-- 0.2.11 未改引擎写路径；本轮没有重新跑真实模型。
+- 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行”；未做触屏真机与屏幕阅读器验收；
+- 0.2.12 未改引擎写路径；本轮没有重新跑真实模型。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
 

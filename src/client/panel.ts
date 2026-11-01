@@ -54,11 +54,12 @@ const CSS = `
   width: 100%;
   max-width: 1120px;
   height: 100%;
+  max-height: 100%;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
   margin: 0 auto;
   padding: clamp(18px, 3.2vw, 38px);
   color: var(--nwe-ink);
@@ -66,6 +67,7 @@ const CSS = `
   line-height: 1.55;
 }
 .nwe-root * { box-sizing: border-box; }
+.nwe-root::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .nwe-root::before {
   content: "";
   position: absolute;
@@ -174,6 +176,7 @@ const CSS = `
 }
 .nwe-help:hover { border-color: color-mix(in srgb, var(--nwe-gold) 60%, var(--nwe-border)); color: var(--nwe-ink); transform: translateY(-1px); }
 .nwe-help svg { flex: 0 0 auto; }
+.nwe-root:focus-visible { outline: 2px solid var(--nwe-gold); outline-offset: -3px; }
 .nwe-root :focus-visible { outline: 2px solid var(--nwe-gold); outline-offset: 3px; }
 .nwe-modal-backdrop {
   position: fixed;
@@ -1120,8 +1123,6 @@ const CSS = `
   font-weight: 650;
 }
 .nwe-dossier > summary::-webkit-details-marker { display: none; }
-.nwe-dossier > summary::before { content: "+"; color: var(--nwe-accent); font-size: 16px; line-height: 1; }
-.nwe-dossier[open] > summary::before { content: "−"; }
 .nwe-dossier-note { margin-left: auto; color: var(--nwe-muted); font-size: 11px; font-weight: 400; }
 .nwe-dossier .nwe-section { margin-top: 12px; }
 .nwe-dossier .nwe-section-head { display: none; }
@@ -1258,7 +1259,17 @@ const CSS = `
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 10px;
   align-items: start;
+  max-height: min(56vh, 580px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   margin-top: 9px;
+  padding-right: 4px;
+}
+.nwe-card-grid:focus-visible {
+  outline: 2px solid var(--nwe-accent);
+  outline-offset: -2px;
 }
 .nwe-data-card {
   overflow: hidden;
@@ -1341,9 +1352,17 @@ const CSS = `
 .nwe-worldbook-layout > .nwe-subsection:first-child,
 .nwe-leads-layout > .nwe-subsection:first-child { grid-column: 1 / -1; }
 .nwe-worldbook-layout > .nwe-subsection .nwe-card-grid,
-.nwe-leads-layout > .nwe-subsection .nwe-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nwe-leads-layout > .nwe-subsection .nwe-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: min(40vh, 400px); }
 .nwe-worldbook-layout > .nwe-subsection:first-child .nwe-card-grid,
 .nwe-leads-layout > .nwe-subsection:first-child .nwe-card-grid { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.nwe-worldbook-layout > .nwe-subsection:has(.nwe-data-card[open]),
+.nwe-leads-layout > .nwe-subsection:has(.nwe-data-card[open]) { grid-column: 1 / -1; }
+.nwe-worldbook-layout > .nwe-subsection:has(.nwe-data-card[open]) .nwe-card-grid,
+.nwe-leads-layout > .nwe-subsection:has(.nwe-data-card[open]) .nwe-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  max-height: min(52vh, 540px);
+}
+#nwe-panel-characters .nwe-card-grid { max-height: min(60vh, 620px); }
 .nwe-quality-layout { display: block; }
 .nwe-quality-kpis {
   display: grid;
@@ -1471,44 +1490,26 @@ const CSS = `
   .nwe-chapter-cards-mobile { display: grid; gap: 8px; margin-top: 10px; }
 }
 
-/* v10 data surfaces: bounded canvas, one disclosure language, local scroll. */
+/* v10 data surfaces: the host clips its fixed centre column, so the page owns
+   exactly one scroller and the chrome stays in flow. The root scrollbar is
+   hidden; card lists and detail bodies below keep their visible local bars. */
 .nwe-root {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  max-height: 100%;
-  overflow: hidden;
-}
-.nwe-hero,
-.nwe-damaged,
-.nwe-next,
-.nwe-tabs { flex: 0 0 auto; }
-.nwe-workbench {
+  display: block;
   flex: 1 1 auto;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
-  margin-top: 2px;
-  padding: 0 6px 2px 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
 }
-.nwe-workbench:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: -3px; }
-.nwe-workbench::-webkit-scrollbar { width: 10px; height: 10px; }
-.nwe-workbench::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--nwe-ink) 5%, transparent);
-}
-.nwe-workbench::-webkit-scrollbar-button { display: none; }
-.nwe-workbench::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--nwe-ink) 28%, transparent);
-  background-clip: padding-box;
-}
-.nwe-workbench::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--nwe-ink) 42%, transparent);
-  background-clip: padding-box;
+.nwe-root::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.nwe-workbench {
+  min-width: 0;
+  margin-top: 2px;
+  padding: 0 6px 2px 0;
+  overflow: visible;
 }
 .nwe-root details > summary { cursor: pointer; list-style: none; }
 .nwe-root details > summary::-webkit-details-marker { display: none; }
@@ -1532,6 +1533,7 @@ const CSS = `
 .nwe-info-card-body:focus-visible,
 .nwe-dossier-body:focus-visible,
 .nwe-fold-body:focus-visible,
+.nwe-card-grid:focus-visible,
 .nwe-table-wrap:focus-visible {
   outline: 2px solid var(--nwe-accent);
   outline-offset: -2px;
@@ -1540,11 +1542,13 @@ const CSS = `
 .nwe-info-card-body::-webkit-scrollbar,
 .nwe-dossier-body::-webkit-scrollbar,
 .nwe-fold-body::-webkit-scrollbar,
+.nwe-card-grid::-webkit-scrollbar,
 .nwe-table-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
 .nwe-data-card-body::-webkit-scrollbar-track,
 .nwe-info-card-body::-webkit-scrollbar-track,
 .nwe-dossier-body::-webkit-scrollbar-track,
 .nwe-fold-body::-webkit-scrollbar-track,
+.nwe-card-grid::-webkit-scrollbar-track,
 .nwe-table-wrap::-webkit-scrollbar-track {
   border-radius: 999px;
   background: color-mix(in srgb, var(--nwe-ink) 5%, transparent);
@@ -1553,11 +1557,13 @@ const CSS = `
 .nwe-info-card-body::-webkit-scrollbar-button,
 .nwe-dossier-body::-webkit-scrollbar-button,
 .nwe-fold-body::-webkit-scrollbar-button,
+.nwe-card-grid::-webkit-scrollbar-button,
 .nwe-table-wrap::-webkit-scrollbar-button { display: none; }
 .nwe-data-card-body::-webkit-scrollbar-thumb,
 .nwe-info-card-body::-webkit-scrollbar-thumb,
 .nwe-dossier-body::-webkit-scrollbar-thumb,
 .nwe-fold-body::-webkit-scrollbar-thumb,
+.nwe-card-grid::-webkit-scrollbar-thumb,
 .nwe-table-wrap::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
@@ -1568,6 +1574,7 @@ const CSS = `
 .nwe-info-card-body::-webkit-scrollbar-thumb:hover,
 .nwe-dossier-body::-webkit-scrollbar-thumb:hover,
 .nwe-fold-body::-webkit-scrollbar-thumb:hover,
+.nwe-card-grid::-webkit-scrollbar-thumb:hover,
 .nwe-table-wrap::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--nwe-ink) 42%, transparent);
   background-clip: padding-box;
@@ -1673,7 +1680,7 @@ const CSS = `
 }
 .nwe-dossier[open] .nwe-dossier-caret { transform: rotate(45deg); color: var(--nwe-accent); }
 .nwe-dossier-body {
-  max-height: min(60vh, 620px);
+  max-height: min(50vh, 500px);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -1785,6 +1792,20 @@ const CSS = `
   .nwe-table-wrap { max-height: 62vh; }
   .nwe-chapters { max-height: 58vh; }
 }
+
+/* A card body is a reading window, not a wheel trap: at its edge the page
+   continues to scroll. The modal keeps contain so the page never moves behind it. */
+.nwe-card-grid,
+.nwe-data-card-body,
+.nwe-info-card-body,
+.nwe-dossier-body,
+.nwe-fold-body,
+.nwe-chapter-detail,
+.nwe-table-wrap,
+.nwe-chapters,
+.nwe-activity,
+.nwe-volumes,
+.nwe-desk-main .nwe-chapters { overscroll-behavior: auto; }
 `
 
 const icon = (size: number, path: string): ReactElement =>
@@ -4152,14 +4173,15 @@ const textOf = (value: unknown, fallback = '—'): string =>
       ? String(value)
       : fallback
 
+const ROLE_LABELS: Readonly<Record<string, string>> = {
+  protagonist: '主角',
+  supporting: '配角',
+  antagonist: '反派',
+  extra: '龙套',
+}
+
 const roleLabel = (value: unknown): string =>
-  value === 'protagonist'
-    ? '主角'
-    : value === 'supporting'
-      ? '配角'
-      : value === 'extra'
-        ? '龙套'
-        : textOf(value)
+  typeof value === 'string' ? (ROLE_LABELS[value] ?? textOf(value)) : textOf(value)
 
 const STATUS_LABELS: Record<string, string> = {
   planted: '已埋',
@@ -4361,7 +4383,12 @@ const sectionList = (title: string, items: unknown, kind: SectionGlyph = 'spark'
   }
   return createElement(
     'div',
-    { className: 'nwe-card-grid' },
+    {
+      className: 'nwe-card-grid',
+      role: 'region',
+      'aria-label': `${title}列表，可滚动`,
+      tabIndex: 0,
+    },
     ...items.map((item, index) => {
       const row = asRow(item)
       const explicitLabel =
@@ -5245,7 +5272,9 @@ export function panelElement(
       'data-plugin': 'dsh-novel-write-engine',
       className: 'nwe-root',
       'aria-busy': loading,
+      'aria-label': '网文工坊页面',
       'data-state': view.state,
+      tabIndex: 0,
     },
     createElement('style', { key: 'nwe-style' }, CSS),
     createElement(
@@ -5311,7 +5340,6 @@ export function panelElement(
         className: 'nwe-workbench',
         role: 'region',
         'aria-label': '网文工坊内容',
-        tabIndex: 0,
       },
       ready && tab === 'overview'
         ? createElement(

@@ -1625,12 +1625,31 @@ describe('client registration and rendering', () => {
     expect(css).not.toContain('#c9a227')
   })
 
-  it('bounds the workbench and data-heavy surfaces with real scroll regions', () => {
+  it('owns one page scroller inside the fixed host while card lists scroll locally', () => {
     const markup = renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined))
     const css = /<style>([\s\S]*)<\/style>/.exec(markup)?.[1] ?? ''
+    const plain = css.replaceAll('&gt;', '>')
+    expect(markup).toMatch(/class="nwe-root"[^>]*aria-label="网文工坊页面"/)
+    expect(markup).toMatch(/class="nwe-root"[^>]*tabindex="0"/)
     expect(markup).toContain('class="nwe-workbench"')
     expect(markup).toContain('aria-label="网文工坊内容"')
-    expect(css).toMatch(/\.nwe-workbench\s*\{[^}]*flex: 1 1 auto;[^}]*overflow-y: auto;/s)
+    expect(markup).not.toMatch(/class="nwe-workbench"[^>]*tabindex=/)
+    const workbench = /\.nwe-workbench\s*\{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(workbench).toContain('overflow: visible')
+    expect(workbench).not.toContain('overflow-y: auto')
+    const rootBlocks = [...css.matchAll(/\.nwe-root\s*\{([^}]*)\}/g)].map((match) => match[1] ?? '')
+    const page = rootBlocks.at(-1) ?? ''
+    expect(page).toContain('display: block')
+    expect(page).toContain('height: 100%')
+    expect(page).toContain('overflow-y: auto')
+    expect(page).toContain('scrollbar-width: none')
+    expect(css).toContain('.nwe-root::-webkit-scrollbar { width: 0; height: 0; display: none; }')
+    expect(css).not.toMatch(/\.nwe-hero[^}]*position:\s*sticky/s)
+    expect(css).toMatch(/\.nwe-card-grid\s*\{[^}]*max-height:[^}]*overflow-y: auto;/s)
+    expect(css).toMatch(/#nwe-panel-characters \.nwe-card-grid\s*\{[^}]*max-height:/s)
+    expect(plain).toMatch(/\.nwe-leads-layout > \.nwe-subsection \.nwe-card-grid\s*\{[^}]*max-height:/s)
+    expect(plain).toContain('.nwe-worldbook-layout > .nwe-subsection:has(.nwe-data-card[open])')
+    expect(plain).toContain('.nwe-leads-layout > .nwe-subsection:has(.nwe-data-card[open])')
     expect(css).toMatch(/\.nwe-table-wrap\s*\{[^}]*max-height: min\(58vh, 560px\);[^}]*overflow: auto;/s)
     expect(css).toMatch(/\.nwe-info-card-body\s*\{[^}]*max-height:/s)
     expect(css).toMatch(/\.nwe-fold-body\s*\{[^}]*max-height:/s)
@@ -1641,6 +1660,19 @@ describe('client registration and rendering', () => {
     expect(css).toContain('::-webkit-scrollbar-thumb')
     expect(css).toContain('.nwe-info-card')
     expect(css).toContain('.nwe-fold')
+  })
+
+  it('keeps the dossier summary a three-track grid in every open state', () => {
+    const markup = renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined))
+    const css = /<style>([\s\S]*)<\/style>/.exec(markup)?.[1] ?? ''
+    const plain = css.replaceAll('&gt;', '>')
+    expect(plain).toMatch(
+      /\.nwe-dossier > summary\s*\{[^}]*display: grid;[^}]*grid-template-columns: 30px minmax\(0, 1fr\) 14px;/s,
+    )
+    expect(plain).toContain('.nwe-dossier > summary::before { content: none; }')
+    // A generated marker would become a fourth grid item and push the copy
+    // into the 14px caret track on the far right.
+    expect(plain).not.toMatch(/\.nwe-dossier(?:\[open\])? > summary::before\s*\{[^}]*content:\s*["']?[+−]/)
   })
 
   it('gives every disclosure a scoped class and custom summary treatment', () => {
@@ -1687,10 +1719,15 @@ describe('client registration and rendering', () => {
       )
     const characters = section('characters', [
       { name: '角色甲', role: 'protagonist', first_appearance: 1, last: 3, appearances: 2 },
+      { name: '角色乙', role: 'antagonist', first_appearance: 2, last: 4, appearances: 1 },
     ])
     expect(characters).toContain('角色甲')
     expect(characters).toContain('搜索人物')
     expect(characters).toContain('主角')
+    expect(characters).toContain('反派')
+    expect(characters).not.toContain('antagonist')
+    expect(characters).toContain('aria-label="人物列表，可滚动"')
+    expect(characters).toMatch(/class="nwe-card-grid"[^>]*tabindex="0"/)
     expect(characters).not.toContain('&quot;role&quot;')
     const quality = section('quality', {
       quality: { average: 12, median: 12, min: 10, max: 20, samples: 2 },
@@ -1742,6 +1779,7 @@ describe('client registration and rendering', () => {
     expect(leads).toContain('休眠')
     expect(leads).not.toContain('dormant')
     expect(leads).toContain('时间线（1）')
+    expect(leads).toContain('aria-label="时间线列表，可滚动"')
     expect(leads).toContain('关系（1）')
     const overview = renderToStaticMarkup(panelElement(buildView(base), false, () => undefined))
     expect(overview).toContain('终检 通过')
