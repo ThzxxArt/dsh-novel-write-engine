@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.9`                                                                                                  |
+| 插件版本 | `0.2.10`                                                                                                 |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1385,6 +1385,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.10 是工作台呈现层版本：七栏内容区改为全宽，人物/线索/设定/质量/健康改为带图标的卡片墙，章节窄屏切换为卡片；概览新增最近 10 章评分趋势与最近 8 章字数柱状图。`PANEL_VERSION` 升到 0.2.10，面板协议 `payload_version` 仍为 7；没有工具、阶段、门控、schema、导出或配置键变化。
+
 0.2.9 是可信工作台与工具契约版本：`ChapterRecord` 增加可选 `archive_card`/`archive_card_digest`，归档卡受保护字段有独立证据；26 个自由 JSON 入参改为类型化 schema，只有真正的动态映射保持开放；面板新增 v7 section 读模型（overview/chapters/characters/foreshadows/timeline/relationships/worldbook/quality/health），每 section 有窗口元数据、64KB 字节上限和 ETag/304；`listHistory` 默认不读正文，基础 section 不读归档 review；规则包增加题材 advisory profile；卷 upsert 支持稳定 id。没有新增阶段、工具、操作、门控、语义项或导出种类。
 
 0.2.8 是边界与可信性版本：新增 `ChapterProgress` 单一投影，修正归档后 `pipeline.chapter` 指向下一章而 `stage` 仍为 `done` 被读成“下一章已完成”；`backups/` 经 `safePath`/`ensureDir` 创建，拒绝符号链接逃逸；PG-05 与 state_delta 共用 `isNarratorAlias`；panel 缓存纳入 journal 健康；`ready_to_archive` 缺 P8 任务书的既有 brief 顺序补回归；归档卡的 `goal/conflict/hook/notes` 不可改写，`chapters.yaml` 损坏时也以旧卡为证据；created 角色的 `growth` 落盘。无 schema、工具、阶段、门控或配置键变化。
@@ -1833,14 +1835,16 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 命名：中文「网文工坊」，英文 `Novel Studio`，id `novel-workshop`。版式按「状态优先」组织：
 
-1. **紧凑顶栏**：项目名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧分组项目选择器、教程、刷新。
+1. **紧凑顶栏**：品牌块、书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧项目选择器、教程、刷新。
 2. **首屏下一步卡**：工具的中文动作 + 可读理由；旁边“复制续写指令”只写剪贴板，失败时展示可选中文本。
-3. **统计条**：已归档章节、总字数、平均评分、待处理门控四项；空值显示 `—`，不再用四张大卡片。
-4. **双栏工作台**：左侧阶段轨、门控、advisory 提示、legacy 旧数据；右侧全书规划（蓝图/严格模式、章卡进度条、**全部卷**、世界观计数、质量趋势、健康度）与最近活动。
-5. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
-6. **章节卡**：章号、标题、阶段、字数、评分进度、状态徽章、可展开摘要；窄屏改为纵向堆叠；超过 30 章只渲染最近 30 张，并显示总记录数。
-7. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。advisory 用黄色区、legacy 用虚线灰色区，均不与 blocking 混排。
-8. **项目选择器**：按写作中/待修复/失效（缺失/非项目/不可读）分组；失效默认折叠，`>6` 项出现搜索框；同名项目用父目录区分，状态写进 option 文本。
+3. **七栏导航**：概览、章节、人物、线索、设定、质量、健康；内容区全宽，不再被旧的左右栏比例限制。
+4. **概览统计与图表**：四项统计条；最近 10 章评分趋势折线（0/75/150 网格、点 tooltip、空态/单点态）与最近 8 章字数柱状图（峰值、章号、空态）；窄屏上下堆叠。
+5. **概览双栏**：左侧阶段轨、门控、advisory 提示、legacy 旧数据与章节；右侧全书进度/蓝图/卷/世界观计数与最近活动；下方「全书资料」折叠区。
+6. **语义卡片墙**：人物、线索、设定、质量、健康使用带图标、摘要、状态 chips 与展开详情的卡片；线索与设定按分组两栏排列。
+7. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
+8. **章节台账**：桌面为可筛选、排序、翻页、懒加载详情的表；章号、标题、阶段、字数、评分、状态；窄屏切换为双行章节卡。超过 30 章只渲染最近 30 条，并显示总记录数。
+9. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。advisory 用黄色区、legacy 用虚线灰色区，均不与 blocking 混排。
+10. **项目选择器**：按写作中/待修复/失效（缺失/非项目/不可读）分组；失效默认折叠，`>6` 项出现搜索框；同名项目用父目录区分，状态写进 option 文本。
 
 **状态与可达性**：loading 用骨架 + `role=status`；choose 显示“发现多本书，先选一本”与项目按钮；missing 显示项目根、原因和建议，并保留选择器；empty 显示 `novel_init`；error 用 `role=alert` + 重试；outdated 用 `location.reload()`；damaged 仍渲染只读数据但在顶部提示用 `novel_state`/`novel_amend` 修复。根节点 `aria-busy`，统计区 `role=group`，选择器 `aria-label="切换项目"`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 

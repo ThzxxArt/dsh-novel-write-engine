@@ -303,6 +303,20 @@ const CSS = `
   letter-spacing: -.02em;
 }
 .nwe-stat-unit { margin-left: 2px; color: var(--nwe-muted); font-size: 12px; font-weight: 400; }
+.nwe-overview-charts { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(260px, .9fr); gap: 12px; margin-top: 14px; }
+.nwe-viz-card { min-width: 0; padding: 13px 15px 11px; border: 1px solid var(--nwe-border); border-radius: 12px; background: linear-gradient(145deg, color-mix(in srgb, var(--nwe-gold) 6%, var(--nwe-surface)), var(--nwe-surface) 58%); }
+.nwe-viz-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.nwe-viz-title { display: flex; align-items: center; gap: 8px; color: var(--nwe-ink); font-size: 13px; font-weight: 650; }
+.nwe-viz-title svg { color: var(--nwe-gold); }
+.nwe-viz-note { color: var(--nwe-muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.nwe-viz-empty { display: grid; place-items: center; min-height: 196px; color: var(--nwe-muted); font-size: 12px; text-align: center; }
+.nwe-trend-chart { display: block; width: 100%; height: 196px; margin-top: 2px; overflow: visible; }
+.nwe-word-chart { display: flex; align-items: flex-end; gap: 7px; height: 196px; margin-top: 2px; padding: 6px 2px 0; border-bottom: 1px solid var(--nwe-border); background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--nwe-border) 25%); }
+.nwe-word-col { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 0; height: 100%; gap: 4px; }
+.nwe-word-value { height: 12px; color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nwe-word-track { display: flex; align-items: flex-end; justify-content: center; flex: 0 0 142px; width: 100%; height: 142px; min-height: 0; }
+.nwe-word-track > span { display: block; width: min(72%, 30px); min-height: 3px; border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg, var(--nwe-gold), color-mix(in srgb, var(--nwe-gold) 28%, transparent)); }
+.nwe-word-label { color: var(--nwe-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nwe-section { margin-top: 26px; }
 .nwe-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .nwe-section-title {
@@ -712,6 +726,718 @@ const CSS = `
   .nwe-skeleton-line { animation: none; }
   .nwe-refresh, .nwe-chapter { transition: none; }
 }
+
+/* v8 workbench: quiet chrome, editorial hierarchy, content over ornament. */
+.nwe-root {
+  --nwe-accent: color-mix(in srgb, #b4471f 82%, var(--nwe-ink));
+  --nwe-accent-soft: color-mix(in srgb, var(--nwe-accent) 9%, transparent);
+  --nwe-ok: color-mix(in srgb, #2f7d5b 82%, var(--nwe-ink));
+  --nwe-warn: color-mix(in srgb, #9a6700 82%, var(--nwe-ink));
+  --nwe-bad: color-mix(in srgb, #b42318 82%, var(--nwe-ink));
+  --nwe-gold: var(--nwe-accent);
+  --nwe-jade: var(--nwe-ok);
+  --nwe-rose: var(--nwe-bad);
+  max-width: 1240px;
+  padding: clamp(22px, 2.8vw, 38px) clamp(20px, 3.4vw, 46px) 30px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.nwe-hero {
+  align-items: flex-end;
+  gap: 32px;
+  padding: 0 0 22px;
+  border: 0;
+  border-bottom: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.nwe-brand { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.nwe-brand-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--nwe-accent);
+  color: #fffaf4;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 #ffffff2e;
+}
+.nwe-eyebrow { color: var(--nwe-muted); font-size: 11px; font-weight: 700; letter-spacing: .16em; }
+.nwe-title {
+  margin: 5px 0 6px;
+  font-family: inherit;
+  font-size: clamp(26px, 3vw, 34px);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -.04em;
+}
+.nwe-meta { gap: 6px 10px; color: var(--nwe-muted); font-size: 12px; }
+.nwe-stage {
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 7px;
+  background: var(--nwe-accent-soft);
+  color: var(--nwe-accent);
+  font-size: 11px;
+  font-weight: 650;
+}
+.nwe-stage::before { display: none; }
+.nwe-rootline {
+  margin-top: 4px;
+  color: color-mix(in srgb, var(--nwe-ink) 46%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.nwe-revision { padding-left: 9px; border-left: 1px solid var(--nwe-border); }
+.nwe-actions { align-items: center; gap: 8px; }
+.nwe-project-label { font-size: 11px; color: var(--nwe-muted); }
+.nwe-project-select,
+.nwe-project-search {
+  min-height: 34px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-surface);
+  color: var(--nwe-ink);
+  font-size: 12px;
+}
+.nwe-project-select { max-width: 300px; padding: 6px 28px 6px 10px; }
+.nwe-project-search { width: 132px; padding: 6px 9px; }
+.nwe-refresh,
+.nwe-help {
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nwe-ink);
+  font: inherit;
+  font-size: 12px;
+}
+.nwe-refresh {
+  border-color: var(--nwe-border);
+  background: transparent;
+  color: var(--nwe-ink);
+}
+.nwe-refresh:hover:not(:disabled) {
+  border-color: var(--nwe-accent);
+  background: var(--nwe-accent-soft);
+  transform: none;
+}
+.nwe-help { background: color-mix(in srgb, var(--nwe-surface) 70%, transparent); color: var(--nwe-muted); }
+.nwe-help:hover { border-color: var(--nwe-accent); color: var(--nwe-ink); transform: none; }
+.nwe-refresh:disabled { cursor: wait; opacity: .55; }
+.nwe-next {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin-top: 22px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--nwe-accent) 22%, var(--nwe-border));
+  border-left: 3px solid var(--nwe-accent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--nwe-accent) 5%, var(--nwe-surface));
+}
+.nwe-next-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--nwe-accent);
+  color: #fffaf4;
+}
+.nwe-next-kicker { color: var(--nwe-accent); font-size: 11px; font-weight: 700; letter-spacing: .14em; }
+.nwe-next-title { margin: 2px 0 3px; font-size: 19px; font-weight: 650; line-height: 1.25; letter-spacing: -.025em; }
+.nwe-next-detail { max-width: 62ch; color: var(--nwe-muted); font-size: 12.5px; line-height: 1.6; }
+.nwe-next-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding-top: 2px;
+  color: var(--nwe-muted);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+.nwe-next-tool {
+  margin: 1px 0 0;
+  padding: 4px 7px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 5px;
+  background: var(--nwe-surface);
+  color: var(--nwe-muted);
+  font-size: 11px;
+}
+.nwe-next .nwe-copy {
+  margin-top: 10px;
+  padding: 6px 11px;
+  border: 1px solid var(--nwe-accent);
+  border-radius: 6px;
+  background: var(--nwe-accent);
+  color: #fffaf4;
+  font-size: 11px;
+}
+.nwe-next .nwe-copy:hover { border-color: color-mix(in srgb, var(--nwe-accent) 84%, var(--nwe-ink)); background: color-mix(in srgb, var(--nwe-accent) 84%, var(--nwe-ink)); color: #fffaf4; }
+.nwe-tabs {
+  gap: 25px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  margin-top: 20px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+.nwe-tabs::-webkit-scrollbar { display: none; }
+.nwe-tab {
+  position: relative;
+  padding: 10px 1px 11px;
+  border-radius: 0;
+  color: var(--nwe-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.nwe-tab:hover { color: var(--nwe-ink); }
+.nwe-tab.is-active { background: transparent; color: var(--nwe-ink); font-weight: 650; }
+.nwe-tab.is-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--nwe-accent);
+}
+.nwe-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 20px;
+  padding: 0 0 18px;
+  border: 0;
+  border-bottom: 1px solid var(--nwe-border);
+}
+.nwe-stat {
+  min-width: 0;
+  padding: 0 22px;
+  border: 0;
+  border-right: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-stat:first-child { padding-left: 0; }
+.nwe-stat:last-child { padding-right: 0; border-right: 0; }
+.nwe-stat-label { color: var(--nwe-muted); font-size: 11px; font-weight: 500; letter-spacing: .03em; }
+.nwe-stat-value {
+  margin-top: 3px;
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -.045em;
+}
+.nwe-stat-unit { margin-left: 4px; color: var(--nwe-muted); font-size: 11px; font-weight: 400; letter-spacing: 0; }
+.nwe-stat-unit.is-note { display: block; margin: 5px 0 0; font-size: 11px; line-height: 1.45; }
+.nwe-desk {
+  grid-template-columns: minmax(0, 1.55fr) minmax(290px, .75fr);
+  gap: 40px;
+  margin-top: 24px;
+}
+.nwe-desk-side { padding-left: 32px; border-left: 1px solid var(--nwe-border); }
+.nwe-desk-heading { margin: 0 0 10px; }
+.nwe-desk-kicker { color: var(--nwe-muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+.nwe-desk-note { color: var(--nwe-muted); font-size: 11px; }
+.nwe-section { margin-top: 25px; }
+.nwe-section-head { align-items: center; margin-bottom: 10px; }
+.nwe-section-title { font-family: inherit; font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+.nwe-section-note { color: var(--nwe-muted); font-size: 11px; }
+.nwe-phases {
+  margin-top: 8px;
+  padding: 13px 2px 7px;
+  border: 0;
+  border-top: 1px solid var(--nwe-border);
+  border-bottom: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-phase { gap: 5px; }
+.nwe-phase:not(:last-child)::after { top: 8px; left: calc(50% + 12px); width: calc(100% - 24px); background: var(--nwe-border); }
+.nwe-dot {
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid color-mix(in srgb, var(--nwe-ink) 24%, transparent);
+  background: var(--nwe-surface);
+  font-size: 11px;
+}
+.nwe-phase.is-done .nwe-dot { border-color: var(--nwe-ok); background: color-mix(in srgb, var(--nwe-ok) 13%, var(--nwe-surface)); color: var(--nwe-ok); }
+.nwe-phase.is-active .nwe-dot { border-color: var(--nwe-accent); background: var(--nwe-accent); color: #fffaf4; box-shadow: 0 0 0 3px var(--nwe-accent-soft); }
+.nwe-phase-label { margin-top: 1px; font-size: 11px; }
+.nwe-phase.is-active .nwe-phase-label { color: var(--nwe-ink); }
+.nwe-pass {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--nwe-ok);
+  font-size: 12px;
+}
+.nwe-block {
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--nwe-bad) 20%, var(--nwe-border));
+  border-left: 3px solid var(--nwe-bad);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--nwe-bad) 4%, var(--nwe-surface));
+}
+.nwe-block-icon { width: 20px; height: 20px; border-radius: 5px; }
+.nwe-advisory {
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-advisory:last-child { border-bottom: 0; }
+.nwe-advisory-code { color: var(--nwe-warn); }
+.nwe-advisory-hint { color: var(--nwe-muted); font-size: 11px; }
+.nwe-chapters { gap: 0; margin-top: 8px; border-top: 1px solid var(--nwe-border); }
+.nwe-chapter {
+  border: 0;
+  border-bottom: 1px solid var(--nwe-border);
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-chapter.is-ok, .nwe-chapter.is-bad { border-left: 0; }
+.nwe-chapter:hover { background: color-mix(in srgb, var(--nwe-accent) 4%, transparent); }
+.nwe-chapter summary {
+  grid-template-columns: 48px minmax(0, 1fr) auto 14px;
+  gap: 12px;
+  padding: 13px 4px;
+}
+.nwe-chapter-num { color: var(--nwe-accent); font-size: 11px; font-weight: 650; letter-spacing: .02em; }
+.nwe-chapter-title { display: block; font-size: 14px; font-weight: 600; }
+.nwe-chapter-stage { display: block; margin-top: 1px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-chapter-meta { gap: 12px; color: var(--nwe-muted); font-size: 11px; }
+.nwe-score { width: 104px; }
+.nwe-score-value { font-size: 11px; }
+.nwe-scorebar { height: 3px; }
+.nwe-scorebar > span { background: var(--nwe-accent); }
+.nwe-badge { padding: 2px 6px; border-radius: 5px; font-size: 11px; }
+.nwe-badge.is-ok { border-color: color-mix(in srgb, var(--nwe-ok) 34%, transparent); color: var(--nwe-ok); }
+.nwe-badge.is-bad { border-color: color-mix(in srgb, var(--nwe-bad) 34%, transparent); color: var(--nwe-bad); }
+.nwe-chapter-extra {
+  margin: 0;
+  padding: 0 4px 12px 64px;
+  color: var(--nwe-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.nwe-chapter-detail {
+  margin: 0 4px 10px 64px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--nwe-surface);
+}
+.nwe-glance {
+  padding: 15px 16px 14px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--nwe-surface) 76%, var(--nwe-raised));
+}
+.nwe-glance-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.nwe-glance-title { margin: 8px 0 4px; font-size: 17px; font-weight: 650; line-height: 1.35; letter-spacing: -.02em; }
+.nwe-glance-text {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--nwe-muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.nwe-glance-bar { overflow: hidden; height: 6px; margin-top: 14px; border-radius: 99px; background: var(--nwe-border); }
+.nwe-glance-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--nwe-accent); }
+.nwe-glance-legend { display: flex; justify-content: space-between; margin-top: 5px; color: var(--nwe-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.nwe-glance-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 15px 0 0; }
+.nwe-glance-facts > div { padding: 0 12px; border-left: 1px solid var(--nwe-border); }
+.nwe-glance-facts > div:first-child { padding-left: 0; border-left: 0; }
+.nwe-glance-facts dt { color: var(--nwe-muted); font-size: 11px; letter-spacing: .05em; }
+.nwe-glance-facts dd { margin: 2px 0 0; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.nwe-activity { gap: 0; margin-top: 18px; }
+.nwe-activity li { grid-template-columns: 62px minmax(0, 1fr) auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--nwe-border) 65%, transparent); font-size: 11px; }
+.nwe-activity li:last-child { border-bottom: 0; }
+.nwe-dossier { margin-top: 32px; padding-top: 13px; border-top: 1px solid var(--nwe-border); }
+.nwe-dossier > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 650;
+}
+.nwe-dossier > summary::-webkit-details-marker { display: none; }
+.nwe-dossier > summary::before { content: "+"; color: var(--nwe-accent); font-size: 16px; line-height: 1; }
+.nwe-dossier[open] > summary::before { content: "−"; }
+.nwe-dossier-note { margin-left: auto; color: var(--nwe-muted); font-size: 11px; font-weight: 400; }
+.nwe-dossier .nwe-section { margin-top: 12px; }
+.nwe-dossier .nwe-section-head { display: none; }
+.nwe-dossier .nwe-v6-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-border);
+}
+.nwe-dossier .nwe-v6-card { padding: 14px 16px; border: 0; border-radius: 0; background: var(--nwe-surface); }
+.nwe-dossier .nwe-v6-card[open] { grid-column: span 3; }
+.nwe-dossier .nwe-v6-card > summary { font-size: 12px; }
+.nwe-footer {
+  margin-top: 36px;
+  padding-top: 13px;
+  border-top: 1px solid var(--nwe-border);
+  color: var(--nwe-muted);
+  font-size: 11px;
+}
+.nwe-footer code { font-size: 11px; }
+.nwe-empty { min-height: 0; padding: 24px; border-style: dashed; border-radius: 8px; background: color-mix(in srgb, var(--nwe-surface) 60%, transparent); }
+.nwe-state { min-height: 320px; border: 0; background: color-mix(in srgb, var(--nwe-surface) 55%, transparent); }
+.nwe-state-title { font-family: inherit; font-size: 20px; font-weight: 650; }
+.nwe-state-icon { width: 38px; height: 38px; border-radius: 11px; background: var(--nwe-accent-soft); color: var(--nwe-accent); }
+.nwe-modal { border-color: var(--nwe-border); border-radius: 14px; background: var(--nwe-surface); }
+.nwe-modal-head { border-bottom-color: var(--nwe-border); background: var(--nwe-surface); }
+.nwe-modal-title { font-family: inherit; font-size: 22px; font-weight: 650; letter-spacing: -.025em; }
+.nwe-tutorial-block h3 { font-family: inherit; font-size: 15px; font-weight: 650; }
+.nwe-step { border: 1px solid var(--nwe-border); border-left: 2px solid var(--nwe-accent); border-radius: 8px; background: transparent; }
+.nwe-step-no, .nwe-step-tool { color: var(--nwe-accent); }
+.nwe-tutorial-card { border-radius: 8px; background: color-mix(in srgb, var(--nwe-surface) 80%, var(--nwe-raised)); }
+.nwe-tutorial-card strong { color: var(--nwe-accent); }
+.nwe-tutorial-note strong { color: var(--nwe-accent); }
+.nwe-copy-block .nwe-copy { border-radius: 6px; }
+.nwe-chapter-toolbar, .nwe-section-search { border-radius: 7px; }
+.nwe-chapter-toolbar input, .nwe-chapter-toolbar select, .nwe-section-search input { border-radius: 6px; }
+.nwe-data-row { border-radius: 6px; background: transparent; }
+.nwe-quality-summary { font-size: 11px; }
+.nwe-dim { grid-template-columns: 68px minmax(0, 1fr) 52px; font-size: 11px; }
+@media (max-width: 980px) {
+  .nwe-desk { grid-template-columns: 1fr; gap: 0; }
+  .nwe-desk-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr); gap: 24px; padding-left: 0; border-left: 0; border-top: 1px solid var(--nwe-border); margin-top: 24px; padding-top: 20px; }
+  .nwe-dossier .nwe-v6-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwe-dossier .nwe-v6-card[open] { grid-column: span 2; }
+}
+@media (max-width: 760px) {
+  .nwe-root { padding: 16px 15px 24px; }
+  .nwe-hero { align-items: flex-start; flex-direction: column; gap: 16px; padding-bottom: 17px; }
+  .nwe-brand { gap: 11px; }
+  .nwe-brand-mark { width: 34px; height: 34px; border-radius: 9px; font-size: 15px; }
+  .nwe-title { font-size: 25px; }
+  .nwe-revision { padding-left: 0; border-left: 0; }
+  .nwe-actions { width: 100%; flex-wrap: wrap; min-width: 0; }
+  .nwe-project { order: 0; flex: 1 0 100%; width: 100%; min-width: 0; }
+  .nwe-project-select { flex: 1; max-width: none; min-width: 0; width: 100%; }
+  .nwe-help, .nwe-refresh { flex: 1 1 0; min-width: 0; }
+  .nwe-project-search { flex: 1 1 100%; width: auto; }
+  .nwe-project-toggle { flex: 1 1 100%; }
+  .nwe-refresh { flex: 1; justify-content: center; }
+  .nwe-help { flex: 0 0 auto; }
+  .nwe-next { grid-template-columns: 32px minmax(0, 1fr); gap: 11px; padding: 15px; }
+  .nwe-next-icon { width: 32px; height: 32px; border-radius: 8px; }
+  .nwe-next-title { font-size: 17px; }
+  .nwe-next-tool { display: none; }
+  .nwe-next-meta { display: none; }
+  .nwe-next .nwe-copy { margin-top: 9px; }
+  .nwe-tabs { gap: 20px; margin-top: 16px; }
+  .nwe-tab { padding: 9px 0 10px; font-size: 12px; }
+  .nwe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 0; padding-bottom: 15px; }
+  .nwe-stat { padding: 0 14px; }
+  .nwe-stat:nth-child(2) { border-right: 0; }
+  .nwe-stat:nth-child(3) { padding-left: 0; }
+  .nwe-stat:nth-child(4) { padding-right: 0; }
+  .nwe-stat-value { font-size: 24px; }
+  .nwe-desk-side { display: block; }
+  .nwe-glance { padding: 14px; }
+  .nwe-phases { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 13px; padding: 12px 0 8px; }
+  .nwe-phase:nth-child(3n)::after { display: none; }
+  .nwe-chapter summary { grid-template-columns: 40px minmax(0, 1fr) 14px; gap: 9px; padding: 12px 2px; }
+  .nwe-chapter-meta { grid-column: 2 / 4; grid-row: 2; display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 7px 12px; margin-top: 4px; }
+  .nwe-chapter-meta > .nwe-badge { order: 4; }
+  .nwe-score { width: 88px; }
+  .nwe-chapter-extra { padding: 0 2px 11px 49px; }
+  .nwe-chapter-detail { margin: 0 2px 9px 49px; }
+  .nwe-dossier { margin-top: 25px; }
+  .nwe-dossier-note { display: none; }
+  .nwe-dossier .nwe-v6-grid { grid-template-columns: 1fr; }
+  .nwe-dossier .nwe-v6-card[open] { grid-column: auto; }
+  .nwe-footer { margin-top: 26px; flex-direction: column; }
+}
+
+/* v9 card wall: every read-model tab owns the full canvas. */
+.nwe-root { max-width: 1460px; }
+.nwe-tab-intro {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  gap: 15px;
+  align-items: start;
+  margin: 24px 0 2px;
+  padding: 0 0 18px;
+  border-bottom: 1px solid var(--nwe-border);
+}
+.nwe-tab-intro-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid color-mix(in srgb, var(--nwe-accent) 20%, var(--nwe-border));
+  border-radius: 12px;
+  background: var(--nwe-accent-soft);
+  color: var(--nwe-accent);
+}
+.nwe-tab-intro-copy { min-width: 0; }
+.nwe-tab-intro-desc { max-width: 76ch; margin: 0; color: var(--nwe-muted); font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.nwe-tab-intro-kicker { color: var(--nwe-muted); font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+.nwe-tab-intro-title { margin: 2px 0 3px; font-size: 25px; font-weight: 700; line-height: 1.2; letter-spacing: -.035em; }
+.nwe-tab-intro-desc { max-width: 76ch; margin: 0; color: var(--nwe-muted); font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.nwe-tab-intro-count {
+  align-self: start;
+  padding: 4px 8px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 5px;
+  color: var(--nwe-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.nwe-tab-panel { margin-top: 0; }
+.nwe-desk-single { grid-template-columns: minmax(0, 1fr); }
+.nwe-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  align-items: start;
+  margin-top: 9px;
+}
+.nwe-data-card {
+  overflow: hidden;
+  border: 1px solid var(--nwe-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nwe-surface) 88%, var(--nwe-raised));
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.nwe-data-card:hover { border-color: color-mix(in srgb, var(--nwe-accent) 30%, var(--nwe-border)); background: var(--nwe-surface); }
+.nwe-data-card[open] {
+  border-color: color-mix(in srgb, var(--nwe-accent) 38%, var(--nwe-border));
+  background: var(--nwe-surface);
+  box-shadow: 0 12px 28px -24px color-mix(in srgb, #000 55%, transparent);
+}
+.nwe-data-card-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 15px;
+  gap: 11px;
+  align-items: start;
+  padding: 13px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.nwe-data-card-head::-webkit-details-marker { display: none; }
+.nwe-data-card-head:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: -2px; }
+.nwe-data-card-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--nwe-accent-soft);
+  color: var(--nwe-accent);
+}
+.nwe-data-card-icon.is-seed, .nwe-data-card-icon.is-clock { background: color-mix(in srgb, var(--nwe-warn) 10%, transparent); color: var(--nwe-warn); }
+.nwe-data-card-icon.is-link, .nwe-data-card-icon.is-check { background: color-mix(in srgb, var(--nwe-ok) 10%, transparent); color: var(--nwe-ok); }
+.nwe-data-card-icon.is-alert { background: color-mix(in srgb, var(--nwe-bad) 10%, transparent); color: var(--nwe-bad); }
+.nwe-data-card-heading { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.nwe-data-card-heading > strong { overflow-wrap: anywhere; font-size: 13px; font-weight: 650; line-height: 1.4; }
+.nwe-data-card-note {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--nwe-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.nwe-data-card-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.nwe-data-card-chips span {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--nwe-border) 80%, transparent);
+  border-radius: 4px;
+  color: var(--nwe-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.nwe-data-card-caret { color: var(--nwe-muted); font-size: 16px; line-height: 1; transition: transform .16s ease; }
+.nwe-data-card[open] .nwe-data-card-caret { transform: rotate(45deg); color: var(--nwe-accent); }
+.nwe-data-card-body {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--nwe-border);
+  background: color-mix(in srgb, var(--nwe-raised) 42%, transparent);
+}
+.nwe-data-card-body .nwe-kv { grid-template-columns: 84px minmax(0, 1fr); padding: 0; font-size: 11.5px; gap: 5px 11px; }
+.nwe-group-head { display: flex; align-items: center; gap: 8px; margin: 21px 0 8px; }
+.nwe-group-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 7px;
+  background: var(--nwe-surface);
+  color: var(--nwe-accent);
+}
+.nwe-group-head h3 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -.01em; }
+.nwe-subsection { margin: 0; }
+.nwe-worldbook-layout, .nwe-leads-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; align-items: start; }
+.nwe-worldbook-layout > .nwe-subsection:first-child,
+.nwe-leads-layout > .nwe-subsection:first-child { grid-column: 1 / -1; }
+.nwe-worldbook-layout > .nwe-subsection .nwe-card-grid,
+.nwe-leads-layout > .nwe-subsection .nwe-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nwe-worldbook-layout > .nwe-subsection:first-child .nwe-card-grid,
+.nwe-leads-layout > .nwe-subsection:first-child .nwe-card-grid { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.nwe-quality-layout { display: block; }
+.nwe-quality-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  margin-top: 16px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 11px;
+  background: var(--nwe-surface);
+}
+.nwe-quality-kpi { padding: 15px 17px; border-right: 1px solid var(--nwe-border); }
+.nwe-quality-kpi:last-child { border-right: 0; }
+.nwe-quality-kpi-label { display: block; color: var(--nwe-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; }
+.nwe-quality-kpi-value { display: block; margin-top: 3px; font-size: 29px; font-weight: 650; line-height: 1.1; letter-spacing: -.045em; }
+.nwe-quality-kpi-value small { margin-left: 3px; color: var(--nwe-muted); font-size: 10px; font-weight: 400; letter-spacing: 0; }
+.nwe-quality-toolbar { display: flex; justify-content: flex-end; margin: 11px 0; }
+.nwe-dim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; margin-top: 14px; }
+.nwe-dim-card { padding: 12px 14px; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-surface); }
+.nwe-dim-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.nwe-dim-card-head span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--nwe-muted); }
+.nwe-dim-card-head strong { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.nwe-dim-card .nwe-v6-bar { display: block; margin-top: 8px; }
+.nwe-dim-card .nwe-v6-bar > span { display: block; height: 5px; border-radius: 99px; background: var(--nwe-border); }
+.nwe-dim-card .nwe-v6-bar i { display: block; height: 100%; border-radius: inherit; background: var(--nwe-accent); }
+.nwe-health-layout { display: block; }
+.nwe-health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 16px; }
+.nwe-health-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 13px 14px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 9px;
+  background: var(--nwe-surface);
+}
+.nwe-health-card.is-ok { border-color: color-mix(in srgb, var(--nwe-ok) 25%, var(--nwe-border)); }
+.nwe-health-card.is-bad { border-color: color-mix(in srgb, var(--nwe-bad) 28%, var(--nwe-border)); }
+.nwe-health-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: color-mix(in srgb, var(--nwe-ok) 10%, transparent); color: var(--nwe-ok); }
+.nwe-health-card.is-bad .nwe-health-icon { background: color-mix(in srgb, var(--nwe-bad) 10%, transparent); color: var(--nwe-bad); }
+.nwe-health-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.nwe-health-copy strong { font-size: 12.5px; }
+.nwe-health-copy span { color: var(--nwe-muted); font-size: 11px; line-height: 1.5; }
+.nwe-health-state { color: var(--nwe-ok); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; letter-spacing: .08em; }
+.nwe-health-card.is-bad .nwe-health-state { color: var(--nwe-bad); }
+.nwe-effort-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.nwe-effort-card { padding: 12px 14px; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-surface); }
+.nwe-effort-card span { display: block; color: var(--nwe-muted); font-size: 10.5px; }
+.nwe-effort-card strong { display: block; margin-top: 2px; font-size: 22px; font-weight: 650; line-height: 1.1; letter-spacing: -.035em; }
+.nwe-section-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  margin: 14px 0 0;
+  padding: 7px 9px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 7px;
+  background: var(--nwe-surface);
+}
+.nwe-search-icon { display: grid; place-items: center; width: 20px; color: var(--nwe-muted); }
+.nwe-search-label { color: var(--nwe-muted); font-size: 11px; white-space: nowrap; }
+.nwe-section-search input { flex: 1 1 auto; max-width: 360px; min-height: 28px; border: 0; background: transparent; }
+.nwe-section-search input:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: 2px; }
+.nwe-chapter-cards-mobile { display: none; }
+.nwe-mobile-chapter {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 3px 9px;
+  align-items: center;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-surface);
+}
+.nwe-mobile-chapter-num { grid-row: 1 / 3; color: var(--nwe-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 650; }
+.nwe-mobile-chapter-body { display: flex; grid-column: 2; grid-row: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.nwe-mobile-chapter-body strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.nwe-mobile-chapter-body span { overflow: hidden; color: var(--nwe-muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.nwe-mobile-chapter-score { grid-column: 3; grid-row: 1; color: var(--nwe-ink); font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.nwe-mobile-chapter .nwe-refresh { grid-column: 2 / 4; grid-row: 2; justify-self: start; min-height: 26px; margin-top: 2px; padding: 3px 9px; font-size: 11px; }
+.nwe-chapter-table { border-collapse: separate; border-spacing: 0 6px; min-width: 720px; }
+.nwe-chapter-table thead th { padding: 4px 11px 7px; border: 0; background: transparent; font-size: 10.5px; letter-spacing: .04em; }
+.nwe-chapter-table tbody tr { background: var(--nwe-surface); box-shadow: 0 0 0 1px var(--nwe-border); }
+.nwe-chapter-table tbody tr:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--nwe-accent) 35%, var(--nwe-border)); }
+.nwe-chapter-table tbody td { padding: 12px 11px; border: 0; }
+.nwe-chapter-table tbody td:first-child { border-radius: 7px 0 0 7px; border-left: 2px solid var(--nwe-accent); font-weight: 650; }
+.nwe-chapter-table tbody td:last-child { border-radius: 0 7px 7px 0; }
+.nwe-chapter-table tbody td.is-num { font-size: 11px; }
+@media (max-width: 980px) {
+  .nwe-overview-charts { grid-template-columns: 1fr 1fr; }
+  .nwe-tab-intro { grid-template-columns: 40px minmax(0, 1fr); }
+  .nwe-tab-intro-icon { width: 40px; height: 40px; }
+  .nwe-tab-intro-count { grid-column: 2; justify-self: start; }
+  .nwe-quality-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwe-quality-kpi:nth-child(2) { border-right: 0; }
+  .nwe-quality-kpi:nth-child(-n + 2) { border-bottom: 1px solid var(--nwe-border); }
+  .nwe-health-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .nwe-tab-intro { gap: 11px; margin-top: 19px; padding-bottom: 15px; }
+  .nwe-tab-intro-title { font-size: 21px; }
+  .nwe-tab-intro-desc { font-size: 12px; }
+  .nwe-overview-charts { grid-template-columns: 1fr; }
+  .nwe-trend-chart, .nwe-word-chart { height: 170px; }
+  .nwe-viz-empty { min-height: 170px; }
+  .nwe-word-track { flex-basis: 120px; height: 120px; }
+  .nwe-card-grid { grid-template-columns: 1fr; }
+  .nwe-quality-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwe-quality-kpi { padding: 13px 14px; }
+  .nwe-quality-kpi-value { font-size: 25px; }
+  .nwe-dim-grid { grid-template-columns: 1fr; }
+  .nwe-effort-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nwe-worldbook-layout, .nwe-leads-layout { grid-template-columns: 1fr; gap: 0; }
+  .nwe-worldbook-layout > .nwe-subsection:first-child,
+  .nwe-leads-layout > .nwe-subsection:first-child { grid-column: auto; }
+  .nwe-worldbook-layout > .nwe-subsection .nwe-card-grid,
+  .nwe-leads-layout > .nwe-subsection .nwe-card-grid,
+  .nwe-worldbook-layout > .nwe-subsection:first-child .nwe-card-grid,
+  .nwe-leads-layout > .nwe-subsection:first-child .nwe-card-grid { grid-template-columns: 1fr; }
+  .nwe-chapter-table { border-spacing: 0 7px; min-width: 680px; }
+  .nwe-chapters-section .nwe-table-wrap { display: none; }
+  .nwe-chapter-cards-mobile { display: grid; gap: 8px; margin-top: 10px; }
+}
 `
 
 const icon = (size: number, path: string): ReactElement =>
@@ -751,6 +1477,38 @@ const helpIcon = (): ReactElement =>
       strokeLinejoin: 'round',
     }),
   )
+
+type SectionGlyph =
+  | 'spark'
+  | 'person'
+  | 'seed'
+  | 'clock'
+  | 'link'
+  | 'map'
+  | 'book'
+  | 'chart'
+  | 'shield'
+  | 'heart'
+  | 'check'
+  | 'alert'
+
+const GLYPH_PATHS: Record<SectionGlyph, string> = {
+  spark: 'M12 3.5l1.8 5.1 5.2 1.9-5.2 1.8L12 17.5l-1.8-5.2-5.2-1.8 5.2-1.9L12 3.5Z',
+  person: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 9a7 7 0 0 1 14 0',
+  seed: 'M12 21V9m0 0c0-3 2-5 5-5 0 3-2 5-5 5Zm0 4c0-2-2-4-5-4 0 3 2 4 5 4Z',
+  clock: 'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  link: 'M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1',
+  map: 'm3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15',
+  book: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Zm0 15A2.5 2.5 0 0 1 6.5 18H20',
+  chart: 'M4 20V10m6 10V4m6 16v-7m4 7H2',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z',
+  heart:
+    'M20.8 8.6c0 5-8.8 10.1-8.8 10.1S3.2 13.6 3.2 8.6A4.6 4.6 0 0 1 12 6a4.6 4.6 0 0 1 8.8 2.6ZM12 8v8m-4-4h8',
+  check: 'm5 12 4 4L19 6',
+  alert: 'M12 4 3 20h18L12 4Zm0 5v5m0 3h.01',
+}
+
+const sectionGlyph = (name: SectionGlyph, size = 18): ReactElement => icon(size, GLYPH_PATHS[name])
 
 interface TutorialStep {
   title: string
@@ -863,7 +1621,7 @@ const stat = (label: string, value: string, unit: string): ReactElement =>
       'div',
       { className: 'nwe-stat-value' },
       value,
-      createElement('span', { className: 'nwe-stat-unit' }, unit),
+      createElement('span', { className: `nwe-stat-unit${unit.length > 8 ? ' is-note' : ''}` }, unit),
     ),
   )
 
@@ -1992,6 +2750,265 @@ const NovelHelp = (): ReactElement => {
   )
 }
 
+const trendChart = (view: PanelView): ReactElement => {
+  const values = view.quality.scores.filter((score) => Number.isFinite(score)).slice(-10)
+  const width = 720
+  const height = 196
+  const left = 38
+  const right = 16
+  const top = 16
+  const bottom = 30
+  const innerWidth = width - left - right
+  const innerHeight = height - top - bottom
+  const max = 150
+  const x = (index: number): number =>
+    values.length <= 1 ? left + innerWidth / 2 : left + (index / (values.length - 1)) * innerWidth
+  const y = (score: number): number =>
+    top + innerHeight - (Math.max(0, Math.min(max, score)) / max) * innerHeight
+  const points = values.map((score, index) => ({ x: x(index), y: y(score), score }))
+  const line = points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
+  const area =
+    points.length === 0
+      ? ''
+      : `M ${points[0]!.x.toFixed(1)} ${(top + innerHeight).toFixed(1)} L ${line.replaceAll(' ', ' L ')} L ${points[points.length - 1]!.x.toFixed(1)} ${(top + innerHeight).toFixed(1)} Z`
+  return createElement(
+    'section',
+    { className: 'nwe-viz-card nwe-viz-trend', 'aria-label': '章节评分趋势' },
+    createElement(
+      'div',
+      { className: 'nwe-viz-head' },
+      createElement(
+        'div',
+        { className: 'nwe-viz-title' },
+        sectionGlyph('chart', 16),
+        createElement('span', null, '评分趋势'),
+      ),
+      createElement(
+        'span',
+        { className: 'nwe-viz-note' },
+        values.length === 0 ? '还没有评审' : `最近 ${values.length} 章 · 满分 ${max}`,
+      ),
+    ),
+    values.length === 0
+      ? createElement('div', { className: 'nwe-viz-empty' }, '完成 P4 评审后，这里会出现逐章评分曲线。')
+      : createElement(
+          'div',
+          { className: 'nwe-trend-wrap' },
+          createElement(
+            'svg',
+            {
+              className: 'nwe-trend-chart',
+              viewBox: `0 0 ${width} ${height}`,
+              role: 'img',
+              'aria-label': `最近 ${values.length} 章评分趋势，最低 ${Math.min(...values)}，最高 ${Math.max(...values)}，满分 150`,
+            },
+            createElement(
+              'defs',
+              null,
+              createElement(
+                'linearGradient',
+                { id: 'nwe-trend-fill', x1: '0', y1: '0', x2: '0', y2: '1' },
+                createElement('stop', {
+                  offset: '0%',
+                  style: { stopColor: 'var(--nwe-gold)', stopOpacity: 0.3 },
+                }),
+                createElement('stop', {
+                  offset: '100%',
+                  style: { stopColor: 'var(--nwe-gold)', stopOpacity: 0 },
+                }),
+              ),
+            ),
+            ...[0, 0.5, 1].map((ratio) => {
+              const gridY = top + innerHeight - ratio * innerHeight
+              return createElement(
+                'g',
+                { key: `grid-${ratio}` },
+                createElement('line', {
+                  x1: left,
+                  x2: width - right,
+                  y1: gridY,
+                  y2: gridY,
+                  style: { stroke: 'var(--nwe-border)', strokeDasharray: ratio === 0 ? undefined : '3 5' },
+                }),
+                createElement(
+                  'text',
+                  {
+                    x: left - 9,
+                    y: gridY + 4,
+                    textAnchor: 'end',
+                    style: { fill: 'var(--nwe-muted)', fontSize: 10 },
+                  },
+                  String(Math.round(max * ratio)),
+                ),
+              )
+            }),
+            createElement('path', { d: area, style: { fill: 'url(#nwe-trend-fill)' } }),
+            createElement('polyline', {
+              points: line,
+              style: {
+                fill: 'none',
+                stroke: 'var(--nwe-gold)',
+                strokeWidth: 2.4,
+                strokeLinejoin: 'round',
+                strokeLinecap: 'round',
+              },
+            }),
+            ...points.map((point, index) =>
+              createElement(
+                'g',
+                { key: `point-${index}` },
+                createElement('circle', {
+                  cx: point.x,
+                  cy: point.y,
+                  r: 3.5,
+                  style: { fill: 'var(--nwe-surface)', stroke: 'var(--nwe-gold)', strokeWidth: 2 },
+                }),
+                createElement('title', null, `第 ${index + 1} 个样本 · ${point.score} / 150`),
+              ),
+            ),
+            createElement(
+              'text',
+              {
+                x: left,
+                y: height - 8,
+                style: { fill: 'var(--nwe-muted)', fontSize: 10 },
+              },
+              `最近 ${values.length} 章`,
+            ),
+          ),
+        ),
+  )
+}
+
+const wordChart = (view: PanelView): ReactElement => {
+  const rows = view.rows.slice(-8)
+  const max = Math.max(1, ...rows.map((row) => row.wordCount))
+  return createElement(
+    'section',
+    { className: 'nwe-viz-card nwe-viz-words', 'aria-label': '章节字数分布' },
+    createElement(
+      'div',
+      { className: 'nwe-viz-head' },
+      createElement(
+        'div',
+        { className: 'nwe-viz-title' },
+        sectionGlyph('book', 16),
+        createElement('span', null, '章节字数'),
+      ),
+      createElement(
+        'span',
+        { className: 'nwe-viz-note' },
+        rows.length === 0 ? '还没有章节' : `最近 ${rows.length} 章 · 峰值 ${max.toLocaleString('zh-CN')}`,
+      ),
+    ),
+    rows.length === 0
+      ? createElement('div', { className: 'nwe-viz-empty' }, '归档第一章后，这里会出现字数柱状图。')
+      : createElement(
+          'div',
+          {
+            className: 'nwe-word-chart',
+            role: 'img',
+            'aria-label': `最近 ${rows.length} 章字数分布，峰值 ${max.toLocaleString('zh-CN')} 字`,
+          },
+          ...rows.map((row) => {
+            return createElement(
+              'div',
+              { className: 'nwe-word-col', key: `word-${row.num}` },
+              createElement('span', { className: 'nwe-word-value' }, row.wordCount.toLocaleString('zh-CN')),
+              createElement(
+                'div',
+                {
+                  className: 'nwe-word-track',
+                  title: `第 ${row.num} 章 · ${row.wordCount.toLocaleString('zh-CN')} 字`,
+                },
+                createElement('span', {
+                  style: {
+                    display: 'block',
+                    flex: '0 0 auto',
+                    width: '24px',
+                    height: `${Math.max(4, Math.round((row.wordCount / max) * 142))}px`,
+                    maxHeight: '100%',
+                    backgroundColor: 'var(--nwe-gold)',
+                    borderRadius: '4px 4px 2px 2px',
+                  },
+                }),
+              ),
+              createElement('span', { className: 'nwe-word-label' }, `第${row.num}章`),
+            )
+          }),
+        ),
+  )
+}
+
+const overviewCharts = (view: PanelView): ReactElement =>
+  createElement('div', { className: 'nwe-overview-charts' }, trendChart(view), wordChart(view))
+
+const bookGlance = (view: PanelView): ReactElement => {
+  const target = view.book.target ?? view.book.outlineTotal
+  const percent =
+    view.book.archivedCoverage === null
+      ? target === 0
+        ? 0
+        : Math.round((view.book.archivedCards / target) * 100)
+      : Math.round(view.book.archivedCoverage * 100)
+  return createElement(
+    'section',
+    { className: 'nwe-glance', 'aria-label': '全书概览' },
+    createElement(
+      'div',
+      { className: 'nwe-glance-head' },
+      createElement('span', { className: 'nwe-desk-kicker' }, '全书'),
+      createElement('span', { className: 'nwe-desk-note' }, view.book.present ? '已规划' : '未规划'),
+    ),
+    createElement('h2', { className: 'nwe-glance-title' }, view.book.premise || '这本书还没有蓝图'),
+    createElement(
+      'p',
+      { className: 'nwe-glance-text' },
+      view.book.logline || '补全书级蓝图、卷卡和世界观后，写作会更稳定。',
+    ),
+    createElement(
+      'div',
+      {
+        className: 'nwe-glance-bar',
+        role: 'progressbar',
+        'aria-valuemin': 0,
+        'aria-valuemax': 100,
+        'aria-valuenow': Math.min(100, Math.max(0, percent)),
+        'aria-label': '全书归档进度',
+      },
+      createElement('span', { style: { width: `${Math.min(100, Math.max(0, percent))}%` } }),
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-glance-legend' },
+      createElement('span', null, `${view.book.archivedCards} / ${target === 0 ? '—' : target} 章`),
+      createElement('span', null, `${percent}% 已归档`),
+    ),
+    createElement(
+      'dl',
+      { className: 'nwe-glance-facts' },
+      createElement(
+        'div',
+        null,
+        createElement('dt', null, '计划卡'),
+        createElement('dd', null, String(view.book.planned)),
+      ),
+      createElement(
+        'div',
+        null,
+        createElement('dt', null, '卷'),
+        createElement('dd', null, String(view.book.volumes.length)),
+      ),
+      createElement(
+        'div',
+        null,
+        createElement('dt', null, '待处理'),
+        createElement('dd', null, String(view.health.blocking)),
+      ),
+    ),
+  )
+}
+
 const nextCard = (view: PanelView): ReactElement =>
   createElement(
     'section',
@@ -2000,12 +3017,18 @@ const nextCard = (view: PanelView): ReactElement =>
     createElement(
       'div',
       { className: 'nwe-next-body' },
-      createElement('div', { className: 'nwe-next-kicker' }, 'CURRENT CHAPTER · 下一步'),
+      createElement('div', { className: 'nwe-next-kicker' }, '当前阶段 · 下一步'),
       createElement('div', { className: 'nwe-next-title' }, view.nextTitle),
       createElement('div', { className: 'nwe-next-detail' }, view.nextDetail),
       createElement(CopyResumeButton, { text: view.resumeText }),
     ),
-    view.nextTool === '' ? null : createElement('code', { className: 'nwe-next-tool' }, view.nextTool),
+    createElement(
+      'div',
+      { className: 'nwe-next-meta' },
+      createElement('span', null, view.chapter > 0 ? `第 ${view.chapter} 章` : '未开始'),
+      createElement('span', null, view.stageLabel),
+      view.nextTool === '' ? null : createElement('code', { className: 'nwe-next-tool' }, view.nextTool),
+    ),
   )
 
 const blockingSection = (view: PanelView): ReactElement =>
@@ -2425,6 +3448,22 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
   )
 }
 
+const bookDossier = (view: PanelView): ReactElement | null => {
+  const body = bookDataSection(view) ?? bookSection(view)
+  if (body === null) return null
+  return createElement(
+    'details',
+    { className: 'nwe-dossier', id: 'nwe-dossier' },
+    createElement(
+      'summary',
+      null,
+      createElement('span', null, '全书资料'),
+      createElement('span', { className: 'nwe-dossier-note' }, '蓝图 · 卷卡 · 世界 · 质量 · 健康'),
+    ),
+    body,
+  )
+}
+
 export type PanelTab =
   'overview' | 'chapters' | 'characters' | 'foreshadows' | 'worldbook' | 'quality' | 'health'
 
@@ -2463,6 +3502,79 @@ const EMPTY_CHAPTER_QUERY: ChapterQuery = {
   scene: '',
   sort: 'num_desc',
   cursor: '',
+}
+
+type SectionTab = Exclude<PanelTab, 'overview'>
+
+const TAB_META: Record<SectionTab, { title: string; desc: string; glyph: SectionGlyph }> = {
+  chapters: {
+    title: '章节台账',
+    desc: '按章查看状态、字数、评分与归档结果；点开详情可读正文和归档 plan。',
+    glyph: 'book',
+  },
+  characters: {
+    title: '人物档案',
+    desc: '在场人物、首次出场、最近状态与成长轨迹，按档案卡分组呈现。',
+    glyph: 'person',
+  },
+  foreshadows: {
+    title: '线索网络',
+    desc: '伏笔、时间线与人物关系同屏对照，避免线索在长书里失联。',
+    glyph: 'seed',
+  },
+  worldbook: {
+    title: '世界设定',
+    desc: '蓝图、地点、势力、规则与数值事实的统一索引，所有条目可展开。',
+    glyph: 'map',
+  },
+  quality: {
+    title: '质量剖面',
+    desc: '全书评分、可读评审、十五维得分与节奏数据，定位需要返工的章节。',
+    glyph: 'chart',
+  },
+  health: {
+    title: '项目健康',
+    desc: '大纲、设定与状态文件的完整性检查，把可修复的问题前置。',
+    glyph: 'shield',
+  },
+}
+
+const sectionItemCount = (section: PanelSectionState | null): number | undefined => {
+  const payload = section?.payload
+  if (payload === null || payload === undefined) return undefined
+  if (Array.isArray(payload.items)) return payload.items.length
+  const row = asRow(payload.items)
+  if (row !== null) {
+    const count = Object.values(row).reduce<number>(
+      (total, value) => total + (Array.isArray(value) ? value.length : 1),
+      0,
+    )
+    if (count > 0) return count
+  }
+  return payload.total ?? payload.returned
+}
+
+const tabIntro = (tab: SectionTab, view: PanelView, section: PanelSectionState | null): ReactElement => {
+  const meta = TAB_META[tab]
+  const total = tab === 'chapters' ? view.stats.chapters : sectionItemCount(section)
+  const note = total === undefined ? '只读投影' : tab === 'chapters' ? `${total} 章` : `${total} 条记录`
+  return createElement(
+    'header',
+    { className: 'nwe-tab-intro' },
+    createElement(
+      'span',
+      { className: 'nwe-tab-intro-icon', 'aria-hidden': 'true' },
+      sectionGlyph(meta.glyph, 22),
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-tab-intro-copy' },
+      createElement('span', { className: 'nwe-tab-intro-kicker' }, 'WORKBENCH / READ MODEL'),
+      createElement('h2', { className: 'nwe-tab-intro-title' }, meta.title),
+      createElement('p', { className: 'nwe-tab-intro-desc' }, meta.desc),
+    ),
+    createElement('span', { className: 'nwe-tab-intro-count' }, note),
+  )
 }
 
 const tabBar = (tab: PanelTab, onTab: (tab: PanelTab) => void): ReactElement =>
@@ -2515,6 +3627,7 @@ const STATUS_LABELS: Record<string, string> = {
   archived: '已归档',
   draft: '草稿',
   dormant: '休眠',
+  active: '在场',
   planned: '计划',
   writing: '写作中',
   done: '完成',
@@ -2681,27 +3794,108 @@ const sectionKv = (row: Record<string, unknown>): ReactElement => {
   )
 }
 
-const sectionList = (title: string, items: unknown): ReactElement => {
+const SECTION_GLYPHS: Record<string, SectionGlyph> = {
+  characters: 'person',
+  foreshadows: 'seed',
+  timeline: 'clock',
+  relationships: 'link',
+  rules: 'book',
+  factions: 'shield',
+  locations: 'map',
+  glossary: 'book',
+  backstory: 'clock',
+  facts: 'chart',
+  themes: 'spark',
+  outline_cards: 'book',
+  drift: 'alert',
+  blueprint: 'map',
+  'state-errors': 'alert',
+  effort: 'heart',
+  pacing: 'chart',
+}
+
+const sectionList = (title: string, items: unknown, kind: SectionGlyph = 'spark'): ReactElement => {
   if (!Array.isArray(items) || items.length === 0) {
     return createElement('div', { className: 'nwe-empty' }, `${title}：暂无数据`)
   }
   return createElement(
     'div',
-    { className: 'nwe-section-list' },
+    { className: 'nwe-card-grid' },
     ...items.map((item, index) => {
       const row = asRow(item)
+      const explicitLabel =
+        row === null
+          ? undefined
+          : row.a !== undefined && row.b !== undefined
+            ? `${textOf(row.a)} ↔ ${textOf(row.b)}`
+            : (row.title ?? row.name ?? row.id ?? row.alias ?? row.term ?? row.event ?? row.a)
       const label =
         row === null
           ? String(item)
           : textOf(
-              row.title ?? row.name ?? row.id ?? row.alias ?? row.a ?? row.term ?? row.event,
-              `第 ${index + 1} 条`,
+              row.chapter === undefined
+                ? explicitLabel
+                : `第 ${textOf(row.chapter)} 章${row.time === undefined ? '' : ` · ${textOf(row.time)}`}`,
+              explicitLabel === undefined ? title : textOf(explicitLabel),
             )
+      const note =
+        row === null
+          ? ''
+          : textOf(
+              row.current_state ??
+                row.profile ??
+                row.description ??
+                row.definition ??
+                row.layout ??
+                row.goal ??
+                row.note ??
+                (row.value === undefined
+                  ? row.event !== undefined && row.time !== undefined
+                    ? row.time
+                    : undefined
+                  : `${textOf(row.value)}${row.unit === undefined ? '' : ` ${textOf(row.unit)}`}`),
+              '',
+            )
+      const chips =
+        row === null
+          ? []
+          : [
+              row.role === undefined ? '' : roleLabel(row.role),
+              row.status === undefined ? '' : statusLabel(row.status),
+              row.first_appearance === undefined ? '' : `首次 ${textOf(row.first_appearance)}`,
+              row.last === undefined ? '' : `最近 ${textOf(row.last)}`,
+              row.appearances === undefined ? '' : `${textOf(row.appearances)} 次登场`,
+              row.type === undefined ? '' : textOf(row.type),
+            ].filter((value) => value !== '')
       return createElement(
         'details',
-        { className: 'nwe-data-row', key: `${label}-${index}` },
-        createElement('summary', null, label),
-        row === null ? createElement('div', { className: 'nwe-data-json' }, String(item)) : sectionKv(row),
+        { className: 'nwe-data-card', key: `${label}-${index}` },
+        createElement(
+          'summary',
+          { className: 'nwe-data-card-head' },
+          createElement(
+            'span',
+            { className: `nwe-data-card-icon is-${kind}`, 'aria-hidden': 'true' },
+            sectionGlyph(kind),
+          ),
+          createElement(
+            'span',
+            { className: 'nwe-data-card-heading' },
+            createElement('strong', null, label),
+            note === '' ? null : createElement('span', { className: 'nwe-data-card-note' }, note),
+            chips.length === 0
+              ? null
+              : createElement(
+                  'span',
+                  { className: 'nwe-data-card-chips' },
+                  ...chips.map((chip) => createElement('span', { key: chip }, chip)),
+                ),
+          ),
+          createElement('span', { className: 'nwe-data-card-caret', 'aria-hidden': 'true' }, '+'),
+        ),
+        row === null
+          ? createElement('div', { className: 'nwe-data-card-body' }, String(item))
+          : createElement('div', { className: 'nwe-data-card-body' }, sectionKv(row)),
       )
     }),
   )
@@ -2710,11 +3904,21 @@ const sectionList = (title: string, items: unknown): ReactElement => {
 const sectionBlock = (title: string, items: unknown, key: string): ReactElement | null => {
   const list = Array.isArray(items) ? items : []
   if (list.length === 0) return null
+  const glyph = SECTION_GLYPHS[key] ?? 'spark'
   return createElement(
     'section',
     { className: 'nwe-subsection', key },
-    createElement('h3', null, `${title}（${list.length}）`),
-    sectionList(title, list),
+    createElement(
+      'div',
+      { className: 'nwe-group-head' },
+      createElement(
+        'span',
+        { className: `nwe-group-icon is-${glyph}`, 'aria-hidden': 'true' },
+        sectionGlyph(glyph, 16),
+      ),
+      createElement('h3', null, `${title}（${list.length}）`),
+    ),
+    sectionList(title, list, glyph),
   )
 }
 
@@ -2785,7 +3989,7 @@ const worldbookSection = (items: unknown): ReactElement => {
   ].filter((block): block is ReactElement => block !== null)
   return blocks.length === 0
     ? createElement('div', { className: 'nwe-empty' }, '设定：暂无数据')
-    : createElement('div', { className: 'nwe-section-list' }, ...blocks)
+    : createElement('div', { className: 'nwe-worldbook-layout' }, ...blocks)
 }
 
 const qualitySection = (
@@ -2803,11 +4007,27 @@ const qualitySection = (
       ? createElement('div', { className: 'nwe-empty' }, '质量：暂无评审')
       : createElement(
           'div',
-          { className: 'nwe-quality-summary' },
-          createElement('span', null, `均分 ${textOf(quality.average)}`),
-          createElement('span', null, `可读评审 ${textOf(quality.samples)}`),
-          createElement('span', null, `中位 ${textOf(quality.median)}`),
-          createElement('span', null, `区间 ${textOf(quality.min)}–${textOf(quality.max)}`),
+          { className: 'nwe-quality-kpis' },
+          ...(
+            [
+              ['全书均分', textOf(quality.average), '/ 150'],
+              ['可读评审', textOf(quality.samples), '章'],
+              ['中位分', textOf(quality.median), ''],
+              ['评分区间', `${textOf(quality.min)}–${textOf(quality.max)}`, ''],
+            ] as const
+          ).map(([label, value, unit]) =>
+            createElement(
+              'article',
+              { className: 'nwe-quality-kpi', key: label },
+              createElement('span', { className: 'nwe-quality-kpi-label' }, label),
+              createElement(
+                'strong',
+                { className: 'nwe-quality-kpi-value' },
+                value,
+                unit === '' ? null : createElement('small', null, unit),
+              ),
+            ),
+          ),
         )
   const bars = dimensions.map((entry, index) => {
     const dimension = asRow(entry)
@@ -2817,9 +4037,14 @@ const qualitySection = (
     const id = textOf(dimension.id, `维度 ${index + 1}`)
     const percent = max > 0 ? Math.max(0, Math.min(100, (average / max) * 100)) : 0
     return createElement(
-      'div',
-      { className: 'nwe-dim', key: id },
-      createElement('span', null, id),
+      'article',
+      { className: 'nwe-dim-card', key: id },
+      createElement(
+        'div',
+        { className: 'nwe-dim-card-head' },
+        createElement('span', null, id),
+        createElement('strong', null, `${Number.isFinite(average) ? average : '—'} / ${max > 0 ? max : '—'}`),
+      ),
       createElement(
         'div',
         {
@@ -2832,7 +4057,6 @@ const qualitySection = (
         },
         createElement('span', null, createElement('i', { style: { width: `${percent}%` } })),
       ),
-      createElement('span', null, `${Number.isFinite(average) ? average : '—'} / ${max > 0 ? max : '—'}`),
     )
   })
   const pacing = asRow(row.pacing)
@@ -2855,22 +4079,63 @@ const qualitySection = (
                 : `第 ${textOf(longest?.chapter)} 章 ${textOf(longest?.words)} 字 / 第 ${textOf(shortest?.chapter)} 章 ${textOf(shortest?.words)} 字`,
           },
         ]
+  const effort = asRow(row.effort)
+  const effortBlock =
+    effort === null
+      ? null
+      : createElement(
+          'section',
+          { className: 'nwe-subsection' },
+          createElement(
+            'div',
+            { className: 'nwe-group-head' },
+            createElement(
+              'span',
+              { className: 'nwe-group-icon is-heart', 'aria-hidden': 'true' },
+              sectionGlyph('heart', 16),
+            ),
+            createElement('h3', null, '返工投入'),
+          ),
+          createElement(
+            'div',
+            { className: 'nwe-effort-grid' },
+            ...(
+              [
+                ['评审', effort.reviews],
+                ['修订', effort.revisions],
+                ['校验', effort.checks],
+                ['回滚', effort.rollbacks],
+              ] as const
+            ).map(([label, value]) =>
+              createElement(
+                'article',
+                { className: 'nwe-effort-card', key: label },
+                createElement('span', null, label),
+                createElement('strong', null, textOf(value)),
+              ),
+            ),
+          ),
+        )
   const extras = [
     pacingRows.length === 0 ? null : sectionBlock('节奏', pacingRows, 'pacing'),
-    sectionBlock('投入', row.effort === null || row.effort === undefined ? [] : [row.effort], 'effort'),
+    effortBlock,
   ].filter((block): block is ReactElement => block !== null)
   return createElement(
     'div',
-    { className: 'nwe-section-list' },
+    { className: 'nwe-quality-layout' },
     summary,
     chapter > 0
       ? createElement(
-          'button',
-          { type: 'button', className: 'nwe-refresh', onClick: () => onDetail(chapter) },
-          '查看本章质量详情',
+          'div',
+          { className: 'nwe-quality-toolbar' },
+          createElement(
+            'button',
+            { type: 'button', className: 'nwe-refresh', onClick: () => onDetail(chapter) },
+            '查看本章质量详情',
+          ),
         )
       : null,
-    ...bars,
+    createElement('div', { className: 'nwe-dim-grid' }, ...bars),
     ...extras,
     qualityDetailPanel(detail, onDetail),
   )
@@ -2883,10 +4148,26 @@ const healthSection = (items: unknown): ReactElement => {
     const value = asRow(row[key])
     const present = value?.present === true
     const existed = value?.file_existed === true
+    const label = key === 'outline' ? '大纲' : '设定'
     return createElement(
-      'span',
-      { className: `nwe-badge ${present ? 'is-ok' : 'is-bad'}`, key },
-      `${key === 'outline' ? '大纲' : '设定'}：${present ? '可读' : existed ? '损坏' : '缺失'}`,
+      'article',
+      { className: `nwe-health-card ${present ? 'is-ok' : 'is-bad'}`, key },
+      createElement(
+        'span',
+        { className: 'nwe-health-icon', 'aria-hidden': 'true' },
+        sectionGlyph(present ? 'check' : 'alert', 18),
+      ),
+      createElement(
+        'div',
+        { className: 'nwe-health-copy' },
+        createElement('strong', null, `${label}：${present ? '可读' : existed ? '损坏' : '缺失'}`),
+        createElement(
+          'span',
+          null,
+          present ? '结构完整，可安全读取' : existed ? '文件存在但解析失败' : '尚未生成该文件',
+        ),
+      ),
+      createElement('span', { className: 'nwe-health-state' }, present ? 'PASS' : 'CHECK'),
     )
   })
   const stateErrors = Array.isArray(row.state_errors) ? row.state_errors : []
@@ -2897,8 +4178,8 @@ const healthSection = (items: unknown): ReactElement => {
   ].filter((block): block is ReactElement => block !== null)
   return createElement(
     'div',
-    { className: 'nwe-section-list' },
-    createElement('div', { className: 'nwe-health-flags' }, ...flags),
+    { className: 'nwe-health-layout' },
+    createElement('div', { className: 'nwe-health-grid' }, ...flags),
     ...blocks,
   )
 }
@@ -3123,6 +4404,42 @@ const chapterTable = (
   const rows = items.map(asRow).filter((row): row is Record<string, unknown> => row !== null)
   const total = payload?.total ?? rows.length
   const cursor = query.cursor
+  const mobileCards =
+    rows.length === 0
+      ? null
+      : createElement(
+          'div',
+          { className: 'nwe-chapter-cards-mobile' },
+          ...rows.map((row, index) => {
+            const num = textOf(row.num, String(index + 1))
+            const score = typeof row.score === 'number' ? String(row.score) : '—'
+            return createElement(
+              'article',
+              { className: 'nwe-mobile-chapter', key: `${num}-${index}` },
+              createElement('span', { className: 'nwe-mobile-chapter-num' }, `CH ${num.padStart(2, '0')}`),
+              createElement(
+                'div',
+                { className: 'nwe-mobile-chapter-body' },
+                createElement('strong', null, textOf(row.title)),
+                createElement(
+                  'span',
+                  null,
+                  `${row.status === 'draft' ? '草稿' : '已归档'} · ${textOf(row.word_count)} 字 · ${textOf(row.scene_type)}`,
+                ),
+              ),
+              createElement('span', { className: 'nwe-mobile-chapter-score' }, score),
+              createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'nwe-refresh',
+                  onClick: () => onDetail(Number(num) || index + 1),
+                },
+                '详情',
+              ),
+            )
+          }),
+        )
   return createElement(
     'section',
     { className: 'nwe-chapters-section', 'aria-label': '章节表' },
@@ -3198,6 +4515,7 @@ const chapterTable = (
             ),
           ),
         ),
+    mobileCards,
     createElement(
       'div',
       { className: 'nwe-pager' },
@@ -3251,7 +4569,7 @@ const leadsSection = (items: unknown): ReactElement => {
   ].filter((block): block is ReactElement => block !== null)
   return blocks.length === 0
     ? createElement('div', { className: 'nwe-empty' }, '线索：暂无数据')
-    : createElement('div', { className: 'nwe-section-list' }, ...blocks)
+    : createElement('div', { className: 'nwe-leads-layout' }, ...blocks)
 }
 
 const sectionMeta = (section: PanelSectionState): ReactElement | null => {
@@ -3291,14 +4609,20 @@ const sectionPanel = (
         : tab === 'worldbook'
           ? '搜索设定'
           : ''
-  const withSearch = (content: ReactElement): ReactElement =>
-    createElement(
+  const withSearch = (content: ReactElement): ReactElement => {
+    const searchGlyph: SectionGlyph = tab === 'characters' ? 'person' : tab === 'foreshadows' ? 'seed' : 'map'
+    return createElement(
       Fragment,
       null,
       createElement(
         'label',
         { className: 'nwe-section-search' },
-        searchLabel,
+        createElement(
+          'span',
+          { className: 'nwe-search-icon', 'aria-hidden': 'true' },
+          sectionGlyph(searchGlyph, 16),
+        ),
+        createElement('span', { className: 'nwe-search-label' }, searchLabel),
         createElement('input', {
           type: 'search',
           value: search,
@@ -3309,7 +4633,8 @@ const sectionPanel = (
       sectionMeta(section),
       content,
     )
-  if (tab === 'characters') return withSearch(sectionList('人物', items))
+  }
+  if (tab === 'characters') return withSearch(sectionList('人物', items, 'person'))
   if (tab === 'foreshadows') return withSearch(leadsSection(items))
   if (tab === 'worldbook') return withSearch(worldbookSection(items))
   if (tab === 'quality') return qualitySection(items, chapter, qualityDetail, onQualityDetail)
@@ -3361,25 +4686,29 @@ export function panelElement(
       { className: 'nwe-hero' },
       createElement(
         'div',
-        { className: 'nwe-hero-title' },
-        createElement('div', { className: 'nwe-eyebrow' }, 'NOVEL STUDIO · 网文工坊'),
-        createElement('h1', { className: 'nwe-title' }, view.title),
+        { className: 'nwe-brand' },
+        createElement('span', { className: 'nwe-brand-mark', 'aria-hidden': 'true' }, '文'),
         createElement(
           'div',
-          { className: 'nwe-meta' },
+          { className: 'nwe-hero-title' },
+          createElement('div', { className: 'nwe-eyebrow' }, '网文工坊 · NOVEL WORKBENCH'),
+          createElement('h1', { className: 'nwe-title' }, view.title),
           createElement(
-            'span',
-            { className: `nwe-stage${view.finished ? ' is-done' : ''}` },
-            view.stageLabel,
+            'div',
+            { className: 'nwe-meta' },
+            createElement(
+              'span',
+              { className: `nwe-stage${view.finished ? ' is-done' : ''}` },
+              view.stageLabel,
+            ),
+            ready ? createElement('span', null, view.subtitle) : null,
+            ready ? createElement('span', { className: 'nwe-revision' }, view.revisionLabel) : null,
+            view.state === 'choose' || view.state === 'missing' || view.state === 'loading'
+              ? createElement('span', null, view.subtitle)
+              : null,
           ),
-          ready ? createElement('span', null, view.subtitle) : null,
-          ready ? createElement('span', { 'aria-hidden': 'true' }, '·') : null,
-          ready ? createElement('span', null, view.revisionLabel) : null,
-          view.state === 'choose' || view.state === 'missing' || view.state === 'loading'
-            ? createElement('span', null, view.subtitle)
-            : null,
+          ready && view.root !== '' ? createElement('div', { className: 'nwe-rootline' }, view.root) : null,
         ),
-        ready && view.root !== '' ? createElement('div', { className: 'nwe-rootline' }, view.root) : null,
       ),
       createElement(
         'div',
@@ -3425,7 +4754,7 @@ export function panelElement(
           stat('待处理', String(view.stats.blocking), '项'),
         )
       : null,
-    ready && tab === 'overview' ? (bookDataSection(view) ?? bookSection(view)) : null,
+    ready && tab === 'overview' ? overviewCharts(view) : null,
     view.state === 'loading' ? loadingState() : null,
     view.state === 'choose' ? choosePanel(view, onSelectProject) : null,
     view.state === 'missing' ? missingPanel(view) : null,
@@ -3460,15 +4789,17 @@ export function panelElement(
           createElement(
             'aside',
             { className: 'nwe-desk-side', 'aria-label': '全书与活动' },
+            bookGlance(view),
             activitySection(view),
           ),
         )
       : null,
+    ready && tab === 'overview' ? bookDossier(view) : null,
     ready && tab === 'chapters'
       ? createElement(
           'div',
           {
-            className: 'nwe-desk',
+            className: 'nwe-desk nwe-desk-single',
             role: 'tabpanel',
             id: 'nwe-panel-chapters',
             'aria-labelledby': 'nwe-tab-chapters',
@@ -3476,6 +4807,7 @@ export function panelElement(
           createElement(
             'div',
             { className: 'nwe-desk-main' },
+            tabIntro('chapters', view, section),
             blockingSection(view),
             chapterToolbar(chapterQuery, onChapterQuery),
             chapterTable(section, view, chapterQuery, onChapterQuery, chapterDetail, onChapterDetail),
@@ -3491,6 +4823,7 @@ export function panelElement(
             id: `nwe-panel-${tab}`,
             'aria-labelledby': `nwe-tab-${tab}`,
           },
+          tabIntro(tab as SectionTab, view, section),
           tab === 'health'
             ? createElement(
                 Fragment,

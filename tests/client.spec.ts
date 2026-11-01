@@ -1383,6 +1383,33 @@ describe('client registration and rendering', () => {
     }
   })
 
+  it('renders overview trend and word charts with accessible summaries', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(panelElement(buildView(base), false, () => undefined))
+    expect(markup).toContain('评分趋势')
+    expect(markup).toContain('章节字数')
+    expect(markup).toContain('aria-label="章节评分趋势"')
+    expect(markup).toContain('aria-label="章节字数分布"')
+    expect(markup).toContain('nwe-trend-chart')
+    expect(markup).toContain('nwe-word-chart')
+    expect(markup).toContain('最近')
+  })
+
+  it('renders empty and single-point chart states', () => {
+    const empty = payload()
+    empty.summary.quality = { averageScore: 0, scores: [], trend: null }
+    empty.chapters.rows = []
+    const emptyMarkup = renderToStaticMarkup(panelElement(buildView(empty), false, () => undefined))
+    expect(emptyMarkup).toContain('还没有评审')
+    expect(emptyMarkup).toContain('还没有章节')
+
+    const single = payload()
+    single.summary.quality = { averageScore: 145, scores: [145], trend: 0 }
+    const singleMarkup = renderToStaticMarkup(panelElement(buildView(single), false, () => undefined))
+    expect(singleMarkup).toContain('最近 1 章')
+    expect(singleMarkup).toContain('aria-label="最近 1 章评分趋势')
+  })
+
   it('renders the loading panel and the icon without a DOM', () => {
     expect(typeof NovelPanel).toBe('function')
     const loading = buildView(null)
@@ -1398,12 +1425,16 @@ describe('client registration and rendering', () => {
     expect(ready).toContain('规划 75%')
     expect(ready).toContain('缺卡 1')
     expect(ready).toContain('nwe-root')
+    expect(ready).toContain('网文工坊 · NOVEL WORKBENCH')
+    expect(ready).toContain('nwe-brand-mark')
+    expect(ready).toContain('全书概览')
+    expect(ready).toContain('全书资料')
     expect(ready).toContain('overflow-y: auto')
     expect(ready).toContain('height: 100%')
     expect(ready).toContain('overscroll-behavior: contain')
     expect(ready).toContain('全书均分')
     expect(ready).toContain('近十均分')
-    expect(ready).toContain('CURRENT CHAPTER · 下一步')
+    expect(ready).toContain('当前阶段 · 下一步')
     expect(ready).toContain('role="progressbar"')
     expect(ready).toContain('aria-label="开端之雨 评分"')
     expect(ready).toContain('@media (max-width: 760px)')
@@ -2434,5 +2465,162 @@ describe('client registration and rendering', () => {
       health: { pending: null },
     } as unknown as NonNullable<NonNullable<PanelPayloadDto['summary']>['bookData']>
     expect(buildView(sparse).quality.trendText).toBe('历史不足')
+  })
+
+  it('renders full-width card walls with icons on every read-model tab', () => {
+    const base = payload()
+    const sectionFor = (
+      tab: 'chapters' | 'characters' | 'foreshadows' | 'worldbook' | 'quality' | 'health',
+      items: unknown,
+    ): string =>
+      renderToStaticMarkup(
+        panelElement(
+          buildView(base),
+          false,
+          () => undefined,
+          () => undefined,
+          tab,
+          () => undefined,
+          {
+            loading: false,
+            error: null,
+            payload: {
+              ...base,
+              payload_version: 7,
+              section: tab,
+              items,
+              total: Array.isArray(items) ? items.length : 1,
+              returned: Array.isArray(items) ? items.length : 1,
+              truncated: false,
+              next_cursor: null,
+            } as unknown as PanelPayloadDto,
+          },
+        ),
+      )
+    const pages: Record<string, string> = {
+      overview: renderToStaticMarkup(
+        panelElement(
+          buildView(base),
+          false,
+          () => undefined,
+          () => undefined,
+        ),
+      ),
+      chapters: sectionFor('chapters', base.chapters.rows),
+      characters: sectionFor('characters', [
+        {
+          name: '林砚',
+          role: 'protagonist',
+          status: 'active',
+          first_appearance: 1,
+          last: 3,
+          appearances: 7,
+          current_state: '守着旧书店，等待下一封来信。',
+          profile: '沉默、克制，习惯把线索写在书脊内侧。',
+        },
+        {
+          name: '沈墨',
+          role: 'supporting',
+          status: 'active',
+          first_appearance: 2,
+          last: 3,
+          appearances: 3,
+          current_state: '在旧城档案馆查一封被退回的信。',
+          profile: '说话很快，擅长从旧报纸里找矛盾。',
+        },
+        {
+          name: '顾姨',
+          role: 'extra',
+          status: 'dormant',
+          first_appearance: 1,
+          last: 1,
+          appearances: 1,
+          current_state: '只在雨夜出现，知道书店旧主人的事。',
+        },
+      ]),
+      foreshadows: sectionFor('foreshadows', {
+        foreshadows: [
+          { id: 'FS-001', title: '无名旧信', status: 'planted', chapter: 1, note: '信封背面有半个地址。' },
+          {
+            id: 'FS-002',
+            title: '黄铜钥匙',
+            status: 'dormant',
+            chapter: 2,
+            note: '钥匙齿形对应旧城档案馆。',
+          },
+          {
+            id: 'FS-003',
+            title: '失踪者笔迹',
+            status: 'advanced',
+            chapter: 3,
+            note: '与三年前最后一封信一致。',
+          },
+        ],
+        timeline: [
+          { chapter: 1, time: '雨夜', description: '旧信被塞进门缝。', location: '旧书店' },
+          { chapter: 2, time: '次日', description: '钥匙打开档案馆后门。', location: '旧城档案馆' },
+        ],
+        relationships: [
+          { a: '林砚', b: '沈墨', type: '盟友', note: '共同查旧信。' },
+          { a: '林砚', b: '顾姨', type: '旧识', note: '顾姨知道旧书店的过去。' },
+        ],
+      }),
+      worldbook: sectionFor('worldbook', {
+        premise: '一座旧城，所有来信都从同一场雨开始。',
+        setting: '旧城临海，档案馆与书店隔着一条被填平的河。',
+        blueprint: { themes: ['记忆', '失踪'], tone: '冷峻', pov: '第三人称限知', ending: '信被寄回。' },
+        locations: [
+          { name: '旧书店', description: '临街两层，木门，靠墙书架到顶。' },
+          { name: '旧城档案馆', description: '灰石立面，地下一层存旧报纸。' },
+        ],
+        factions: [{ name: '港务会', description: '控制旧城航运与档案。', goal: '封锁旧案。' }],
+        rules: [{ name: '信不能过海', description: '所有未署名的信都会在港口被退回。' }],
+        glossary: [{ term: '旧印', definition: '档案馆书脊内侧的暗记。' }],
+        backstory: [{ time: '三年前', event: '第一封无名信出现。' }],
+        facts: [{ alias: '灯塔高度', value: 42, unit: '米' }],
+        outline_cards: [
+          { num: 1, title: '雨夜来信', status: 'archived', scene_type: '日常过渡章', goal: '找到钥匙。' },
+        ],
+        volumes: [{ title: '第一卷 雨与旧信', start_chapter: 1, end_chapter: 12 }],
+        ledger: {
+          locations: [{ name: '旧书店', layout: '木门与书架', anchors: ['门缝'] }],
+          abilities: [{ name: '辨字', description: '能从笔迹判断写信时的情绪。' }],
+          artifacts: [{ name: '黄铜钥匙', description: '齿形像旧城档案馆。' }],
+        },
+      }),
+      quality: sectionFor('quality', {
+        quality: { average: 132, samples: 6, median: 134, min: 118, max: 145 },
+        dimensions: [
+          { id: 'R-W-04', average: 17, samples: 6, max: 20 },
+          { id: 'R-W-10', average: 0.8, samples: 6, max: 1 },
+          { id: 'R-W-01', average: 13, samples: 6, max: 15 },
+          { id: 'R-W-07', average: 8, samples: 6, max: 10 },
+        ],
+        pacing: {
+          scene_types: { 日常过渡章: 3, 情感爆发章: 2, 战斗动作章: 1 },
+          hook_strength: { '4': 4, '5': 2 },
+          plot_advancement: { mid: 5, high: 1 },
+          longest: { chapter: 6, words: 1234 },
+          shortest: { chapter: 3, words: 519 },
+        },
+        effort: { reviews: 6, revisions: 2, checks: 3, rollbacks: 0, chapters: [] },
+      }),
+      health: sectionFor('health', {
+        outline: { present: true, error: null },
+        worldbook: { present: true, error: null },
+        state_errors: [],
+        drift: [],
+        pending: null,
+      }),
+    }
+    for (const [name, markup] of Object.entries(pages)) {
+      expect(markup, name).toContain('nwe-tab-intro')
+    }
+    expect(pages.characters).toContain('nwe-data-card-icon')
+    expect(pages.worldbook).toContain('nwe-group-head')
+    expect(pages.quality).toContain('nwe-quality-kpis')
+    expect(pages.quality).toContain('nwe-effort-grid')
+    expect(pages.chapters).toContain('nwe-chapter-cards-mobile')
+    expect(pages.health).toContain('nwe-health-grid')
   })
 })

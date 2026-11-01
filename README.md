@@ -10,7 +10,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-novel-write-engine?style=flat-square&logo=npm&label=downloads)](https://www.npmjs.com/package/dsh-novel-write-engine)
 [![CI](https://img.shields.io/github/actions/workflow/status/ThzxxArt/dsh-novel-write-engine/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/ThzxxArt/dsh-novel-write-engine/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ThzxxArt/dsh-novel-write-engine?style=flat-square&logo=github&label=release)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases)
-[![version](https://img.shields.io/badge/version-0.2.9-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.9)
+[![version](https://img.shields.io/badge/version-0.2.10-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.10)
 [![Node](https://img.shields.io/badge/Node-%3E%3D24.9.0-339933?style=flat-square&logo=node.js&logoColor=white)](#1-兼容性)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%20~%200.3-6f42c1?style=flat-square)](#1-兼容性)
 [![License](https://img.shields.io/github/license/ThzxxArt/dsh-novel-write-engine?style=flat-square)](LICENSE)
@@ -20,9 +20,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.9**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.10**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.9 是可信工作台与工具契约版本：归档卡证据链、26 个自由 JSON 入参类型化、面板 v7 分栏/64KB 预算/ETag、规则包精度、稳定卷 id 与一批读模型修复。没有新增阶段、工具、操作、门控、语义项或导出种类；`archive_card` 是可选新字段，旧项目只读回退并在无法证明时 fail closed。
+> 0.2.10 是工作台体验版本：七栏内容区改为全宽，人物/线索/设定/质量/健康改为带图标的卡片墙，章节在窄屏切换为卡片；概览新增最近 10 章评分趋势与最近 8 章字数柱状图。没有新增或改变阶段、工具、操作、门控、语义项、导出、schema 或配置键。
 
 ---
 
@@ -204,7 +204,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.9
+dsh plugin --profile web add dsh-novel-write-engine@0.2.10
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -252,10 +252,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.9.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.10.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.9.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.10.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -267,7 +267,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.9`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.10`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -335,11 +335,12 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 归档后打开左侧 **网文工坊**：
 
-- 紧凑顶栏：书名、类型、平台、当前章边界（例如“第 1 章已归档 · 下一章第 2 章待开始”）；
-- 首屏“当前章 / 下一步”卡与“复制续写指令”；归档后显示下一章 P1，全书完成时隐藏复制按钮；
-- 统计条：已归档章节、总字数（归档 + 活动草稿）、平均分、待处理门控；
-- 双栏工作台：阶段轨、门控、提示、旧数据、全书规划、质量趋势、健康度、最近活动；
-- 底部章节卡。
+- 顶栏：书名、类型、平台、当前章边界（例如“第 1 章已归档 · 下一章第 2 章待开始”）；
+- 首屏“下一步”卡与“复制续写指令”；归档后显示下一章 P1，全书完成时隐藏复制按钮；
+- 七栏导航：概览、章节、人物、线索、设定、质量、健康；内容区占满画布，不再被旧的左右栏比例挤在左侧；
+- 概览：四项统计条 + 最近 10 章评分趋势折线 + 最近 8 章字数柱状图；下方是阶段轨、门控与全书/活动双栏，“全书资料”可展开蓝图、卷、世界观与质量摘要；
+- 人物、线索、设定、质量、健康：带图标的卡片墙，卡片可展开详情；线索与设定按分组两栏排列；章节在桌面是可筛选、排序、翻页的台账，窄屏切换为章节卡；
+- 超过 30 章只渲染最近 30 条，并显示总记录数。
 
 面板按概览/章节/人物/线索/设定/质量/健康七栏读取；每栏有独立 section、窗口元数据和 64KB 字节上限，失败时显式显示同步错误。它**只读**，所有写操作仍在对话/工具里。
 
@@ -623,18 +624,18 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.9
+### 升级到 0.2.10
 
-0.2.9 没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；`ChapterRecord.archive_card` 是可选新字段，旧记录缺它时按只读回退处理，无法证明的归档卡修改会 fail closed。
+0.2.10 是面板呈现层更新，没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；面板协议 `payload_version` 保持 7，`PANEL_VERSION` 从 0.2.9 升到 0.2.10。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.9
+dsh plugin --profile web add dsh-novel-write-engine@0.2.10
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.8 升到 0.2.9；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.9 升到 0.2.10；旧标签页显示“需要刷新”时刷新即可。
 
-历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.9 不再在 `main` 保留旧版方案与验收稿；需要溯源时使用对应发布 tag 或 Release 快照。
+历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.9 的方案与验收稿仍保留在 `docs/`；更早版本使用对应发布 tag 或 Release 快照查看。
 
 ### 从源码目录升级
 
@@ -789,17 +790,15 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 本次 0.2.9 验证
+### 本次 0.2.10 验证
 
-以本次发布实际跑出的结果为准：
+以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**94 个测试文件 / 1000 项全部通过**；
-- 覆盖率：**语句 93.47% / 分支 89.01% / 函数 96.82% / 行 93.47%**；逐文件门禁通过；client 函数覆盖 85.59%；client bundle 158.50 KB（react-dom 外置）；
+- `corepack pnpm test`：**94 个测试文件 / 1003 项全部通过**；
+- 覆盖率：**语句 93.76% / 分支 89.17% / 函数 96.75% / 行 93.76%**；逐文件门禁通过；client 函数覆盖 86.04%；client bundle 209.95 KB（react-dom 外置）；
 - `typecheck`、`lint`、`build`：通过；
-- `check:hygiene`（160 files，0 v8 ignore）、`test:isolated`（63 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash`：通过；
-- 真实模型 P3 20 章：已跑（`agnes-2.5-flash`，总正文 16,625 字，P1/P2/P4/P6 为确定性夹具）；第二轮复跑都市/玄幻/西方奇幻三题材各 1 章完整 P1→archive；三题材矩阵另有 `tests/generality.spec.ts` 覆盖。
-- 视觉：静态 Chromium 390/768/1440 与浅/深色截图已看；真实宿主临时 profile 0.2.9 的空态 1440/390 已截图；有项目态真实宿主、触屏真机与屏幕阅读器未验收。
-- 隐私守卫：`src / briefs / skills / presets / rulepacks / docs` 与根文档均无具体项目身份。
+- 视觉：1440 静态 Chromium 与 390 CDP 视口检查；有项目态真实宿主、触屏真机与屏幕阅读器未验收；
+- 0.2.10 未改引擎写路径；本轮没有重新跑真实模型。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
 
@@ -814,7 +813,6 @@ tests/            # 单测、集成、falsify、e2e
 | [docs/tools.md](docs/tools.md) | 28 个工具与命令面速查 |
 | [docs/states.md](docs/states.md) | 状态机、迁移表、轮次与回退 |
 | [docs/rulepack.md](docs/rulepack.md) | 规则包结构、编译器断言、改词表流程 |
-| [PLAN.md](PLAN.md) | 0.1.0 实施计划（历史） |
 | [LICENSE](LICENSE) | MIT |
 
 ### 反馈

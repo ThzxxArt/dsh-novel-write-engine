@@ -25,7 +25,7 @@ const productRoots = [
   { directory: new URL('../docs/', import.meta.url), extensions: ['.md'] },
 ]
 
-const productFiles = ['README.md', 'CHANGELOG.md', 'PLAN.md', 'DESIGN.md'].map(
+const productFiles = ['README.md', 'CHANGELOG.md', 'DESIGN.md'].map(
   (name) => new URL(`../${name}`, import.meta.url),
 )
 
