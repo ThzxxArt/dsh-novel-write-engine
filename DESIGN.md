@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.10`                                                                                                 |
+| 插件版本 | `0.2.11`                                                                                                 |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1385,6 +1385,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.11 是工作台内容层与命令教程版本：七栏内容区固定在面板高度内独立滚动，所有折叠详情、资料卡、章节/质量详情与章节表改为有界滚动；面板教程新增「全部命令」，覆盖 5 个入口、`/novel` 的 25 种带名写法、6 种导出、25 个 admin 操作与常用组合。`PANEL_VERSION` 升到 0.2.11，面板协议 `payload_version` 仍为 7；没有工具、阶段、门控、schema、导出或配置键变化。
+
 0.2.10 是工作台呈现层版本：七栏内容区改为全宽，人物/线索/设定/质量/健康改为带图标的卡片墙，章节窄屏切换为卡片；概览新增最近 10 章评分趋势与最近 8 章字数柱状图。`PANEL_VERSION` 升到 0.2.10，面板协议 `payload_version` 仍为 7；没有工具、阶段、门控、schema、导出或配置键变化。
 
 0.2.9 是可信工作台与工具契约版本：`ChapterRecord` 增加可选 `archive_card`/`archive_card_digest`，归档卡受保护字段有独立证据；26 个自由 JSON 入参改为类型化 schema，只有真正的动态映射保持开放；面板新增 v7 section 读模型（overview/chapters/characters/foreshadows/timeline/relationships/worldbook/quality/health），每 section 有窗口元数据、64KB 字节上限和 ETag/304；`listHistory` 默认不读正文，基础 section 不读归档 review；规则包增加题材 advisory profile；卷 upsert 支持稳定 id。没有新增阶段、工具、操作、门控、语义项或导出种类。
@@ -1791,15 +1793,20 @@ relationships: { ['a|b']: string → { action, reason?, a?, b?, type?, descripti
 | 插件内部派发 subagent                | 工具调用变分钟级长任务，不可中断、不可观测                 |
 | 一个 `novel_submit` + `phase` 判别式 | `oneOf` 分支过深，参数难命中                               |
 
-### 9.4 五条斜杠命令
+### 9.4 斜杠命令
+
+五个入口：`/novel`、`/novel-next`、`/novel-stats`、`/novel-export <kind>`、`/novel-admin [<op> <json>]`；后四个是 `/novel` 子命令的短别名。
 
 ```
-/novel             → 状态卡（项目头 + 当前位置 + 下一步）
-/novel next        → 下一步该调的工具与参数
-/novel stats       → 字数 / 评分 / 伏笔 / 词表命中统计
-/novel export      → 导出 md / txt / epub / outline / worldbook / proposal，附封面 SVG 与平台简介
-/novel admin <op>  → 触达未注册在高频面的 18 个工具（仅 toolsMode=core 时需要）
+/novel [status|next|stats|outline|guide|report|doctor|search <关键词>]
+/novel projects | projects --prune | projects --prune --yes | current
+/novel use <路径|书名|.> | unbind | scan | scan --register
+/novel resume
+/novel export md|txt|epub|outline|worldbook|proposal
+/novel admin | admin <op> <json>
 ```
+
+`/novel` 共 25 种带名写法；`/novel admin` 提供 25 个操作（18 个非核心工具、5 个登记/导入、2 个核心工具冗余入口）。面板「? 教程 → 全部命令」给出完整命令表、admin 操作分组和常用组合；`/novel admin` 空参数也会列出全部操作名。
 
 命令与工具共用同一套投影（§6.6），不引入第二条数据路径；命令是「少一次工具调用」的糖，不是新能力。
 
@@ -1837,12 +1844,12 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 1. **紧凑顶栏**：品牌块、书名 / 类型 / 平台 / 当前章 / 阶段徽章 / 修订次数 / 绝对项目根；右侧项目选择器、教程、刷新。
 2. **首屏下一步卡**：工具的中文动作 + 可读理由；旁边“复制续写指令”只写剪贴板，失败时展示可选中文本。
-3. **七栏导航**：概览、章节、人物、线索、设定、质量、健康；内容区全宽，不再被旧的左右栏比例限制。
-4. **概览统计与图表**：四项统计条；最近 10 章评分趋势折线（0/75/150 网格、点 tooltip、空态/单点态）与最近 8 章字数柱状图（峰值、章号、空态）；窄屏上下堆叠。
-5. **概览双栏**：左侧阶段轨、门控、advisory 提示、legacy 旧数据与章节；右侧全书进度/蓝图/卷/世界观计数与最近活动；下方「全书资料」折叠区。
-6. **语义卡片墙**：人物、线索、设定、质量、健康使用带图标、摘要、状态 chips 与展开详情的卡片；线索与设定按分组两栏排列。
+3. **七栏导航**：概览、章节、人物、线索、设定、质量、健康；内容区全宽，顶栏/下一步/导航固定，内容画布在面板高度内独立滚动。
+4. **概览统计与图表**：四项统计条；最近 10 章评分趋势折线（0/75/150 网格、点 tooltip、空态/单点态）与最近 8 章字数柱状图（峰值、章号、空态）；窄屏上下堆叠。下方「全书资料」用 3 列资料卡承载蓝图、进度、卷、人物、世界、伏笔、质量与健康，默认展开书脊卡。
+5. **概览双栏**：左侧阶段轨、门控、advisory 提示、legacy 旧数据与章节；右侧全书进度/蓝图/卷/世界观计数与最近活动；章节与活动列表限高滚动。
+6. **语义卡片墙与折叠**：人物、线索、设定、质量、健康使用带图标、摘要、状态 chips 与展开详情的卡片；展开卡占满整行，正文区限高滚动。线索与设定按分组两栏排列。所有折叠共用“图标/标题/状态/加号”头部与 `+ → ×` 状态，禁止浏览器默认 summary 样式。
 7. **九阶段轨**：三个阶段态（done / active / pending）；只有配置的 `total_chapters` 全部归档后九格才全绿、没有 active。单章 `done` 是「本章已归档」，下一章仍从 P1 开始，不能显示成全书完成或 P9 进行中。`ready_to_archive` 时 P7 为 active、P8/P9 为 pending，因为归档事务尚未提交。
-8. **章节台账**：桌面为可筛选、排序、翻页、懒加载详情的表；章号、标题、阶段、字数、评分、状态；窄屏切换为双行章节卡。超过 30 章只渲染最近 30 条，并显示总记录数。
+8. **章节台账**：桌面为可筛选、排序、翻页、懒加载详情的表；章号、标题、阶段、字数、评分、状态；表头固定、表体限高滚动；窄屏切换为双行章节卡。超过 30 章只渲染最近 30 条，并显示总记录数。
 9. **门控区**：无阻塞时绿色通过条；有阻塞时逐条显示 code / detail / hint，颜色之外还有 `!` 图标与文字。advisory 用黄色区、legacy 用虚线灰色区，均不与 blocking 混排。
 10. **项目选择器**：按写作中/待修复/失效（缺失/非项目/不可读）分组；失效默认折叠，`>6` 项出现搜索框；同名项目用父目录区分，状态写进 option 文本。
 

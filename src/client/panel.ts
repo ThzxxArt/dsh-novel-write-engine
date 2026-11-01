@@ -11,6 +11,14 @@ import {
   type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
+import {
+  ADMIN_OPERATION_COUNT,
+  ADMIN_OPERATION_GROUPS,
+  COMMAND_COMBINATIONS,
+  COMMAND_ENTRY,
+  COMMAND_FORM_COUNT,
+  COMMAND_GROUPS,
+} from '../command-reference.js'
 import { PANEL_CHAPTER_LIMIT, PANEL_ROUTE, PANEL_VERSION } from '../constants.js'
 import { buildView, fetchPanel, type PanelChapter, type PanelProject, type PanelView } from './viewmodel.js'
 import type { PanelPayloadDto } from './dto.js'
@@ -250,6 +258,27 @@ const CSS = `
 .nwe-step p strong { color: var(--nwe-ink); font-weight: 600; }
 .nwe-tutorial-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; background: color-mix(in srgb, var(--nwe-gold) 8%, transparent); color: var(--nwe-muted); font-size: 12px; line-height: 1.7; }
 .nwe-tutorial-note strong { color: var(--nwe-gold); }
+.nwe-command-groups { display: grid; gap: 9px; margin-top: 10px; }
+.nwe-command-group { overflow: hidden; border: 1px solid var(--nwe-border); border-radius: 11px; background: color-mix(in srgb, var(--nwe-surface) 88%, var(--nwe-raised)); }
+.nwe-command-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--nwe-border); background: color-mix(in srgb, var(--nwe-raised) 45%, transparent); }
+.nwe-command-group-head h4 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .02em; }
+.nwe-command-group-head span { color: var(--nwe-muted); font-size: 12px; text-align: right; }
+.nwe-command-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--nwe-border); }
+.nwe-command-row { min-width: 0; padding: 9px 11px; background: var(--nwe-surface); }
+.nwe-command-form { display: block; color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.nwe-command-desc { display: block; margin-top: 3px; color: var(--nwe-muted); font-size: 12px; line-height: 1.55; }
+.nwe-command-subhead { margin: 17px 0 0; font-size: 12px; font-weight: 650; letter-spacing: .02em; }
+.nwe-admin-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 9px; }
+.nwe-admin-group { padding: 10px 11px; border: 1px solid var(--nwe-border); border-radius: 10px; background: color-mix(in srgb, var(--nwe-raised) 42%, transparent); }
+.nwe-admin-group h5 { margin: 0; color: var(--nwe-ink); font-size: 12px; }
+.nwe-admin-group p { margin: 3px 0 7px; color: var(--nwe-muted); font-size: 12px; line-height: 1.5; }
+.nwe-admin-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.nwe-admin-list code { padding: 2px 5px; border: 1px solid var(--nwe-border); border-radius: 5px; color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.nwe-command-combos { display: grid; gap: 7px; margin: 9px 0 0; padding: 0; list-style: none; }
+.nwe-command-combos li { padding: 10px 12px; border: 1px solid var(--nwe-border); border-radius: 10px; background: color-mix(in srgb, var(--nwe-surface) 86%, var(--nwe-raised)); }
+.nwe-command-combos strong { display: block; color: var(--nwe-ink); font-size: 12px; }
+.nwe-command-steps { display: block; margin: 4px 0 0; padding: 7px 9px; border: 1px solid var(--nwe-border); border-radius: 7px; background: color-mix(in srgb, #000 16%, var(--nwe-surface)); color: var(--nwe-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nwe-command-combos p { margin: 5px 0 0; color: var(--nwe-muted); font-size: 12px; line-height: 1.55; }
 .nwe-faq { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .nwe-faq li { padding: 10px 12px; border: 1px solid var(--nwe-border); border-radius: 10px; }
 .nwe-faq strong { display: block; color: var(--nwe-ink); font-size: 12px; }
@@ -508,6 +537,9 @@ const CSS = `
   .nwe-modal-body { padding: 16px 18px 22px; }
   .nwe-modal-foot { padding: 9px 18px; }
   .nwe-tutorial-cards { grid-template-columns: 1fr; }
+  .nwe-command-rows, .nwe-admin-groups { grid-template-columns: 1fr; }
+  .nwe-command-group-head { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .nwe-command-group-head span { text-align: left; }
   .nwe-step-tool { margin-left: 0; }
   .nwe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .nwe-book-grid { grid-template-columns: 1fr; }
@@ -1438,6 +1470,321 @@ const CSS = `
   .nwe-chapters-section .nwe-table-wrap { display: none; }
   .nwe-chapter-cards-mobile { display: grid; gap: 8px; margin-top: 10px; }
 }
+
+/* v10 data surfaces: bounded canvas, one disclosure language, local scroll. */
+.nwe-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+.nwe-hero,
+.nwe-damaged,
+.nwe-next,
+.nwe-tabs { flex: 0 0 auto; }
+.nwe-workbench {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 2px;
+  padding: 0 6px 2px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.nwe-workbench:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: -3px; }
+.nwe-workbench::-webkit-scrollbar { width: 10px; height: 10px; }
+.nwe-workbench::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nwe-ink) 5%, transparent);
+}
+.nwe-workbench::-webkit-scrollbar-button { display: none; }
+.nwe-workbench::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nwe-ink) 28%, transparent);
+  background-clip: padding-box;
+}
+.nwe-workbench::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--nwe-ink) 42%, transparent);
+  background-clip: padding-box;
+}
+.nwe-root details > summary { cursor: pointer; list-style: none; }
+.nwe-root details > summary::-webkit-details-marker { display: none; }
+.nwe-root details > summary::marker { content: ""; }
+.nwe-root details > summary:focus-visible { outline: 2px solid var(--nwe-accent); outline-offset: -2px; }
+
+.nwe-data-card[open] {
+  grid-column: 1 / -1;
+  background: var(--nwe-surface);
+  box-shadow: 0 14px 34px -28px color-mix(in srgb, #000 62%, transparent);
+}
+.nwe-data-card-head { align-items: center; transition: background .16s ease; }
+.nwe-data-card:hover .nwe-data-card-head { background: color-mix(in srgb, var(--nwe-accent) 4%, transparent); }
+.nwe-data-card-body {
+  max-height: min(42vh, 360px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.nwe-data-card-body:focus-visible,
+.nwe-info-card-body:focus-visible,
+.nwe-dossier-body:focus-visible,
+.nwe-fold-body:focus-visible,
+.nwe-table-wrap:focus-visible {
+  outline: 2px solid var(--nwe-accent);
+  outline-offset: -2px;
+}
+.nwe-data-card-body::-webkit-scrollbar,
+.nwe-info-card-body::-webkit-scrollbar,
+.nwe-dossier-body::-webkit-scrollbar,
+.nwe-fold-body::-webkit-scrollbar,
+.nwe-table-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
+.nwe-data-card-body::-webkit-scrollbar-track,
+.nwe-info-card-body::-webkit-scrollbar-track,
+.nwe-dossier-body::-webkit-scrollbar-track,
+.nwe-fold-body::-webkit-scrollbar-track,
+.nwe-table-wrap::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nwe-ink) 5%, transparent);
+}
+.nwe-data-card-body::-webkit-scrollbar-button,
+.nwe-info-card-body::-webkit-scrollbar-button,
+.nwe-dossier-body::-webkit-scrollbar-button,
+.nwe-fold-body::-webkit-scrollbar-button,
+.nwe-table-wrap::-webkit-scrollbar-button { display: none; }
+.nwe-data-card-body::-webkit-scrollbar-thumb,
+.nwe-info-card-body::-webkit-scrollbar-thumb,
+.nwe-dossier-body::-webkit-scrollbar-thumb,
+.nwe-fold-body::-webkit-scrollbar-thumb,
+.nwe-table-wrap::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nwe-ink) 28%, transparent);
+  background-clip: padding-box;
+}
+.nwe-data-card-body::-webkit-scrollbar-thumb:hover,
+.nwe-info-card-body::-webkit-scrollbar-thumb:hover,
+.nwe-dossier-body::-webkit-scrollbar-thumb:hover,
+.nwe-fold-body::-webkit-scrollbar-thumb:hover,
+.nwe-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--nwe-ink) 42%, transparent);
+  background-clip: padding-box;
+}
+
+.nwe-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.nwe-info-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-surface);
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.nwe-info-card:hover {
+  border-color: color-mix(in srgb, var(--nwe-accent) 30%, var(--nwe-border));
+  background: color-mix(in srgb, var(--nwe-accent) 3%, var(--nwe-surface));
+}
+.nwe-info-card[open] {
+  grid-column: 1 / -1;
+  border-color: color-mix(in srgb, var(--nwe-accent) 36%, var(--nwe-border));
+  background: var(--nwe-surface);
+  box-shadow: 0 14px 34px -30px color-mix(in srgb, #000 62%, transparent);
+}
+.nwe-info-card-head {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 14px;
+  gap: 10px;
+  align-items: center;
+  padding: 13px 14px;
+}
+.nwe-info-card-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--nwe-accent-soft);
+  color: var(--nwe-accent);
+}
+.nwe-info-card-title { overflow-wrap: anywhere; font-size: 12.5px; font-weight: 650; line-height: 1.4; }
+.nwe-info-card-caret {
+  color: var(--nwe-muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform .16s ease, color .16s ease;
+}
+.nwe-info-card[open] .nwe-info-card-caret { transform: rotate(45deg); color: var(--nwe-accent); }
+.nwe-info-card-body {
+  max-height: min(48vh, 460px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--nwe-border);
+  background: color-mix(in srgb, var(--nwe-raised) 34%, transparent);
+}
+.nwe-info-card-body > :first-child { margin-top: 0; }
+.nwe-info-card-body .nwe-v6-list { margin-top: 0; gap: 7px; }
+.nwe-info-card-body .nwe-v6-list li { grid-template-columns: minmax(6.5em, max-content) minmax(0, 1fr); }
+.nwe-info-card-body .nwe-v6-list b { font-weight: 600; }
+.nwe-info-card-body .nwe-v6-bars { margin-top: 12px; }
+
+.nwe-dossier {
+  flex: 0 0 auto;
+  margin-top: 28px;
+  padding-top: 10px;
+  border-top: 1px solid var(--nwe-border);
+}
+.nwe-dossier > summary {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 14px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+}
+.nwe-dossier > summary::before { content: none; }
+.nwe-dossier-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: var(--nwe-surface);
+  color: var(--nwe-accent);
+}
+.nwe-dossier-copy { min-width: 0; }
+.nwe-dossier-title { display: block; font-size: 14px; font-weight: 650; line-height: 1.35; }
+.nwe-dossier-note { display: block; margin: 2px 0 0; color: var(--nwe-muted); font-size: 11px; font-weight: 400; }
+.nwe-dossier-caret {
+  color: var(--nwe-muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform .16s ease, color .16s ease;
+}
+.nwe-dossier[open] .nwe-dossier-caret { transform: rotate(45deg); color: var(--nwe-accent); }
+.nwe-dossier-body {
+  max-height: min(60vh, 620px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  margin-top: 8px;
+  padding-right: 4px;
+}
+.nwe-dossier .nwe-section { margin-top: 12px; }
+.nwe-dossier .nwe-section:first-child { margin-top: 0; }
+
+.nwe-fold {
+  overflow: hidden;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--nwe-surface) 86%, var(--nwe-raised));
+  transition: border-color .16s ease, background .16s ease;
+}
+.nwe-fold + .nwe-fold { margin-top: 8px; }
+.nwe-fold:hover { border-color: color-mix(in srgb, var(--nwe-accent) 28%, var(--nwe-border)); }
+.nwe-fold[open] { border-color: color-mix(in srgb, var(--nwe-accent) 34%, var(--nwe-border)); background: var(--nwe-surface); }
+.nwe-fold-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+}
+.nwe-fold-title { overflow-wrap: anywhere; color: var(--nwe-ink); font-size: 12px; font-weight: 650; line-height: 1.45; }
+.nwe-fold-meta { color: var(--nwe-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nwe-fold-caret {
+  color: var(--nwe-muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .16s ease, color .16s ease;
+}
+.nwe-fold[open] .nwe-fold-caret { transform: rotate(45deg); color: var(--nwe-accent); }
+.nwe-fold-body {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--nwe-border);
+  background: color-mix(in srgb, var(--nwe-raised) 28%, transparent);
+}
+.nwe-fold-body > :first-child { margin-top: 0; }
+.nwe-fold-body .nwe-detail-text { max-height: none; overflow: visible; margin: 0; padding: 0; border: 0; background: transparent; }
+.nwe-detail-fold .nwe-fold-body { max-height: min(38vh, 340px); }
+
+.nwe-chapter[open] {
+  border-color: color-mix(in srgb, var(--nwe-accent) 34%, var(--nwe-border));
+  background: var(--nwe-surface);
+}
+.nwe-chapter[open] summary { background: color-mix(in srgb, var(--nwe-accent) 4%, transparent); }
+.nwe-chapter-detail {
+  max-height: min(36vh, 300px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0 4px 12px 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--nwe-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--nwe-raised) 30%, transparent);
+  color: var(--nwe-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.nwe-chapter-detail-panel {
+  max-height: none;
+  overflow: visible;
+  margin: 12px 4px 0 64px;
+  padding: 12px 14px;
+  white-space: normal;
+}
+.nwe-chapter-detail-panel .nwe-section-head { margin-bottom: 10px; }
+
+.nwe-table-wrap {
+  max-height: min(58vh, 560px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.nwe-chapter-table thead th { position: sticky; top: 0; z-index: 2; background: var(--nwe-surface); }
+.nwe-chapters { max-height: min(56vh, 460px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.nwe-activity { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+
+@media (min-width: 900px) {
+  .nwe-data-card[open] .nwe-kv {
+    grid-template-columns: minmax(76px, max-content) minmax(0, 1fr) minmax(76px, max-content) minmax(0, 1fr);
+    column-gap: 14px;
+  }
+}
+@media (max-width: 980px) {
+  .nwe-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .nwe-workbench { padding-right: 2px; }
+  .nwe-info-grid { grid-template-columns: 1fr; }
+  .nwe-info-card[open] { grid-column: auto; }
+  .nwe-info-card-body { max-height: min(44vh, 420px); }
+  .nwe-dossier > summary { grid-template-columns: 26px minmax(0, 1fr) 14px; }
+  .nwe-dossier-icon { width: 26px; height: 26px; }
+  .nwe-dossier-caret { grid-column: 3; }
+  .nwe-dossier-note { display: none; }
+  .nwe-chapter-detail { margin: 0 2px 10px; padding: 10px 11px; }
+  .nwe-chapter-detail-panel { margin: 10px 2px 0; }
+  .nwe-data-card[open] .nwe-kv { grid-template-columns: 78px minmax(0, 1fr); }
+  .nwe-table-wrap { max-height: 62vh; }
+  .nwe-chapters { max-height: 58vh; }
+}
 `
 
 const icon = (size: number, path: string): ReactElement =>
@@ -1509,6 +1856,48 @@ const GLYPH_PATHS: Record<SectionGlyph, string> = {
 }
 
 const sectionGlyph = (name: SectionGlyph, size = 18): ReactElement => icon(size, GLYPH_PATHS[name])
+
+interface FoldOptions {
+  className?: string
+  meta?: string
+  open?: boolean
+  bodyClassName?: string
+}
+
+/** One disclosure language for every nested detail panel. */
+const foldBlock = (
+  key: string,
+  title: string,
+  body: ReactElement | ReactElement[] | null,
+  options: FoldOptions = {},
+): ReactElement =>
+  createElement(
+    'details',
+    {
+      className: `nwe-fold${options.className === undefined ? '' : ` ${options.className}`}`,
+      key,
+      ...(options.open === true ? { open: true } : {}),
+    },
+    createElement(
+      'summary',
+      { className: 'nwe-fold-head' },
+      createElement('span', { className: 'nwe-fold-title' }, title),
+      options.meta === undefined ? null : createElement('span', { className: 'nwe-fold-meta' }, options.meta),
+      createElement('span', { className: 'nwe-fold-caret', 'aria-hidden': 'true' }, '+'),
+    ),
+    body === null
+      ? null
+      : createElement(
+          'div',
+          {
+            className: `nwe-fold-body${options.bodyClassName === undefined ? '' : ` ${options.bodyClassName}`}`,
+            role: 'region',
+            'aria-label': `${title} 内容`,
+            tabIndex: 0,
+          },
+          body,
+        ),
+  )
 
 interface TutorialStep {
   title: string
@@ -2335,6 +2724,108 @@ const CopyPrompt = ({ text, label }: { text: string; label: string }): ReactElem
   )
 }
 
+const commandReferenceSection = (): ReactElement => {
+  const groups = [
+    { title: '入口命令', hint: '5 个：/novel 与 4 个短别名', items: COMMAND_ENTRY },
+    ...COMMAND_GROUPS,
+  ]
+  return createElement(
+    'section',
+    { className: 'nwe-tutorial-block' },
+    createElement('h3', null, '全部命令：入口、子命令与组合'),
+    createElement(
+      'p',
+      null,
+      `5 个入口命令、/novel 的 ${COMMAND_FORM_COUNT} 种带名写法、${ADMIN_OPERATION_COUNT} 个 admin 操作。短命令只是别名；斜杠命令由你在输入框执行，Agent 不能代跑。`,
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-command-groups' },
+      ...groups.map((group) =>
+        createElement(
+          'div',
+          { className: 'nwe-command-group', key: group.title },
+          createElement(
+            'div',
+            { className: 'nwe-command-group-head' },
+            createElement('h4', null, group.title),
+            createElement('span', null, group.hint),
+          ),
+          createElement(
+            'div',
+            { className: 'nwe-command-rows' },
+            ...group.items.map((item) =>
+              createElement(
+                'div',
+                { className: 'nwe-command-row', key: item.form },
+                createElement('code', { className: 'nwe-command-form' }, item.form),
+                createElement('span', { className: 'nwe-command-desc' }, item.summary),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+    createElement(
+      'h4',
+      { className: 'nwe-command-subhead' },
+      `${ADMIN_OPERATION_COUNT} 个 admin 操作（/novel admin <op> <json>）`,
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-admin-groups' },
+      ...ADMIN_OPERATION_GROUPS.map((group) =>
+        createElement(
+          'div',
+          { className: 'nwe-admin-group', key: group.title },
+          createElement('h5', null, group.title),
+          createElement('p', null, group.hint),
+          createElement(
+            'ul',
+            { className: 'nwe-admin-list' },
+            ...group.items.map((operation) =>
+              createElement(
+                'li',
+                { key: operation.name },
+                createElement('code', { title: operation.summary }, operation.name),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+    createElement(
+      'p',
+      { className: 'nwe-tutorial-note' },
+      createElement('strong', null, 'admin 示例：'),
+      createElement('code', null, '/novel admin novel_state {"kind":"pipeline"}'),
+      '、',
+      createElement('code', null, '/novel admin novel_registry_register {"root":"/abs/book"}'),
+      '。参数与同名工具一致；JSON 必须是对象，不能传数组或裸字符串。',
+    ),
+    createElement('h4', { className: 'nwe-command-subhead' }, '常用组合'),
+    createElement(
+      'ol',
+      { className: 'nwe-command-combos' },
+      ...COMMAND_COMBINATIONS.map((combination) =>
+        createElement(
+          'li',
+          { key: combination.title },
+          createElement('strong', null, combination.title),
+          createElement('code', { className: 'nwe-command-steps' }, combination.steps.join('  →  ')),
+          createElement('p', null, combination.note),
+        ),
+      ),
+    ),
+    createElement(
+      'p',
+      { className: 'nwe-tutorial-note' },
+      createElement('strong', null, '边界：'),
+      ' /novel 不带参数等于 status；/novel projects --yes 必须和 --prune 一起用；/novel scan 不选书，--register 只登记；/novel resume 只读。短命令不会改变能力，只是 /novel 子命令的别名。',
+    ),
+  )
+}
+
 const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonElement | null>): ReactElement =>
   createElement(
     'div',
@@ -2479,6 +2970,7 @@ const tutorialDialog = (onClose: () => void, closeRef: RefObject<HTMLButtonEleme
             ...TUTORIAL_STEPS.map((step, index) => tutorialStep(step, index)),
           ),
         ),
+        commandReferenceSection(),
         createElement(
           'section',
           { className: 'nwe-tutorial-block' },
@@ -3110,7 +3602,18 @@ const v6Kv = (entries: Array<[string, string]>): ReactElement =>
     ),
   )
 
-const v6Card = (
+const INFO_GLYPHS: Record<string, SectionGlyph> = {
+  bp: 'map',
+  progress: 'chart',
+  volumes: 'book',
+  cast: 'person',
+  world: 'map',
+  foreshadow: 'seed',
+  quality: 'chart',
+  health: 'shield',
+}
+
+const infoCard = (
   key: string,
   title: string,
   children: Array<ReactElement | null>,
@@ -3118,9 +3621,28 @@ const v6Card = (
 ): ReactElement =>
   createElement(
     'details',
-    { className: 'nwe-v6-card', key, ...(open ? { open: true } : {}) },
-    createElement('summary', null, title),
-    ...children,
+    { className: 'nwe-info-card', key, ...(open ? { open: true } : {}) },
+    createElement(
+      'summary',
+      { className: 'nwe-info-card-head' },
+      createElement(
+        'span',
+        { className: 'nwe-info-card-icon', 'aria-hidden': 'true' },
+        sectionGlyph(INFO_GLYPHS[key] ?? 'book', 16),
+      ),
+      createElement('strong', { className: 'nwe-info-card-title' }, title),
+      createElement('span', { className: 'nwe-info-card-caret', 'aria-hidden': 'true' }, '+'),
+    ),
+    createElement(
+      'div',
+      {
+        className: 'nwe-info-card-body',
+        role: 'region',
+        'aria-label': `${title} 内容`,
+        tabIndex: 0,
+      },
+      ...children,
+    ),
   )
 
 const bookDataSection = (view: PanelView): ReactElement | null => {
@@ -3188,8 +3710,8 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
     ),
     createElement(
       'div',
-      { className: 'nwe-v6-grid' },
-      v6Card(
+      { className: 'nwe-info-grid' },
+      infoCard(
         'bp',
         '书脊与蓝图',
         [
@@ -3217,7 +3739,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
         ],
         true,
       ),
-      v6Card('progress', '进度与当前章', [
+      infoCard('progress', '进度与当前章', [
         v6Kv([
           ['已归档', `${data.progress.archived} / ${data.progress.target ?? '不限'} 章`],
           ['字数', `归档 ${data.progress.words_archived} · 含草稿 ${data.progress.words_with_draft}`],
@@ -3243,7 +3765,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               ...data.current.card.cast.map((name) => createElement('span', { key: name }, name)),
             ),
       ]),
-      v6Card('volumes', '卷进度', [
+      infoCard('volumes', '卷进度', [
         view.book.volumes.length === 0
           ? createElement('p', { className: 'nwe-v6-note' }, '还没有卷')
           : createElement(
@@ -3263,7 +3785,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               ),
             ),
       ]),
-      v6Card('cast', '人物与关系', [
+      infoCard('cast', '人物与关系', [
         v6Kv([
           ['角色总数', String(data.cast.total)],
           [
@@ -3292,7 +3814,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
           ),
         ),
       ]),
-      v6Card('world', '世界与设定', [
+      infoCard('world', '世界与设定', [
         v6Kv([
           ['地点 / 势力', `${data.worldbook.counts.locations} / ${data.worldbook.counts.factions}`],
           ['规则 / 术语', `${data.worldbook.counts.rules} / ${data.worldbook.counts.glossary}`],
@@ -3309,7 +3831,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
           ),
         ),
       ]),
-      v6Card('foreshadow', '伏笔与时间线', [
+      infoCard('foreshadow', '伏笔与时间线', [
         v6Kv([
           [
             '伏笔',
@@ -3333,7 +3855,7 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
           ),
         ),
       ]),
-      v6Card('quality', '质量与节奏', [
+      infoCard('quality', '质量与节奏', [
         v6Kv([
           [
             '全书均分',
@@ -3382,10 +3904,9 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               '质量维度请切换到「质量」页查看；概览只取轻量摘要。',
             )
           : createElement('div', { className: 'nwe-v6-bars', 'aria-label': '十五维质量' }, ...dims),
-        createElement(
-          'details',
-          null,
-          createElement('summary', null, '逐章 effort'),
+        foldBlock(
+          'effort',
+          '逐章 effort',
           createElement(
             'ul',
             { className: 'nwe-v6-list' },
@@ -3402,9 +3923,10 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               ),
             ),
           ),
+          { meta: `${data.effort.chapters.length} 章` },
         ),
       ]),
-      v6Card('health', '健康与恢复', [
+      infoCard('health', '健康与恢复', [
         v6Kv([
           [
             '大纲',
@@ -3457,10 +3979,29 @@ const bookDossier = (view: PanelView): ReactElement | null => {
     createElement(
       'summary',
       null,
-      createElement('span', null, '全书资料'),
-      createElement('span', { className: 'nwe-dossier-note' }, '蓝图 · 卷卡 · 世界 · 质量 · 健康'),
+      createElement(
+        'span',
+        { className: 'nwe-dossier-icon', 'aria-hidden': 'true' },
+        sectionGlyph('book', 16),
+      ),
+      createElement(
+        'span',
+        { className: 'nwe-dossier-copy' },
+        createElement('strong', { className: 'nwe-dossier-title' }, '全书资料'),
+        createElement('span', { className: 'nwe-dossier-note' }, '蓝图 · 卷卡 · 世界 · 质量 · 健康'),
+      ),
+      createElement('span', { className: 'nwe-dossier-caret', 'aria-hidden': 'true' }, '+'),
     ),
-    body,
+    createElement(
+      'div',
+      {
+        className: 'nwe-dossier-body',
+        role: 'region',
+        'aria-label': '全书资料内容',
+        tabIndex: 0,
+      },
+      body,
+    ),
   )
 }
 
@@ -3894,8 +4435,26 @@ const sectionList = (title: string, items: unknown, kind: SectionGlyph = 'spark'
           createElement('span', { className: 'nwe-data-card-caret', 'aria-hidden': 'true' }, '+'),
         ),
         row === null
-          ? createElement('div', { className: 'nwe-data-card-body' }, String(item))
-          : createElement('div', { className: 'nwe-data-card-body' }, sectionKv(row)),
+          ? createElement(
+              'div',
+              {
+                className: 'nwe-data-card-body',
+                role: 'region',
+                'aria-label': `${label} 内容`,
+                tabIndex: 0,
+              },
+              String(item),
+            )
+          : createElement(
+              'div',
+              {
+                className: 'nwe-data-card-body',
+                role: 'region',
+                'aria-label': `${label} 内容`,
+                tabIndex: 0,
+              },
+              sectionKv(row),
+            ),
       )
     }),
   )
@@ -4270,7 +4829,10 @@ const chapterDetailPanel = (
     : []
   return createElement(
     'section',
-    { className: 'nwe-chapter-detail', 'aria-label': `第 ${detail.chapter} 章详情` },
+    {
+      className: 'nwe-chapter-detail nwe-chapter-detail-panel',
+      'aria-label': `第 ${detail.chapter} 章详情`,
+    },
     createElement(
       'div',
       { className: 'nwe-section-head' },
@@ -4290,34 +4852,30 @@ const chapterDetailPanel = (
             null,
             manuscript === null
               ? createElement('div', { className: 'nwe-empty' }, '正文尚未写入。')
-              : createElement(
-                  'details',
-                  { open: true },
-                  createElement('summary', null, `正文 · ${Array.from(manuscript).length} 字`),
+              : foldBlock(
+                  'manuscript',
+                  '正文',
                   createElement('pre', { className: 'nwe-detail-text' }, manuscript),
+                  { meta: `${Array.from(manuscript).length} 字`, open: true, className: 'nwe-detail-fold' },
                 ),
             plan === null
               ? null
-              : createElement(
-                  'details',
-                  null,
-                  createElement('summary', null, '归档 plan'),
-                  createElement('pre', { className: 'nwe-detail-text' }, plan),
-                ),
+              : foldBlock('plan', '归档 plan', createElement('pre', { className: 'nwe-detail-text' }, plan), {
+                  className: 'nwe-detail-fold',
+                }),
             worldPlan === null
               ? null
-              : createElement(
-                  'details',
-                  null,
-                  createElement('summary', null, '世界计划'),
+              : foldBlock(
+                  'world',
+                  '世界计划',
                   createElement('pre', { className: 'nwe-detail-text' }, worldPlan),
+                  { className: 'nwe-detail-fold' },
                 ),
             summaryEvents.length === 0
               ? null
-              : createElement(
-                  'details',
-                  null,
-                  createElement('summary', null, '本章摘要'),
+              : foldBlock(
+                  'summary-events',
+                  '本章摘要',
                   createElement(
                     'ul',
                     { className: 'nwe-v6-list' },
@@ -4325,6 +4883,7 @@ const chapterDetailPanel = (
                       createElement('li', { key: `${index}-${event}` }, event),
                     ),
                   ),
+                  { meta: `${summaryEvents.length} 条`, className: 'nwe-detail-fold' },
                 ),
           ),
   )
@@ -4341,7 +4900,10 @@ const qualityDetailPanel = (
   const check = typeof items?.check === 'string' ? items.check : null
   return createElement(
     'section',
-    { className: 'nwe-chapter-detail', 'aria-label': `第 ${detail.chapter} 章质量详情` },
+    {
+      className: 'nwe-chapter-detail nwe-chapter-detail-panel',
+      'aria-label': `第 ${detail.chapter} 章质量详情`,
+    },
     createElement(
       'div',
       { className: 'nwe-section-head' },
@@ -4363,19 +4925,19 @@ const qualityDetailPanel = (
               null,
               review === null
                 ? null
-                : createElement(
-                    'details',
-                    { open: true },
-                    createElement('summary', null, '评审 review'),
+                : foldBlock(
+                    'review',
+                    '评审 review',
                     createElement('pre', { className: 'nwe-detail-text' }, review),
+                    { open: true, className: 'nwe-detail-fold' },
                   ),
               check === null
                 ? null
-                : createElement(
-                    'details',
-                    null,
-                    createElement('summary', null, '检查 check'),
+                : foldBlock(
+                    'check',
+                    '检查 check',
                     createElement('pre', { className: 'nwe-detail-text' }, check),
+                    { className: 'nwe-detail-fold' },
                   ),
             ),
   )
@@ -4461,7 +5023,12 @@ const chapterTable = (
       ? createElement('div', { className: 'nwe-empty' }, '没有匹配的章节。')
       : createElement(
           'div',
-          { className: 'nwe-table-wrap' },
+          {
+            className: 'nwe-table-wrap',
+            role: 'region',
+            'aria-label': '章节表，可滚动',
+            tabIndex: 0,
+          },
           createElement(
             'table',
             { className: 'nwe-chapter-table' },
@@ -4738,114 +5305,123 @@ export function panelElement(
       : null,
     ready && view.nextTitle !== '' ? nextCard(view) : null,
     ready ? tabBar(tab, onTab) : null,
-    ready && tab === 'overview'
-      ? createElement(
-          'div',
-          { className: 'nwe-stats', role: 'group', 'aria-label': '项目统计' },
-          stat('已归档', String(view.stats.chapters), '章'),
-          stat(
-            '总字数',
-            view.stats.words.toLocaleString('zh-CN'),
-            (view.stats.draftWords ?? 0) > 0
-              ? `字（归档 ${(view.stats.archivedWords ?? 0).toLocaleString('zh-CN')} + 草稿 ${view.stats.draftWords!.toLocaleString('zh-CN')}）`
-              : '字',
-          ),
-          stat('全书均分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
-          stat('待处理', String(view.stats.blocking), '项'),
-        )
-      : null,
-    ready && tab === 'overview' ? overviewCharts(view) : null,
-    view.state === 'loading' ? loadingState() : null,
-    view.state === 'choose' ? choosePanel(view, onSelectProject) : null,
-    view.state === 'missing' ? missingPanel(view) : null,
-    view.state === 'error' || view.state === 'empty' || view.state === 'outdated'
-      ? statePanel(view.state, view, loading, onRefresh)
-      : null,
-    ready && tab === 'overview'
-      ? createElement(
-          'div',
-          {
-            className: 'nwe-desk',
-            role: 'tabpanel',
-            id: 'nwe-panel-overview',
-            'aria-labelledby': 'nwe-tab-overview',
-          },
-          createElement(
+    createElement(
+      'div',
+      {
+        className: 'nwe-workbench',
+        role: 'region',
+        'aria-label': '网文工坊内容',
+        tabIndex: 0,
+      },
+      ready && tab === 'overview'
+        ? createElement(
             'div',
-            { className: 'nwe-desk-main' },
+            { className: 'nwe-stats', role: 'group', 'aria-label': '项目统计' },
+            stat('已归档', String(view.stats.chapters), '章'),
+            stat(
+              '总字数',
+              view.stats.words.toLocaleString('zh-CN'),
+              (view.stats.draftWords ?? 0) > 0
+                ? `字（归档 ${(view.stats.archivedWords ?? 0).toLocaleString('zh-CN')} + 草稿 ${view.stats.draftWords!.toLocaleString('zh-CN')}）`
+                : '字',
+            ),
+            stat('全书均分', view.stats.chapters === 0 ? '—' : String(view.stats.averageScore), '/150'),
+            stat('待处理', String(view.stats.blocking), '项'),
+          )
+        : null,
+      ready && tab === 'overview' ? overviewCharts(view) : null,
+      view.state === 'loading' ? loadingState() : null,
+      view.state === 'choose' ? choosePanel(view, onSelectProject) : null,
+      view.state === 'missing' ? missingPanel(view) : null,
+      view.state === 'error' || view.state === 'empty' || view.state === 'outdated'
+        ? statePanel(view.state, view, loading, onRefresh)
+        : null,
+      ready && tab === 'overview'
+        ? createElement(
+            'div',
+            {
+              className: 'nwe-desk',
+              role: 'tabpanel',
+              id: 'nwe-panel-overview',
+              'aria-labelledby': 'nwe-tab-overview',
+            },
             createElement(
               'div',
-              { className: 'nwe-desk-heading' },
-              createElement('span', { className: 'nwe-desk-kicker' }, '当前一章'),
-              createElement('span', { className: 'nwe-desk-note' }, view.stageLabel),
+              { className: 'nwe-desk-main' },
+              createElement(
+                'div',
+                { className: 'nwe-desk-heading' },
+                createElement('span', { className: 'nwe-desk-kicker' }, '当前一章'),
+                createElement('span', { className: 'nwe-desk-note' }, view.stageLabel),
+              ),
+              phases(view),
+              blockingSection(view),
+              advisoriesSection(view),
+              pendingSection(view),
+              legacySection(view),
+              chaptersSection(view),
             ),
-            phases(view),
-            blockingSection(view),
-            advisoriesSection(view),
-            pendingSection(view),
-            legacySection(view),
-            chaptersSection(view),
-          ),
-          createElement(
-            'aside',
-            { className: 'nwe-desk-side', 'aria-label': '全书与活动' },
-            bookGlance(view),
-            activitySection(view),
-          ),
-        )
-      : null,
-    ready && tab === 'overview' ? bookDossier(view) : null,
-    ready && tab === 'chapters'
-      ? createElement(
-          'div',
-          {
-            className: 'nwe-desk nwe-desk-single',
-            role: 'tabpanel',
-            id: 'nwe-panel-chapters',
-            'aria-labelledby': 'nwe-tab-chapters',
-          },
-          createElement(
+            createElement(
+              'aside',
+              { className: 'nwe-desk-side', 'aria-label': '全书与活动' },
+              bookGlance(view),
+              activitySection(view),
+            ),
+          )
+        : null,
+      ready && tab === 'overview' ? bookDossier(view) : null,
+      ready && tab === 'chapters'
+        ? createElement(
             'div',
-            { className: 'nwe-desk-main' },
-            tabIntro('chapters', view, section),
-            blockingSection(view),
-            chapterToolbar(chapterQuery, onChapterQuery),
-            chapterTable(section, view, chapterQuery, onChapterQuery, chapterDetail, onChapterDetail),
-          ),
-        )
-      : null,
-    ready && tab !== 'overview' && tab !== 'chapters'
-      ? createElement(
-          'section',
-          {
-            className: 'nwe-section nwe-tab-panel',
-            role: 'tabpanel',
-            id: `nwe-panel-${tab}`,
-            'aria-labelledby': `nwe-tab-${tab}`,
-          },
-          tabIntro(tab as SectionTab, view, section),
-          tab === 'health'
-            ? createElement(
-                Fragment,
-                null,
-                blockingSection(view),
-                advisoriesSection(view),
-                pendingSection(view),
-                legacySection(view),
-              )
-            : null,
-          sectionPanel(
-            tab,
-            section,
-            sectionSearch,
-            onSectionSearch,
-            view.chapter,
-            qualityDetail,
-            onQualityDetail,
-          ),
-        )
-      : null,
-    footer(view, onRefresh),
+            {
+              className: 'nwe-desk nwe-desk-single',
+              role: 'tabpanel',
+              id: 'nwe-panel-chapters',
+              'aria-labelledby': 'nwe-tab-chapters',
+            },
+            createElement(
+              'div',
+              { className: 'nwe-desk-main' },
+              tabIntro('chapters', view, section),
+              blockingSection(view),
+              chapterToolbar(chapterQuery, onChapterQuery),
+              chapterTable(section, view, chapterQuery, onChapterQuery, chapterDetail, onChapterDetail),
+            ),
+          )
+        : null,
+      ready && tab !== 'overview' && tab !== 'chapters'
+        ? createElement(
+            'section',
+            {
+              className: 'nwe-section nwe-tab-panel',
+              role: 'tabpanel',
+              id: `nwe-panel-${tab}`,
+              'aria-labelledby': `nwe-tab-${tab}`,
+            },
+            tabIntro(tab as SectionTab, view, section),
+            tab === 'health'
+              ? createElement(
+                  Fragment,
+                  null,
+                  blockingSection(view),
+                  advisoriesSection(view),
+                  pendingSection(view),
+                  legacySection(view),
+                )
+              : null,
+            sectionPanel(
+              tab,
+              section,
+              sectionSearch,
+              onSectionSearch,
+              view.chapter,
+              qualityDetail,
+              onQualityDetail,
+            ),
+          )
+        : null,
+      footer(view, onRefresh),
+    ),
   )
 }
 

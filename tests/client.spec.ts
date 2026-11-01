@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { buildView, fetchPanel } from '../src/client/viewmodel.js'
 import { apply as applyClient, NovelIcon, NovelPanel } from '../src/client/index.js'
 import { panelElement } from '../src/client/panel.js'
+import { ADMIN_OPERATION_GROUPS, COMMAND_ENTRY, COMMAND_GROUPS } from '../src/command-reference.js'
 import type { PanelPayloadDto } from '../src/client/dto.js'
 
 const payload = (): PanelPayloadDto & {
@@ -77,6 +78,130 @@ const payload = (): PanelPayloadDto & {
     ],
   },
 })
+
+const panelBookData = (): NonNullable<NonNullable<PanelPayloadDto['summary']>['bookData']> => ({
+  identity: {
+    author: '苏浅玥',
+    description: '一座旧城，所有来信都从同一场雨开始。',
+    created_at: '2026-10-01T08:00:00.000Z',
+    targets: { words_per_chapter: [2200, 2800], total_chapters: 120, dialogue_ratio: [0.3, 0.6] },
+  },
+  blueprint: {
+    premise: '旧案重启',
+    logline: '档案员入局',
+    themes: ['记忆', '失踪'],
+    tone: '冷峻',
+    pov: '第三人称限知',
+    audience: '悬疑读者',
+    selling_points: ['旧城雨夜', '档案谜案'],
+    ending: '信被寄回。',
+  },
+  progress: {
+    archived: 12,
+    target: 120,
+    words_archived: 286000,
+    words_with_draft: 292400,
+    average_words: 23833,
+    remaining_words: 2576000,
+    remaining_words_basis: 'actual_average',
+    percent: 10,
+  },
+  current: {
+    card: {
+      num: 13,
+      title: '雨停之前',
+      scene_type: '情感爆发章',
+      goal: '找到最后一封旧信。',
+      conflict: '档案馆封楼。',
+      hook: '钥匙断在锁里。',
+      cast: ['林砚', '沈墨'],
+      target_words: [2200, 2800],
+      status: 'planned',
+    },
+    chapter: 13,
+    stage: 'P4',
+    rounds: { review: 1, revise: 0, check: 0 },
+    manuscript_hash: 'hash-13',
+    metrics: null,
+  },
+  worldbook: {
+    counts: {
+      present: true,
+      characters: 2,
+      locations: 2,
+      factions: 1,
+      rules: 1,
+      glossary: 1,
+      backstory: 1,
+      facts: 1,
+    },
+    locations: [{ name: '旧书店', description: '临街两层，木门，靠墙书架到顶。' }],
+    factions: [{ name: '港务会', description: '控制旧城航运与档案。' }],
+    rules: [{ name: '信不能过海', description: '未署名的信会在港口被退回。' }],
+    facts: [{ alias: '灯塔高度', value: 42, unit: '米' }],
+  },
+  cast: {
+    total: 2,
+    top: [
+      { name: '林砚', role: '主角', appearances: 12, last_seen: 12 },
+      { name: '沈墨', role: '配角', appearances: 8, last_seen: 11 },
+    ],
+  },
+  relationships: { total: 1, types: { 盟友: 1 } },
+  foreshadows: {
+    open: 1,
+    dormant: 0,
+    overdue: 0,
+    resolved: 0,
+    oldest: [{ id: 'FS-001', title: '无名旧信', last_touched: 1, age: 11 }],
+  },
+  timeline: { events: 4, first_chapter: 1, last_chapter: 12 },
+  outline: { drift: [] },
+  quality: {
+    average: 132,
+    median: 134,
+    min: 118,
+    max: 145,
+    last_ten_average: 136,
+    trend: 2.5,
+    trend_basis: 'last_five_vs_previous_five',
+    samples: 12,
+    attempts: 15,
+    dimensions: [{ id: 'R-W-04', average: 17, samples: 12, max: 20 }],
+  },
+  pacing: {
+    scene_types: { 日常过渡章: 6, 情感爆发章: 4 },
+    hook_strength: { '4': 8, '5': 4 },
+    plot_advancement: { mid: 9, high: 3 },
+    longest: { chapter: 6, words: 2680 },
+    shortest: { chapter: 3, words: 1980 },
+  },
+  effort: {
+    reviews: 15,
+    revisions: 4,
+    checks: 12,
+    rollbacks: 1,
+    chapters: [
+      {
+        num: 12,
+        reviews: 2,
+        revisions: 1,
+        checks: 1,
+        rollbacks: 0,
+        final_check: 'pass',
+        archived_at: '2026-10-28T10:00:00.000Z',
+      },
+    ],
+  },
+  health: {
+    state_errors: [],
+    outline: { present: true, error: null },
+    worldbook: { present: true, error: null },
+    pending: null,
+  },
+})
+
+const withoutCss = (markup: string): string => markup.replace(/<style>[\s\S]*?<\/style>/, '')
 
 describe('panel view model', () => {
   it('sends the section ETag and treats 304 as unchanged', async () => {
@@ -179,6 +304,22 @@ describe('panel view model', () => {
       expect(container.textContent).toContain('/novel current')
       expect(container.textContent).toContain('/novel unbind')
       expect(container.textContent).toContain('scan --register')
+      expect(container.textContent).toContain('全部命令：入口、子命令与组合')
+      expect(container.textContent).toContain('25 种带名写法')
+      expect(container.textContent).toContain('25 个 admin 操作')
+      for (const command of COMMAND_ENTRY) {
+        expect(container.textContent, command.form).toContain(command.form)
+      }
+      for (const group of COMMAND_GROUPS) {
+        for (const command of group.items) {
+          expect(container.textContent, command.form).toContain(command.form)
+        }
+      }
+      for (const group of ADMIN_OPERATION_GROUPS) {
+        for (const operation of group.items) {
+          expect(container.textContent, operation.name).toContain(operation.name)
+        }
+      }
       expect(help!.getAttribute('aria-expanded')).toBe('true')
       expect(document.body.style.overflow).toBe('hidden')
       expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭使用教程')
@@ -1484,6 +1625,47 @@ describe('client registration and rendering', () => {
     expect(css).not.toContain('#c9a227')
   })
 
+  it('bounds the workbench and data-heavy surfaces with real scroll regions', () => {
+    const markup = renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined))
+    const css = /<style>([\s\S]*)<\/style>/.exec(markup)?.[1] ?? ''
+    expect(markup).toContain('class="nwe-workbench"')
+    expect(markup).toContain('aria-label="网文工坊内容"')
+    expect(css).toMatch(/\.nwe-workbench\s*\{[^}]*flex: 1 1 auto;[^}]*overflow-y: auto;/s)
+    expect(css).toMatch(/\.nwe-table-wrap\s*\{[^}]*max-height: min\(58vh, 560px\);[^}]*overflow: auto;/s)
+    expect(css).toMatch(/\.nwe-info-card-body\s*\{[^}]*max-height:/s)
+    expect(css).toMatch(/\.nwe-fold-body\s*\{[^}]*max-height:/s)
+    expect(css).toMatch(/\.nwe-dossier-body\s*\{[^}]*max-height:/s)
+    expect(css).toMatch(/\.nwe-data-card-body\s*\{[^}]*max-height:/s)
+    expect(css).toContain('.nwe-root details')
+    expect(css).toContain('::-webkit-details-marker')
+    expect(css).toContain('::-webkit-scrollbar-thumb')
+    expect(css).toContain('.nwe-info-card')
+    expect(css).toContain('.nwe-fold')
+  })
+
+  it('gives every disclosure a scoped class and custom summary treatment', () => {
+    const markup = withoutCss(
+      renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined)),
+    )
+    const tags = [...markup.matchAll(/<details\b([^>]*)>/g)].map((match) => match[1] ?? '')
+    expect(tags.length).toBeGreaterThan(0)
+    for (const attrs of tags) expect(attrs).toMatch(/class="nwe-/)
+    expect(markup).toContain('nwe-dossier-body')
+  })
+
+  it('renders book data with the unified info-card and dossier surfaces', () => {
+    const base = payload()
+    base.summary.bookData = panelBookData()
+    const markup = withoutCss(renderToStaticMarkup(panelElement(buildView(base), false, () => undefined)))
+    expect(markup.match(/nwe-info-card-head/g)).toHaveLength(8)
+    expect(markup).toContain('nwe-info-card-body')
+    expect(markup).toContain('nwe-info-card-icon')
+    expect(markup).toContain('nwe-dossier-body')
+    expect(markup).toContain('nwe-fold-head')
+    expect(markup).toContain('逐章 effort')
+    expect(markup).not.toContain('nwe-v6-card')
+  })
+
   it('renders readable cards, dimension bars and localized enums', () => {
     const base = payload()
     base.chapters.rows[0]!.finalCheck = 'pass'
@@ -1796,6 +1978,10 @@ describe('client registration and rendering', () => {
     expect(markup).toContain('归档 plan')
     expect(markup).toContain('世界计划内容')
     expect(markup).toContain('摘要事件')
+    expect(markup).toContain('nwe-fold-head')
+    expect(markup).toContain('nwe-fold-body')
+    expect(markup).toContain('nwe-detail-fold')
+    expect(markup).toContain('aria-label="正文 内容"')
   })
 
   it('closes the lazy chapter detail from its close button', async () => {
@@ -2615,8 +2801,14 @@ describe('client registration and rendering', () => {
     }
     for (const [name, markup] of Object.entries(pages)) {
       expect(markup, name).toContain('nwe-tab-intro')
+      expect(markup, name).toContain('nwe-workbench')
+      const details = [...markup.matchAll(/<details\b([^>]*)>/g)].map((match) => match[1] ?? '')
+      for (const attrs of details) expect(attrs, name).toMatch(/class="nwe-/)
     }
+    expect(pages.overview).toContain('nwe-dossier-body')
     expect(pages.characters).toContain('nwe-data-card-icon')
+    expect(pages.characters).toContain('nwe-data-card-body')
+    expect(pages.chapters).toContain('aria-label="章节表，可滚动"')
     expect(pages.worldbook).toContain('nwe-group-head')
     expect(pages.quality).toContain('nwe-quality-kpis')
     expect(pages.quality).toContain('nwe-effort-grid')

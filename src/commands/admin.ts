@@ -1,4 +1,5 @@
 import type { EngineService } from '../engine/service.js'
+import { ADMIN_OPERATION_NAMES } from '../command-reference.js'
 import { ERROR_CODES, EngineInputError } from '../types.js'
 
 type Handler = (engine: EngineService, args: Record<string, unknown>) => Promise<unknown>
@@ -75,7 +76,10 @@ const OPERATIONS: Record<string, Handler> = {
   novel_import: (engine, args) => engine.importPack(args as never),
 }
 
-export const ADMIN_OPERATION_NAMES = Object.keys(OPERATIONS)
+// The tutorial and `/novel admin` help share one list; tests compare it with
+// the implemented operation table so neither can drift silently.
+export const IMPLEMENTED_ADMIN_OPERATION_NAMES = Object.keys(OPERATIONS)
+export { ADMIN_OPERATION_NAMES }
 
 export const adminHelp = (): string =>
   [

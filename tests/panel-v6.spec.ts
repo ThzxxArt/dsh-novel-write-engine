@@ -49,7 +49,7 @@ describe('panel v6 book data', () => {
       expect(html).toContain('归档')
       expect(html).toContain('书脊与蓝图')
       expect(html).toContain('质量与节奏')
-      expect(html.match(/质量与节奏/g)).toHaveLength(1)
+      expect(html.match(/nwe-info-card-title">质量与节奏/g)).toHaveLength(1)
       expect(html).toContain('第 1 章')
       expect(html).toContain('卷进度')
       expect(html).toContain('锚点：门口')

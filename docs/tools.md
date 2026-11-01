@@ -107,9 +107,16 @@
 
 ## 命令
 
-`/novel [status|next|stats|outline|guide|report|doctor|search <词>|export <kind>|projects|current|use <path|title|.>|unbind|scan [--register]|resume|admin]`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。
+五个入口：`/novel`、`/novel-next`、`/novel-stats`、`/novel-export`、`/novel-admin`。短命令只是 `/novel` 子命令的别名。
 
-`scan`/`resume` 只是 `/novel` 子命令，不进入工具 schema；工具仍 28 个、服务操作仍 32 个。
+`/novel` 的带名写法：
+
+- 状态与内容：`status`、`next`、`stats`、`outline`、`guide`、`report`、`doctor`、`search <关键词>`；
+- 项目与会话：`projects`、`projects --prune [--yes]`、`current`、`use <路径|书名|.>`、`unbind`、`scan [--register]`；
+- 续写与导出：`resume`、`export md|txt|epub|outline|worldbook|proposal`；
+- 隐藏与运维：`admin [<op> <json>]`。
+
+面板「? 教程 → 全部命令」展示 5 个入口、25 种带名写法、6 种导出、25 个 admin 操作和常用组合；`/novel admin` 空参数列出全部操作名。`scan`/`resume` 只是 `/novel` 子命令，不进入工具 schema；工具仍 28 个、服务操作仍 32 个。
 
 ## core 模式
 
