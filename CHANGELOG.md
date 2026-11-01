@@ -32,7 +32,7 @@
 
 - `english_punct`、`types`、`acknowledged`、timeline 数字下标、旧 `briefs.yaml` 都保留；旧记录不自动改写。
 - `SCHEMA_VERSION` 仍为 1；`REMOTE_VERSION` 仍为 6；`PANEL_VERSION` 升到 0.2.13。
-- 未提交、未推送、未打 tag；发布需单独授权。
+- 安装与产物校验见 GitHub Release 的 tarball 与 `SHA256SUMS.txt`；npm 版本为 `dsh-novel-write-engine@0.2.13`。
 
 ### Tests
 
