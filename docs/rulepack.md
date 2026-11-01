@@ -1,3 +1,19 @@
+## 0.2.9 genre profile
+
+`genres.<题材>` 可增加可选的 `profile`，只影响 advisory：
+
+```yaml
+genres:
+  都市现代:
+    note: "..."
+    profile:
+      period_density: { min: 1.5, max: 10 }
+      water_words: 0.02
+      pleasure_density: 2
+```
+
+`period_density` 必须是合法区间且 `max` 不超过 100；`water_words` 是 0..1 的比例；`pleasure_density` 是每个滑动窗口的最低关键词命中数（正整数，2 表示至少命中 2 次），不是比例。未提供 profile 的题材继续使用全局阈值。profile 不改变 blocker、门控或评分。
+
 # 规则包
 
 `rulepacks/default.yaml` 是唯一口味来源；代码只负责执行。

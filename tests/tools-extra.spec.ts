@@ -10,6 +10,23 @@ const result = <T>(data: T): { data: T; revision: number; warnings: never[] } =>
   warnings: [],
 })
 
+const emptyDelta = (): Record<string, Record<string, never>> => ({
+  characters: {},
+  foreshadows: {},
+  timeline: {},
+  world: {},
+  relationships: {},
+})
+const proof = (): {
+  opening: { paragraph: number; quote: string }
+  middle: { paragraph: number; quote: string }
+  ending: { paragraph: number; quote: string }
+} => ({
+  opening: { paragraph: 1, quote: '开场' },
+  middle: { paragraph: 2, quote: '中段' },
+  ending: { paragraph: 3, quote: '结尾' },
+})
+
 const engine = () => ({
   withSignal: async (_signal: unknown, task: () => Promise<unknown>) => task(),
   initProject: vi.fn(async () => result({ root: '/tmp/x', title: 't', chapter: 1, stage: 'idle' })),
@@ -86,7 +103,7 @@ describe('every tool executes one operation', () => {
       {
         objective: 'o',
         constraints: ['c'],
-        characters: [{ name: '他' }],
+        characters: [{ name: '他', role: 'protagonist', current_state: '在场' }],
         locations: [],
         continuity_notes: [],
         project_root: '/tmp/x',
@@ -122,16 +139,16 @@ describe('every tool executes one operation', () => {
         {},
       ),
     ).rejects.toThrow(/missing required property "target_words"/)
-    await map.get('novel_review')!.execute({ chapter: 1, dimensions: [], total: 150, proof: {} }, {})
+    await map.get('novel_review')!.execute({ chapter: 1, dimensions: [], total: 150, proof: proof() }, {})
     expect(fake.submitReview).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, issues: [] }))
-    await map.get('novel_revise')!.execute({ chapter: 1, content: 'x', issues: [], proof: {} }, {})
-    expect(fake.submitRevision).toHaveBeenCalledWith(expect.objectContaining({ issues: [], proof: {} }))
+    await map.get('novel_revise')!.execute({ chapter: 1, content: 'x', issues: [], proof: proof() }, {})
+    expect(fake.submitRevision).toHaveBeenCalledWith(expect.objectContaining({ issues: [], proof: proof() }))
     await map.get('novel_check')!.execute({ chapter: 1, semantic: [], scope: ['content'] }, {})
     expect(fake.runCheck).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1 }))
     await map.get('novel_archive')!.execute(
       {
         chapter: 1,
-        state_delta: { characters: {}, foreshadows: {}, timeline: {}, world: {}, relationships: {} },
+        state_delta: emptyDelta(),
       },
       {},
     )
@@ -222,9 +239,9 @@ describe('every tool executes one operation', () => {
       )
     }) as never
     const map = tools(fake)
-    await expect(map.get('novel_archive')!.execute({ chapter: 1, state_delta: {} }, {})).rejects.toThrowError(
-      /blocking: .*PG-04/,
-    )
+    await expect(
+      map.get('novel_archive')!.execute({ chapter: 1, state_delta: emptyDelta() }, {}),
+    ).rejects.toThrowError(/blocking: .*PG-04/)
   })
 
   it('renders engine warnings for json tools', () => {
@@ -286,12 +303,12 @@ describe('every tool executes one operation', () => {
     fake.archiveChapter = vi.fn(async () => {
       throw new EngineInputError('ENGINE_SCHEMA_INVALID', 'bad input')
     }) as never
-    await expect(map.get('novel_archive')!.execute({ chapter: 1, state_delta: {} }, {})).rejects.toThrow(
-      /ENGINE_SCHEMA_INVALID/,
-    )
+    await expect(
+      map.get('novel_archive')!.execute({ chapter: 1, state_delta: emptyDelta() }, {}),
+    ).rejects.toThrow(/ENGINE_SCHEMA_INVALID/)
     await expect(
       map.get('novel_plan_world')!.execute({ objective: 'o', characters: '{' }, {}),
-    ).rejects.toThrow(/malformed JSON|JSON/)
+    ).rejects.toThrow(/must be an array/)
     await map.get('novel_plan_chapter')!.execute(
       {
         title: 't',

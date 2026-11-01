@@ -301,7 +301,7 @@ export function outlineSummary(
     missingCards,
     plannedCoverage,
     archivedCoverage,
-    coverage: plannedCoverage ?? (archivedDenominator === 0 ? 0 : cardCoverage),
+    coverage: plannedCoverage ?? cardCoverage,
     cardCoverage,
     volumes: document.volumes.length,
   }
@@ -1495,9 +1495,19 @@ export function parseOutlineMarkdown(content: string): OutlineParseResult {
     if (currentVolume === null) return
     const volume = currentVolume
     const chapters = chapterInputs.filter((card) => card.volume === volume.order)
-    if (chapters.length > 0) {
+    if (chapters.length > 0 && !volume.explicitRange) {
       volume.start_chapter = Math.min(volume.start_chapter, ...chapters.map((card) => card.num))
       volume.end_chapter = Math.max(volume.end_chapter, ...chapters.map((card) => card.num))
+    } else if (chapters.length > 0) {
+      for (const card of chapters) {
+        if (card.num < volume.start_chapter || card.num > volume.end_chapter) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `Markdown volume "${volume.title}" declares 第${volume.start_chapter}-${volume.end_chapter}章 but contains chapter ${card.num}`,
+            'fix the declared range or move the card into the right volume',
+          )
+        }
+      }
     } else if (!volume.explicitRange) {
       warnings.push(`volume "${volume.title}" has neither a chapter range nor chapter cards; it was ignored`)
       volumeInputs.pop()

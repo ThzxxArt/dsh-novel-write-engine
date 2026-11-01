@@ -48,7 +48,7 @@ export interface PanelBookData {
     average_words: number
     remaining_words: number | null
     remaining_words_basis: 'actual_average' | 'minimum_target' | 'none'
-    percent: number
+    percent: number | null
   }
   current: {
     card: PanelCardData | null
@@ -78,7 +78,7 @@ export interface PanelBookData {
     median: number
     min: number
     max: number
-    last_ten_average: number
+    last_ten_average: number | null
     trend: number | null
     trend_basis: BookReport['quality']['trend_basis']
     samples: number

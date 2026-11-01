@@ -38,7 +38,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
       scale_words: 3000,
       token: '——',
     },
-    period_density: { min: 1.5, max: 8 },
+    period_density: { min: 1.5, max: 10 },
     ellipsis_run: { max: 1, token: '……' },
     uniform_sentence: { min_sentences: 8, ratio: 0.6 },
     consecutive_le: { max: 3, char: '了' },
@@ -224,7 +224,33 @@ export function compileRulepack(raw: unknown): Rulepack {
   const genres = object(root.genres, 'genres')
   knownKeys(genres, GENRES, 'genres')
   for (const name of GENRES) {
-    knownKeys(object(genres[name], `genres.${name}`), ['note'], `genres.${name}`)
+    const entry = object(genres[name], `genres.${name}`)
+    knownKeys(entry, ['note', 'profile'], `genres.${name}`)
+    if (entry.profile !== undefined) {
+      const profile = object(entry.profile, `genres.${name}.profile`)
+      knownKeys(profile, ['period_density', 'water_words', 'pleasure_density'], `genres.${name}.profile`)
+      if (profile.period_density !== undefined) {
+        const density = object(profile.period_density, `genres.${name}.profile.period_density`)
+        knownKeys(density, ['min', 'max'], `genres.${name}.profile.period_density`)
+        const min = num(density.min, `genres.${name}.profile.period_density.min`)
+        const max = num(density.max, `genres.${name}.profile.period_density.max`)
+        if (min < 0 || max < 0) invalid(`genres.${name}.profile.period_density must be non-negative`)
+        if (max > 100) {
+          invalid(`genres.${name}.profile.period_density.max must not exceed 100 per 100 chars`)
+        }
+        if (min > max) {
+          invalid(`genres.${name}.profile.period_density.min must not exceed max`)
+        }
+      }
+      if (profile.water_words !== undefined) {
+        const value = num(profile.water_words, `genres.${name}.profile.water_words`)
+        if (value < 0 || value > 1) invalid(`genres.${name}.profile.water_words must be 0..1`)
+      }
+      if (profile.pleasure_density !== undefined) {
+        const value = num(profile.pleasure_density, `genres.${name}.profile.pleasure_density`)
+        if (value <= 0) invalid(`genres.${name}.profile.pleasure_density must be > 0`)
+      }
+    }
   }
   const crosschapter = section('crosschapter', [
     'duplicate_similarity',
@@ -341,7 +367,7 @@ export function compileRulepack(raw: unknown): Rulepack {
   )
   for (const genre of GENRES) {
     const guide = object(pack.genres[genre], `genres.${genre}`)
-    knownKeys(guide, ['note'], `genres.${genre}`)
+    knownKeys(guide, ['note', 'profile'], `genres.${genre}`)
     if (typeof guide.note !== 'string') invalid(`genres.${genre}.note must be a string`)
   }
 

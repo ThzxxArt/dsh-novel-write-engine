@@ -1,3 +1,23 @@
+## 0.2.9 archive_card
+
+`state/chapters.yaml` 的归档行可带两个可选字段：
+
+```yaml
+archive_card:
+  title: 开端之雨
+  scene_type: 日常过渡章
+  target_words: [100, 200]
+  cast: [他]
+  goal: 收到无名信
+  conflict: 拆不拆
+  hook: 蜡印
+  notes: 作者备注
+  archived_at: 2026-10-31T00:00:00.000Z
+archive_card_digest: "v1:..."
+```
+
+它们由归档事务写入，`novel_amend` 只能比较、不能新增或改写。缺字段的旧记录走只读回退：outline 可读时用当前卡，outline 不可读且有备份时用备份卡；两者都没有时 fail closed。
+
 # 状态机
 
 ## 两种枚举，不能混用

@@ -76,10 +76,29 @@ const payload = (): PanelPayloadDto & {
       { num: 3, title: '灯下之言', wordCount: 0, score: 0, stage: 'P3', status: 'blocked' },
     ],
   },
-  gates: { schemaVersion: 6, panelId: 'novel-workshop', stage: 'P4', blocking: [], explanations: [] },
 })
 
 describe('panel view model', () => {
+  it('sends the section ETag and treats 304 as unchanged', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: false,
+      status: 304,
+      json: async () => ({}),
+      headers: { get: () => null },
+      init,
+    }))
+    const result = await fetchPanel(
+      fetchMock as unknown as typeof fetch,
+      '/panel?section=characters',
+      undefined,
+      'W/"section"',
+    )
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      'if-none-match': 'W/"section"',
+    })
+    expect(result).toMatchObject({ notModified: true, error: null, payload: null })
+  })
+
   it('projects the ready state', () => {
     const view = buildView(payload())
     expect(view.state).toBe('ready')
@@ -146,6 +165,7 @@ describe('panel view model', () => {
       const dialog = container.querySelector('[role="dialog"]')
       expect(dialog).not.toBeNull()
       expect(dialog!.getAttribute('aria-modal')).toBe('true')
+      expect(dialog!.closest('[inert]')).toBeNull()
       expect(container.textContent).toContain('一本书的完整流程')
       expect(container.textContent).toContain('novel_archive')
       expect(container.textContent).toContain('L2-POV')
@@ -222,7 +242,7 @@ describe('panel view model', () => {
     const html = renderToStaticMarkup(panelElement(view, false, () => undefined))
     expect(html).toContain('需要处理：2 条门控')
     expect(html).toContain('novel_doctor')
-    expect(html).toContain('committed')
+    expect(html).toContain('已提交')
   })
 
   it('labels stage done as chapter archived unless the book target is finished', () => {
@@ -367,7 +387,6 @@ describe('panel v6 project selection', () => {
     choose.selection = { root: null, source: 'none' }
     delete choose.summary
     delete choose.chapters
-    delete choose.gates
     const chooseView = buildView(choose)
     expect(chooseView.state).toBe('choose')
     const chooseHtml = renderToStaticMarkup(panelElement(chooseView, false, () => undefined))
@@ -381,7 +400,6 @@ describe('panel v6 project selection', () => {
     missing.selection = { root: '/novels/b', source: 'query' }
     delete missing.summary
     delete missing.chapters
-    delete missing.gates
     missing.missing = {
       root: '/novels/b',
       title: '乙书',
@@ -416,7 +434,6 @@ describe('panel v6 project selection', () => {
     busy.selection = { root: '/novels/b', source: 'query' }
     delete busy.summary
     delete busy.chapters
-    delete busy.gates
     busy.missing = {
       root: '/novels/b',
       title: '乙书',
@@ -434,7 +451,6 @@ describe('panel v6 project selection', () => {
     notProject.selection = { root: '/novels/b', source: 'query' }
     delete notProject.summary
     delete notProject.chapters
-    delete notProject.gates
     notProject.missing = {
       root: '/novels/b',
       title: '乙书',
@@ -506,7 +522,6 @@ describe('panel v6 project selection', () => {
     blank.selection = { root: null, source: 'none' }
     delete blank.summary
     delete blank.chapters
-    delete blank.gates
     delete blank.resume
     blank.empty = true
     blank.error = '没有项目'
@@ -522,7 +537,6 @@ describe('panel v6 project selection', () => {
     rootless.selection = { root: null, source: 'none' }
     delete rootless.summary
     delete rootless.chapters
-    delete rootless.gates
     const view = buildView(rootless)
     expect(view.projects[0]!.label).toContain('— /')
   })
@@ -533,7 +547,6 @@ describe('panel v6 project selection', () => {
     blank.selection = { root: null, source: 'none' }
     delete blank.summary
     delete blank.chapters
-    delete blank.gates
     delete blank.resume
     const view = buildView(blank)
     expect(view.state).toBe('empty')
@@ -548,7 +561,6 @@ describe('panel v6 project selection', () => {
     duplicate.selection = { root: null, source: 'none' }
     delete duplicate.summary
     delete duplicate.chapters
-    delete duplicate.gates
     const view = buildView(duplicate)
     expect(view.state).toBe('choose')
     expect(view.projects[0]!.label).toContain('— a')
@@ -644,20 +656,20 @@ describe('panel v6 project selection', () => {
       })
       const select = (): HTMLSelectElement =>
         container.querySelector<HTMLSelectElement>('select[aria-label="切换项目"]')!
-      expect(Array.from(select().options)).toHaveLength(1)
+      expect(Array.from(select().options)).toHaveLength(2)
       const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
       await act(async () => {
         toggle.click()
       })
-      expect(Array.from(select().options)).toHaveLength(8)
+      expect(Array.from(select().options)).toHaveLength(9)
       const search = container.querySelector<HTMLInputElement>('input[aria-label="搜索项目"]')!
       const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
       await act(async () => {
         setValue.call(search, '正常')
         search.dispatchEvent(new Event('input', { bubbles: true }))
       })
-      expect(Array.from(select().options)).toHaveLength(1)
-      expect(Array.from(select().options)[0]!.text).toContain('正常书')
+      expect(Array.from(select().options)).toHaveLength(2)
+      expect(Array.from(select().options)[1]!.text).toContain('正常书')
 
       // The search box unmounts when the project list shrinks. A retained query
       // must not silently keep filtering the select.
@@ -817,7 +829,6 @@ describe('panel v6 project selection', () => {
     stale.selection = { root: '/novels/removed', source: 'query' }
     delete stale.summary
     delete stale.chapters
-    delete stale.gates
     stale.missing = {
       root: '/novels/removed',
       title: '已移除',
@@ -1015,6 +1026,225 @@ describe('client registration and rendering', () => {
     }
   })
 
+  it('refreshes the active section when the bundle is refreshed', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const sectionPayload = {
+      ...payload(),
+      payload_version: 7,
+      section: 'characters',
+      items: [{ name: '角色甲', role: 'protagonist' }],
+      total: 1,
+      returned: 1,
+      truncated: false,
+      etag: 'W/"characters"',
+    }
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (
+        String(input).includes('section=characters') &&
+        init?.headers &&
+        new Headers(init.headers).get('if-none-match')
+      ) {
+        return { ok: false, status: 304, json: async () => ({}) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (String(input).includes('section=characters') ? sectionPayload : payload()),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const sectionCalls = (): number =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('section=characters')).length
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (button) => button.textContent === '人物',
+      )!
+      await act(async () => {
+        tab.click()
+        await Promise.resolve()
+      })
+      expect(sectionCalls()).toBe(1)
+      const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="刷新项目状态"]')!
+      await act(async () => {
+        refresh.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(sectionCalls()).toBe(2)
+      const sectionHeaders = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes('section=characters'))
+        .map(([, init]) => init?.headers)
+      expect(sectionHeaders[1]).toMatchObject({ 'if-none-match': 'W/"characters"' })
+      expect(container.textContent).toContain('角色甲')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
+  it('handles a search change with the default section handler', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const base = payload()
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            () => undefined,
+            () => undefined,
+            'characters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...base,
+                payload_version: 7,
+                section: 'characters',
+                items: [{ name: '角色甲', role: 'protagonist', first_appearance: 1 }],
+              },
+            },
+            { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+            () => undefined,
+            '',
+          ),
+        )
+      })
+      const input = container.querySelector<HTMLInputElement>('input')!
+      await act(async () => {
+        input.value = '甲'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      expect(container.textContent).toContain('角色甲')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('renders loading and error states inside a chapter detail', () => {
+    const base = payload()
+    const withDetail = (state: { loading: boolean; error: string | null }): string =>
+      renderToStaticMarkup(
+        panelElement(
+          buildView(base),
+          false,
+          () => undefined,
+          () => undefined,
+          'chapters',
+          () => undefined,
+          {
+            loading: false,
+            error: null,
+            payload: {
+              ...base,
+              payload_version: 7,
+              section: 'chapters',
+              total: 1,
+              returned: 1,
+              truncated: false,
+              next_cursor: null,
+              items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+            },
+          },
+          { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+          () => undefined,
+          '',
+          () => undefined,
+          { chapter: 1, section: { ...state, payload: null } },
+        ),
+      )
+    expect(withDetail({ loading: true, error: null })).toContain('正在读取章节详情')
+    expect(withDetail({ loading: false, error: '读取失败' })).toContain('章节详情读取失败')
+  })
+
+  it('opens the lazy chapter detail from the chapter table', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const base = payload()
+    const fetchMock = vi.fn(async (input: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        const url = String(input)
+        if (url.includes('section=chapters')) {
+          return {
+            ...base,
+            payload_version: 7,
+            section: 'chapters',
+            total: 1,
+            returned: 1,
+            truncated: false,
+            next_cursor: null,
+            items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+          }
+        }
+        if (url.includes('section=chapter_detail')) {
+          return {
+            ...base,
+            payload_version: 7,
+            section: 'chapter_detail',
+            items: { chapter: 1, manuscript: '雨夜的正文。' },
+          }
+        }
+        return base
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (button) => button.textContent === '章节',
+      )!
+      await act(async () => {
+        tab.click()
+        await Promise.resolve()
+      })
+      const detailButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '详情',
+      )!
+      await act(async () => {
+        detailButton.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('第 1 章详情')
+      expect(container.textContent).toContain('雨夜的正文。')
+      const close = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '收起',
+      )!
+      await act(async () => {
+        close.click()
+      })
+      expect(container.textContent).not.toContain('第 1 章详情')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
   it('does not let a silent focus refresh abort a visible loading request', async () => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     localStorage.removeItem('nwe.panel-root.v1')
@@ -1093,20 +1323,56 @@ describe('client registration and rendering', () => {
         window.dispatchEvent(new Event('focus'))
         await Promise.resolve()
       })
-      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
       fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => payload() })
       await act(async () => {
         vi.advanceTimersByTime(15_000)
         await Promise.resolve()
       })
-      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
       expect(container.textContent).toContain('测试之书')
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'))
         await Promise.resolve()
       })
-      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
+  it('keeps the previous view when the bundle answers 304', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    vi.useFakeTimers()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+      if (init?.headers && new Headers(init.headers).get('if-none-match') === 'bundle-1') {
+        return { ok: false, status: 304, json: async () => ({}) }
+      }
+      return { ok: true, status: 200, json: async () => ({ ...payload(), etag: 'bundle-1' }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('测试之书')
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(container.textContent).toContain('测试之书')
     } finally {
       await act(async () => {
         root.unmount()
@@ -1173,5 +1439,1000 @@ describe('client registration and rendering', () => {
     expect(icon).toContain('<svg')
     expect(icon).toContain('width="20"')
     expect(renderToStaticMarkup(NovelIcon({}))).toContain('width="18"')
+  })
+
+  it('does not define a custom property in terms of itself', () => {
+    const markup = renderToStaticMarkup(panelElement(buildView(payload()), false, () => undefined))
+    const css = /<style>([\s\S]*)<\/style>/.exec(markup)?.[1] ?? ''
+    const declarations = [...css.matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)]
+    expect(declarations.length).toBeGreaterThan(0)
+    for (const [, name, value] of declarations) {
+      expect(value).not.toContain(`var(--${name})`)
+    }
+    expect(css).not.toContain('#b08a1e')
+    expect(css).not.toContain('#c9a227')
+  })
+
+  it('renders readable cards, dimension bars and localized enums', () => {
+    const base = payload()
+    base.chapters.rows[0]!.finalCheck = 'pass'
+    const section = (tab: Parameters<typeof panelElement>[4], items: unknown): string =>
+      renderToStaticMarkup(
+        panelElement(
+          buildView(base),
+          false,
+          () => undefined,
+          () => undefined,
+          tab,
+          () => undefined,
+          {
+            loading: false,
+            error: null,
+            payload: { ...base, payload_version: 7, section: tab, items },
+          },
+        ),
+      )
+    const characters = section('characters', [
+      { name: '角色甲', role: 'protagonist', first_appearance: 1, last: 3, appearances: 2 },
+    ])
+    expect(characters).toContain('角色甲')
+    expect(characters).toContain('搜索人物')
+    expect(characters).toContain('主角')
+    expect(characters).not.toContain('&quot;role&quot;')
+    const quality = section('quality', {
+      quality: { average: 12, median: 12, min: 10, max: 20, samples: 2 },
+      dimensions: [
+        { id: 'R-W-10', average: 0.5, samples: 2, max: 1 },
+        { id: 'R-W-04', average: 12, samples: 2, max: 20 },
+      ],
+    })
+    expect(quality).toContain('aria-valuemax="20"')
+    expect(quality).toContain('12 / 20')
+    expect(quality).toContain('0.5 / 1')
+    const worldbook = section('worldbook', {
+      premise: '旧城的前提',
+      setting: '旧城的设定',
+      locations: [{ name: '旧城', description: '城墙很高' }],
+      glossary: [{ term: '旧印', definition: '城门上的印记' }],
+      backstory: [{ event: '十年前', description: '城门第一次关闭' }],
+      rules: [],
+      ledger: { locations: [{ name: '旧城' }] },
+      outline_cards: [{ num: 1, title: '章一', status: 'planned', scene_type: '日常过渡章', goal: '目标' }],
+    })
+    expect(worldbook).toContain('地点（1）')
+    expect(worldbook).toContain('搜索设定')
+    expect(worldbook).toContain('旧城')
+    expect(worldbook).toContain('旧印')
+    expect(worldbook).toContain('十年前')
+    expect(worldbook).toContain('旧城的前提')
+    expect(worldbook).toContain('计划')
+    expect(worldbook).toContain('场景')
+    expect(worldbook).not.toContain('scene_type')
+    const health = section('health', {
+      outline: { present: false, file_existed: true, error: '坏' },
+      worldbook: { present: true, error: null },
+      state_errors: [{ path: 'state/chapters.yaml', code: 'E', message: '坏了' }],
+      drift: [{ chapter: 1, field: 'title', planned: '甲', actual: '乙' }],
+      pending: null,
+    })
+    expect(health).toContain('大纲：损坏')
+    expect(health).toContain('状态错误（1）')
+    const leads = section('foreshadows', {
+      foreshadows: [
+        { id: 'FS-001', title: '旧信封', status: 'planted' },
+        { id: 'FS-002', title: '旧钥匙', status: 'dormant' },
+      ],
+      timeline: [{ chapter: 1, description: '收到信', location: '旧城' }],
+      relationships: [{ a: '甲', b: '乙', type: '盟友' }],
+    })
+    expect(leads).toContain('伏笔（2）')
+    expect(leads).toContain('休眠')
+    expect(leads).not.toContain('dormant')
+    expect(leads).toContain('时间线（1）')
+    expect(leads).toContain('关系（1）')
+    const overview = renderToStaticMarkup(panelElement(buildView(base), false, () => undefined))
+    expect(overview).toContain('终检 通过')
+    expect(overview).not.toContain('终检 pass')
+  })
+
+  it('owns the pending transaction once and localizes its state', () => {
+    const base = payload()
+    ;(base.summary as unknown as { pending: unknown }).pending = {
+      state: 'partial',
+      txid: 'TX-001',
+      detail: '请检查备份',
+    }
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'health',
+      ),
+    )
+    expect(markup.match(/事务部分完成/g)).toHaveLength(1)
+    expect(markup).toContain('部分完成')
+    expect(markup).not.toContain('>partial<')
+  })
+
+  it('renders a filterable chapter table with pagination metadata', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'chapters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'chapters',
+            total: 2,
+            returned: 1,
+            truncated: true,
+            next_cursor: '1',
+            items: [
+              {
+                num: 1,
+                title: '开端之雨',
+                status: 'archived',
+                word_count: 2000,
+                score: 145,
+                scene_type: '日常过渡章',
+                final_check: 'pass',
+                archived_at: '2026-10-31T00:00:00.000Z',
+              },
+            ],
+          },
+        },
+        { search: '开端', status: 'archived', scene: '', sort: 'num_desc', cursor: '' },
+        () => undefined,
+      ),
+    )
+    expect(markup).toContain('搜索标题')
+    expect(markup).toContain('<table')
+    expect(markup).toContain('第 1 章')
+    expect(markup).toContain('显示 1 / 共 2')
+    expect(markup).toContain('通过')
+    expect(markup).toContain('下一页')
+  })
+
+  it('renders sparse chapter rows and omitted section totals', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'chapters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'chapters',
+            items: [{ num: 'x', status: 'draft', title: '草稿章', final_check: 'unknown' }],
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('草稿章')
+    expect(markup).toContain('草稿')
+    expect(markup).toContain('已显示全部')
+    expect(markup).not.toContain('共 undefined')
+  })
+
+  it('falls back to the row position when a chapter number is unreadable', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const base = payload()
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            () => undefined,
+            () => undefined,
+            'chapters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...base,
+                payload_version: 7,
+                section: 'chapters',
+                total: 1,
+                returned: 1,
+                truncated: false,
+                next_cursor: null,
+                items: [{ num: 'x', title: '无编号', status: 'archived', word_count: 20 }],
+              },
+            },
+            { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+            () => undefined,
+          ),
+        )
+      })
+      const detail = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '详情',
+      )!
+      await act(async () => {
+        detail.click()
+      })
+      expect(container.textContent).toContain('无编号')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('labels a clipped-only chapter payload as text truncation', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'chapters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'chapters',
+            total: 1,
+            returned: 1,
+            truncated: true,
+            next_cursor: null,
+            items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('部分文本已截断')
+    expect(markup).not.toContain('可继续翻页')
+  })
+
+  it('opens a lazy chapter detail manuscript', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'chapters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'chapters',
+            total: 1,
+            returned: 1,
+            truncated: false,
+            next_cursor: null,
+            items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+          },
+        },
+        { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+        () => undefined,
+        '',
+        () => undefined,
+        {
+          chapter: 1,
+          section: {
+            loading: false,
+            error: null,
+            payload: {
+              ...base,
+              payload_version: 7,
+              section: 'chapter_detail',
+              items: {
+                chapter: 1,
+                row: { summary_events: ['摘要事件'] },
+                manuscript: '雨夜的正文。',
+                plan: '归档 plan',
+                world_plan: '世界计划内容',
+              },
+            },
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('第 1 章详情')
+    expect(markup).toContain('雨夜的正文。')
+    expect(markup).toContain('归档 plan')
+    expect(markup).toContain('世界计划内容')
+    expect(markup).toContain('摘要事件')
+  })
+
+  it('closes the lazy chapter detail from its close button', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const base = payload()
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            () => undefined,
+            () => undefined,
+            'chapters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...base,
+                payload_version: 7,
+                section: 'chapters',
+                total: 1,
+                returned: 1,
+                truncated: false,
+                next_cursor: null,
+                items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+              },
+            },
+            { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+            () => undefined,
+            '',
+            () => undefined,
+            {
+              chapter: 1,
+              section: {
+                loading: false,
+                error: null,
+                payload: {
+                  ...base,
+                  payload_version: 7,
+                  section: 'chapter_detail',
+                  items: { chapter: 1, manuscript: '雨夜的正文。', plan: '归档 plan' },
+                },
+              },
+            },
+          ),
+        )
+      })
+      const close = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '收起',
+      )!
+      await act(async () => {
+        close.click()
+      })
+      expect(container.textContent).toContain('第 1 章详情')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('drives chapter filters and pagination controls', async () => {
+    const base = payload()
+    const onQuery = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            () => undefined,
+            () => undefined,
+            'chapters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...base,
+                payload_version: 7,
+                section: 'chapters',
+                total: 2,
+                returned: 1,
+                truncated: true,
+                next_cursor: '1',
+                items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+              },
+            },
+            { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+            onQuery,
+          ),
+        )
+      })
+      const input = container.querySelector('input[type="search"]') as HTMLInputElement
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      await act(async () => {
+        setValue.call(input, '旧城')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      expect(onQuery).toHaveBeenCalledWith({ search: '旧城', cursor: '' })
+      const status = container.querySelectorAll('.nwe-chapter-toolbar select')[0] as HTMLSelectElement
+      const setSelect = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+      await act(async () => {
+        setSelect.call(status, 'archived')
+        status.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      expect(onQuery).toHaveBeenCalledWith({ status: 'archived', cursor: '' })
+      const next = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === '下一页',
+      ) as HTMLButtonElement
+      await act(async () => {
+        next.click()
+      })
+      expect(onQuery).toHaveBeenCalledWith({ cursor: '1' })
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('degrades chapter and section panels without throwing', () => {
+    const base = payload()
+    const view = buildView(base)
+    const fallback = (
+      tab: Parameters<typeof panelElement>[4],
+      section: Parameters<typeof panelElement>[6],
+    ): string =>
+      renderToStaticMarkup(
+        panelElement(
+          view,
+          false,
+          () => undefined,
+          () => undefined,
+          tab,
+          () => undefined,
+          section,
+        ),
+      )
+    expect(fallback('chapters', { loading: true, error: null, payload: null })).toContain('章节')
+    expect(fallback('chapters', { loading: false, error: 'boom', payload: null })).toContain('章节读取失败')
+    expect(
+      fallback('chapters', {
+        loading: false,
+        error: null,
+        payload: { ...base, payload_version: 7, section: 'chapters', items: 'bad' },
+      }),
+    ).toContain('章节')
+    expect(
+      fallback('chapters', {
+        loading: false,
+        error: null,
+        payload: { ...base, payload_version: 7, section: 'chapters', items: [] },
+      }),
+    ).toContain('没有匹配的章节')
+    expect(
+      fallback('characters', { loading: false, error: null, payload: { ...base, items: [] } }),
+    ).toContain('人物：暂无数据')
+    expect(
+      fallback('worldbook', { loading: false, error: null, payload: { ...base, items: ['旧城'] } }),
+    ).toContain('设定')
+    expect(fallback('worldbook', { loading: false, error: null, payload: { ...base, items: {} } })).toContain(
+      '设定：暂无数据',
+    )
+    expect(
+      fallback('quality', { loading: false, error: null, payload: { ...base, items: ['质量'] } }),
+    ).toContain('质量')
+    expect(
+      fallback('health', { loading: false, error: null, payload: { ...base, items: ['健康'] } }),
+    ).toContain('健康')
+    expect(
+      fallback('foreshadows', { loading: false, error: null, payload: { ...base, items: [] } }),
+    ).toContain('线索：暂无数据')
+    expect(
+      fallback('foreshadows', {
+        loading: false,
+        error: null,
+        payload: { ...base, items: { foreshadows: [], timeline: [], relationships: [] } },
+      }),
+    ).toContain('线索：暂无数据')
+  })
+
+  it('shows the section window and keeps every returned row', () => {
+    const base = payload()
+    const items = Array.from({ length: 120 }, (_, index) => ({ name: `角色${index + 1}` }))
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'characters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'characters',
+            items,
+            total: 180,
+            returned: 120,
+            truncated: true,
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('显示 120 / 共 180')
+    expect(markup).toContain('角色120')
+  })
+
+  it('defaults a missing returned count to zero', () => {
+    const base = payload()
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'characters',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...base,
+            payload_version: 7,
+            section: 'characters',
+            items: [],
+            total: 3,
+            truncated: true,
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('显示 0 / 共 3')
+  })
+
+  it('opens a lazy quality detail from the quality tab', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const base = payload()
+    const fetchMock = vi.fn(async (input: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        const url = String(input)
+        if (url.includes('section=quality_detail')) {
+          return {
+            ...base,
+            payload_version: 7,
+            section: 'quality_detail',
+            items: { chapter: 2, review: '评审内容', check: '检查内容' },
+          }
+        }
+        if (url.includes('section=quality')) {
+          return {
+            ...base,
+            payload_version: 7,
+            section: 'quality',
+            items: { quality: { average: 1, samples: 1, median: 1, min: 1, max: 1 }, dimensions: [] },
+          }
+        }
+        return base
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (button) => button.textContent === '质量',
+      )!
+      await act(async () => {
+        tab.click()
+        await Promise.resolve()
+      })
+      const detailButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '查看本章质量详情',
+      )!
+      await act(async () => {
+        detailButton.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('第 2 章质量详情')
+      expect(container.textContent).toContain('评审内容')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
+  it('opens a lazy quality detail for the active chapter', () => {
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...payload(),
+            payload_version: 7,
+            section: 'quality',
+            items: { quality: { average: 1, samples: 1, median: 1, min: 1, max: 1 }, dimensions: [] },
+          },
+        },
+        { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+        () => undefined,
+        '',
+        () => undefined,
+        null,
+        () => undefined,
+        {
+          chapter: 2,
+          section: {
+            loading: false,
+            error: null,
+            payload: {
+              ...payload(),
+              payload_version: 7,
+              section: 'quality_detail',
+              items: { chapter: 2, review: '评审内容', check: '检查内容' },
+            },
+          },
+        },
+      ),
+    )
+    expect(markup).toContain('第 2 章质量详情')
+    expect(markup).toContain('评审内容')
+    expect(markup).toContain('检查内容')
+  })
+
+  it('keeps omitted panel callbacks safe', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const base = payload()
+    const nop = undefined as unknown as () => void
+    try {
+      await act(async () => {
+        root.render(panelElement(buildView(base), false, nop))
+      })
+      const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (button) => button.textContent === '章节',
+      )!
+      await act(async () => {
+        tab.click()
+      })
+      await act(async () => {
+        root.render(
+          panelElement(buildView(base), false, nop, nop, 'chapters', nop, {
+            loading: false,
+            error: null,
+            payload: {
+              ...base,
+              payload_version: 7,
+              section: 'chapters',
+              total: 1,
+              returned: 1,
+              truncated: false,
+              next_cursor: null,
+              items: [{ num: 1, title: '开端之雨', status: 'archived', word_count: 20 }],
+            },
+          }),
+        )
+      })
+      const detail = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '详情',
+      )!
+      await act(async () => {
+        detail.click()
+      })
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            nop,
+            nop,
+            'quality',
+            nop,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...base,
+                payload_version: 7,
+                section: 'quality',
+                items: { quality: { average: 1, samples: 1, median: 1, min: 1, max: 1 }, dimensions: [] },
+              },
+            },
+            { search: '', status: 'all', scene: '', sort: 'num_desc', cursor: '' },
+            nop,
+            '',
+            nop,
+            null,
+            nop,
+            {
+              chapter: 1,
+              section: {
+                loading: false,
+                error: null,
+                payload: {
+                  ...base,
+                  payload_version: 7,
+                  section: 'quality_detail',
+                  items: { chapter: 1, review: '评审内容', check: '检查内容' },
+                },
+              },
+            },
+          ),
+        )
+      })
+      const close = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === '收起',
+      )!
+      await act(async () => {
+        close.click()
+      })
+      expect(container.textContent).toContain('评审内容')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('renders an unreviewed chapter card without a score bar', () => {
+    const view = buildView(payload())
+    view.rows = [
+      {
+        ...view.rows[0]!,
+        score: '—',
+        scoreValue: null,
+        scorePercent: null,
+        badge: '草稿',
+        tone: 'muted',
+      },
+    ]
+    const markup = renderToStaticMarkup(panelElement(view, false, () => undefined))
+    expect(markup).toContain('未评审')
+  })
+
+  it('links every tab control to a labelled tabpanel', () => {
+    const tabs = [
+      'overview',
+      'chapters',
+      'characters',
+      'foreshadows',
+      'worldbook',
+      'quality',
+      'health',
+    ] as const
+    for (const tab of tabs) {
+      const markup = renderToStaticMarkup(
+        panelElement(
+          buildView(payload()),
+          false,
+          () => undefined,
+          () => undefined,
+          tab,
+        ),
+      )
+      expect(markup).toContain(`id="nwe-panel-${tab}"`)
+      expect(markup).toContain(`aria-labelledby="nwe-tab-${tab}"`)
+    }
+  })
+
+  it('renders seven tabs, a section panel and an explicit sync failure', async () => {
+    const view = buildView(payload())
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            { ...view, syncError: '宿主返回 503' },
+            false,
+            () => undefined,
+            () => undefined,
+            'characters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                ...payload(),
+                payload_version: 7,
+                section: 'characters',
+                items: [{ name: '角色甲', role: 'protagonist' }],
+              },
+            },
+          ),
+        )
+      })
+      expect(container.querySelectorAll('[role="tab"]')).toHaveLength(7)
+      expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('角色甲')
+      expect(container.textContent).toContain('同步失败：宿主返回 503')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
+  })
+
+  it('labels insufficient quality history without inventing a trend', () => {
+    const sparse = payload()
+    sparse.summary.quality = { averageScore: 0, scores: [], trend: null, trend_basis: 'insufficient_history' }
+    sparse.summary.bookData = {
+      current: { rounds: { review: 0, revise: 0, check: 0 } },
+      quality: {
+        average: 0,
+        median: 0,
+        min: 0,
+        max: 0,
+        last_ten_average: null,
+        trend: null,
+        trend_basis: 'insufficient_history',
+        dimensions: [],
+        samples: 0,
+        attempts: 0,
+      },
+      health: { pending: null },
+    } as unknown as NonNullable<NonNullable<PanelPayloadDto['summary']>['bookData']>
+    expect(buildView(sparse).quality.trendText).toBe('历史不足')
+  })
+
+  it('renders every section tab and its empty/error/loading states', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const mount = createRoot(host)
+    const view = buildView(payload())
+    const tabs = ['characters', 'foreshadows', 'worldbook', 'quality', 'health'] as const
+    try {
+      for (const tab of tabs) {
+        await act(async () => {
+          mount.render(
+            panelElement(
+              view,
+              false,
+              () => undefined,
+              () => undefined,
+              tab,
+              () => undefined,
+              {
+                loading: false,
+                error: null,
+                payload: {
+                  ...payload(),
+                  payload_version: 7,
+                  section: tab,
+                  items:
+                    tab === 'worldbook'
+                      ? { locations: [{ name: '地点' }], rules: [] }
+                      : tab === 'quality'
+                        ? { quality: null, dimensions: [] }
+                        : tab === 'health'
+                          ? { health: null, blocking: [] }
+                          : [{ name: '角色甲' }, 'plain'],
+                },
+              },
+            ),
+          )
+        })
+        expect(host.querySelector(`#nwe-panel-${tab}`)).not.toBeNull()
+      }
+      await act(async () => {
+        mount.render(
+          panelElement(
+            view,
+            false,
+            () => undefined,
+            () => undefined,
+            'characters',
+            () => undefined,
+            {
+              loading: true,
+              error: null,
+              payload: null,
+            },
+          ),
+        )
+      })
+      expect(host.textContent).toContain('正在读取栏目')
+      await act(async () => {
+        mount.render(
+          panelElement(
+            view,
+            false,
+            () => undefined,
+            () => undefined,
+            'characters',
+            () => undefined,
+            {
+              loading: false,
+              error: 'boom',
+              payload: null,
+            },
+          ),
+        )
+      })
+      expect(host.textContent).toContain('栏目读取失败')
+    } finally {
+      await act(async () => {
+        mount.unmount()
+      })
+      host.remove()
+    }
+  })
+
+  it('formats a positive quality trend with a plus sign', () => {
+    const positive = payload()
+    positive.summary.bookData = positive.summary.bookData
+      ? { ...positive.summary.bookData, quality: { ...positive.summary.bookData.quality, trend: 2.5 } }
+      : undefined
+    if (positive.summary.quality !== undefined) positive.summary.quality.trend = 2.5
+    expect(buildView(positive).quality.trendText).toBe('+2.5')
+  })
+
+  it('reads insufficient history from bookData when the flat quality has no basis', () => {
+    const sparse = payload()
+    const flat = { ...sparse.summary.quality!, trend: null }
+    delete (flat as { trend_basis?: string }).trend_basis
+    sparse.summary.quality = flat
+    sparse.summary.bookData = {
+      current: { rounds: { review: 0, revise: 0, check: 0 } },
+      quality: {
+        average: 0,
+        median: 0,
+        min: 0,
+        max: 0,
+        last_ten_average: null,
+        trend: null,
+        trend_basis: 'insufficient_history',
+        dimensions: [],
+        samples: 0,
+        attempts: 0,
+      },
+      health: { pending: null },
+    } as unknown as NonNullable<NonNullable<PanelPayloadDto['summary']>['bookData']>
+    expect(buildView(sparse).quality.trendText).toBe('历史不足')
   })
 })

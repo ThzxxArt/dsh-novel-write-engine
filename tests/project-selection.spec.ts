@@ -196,6 +196,8 @@ describe('session-level project selection', () => {
       await expect(engine.getStatus({})).rejects.toMatchObject({
         code: 'ENGINE_PROJECT_AMBIGUOUS',
       })
+      const listed = await engine.listProjects()
+      expect(listed.projects.some((row) => row.root === missingConfig && row.state === 'missing')).toBe(true)
     } finally {
       await cleanup()
       await rm(other, { recursive: true, force: true })

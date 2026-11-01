@@ -215,4 +215,61 @@ describe('file lock reclaim', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('does not treat a hard-linked fresh claim as expired by the lock mtime', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ pid: 999_999, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'stale' }),
+      )
+      const old = new Date(Date.now() - 10_000)
+      await fs.utimes(path, old, old)
+      await fs.link(path, `${path}.reclaim`)
+      await expect(new FileLock(path, 1_000, 120).acquire()).rejects.toMatchObject({
+        code: 'ENGINE_LOCK_TIMEOUT',
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not steal a stale lock while a fresh reclaim claim exists', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ pid: 999_999, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'stale' }),
+      )
+      await writeFile(`${path}.reclaim`, 'claim')
+      await expect(new FileLock(path, 1_000, 120).acquire()).rejects.toMatchObject({
+        code: 'ENGINE_LOCK_TIMEOUT',
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('clears an expired reclaim claim before retrying', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ pid: 999_999, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'stale' }),
+      )
+      const claim = `${path}.reclaim`
+      await writeFile(claim, 'old claim')
+      const old = new Date(Date.now() - 10_000)
+      await fs.utimes(claim, old, old)
+      const lock = new FileLock(path, 1_000, 500)
+      await lock.acquire()
+      await lock.release()
+      expect(await readFile(path, 'utf8').catch(() => null)).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

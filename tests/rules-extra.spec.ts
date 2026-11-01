@@ -3,6 +3,7 @@ import { dedupeAdvisories, isExempt, runMachineChecks } from '../src/rules/pipel
 import { loadRulepack } from '../src/rulepack.js'
 import type { MachineOptions } from '../src/rules/pipeline.js'
 import type { Violation } from '../src/types.js'
+import { sampleSummary } from './helpers.js'
 
 const pack = loadRulepack()
 const options = (overrides: Partial<MachineOptions> = {}): MachineOptions => ({
@@ -327,7 +328,73 @@ describe('rule edge cases', () => {
     ).not.toContain('RELATION_UNKNOWN')
   })
 
-  it('flags a character whose description drifts from the locked first appearance', () => {
+  it('does not attribute a spend to a character named elsewhere in the sentence', () => {
+    const characters = {
+      schema_version: 1 as const,
+      characters: ['甲', '乙'].map((name) => ({
+        name,
+        role: name === '甲' ? 'protagonist' : 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      })),
+    }
+    const summary = sampleSummary({
+      characters_appeared: ['甲', '乙'],
+      resource_changes: [{ character: '甲', resource: '代币', delta: 5, reason: '测试' }],
+    })
+    expect(
+      codesOf('甲靠在门边，看着乙花掉五枚代币。', {
+        summary,
+        evidence: { ...options().evidence, characters },
+      }),
+    ).not.toContain('RESOURCE_MISMATCH')
+  })
+
+  it('does not count a short name that appears inside a longer known name', () => {
+    const characters = {
+      schema_version: 1 as const,
+      characters: ['玉', '小玉', '甲'].map((name) => ({
+        name,
+        role: 'supporting',
+        first_appearance: 1,
+        profile: {},
+        current_state: {},
+        growth: [],
+        updated_at: 1,
+      })),
+    }
+    const relationships = {
+      schema_version: 1 as const,
+      next_seq: 2,
+      items: [{ id: 'RL-001', a: '小玉', b: '甲', type: '同事', since: 1, description: '', evolution: [] }],
+    }
+    expect(
+      codesOf('小玉看着甲，没有说话。', {
+        evidence: { ...options().evidence, characters, relationships },
+      }),
+    ).not.toContain('RELATION_UNKNOWN')
+  })
+
+  it('does not flag drift when an earlier description is correct', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {
+        他: { first_appearance: 1, locked_at: 1, appearance: '左脸有一道刀疤。' },
+      },
+      locations: {},
+    }
+    expect(
+      codesOf('他左脸有一道刀疤。\n\n他脸上干干净净，没有任何疤痕，皮肤白得像纸，连一颗痣也没有。', {
+        evidence: { ...options().evidence, locks },
+      }),
+    ).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('flags a character whose description drifts from the locked appearance', () => {
     const locks = {
       schema_version: 1 as const,
       locked_at_chapter: 1,
@@ -536,7 +603,7 @@ describe('rule edge cases', () => {
     expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
   })
 
-  it('reports drift introduced after a correct description', () => {
+  it('does not flag drift when an earlier location description is correct', () => {
     const locks = {
       schema_version: 1 as const,
       locked_at_chapter: 1,
@@ -552,6 +619,25 @@ describe('rule edge cases', () => {
     }
     const text =
       '他推开旧办公室的门，靠窗一张旧办公桌还在，墙角堆满文件箱，桌上的台灯没有开。\n\n后来旧办公室重新装修，桌子换成红木桌，墙角空荡荡的。'
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('reports the best of several sub-threshold descriptions', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '靠窗一张旧办公桌，墙角堆满文件箱',
+          capacity: 0,
+        },
+      },
+    }
+    const text =
+      '旧办公室的桌子全换成了红木桌，墙角也空了。\n\n旧办公室重新装修后，墙上光秃秃的，连一只箱子也没有。'
     expect(codesOf(text, { evidence: { ...options().evidence, locks } })).toContain('LOCKED_DETAIL_DRIFT')
   })
 
@@ -572,5 +658,98 @@ describe('rule edge cases', () => {
     expect(merged[0]!.detail).toContain('旧办公桌')
     expect(merged[0]!.detail).toContain('红铠甲')
     expect(merged[0]!.detail.match(/旧办公桌/g)).toHaveLength(1)
+  })
+
+  it('does not match a shorter character name inside a longer name', () => {
+    const characters = {
+      schema_version: 1 as const,
+      characters: [
+        {
+          name: '甲',
+          role: 'protagonist',
+          first_appearance: 1,
+          profile: {},
+          current_state: {},
+          growth: [],
+          updated_at: 1,
+        },
+        {
+          name: '甲某',
+          role: 'supporting',
+          first_appearance: 1,
+          profile: {},
+          current_state: {},
+          growth: [],
+          updated_at: 1,
+        },
+        {
+          name: '乙',
+          role: 'supporting',
+          first_appearance: 1,
+          profile: {},
+          current_state: {},
+          growth: [],
+          updated_at: 1,
+        },
+      ],
+    }
+    expect(
+      codesOf('甲某看着乙，没有说话。', {
+        evidence: {
+          ...options().evidence,
+          characters,
+          relationships: {
+            schema_version: 1,
+            next_seq: 2,
+            items: [
+              { id: 'RL-001', a: '甲某', b: '乙', type: '同事', since: 1, description: '', evolution: [] },
+            ],
+          },
+        },
+      }),
+    ).not.toContain('RELATION_UNKNOWN')
+  })
+
+  it('reads 一米八 as 1.8 metres and still flags a bare 一米', () => {
+    const facts = [{ alias: '身高', value: 1.8, unit: '米' }]
+    expect(codesOf('他的身高一米八。', { facts })).not.toContain('NUMERIC_FACT_MISMATCH')
+    expect(codesOf('他的身高一米。', { facts })).toContain('NUMERIC_FACT_MISMATCH')
+  })
+
+  it('does not report locked drift for a bare mention before a correct description', () => {
+    const locks = {
+      schema_version: 1 as const,
+      locked_at_chapter: 1,
+      characters: {},
+      locations: {
+        旧办公室: {
+          first_appearance: 1,
+          locked_at: 1,
+          layout: '门朝北，桌上一盏绿灯，墙上有一张旧地图。',
+          capacity: 4,
+        },
+      },
+    }
+    expect(
+      codesOf('他推开旧办公室的门，里面没有人。\n\n旧办公室的门朝北，桌上一盏绿灯，墙上有一张旧地图。', {
+        evidence: { ...options().evidence, locks },
+      }),
+    ).not.toContain('LOCKED_DETAIL_DRIFT')
+    expect(
+      codesOf(
+        '旧办公室的门朝北，桌上一盏绿灯，墙上有一张旧地图。\n\n他走进旧办公室，屋里的桌子换成了红木桌，墙角还多了一台机器。',
+        {
+          evidence: { ...options().evidence, locks },
+        },
+      ),
+    ).not.toContain('LOCKED_DETAIL_DRIFT')
+  })
+
+  it('applies a genre water-word profile without changing the global rule', () => {
+    const custom = structuredClone(pack)
+    custom.genres['都市现代'].profile = { water_words: 0.0001 }
+    const text = '的时候的时候的时候的时候的时候的时候的时候的时候'
+    expect(codesOf(text, { rulepack: custom })).toContain('WATER_WORDS')
+    expect(codesOf(text)).not.toContain('WATER_WORDS')
   })
 })

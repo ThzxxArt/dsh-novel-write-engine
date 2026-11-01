@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readTextIfExists } from '../src/assets.js'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -154,5 +155,14 @@ describe('rule pack loading and edge cases', () => {
     const badPattern = base()
     badPattern.lexicon.god_view.push({ pattern: '[' })
     expect(() => compileRulepack(badPattern)).toThrow(/not a valid regular expression/)
+  })
+
+  it('turns a non-ENOENT asset read failure into a typed engine error', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'asset-dir-'))
+    try {
+      expect(() => readTextIfExists(dir)).toThrow(/cannot read/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

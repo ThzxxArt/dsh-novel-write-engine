@@ -853,7 +853,7 @@ describe('0.2.3 trusted ledgers', () => {
     expect(report.quality.dimensions[0]).toMatchObject({ samples: 1 })
   })
 
-  it('never reports fewer quality attempts than readable samples', () => {
+  it('keeps journal attempts independent from readable samples', () => {
     const second = { ...oldChapter(), num: 2, title: '第二章', file: 'chapters/chapter-002.md', score: 141 }
     const secondReview = { ...review(), chapter: 2, round: 1, content_hash: 'hash-2' }
     const report = buildBookReport({
@@ -875,7 +875,7 @@ describe('0.2.3 trusted ledgers', () => {
       foreshadowDormantAfter: 5,
     })
     expect(report.quality.samples).toBe(2)
-    expect(report.quality.attempts).toBe(2)
+    expect(report.quality.attempts).toBe(1)
   })
 
   it('does not show stale advisories after the manuscript leaves their check hash', async () => {

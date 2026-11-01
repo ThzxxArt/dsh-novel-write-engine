@@ -282,6 +282,23 @@ const validateSummary = (kind: DocKind, value: unknown, path: string): void => {
   stringAt(kind, summary.plot_advancement, `${path}.plot_advancement`)
 }
 
+const validateArchivedCard = (kind: DocKind, value: unknown, path: string): void => {
+  if (value === undefined) return
+  const card = objectAt(kind, value, path)
+  stringAt(kind, card.title, `${path}.title`)
+  stringAt(kind, card.scene_type, `${path}.scene_type`)
+  const target = listAt(kind, card.target_words, `${path}.target_words`)
+  if (target.length !== 2) invalid(kind, `${path}.target_words must contain two numbers`)
+  for (const [index, item] of target.entries()) numberAt(kind, item, `${path}.target_words[${index}]`)
+  for (const [index, item] of listAt(kind, card.cast, `${path}.cast`).entries()) {
+    stringAt(kind, item, `${path}.cast[${index}]`)
+  }
+  for (const key of ['goal', 'conflict', 'hook', 'notes'] as const) {
+    stringAt(kind, card[key], `${path}.${key}`)
+  }
+  nullableString(kind, card.archived_at, `${path}.archived_at`)
+}
+
 const validateNested = (kind: DocKind, record: Record<string, unknown>): void => {
   switch (kind) {
     case 'project': {
@@ -328,6 +345,8 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         validateSummary(kind, row.summary, `${path}.summary`)
         if (row.assigned_ids !== undefined) objectAt(kind, row.assigned_ids, `${path}.assigned_ids`)
         optionalString(kind, row.archive_digest, `${path}.archive_digest`)
+        optionalString(kind, row.archive_card_digest, `${path}.archive_card_digest`)
+        validateArchivedCard(kind, row.archive_card, `${path}.archive_card`)
         optionalString(kind, row.final_check, `${path}.final_check`)
         optionalString(kind, row.archived_at, `${path}.archived_at`)
         if (row.rounds !== undefined) {

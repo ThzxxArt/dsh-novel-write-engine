@@ -7,7 +7,8 @@ export interface HistoryEntry {
   chapter: number
   revision: number
   path: string
-  chars: number
+  /** Only populated when the caller explicitly requests body sizes. */
+  chars?: number
 }
 
 const PATTERN =
@@ -25,7 +26,11 @@ const kindOf = (directory: HistoryKind, suffix: string): boolean => {
  * still on disk: history is evidence, not a cache, and this function never
  * deletes it.
  */
-export async function listHistory(store: FsStore, chapter?: number): Promise<HistoryEntry[]> {
+export async function listHistory(
+  store: FsStore,
+  chapter?: number,
+  options: { withChars?: boolean } = {},
+): Promise<HistoryEntry[]> {
   const entries: HistoryEntry[] = []
   for (const kind of HISTORY_KINDS) {
     const names = await store.list(joinRel(HISTORY_DIR, kind))
@@ -38,8 +43,12 @@ export async function listHistory(store: FsStore, chapter?: number): Promise<His
       const revision = Number(match.groups!.revision)
       if (chapter !== undefined && num !== chapter) continue
       const path = joinRel(HISTORY_DIR, kind, name)
-      const text = await store.readText(path)
-      entries.push({ kind, chapter: num, revision, path, chars: text?.length ?? 0 })
+      const entry: HistoryEntry = { kind, chapter: num, revision, path }
+      if (options.withChars === true) {
+        const text = await store.readText(path)
+        entry.chars = text?.length ?? 0
+      }
+      entries.push(entry)
     }
   }
   return entries.sort(

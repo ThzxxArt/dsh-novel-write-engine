@@ -134,6 +134,7 @@ const mergeVolumes = (
     }
   }
   const byTitle = volumeByTitle(options.existingVolumes)
+  const byId = new Map(options.existingVolumes.map((volume) => [volume.id, volume]))
   const usedIds = new Set(options.existingVolumes.map((volume) => volume.id))
   let nextGeneratedId = 1
   const generatedId = (): string => {
@@ -144,6 +145,8 @@ const mergeVolumes = (
     return id
   }
   const submitted = new Set<string>()
+  const submittedIds = new Set<string>()
+  const generatedIds = new Set<string>()
   for (const [index, raw] of (options.volumes ?? []).entries()) {
     if (!isRecord(raw)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `volumes[${index}] must be an object`)
@@ -153,11 +156,46 @@ const mergeVolumes = (
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `volumes contains duplicate title "${title}"`)
     }
     submitted.add(title)
-    const base = byTitle.get(title)
     const explicitId = typeof raw.id === 'string' && raw.id.trim() !== '' ? raw.id.trim() : undefined
-    const id = base?.id ?? explicitId ?? generatedId()
+    if (explicitId !== undefined && (submittedIds.has(explicitId) || generatedIds.has(explicitId))) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `volumes contains duplicate id "${explicitId}"`)
+    }
+    if (explicitId !== undefined) submittedIds.add(explicitId)
+    const byIdBase = explicitId === undefined ? undefined : byId.get(explicitId)
+    const titleBase = byTitle.get(title)
+    if (explicitId !== undefined && byIdBase === undefined && usedIds.has(explicitId)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `volume id "${explicitId}" already belongs to another volume`,
+      )
+    }
+    if (explicitId !== undefined && titleBase !== undefined && titleBase.id !== explicitId) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `volume "${title}" cannot change its stable id from "${titleBase.id}" to "${explicitId}"`,
+      )
+    }
+    const base = byIdBase ?? titleBase
+    let id: string
+    if (base !== undefined) {
+      id = base.id
+    } else if (explicitId !== undefined) {
+      id = explicitId
+    } else {
+      id = generatedId()
+      generatedIds.add(id)
+    }
+    if (base !== undefined && explicitId !== undefined && base.id !== explicitId) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `volume "${base.title}" cannot change its stable id from "${base.id}" to "${explicitId}"`,
+      )
+    }
+    if (base !== undefined && base.title !== title) byTitle.delete(base.title)
     if (!usedIds.has(id)) usedIds.add(id)
-    byTitle.set(title, { ...(base ?? {}), ...raw, id, title } as unknown as OutlineVolume)
+    const next = { ...(base ?? {}), ...raw, id, title } as unknown as OutlineVolume
+    byTitle.set(title, next)
+    byId.set(id, next)
   }
   for (const title of removed) {
     if (submitted.has(title)) {
@@ -181,6 +219,7 @@ const mergeVolumes = (
       )
     }
     byTitle.delete(title)
+    byId.delete(existing.id)
   }
   const raw = [...byTitle.values()]
   const volumes = normalizeVolumes(raw, { totalChapters: options.totalChapters })

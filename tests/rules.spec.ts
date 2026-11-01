@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileRulepack, DEFAULT_RULEPACK, normalize } from '../src/rules/compiler.js'
 import { RuleRegistry } from '../src/rules/registry.js'
@@ -631,5 +634,32 @@ describe('machine pipeline', () => {
       }),
     )
     expect(advanced.violations.map((violation) => violation.code)).not.toContain('FS_REVISITED_TOO_SOON')
+  })
+
+  it('rejects malformed genre profiles', () => {
+    const water = structuredClone(rawPack) as Record<string, any>
+    water.genres['都市现代'].profile = { water_words: 2 }
+    expect(() => compileRulepack(water)).toThrow(/water_words must be 0..1/)
+    const density = structuredClone(rawPack) as Record<string, any>
+    density.genres['都市现代'].profile = { period_density: { min: 9, max: 2 } }
+    expect(() => compileRulepack(density)).toThrow(/must not exceed max/)
+    const oversized = structuredClone(rawPack) as Record<string, any>
+    oversized.genres['都市现代'].profile = { period_density: { min: 1, max: 500 } }
+    expect(() => compileRulepack(oversized)).toThrow(/period_density.max must not exceed 100/)
+    const pleasure = structuredClone(rawPack) as Record<string, any>
+    pleasure.genres['都市现代'].profile = { pleasure_density: 0 }
+    expect(() => compileRulepack(pleasure)).toThrow(/pleasure_density must be > 0/)
+  })
+
+  it('reports a missing or unparsable custom rule pack', async () => {
+    expect(() => loadRulepack('/definitely/missing/rulepack.yaml')).toThrow(/cannot read rule pack/)
+    const dir = await mkdtemp(join(tmpdir(), 'rulepack-'))
+    try {
+      const path = join(dir, 'bad.yaml')
+      await writeFile(path, 'a: [', 'utf8')
+      expect(() => loadRulepack(path)).toThrow(/cannot parse rule pack/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

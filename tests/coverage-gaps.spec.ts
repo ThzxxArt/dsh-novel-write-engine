@@ -146,8 +146,13 @@ describe('adapter optional-argument branches', () => {
       ending: 'e',
       target_words: [100, 200],
     })
-    await run('novel_review', { chapter: 1, dimensions: [], total: 150, proof: {} })
-    await run('novel_revise', { chapter: 1, content: 'x', proof: {} })
+    const proof = {
+      opening: { paragraph: 1, quote: 'a' },
+      middle: { paragraph: 2, quote: 'b' },
+      ending: { paragraph: 3, quote: 'c' },
+    }
+    await run('novel_review', { chapter: 1, dimensions: [], total: 150, proof })
+    await run('novel_revise', { chapter: 1, content: 'x', proof })
     await run('novel_check', { chapter: 1, semantic: [] })
     await run('novel_word_count', {})
     await run('novel_state', { kind: 'pipeline' })

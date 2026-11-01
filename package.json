@@ -1,6 +1,6 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "keywords": [
     "dsh-plugin",
@@ -63,7 +63,8 @@
       ],
       "external": [
         "react",
-        "react/jsx-runtime"
+        "react/jsx-runtime",
+        "react-dom"
       ]
     }
   },
@@ -98,7 +99,8 @@
     "@deepseek-ai/dsh-skill": "^0.2.0-rc.1 || ^0.2.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.5",
     "@deepseek-ai/dsh-tools": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-client-ui-layout": {
@@ -111,6 +113,9 @@
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },

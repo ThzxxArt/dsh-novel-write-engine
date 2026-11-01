@@ -268,7 +268,7 @@ describe('book report', () => {
         targetChapters: null,
       }),
     )
-    expect(report.progress).toMatchObject({ archived: 0, words: 0, percent: 0, remaining_words: null })
+    expect(report.progress).toMatchObject({ archived: 0, words: 0, percent: null, remaining_words: null })
     expect(report.quality).toMatchObject({ average: 0, median: 0, min: 0, max: 0 })
     expect(report.pacing.longest).toBeNull()
     expect(report.pacing.shortest).toBeNull()
@@ -349,7 +349,7 @@ describe('book guide', () => {
 describe('outline summary', () => {
   it('derives coverage and presence from cards', () => {
     const outline = emptyOutline('2026-01-01')
-    expect(outlineSummary(outline, 0)).toMatchObject({ present: false, total: 0, coverage: 0 })
+    expect(outlineSummary(outline, 0)).toMatchObject({ present: false, total: 0, coverage: 1 })
     outline.chapters.push({
       num: 1,
       volume: null,

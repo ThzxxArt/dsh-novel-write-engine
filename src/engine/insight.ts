@@ -53,10 +53,18 @@ export interface ReportInput {
   targetChapters: number | null
   minScore: number
   foreshadowDormantAfter: number
+  /** Rulepack maxima by dimension id; used by the panel bar denominator. */
+  dimensionMax?: Readonly<Record<string, number>>
 }
 
 const average = (values: readonly number[]): number =>
   values.length === 0 ? 0 : values.reduce((total, value) => total + value, 0) / values.length
+
+const clip = (value: string, max: number): string => {
+  const chars = Array.from(value)
+  return chars.length <= max ? value : `${chars.slice(0, Math.max(0, max - 1)).join('')}…`
+}
+const clipList = (values: readonly string[], max: number): string[] => values.map((value) => clip(value, max))
 
 const median = (values: readonly number[]): number => {
   if (values.length === 0) return 0
@@ -125,9 +133,9 @@ export function buildBookReport(input: ReportInput): BookReport {
   }
   const chapterReviews = [...finalReviews.values()]
   const qualitySamples = chapterReviews.length
-  // A readable final review is itself at least one attempt. A truncated or
-  // legacy journal must never make attempts lower than samples.
-  const qualityAttempts = Math.max(input.reviewAttempts ?? input.reviews.length, qualitySamples)
+  // Keep the attempt count honest: a truncated journal may report fewer
+  // attempts than readable final reviews, and that is a real coverage gap.
+  const qualityAttempts = input.reviewAttempts ?? input.reviews.length
   const trendBasis: BookReport['quality']['trend_basis'] =
     qualitySamples < 3
       ? 'insufficient_samples'
@@ -287,7 +295,7 @@ export function buildBookReport(input: ReportInput): BookReport {
       average_words: averageWords,
       percent:
         input.targetChapters === null || input.targetChapters === 0
-          ? 0
+          ? null
           : Math.min(100, Math.round((records.length / input.targetChapters) * 1000) / 10),
       remaining_words: averageRemaining,
       remaining_words_min: minimumRemaining,
@@ -329,6 +337,7 @@ export function buildBookReport(input: ReportInput): BookReport {
           id,
           average: Math.round((value.total / value.samples) * 10) / 10,
           samples: value.samples,
+          max: input.dimensionMax?.[id] ?? 0,
         }))
         .sort((left, right) => compareText(left.id, right.id)),
     },
@@ -796,7 +805,7 @@ export interface PanelBookDataInput {
   stage: Stage
   rounds: { review: number; revise: number; check: number }
   draftWords: number
-  lastTenAverage: number
+  lastTenAverage: number | null
   manuscriptHash: string | null
   metrics: WordMetrics | null
   stateErrors: Array<{ path: string; code: string; message: string }>
@@ -835,13 +844,13 @@ const nameDescription = (
 ): PanelWorldEntry[] => {
   const merged = new Map<string, PanelWorldEntry>()
   for (const entry of [...entries, ...ledgerWorldEntries(world, kind)]) {
-    const name = oneLine(entry.name)
+    const name = clip(oneLine(entry.name), 80)
     if (name === '') continue
     const existing = merged.get(name)
     if (existing === undefined) {
       merged.set(name, {
         name,
-        description: oneLine(entry.description),
+        description: clip(oneLine(entry.description), 240),
         ...(entry.anchors === undefined || entry.anchors.length === 0 ? {} : { anchors: [...entry.anchors] }),
       })
       continue
@@ -877,12 +886,12 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       ? null
       : {
           num: card.num,
-          title: card.title,
+          title: clip(card.title, 120),
           scene_type: card.scene_type,
-          goal: card.goal,
-          conflict: card.conflict,
-          hook: card.hook,
-          cast: [...card.cast],
+          goal: clip(card.goal, 400),
+          conflict: clip(card.conflict, 400),
+          hook: clip(card.hook, 400),
+          cast: [...card.cast].slice(0, 8).map((name) => clip(name, 80)),
           target_words: [card.target_words[0], card.target_words[1]],
           status: card.status,
         }
@@ -899,8 +908,8 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
   }
   return {
     identity: {
-      author: input.project.author,
-      description: input.project.description,
+      author: clip(input.project.author, 80),
+      description: clip(input.project.description, 400),
       created_at: input.project.created_at,
       targets: {
         words_per_chapter: [
@@ -912,14 +921,14 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       },
     },
     blueprint: {
-      premise: input.outline.book.premise,
-      logline: input.outline.book.logline,
-      themes: [...input.outline.book.themes],
-      tone: input.outline.book.tone,
-      pov: input.outline.book.pov,
-      audience: input.outline.book.audience,
-      selling_points: [...input.outline.book.selling_points],
-      ending: input.outline.book.ending,
+      premise: clip(input.outline.book.premise, 400),
+      logline: clip(input.outline.book.logline, 400),
+      themes: clipList(input.outline.book.themes, 120).slice(0, 20),
+      tone: clip(input.outline.book.tone, 400),
+      pov: clip(input.outline.book.pov, 400),
+      audience: clip(input.outline.book.audience, 400),
+      selling_points: clipList(input.outline.book.selling_points, 200).slice(0, 20),
+      ending: clip(input.outline.book.ending, 400),
     },
     progress: {
       archived: report.progress.archived,
@@ -945,9 +954,9 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       factions: nameDescription(input.worldbook.factions, input.world, 'faction'),
       rules: nameDescription(input.worldbook.rules, input.world, 'rule'),
       facts: (input.worldbook.facts ?? []).slice(0, 5).map((fact) => ({
-        alias: fact.alias,
+        alias: clip(fact.alias, 80),
         value: fact.value,
-        unit: fact.unit,
+        unit: clip(fact.unit, 40),
       })),
     },
     cast: {
@@ -986,8 +995,11 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
     },
     health: {
       state_errors: input.stateErrors.slice(0, 10).map((entry) => ({ ...entry })),
-      outline: { present: input.outlinePresent, error: input.outlineError },
-      worldbook: { present: input.worldbookPresent, error: input.worldbookError },
+      outline: { present: input.outlinePresent && input.outlineError === null, error: input.outlineError },
+      worldbook: {
+        present: input.worldbookPresent && input.worldbookError === null,
+        error: input.worldbookError,
+      },
       pending: input.pending === null ? null : { ...input.pending },
     },
   }

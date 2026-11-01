@@ -1,4 +1,4 @@
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, type ParameterPropertySpec, type ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
 import { arraySemanticsDescription, type ArraySemantics } from './semantics.js'
 import {
@@ -15,9 +15,10 @@ import {
 import type { EngineCaller, EngineService } from '../engine/service.js'
 
 /**
- * Providers sometimes serialize a free-form `json` parameter as a JSON string
- * even when the model intended an object. Accept both wire shapes; an invalid
- * string becomes a machine-code error instead of a raw TypeError.
+ * Compatibility helper for already-serialized legacy payloads and dynamic
+ * maps. Model-facing schemas are typed and reject strings before this runs;
+ * the string branch is kept only for old callers that invoke the adapter
+ * directly.
  */
 const asJson = <T>(value: unknown, field: string): T => {
   if (typeof value !== 'string') return value as T
@@ -26,8 +27,8 @@ const asJson = <T>(value: unknown, field: string): T => {
   } catch {
     throw new EngineInputError(
       ERROR_CODES.SCHEMA_INVALID,
-      `${field} must be a JSON object or a valid JSON string`,
-      `send ${field} as an object, not a malformed string`,
+      `${field} must be a JSON object`,
+      `send ${field} as an object, not a serialized string`,
     )
   }
 }
@@ -147,20 +148,229 @@ const stringArray = (semantics: ArraySemantics, description: string) => ({
   items: { type: 'string' as const },
   description: arraySemanticsDescription(semantics, description),
 })
+
+/* Typed schema builders. Every model-visible object is explicit; only the two
+ * genuinely dynamic maps (state_delta entries and new_element_anchors) stay
+ * open because DSH's JSON-Schema subset cannot type their keys. */
+const str: ParameterPropertySpec = { type: 'string' }
+const int: ParameterPropertySpec = { type: 'integer' }
+const num: ParameterPropertySpec = { type: 'number' }
+const bool: ParameterPropertySpec = { type: 'boolean' }
+const nullableInt: ParameterPropertySpec = { oneOf: [{ type: 'integer' }, { type: 'null' }] }
+const nullableStr: ParameterPropertySpec = { oneOf: [{ type: 'string' }, { type: 'null' }] }
+const required = <T extends ParameterPropertySpec>(value: T): T & { required: true } => ({
+  ...value,
+  required: true,
+})
+const optional = <T extends ParameterPropertySpec>(value: T): ParameterPropertySpec => {
+  const copy = { ...value } as Record<string, unknown>
+  delete copy.required
+  return copy as unknown as ParameterPropertySpec
+}
+const arrayOf = (items: ParameterPropertySpec): ParameterPropertySpec => ({ type: 'array', items })
+const objectOf = (properties: ParameterSchemaSpec): ParameterPropertySpec => ({
+  type: 'object',
+  additionalProperties: false,
+  properties,
+})
+const openObject = (description?: string): ParameterPropertySpec => ({
+  type: 'object',
+  additionalProperties: true,
+  ...(description === undefined ? {} : { description }),
+})
+const openObjectWith = (properties: ParameterSchemaSpec, description?: string): ParameterPropertySpec => ({
+  type: 'object',
+  additionalProperties: true,
+  properties,
+  ...(description === undefined ? {} : { description }),
+})
+
+const readingProofRef = objectOf({
+  chapter: int,
+  paragraph: required(int),
+  quote: required(str),
+})
+const proofSchema = required(
+  objectOf({
+    opening: required(readingProofRef),
+    middle: required(readingProofRef),
+    ending: required(readingProofRef),
+  }),
+)
+const issueSchema = objectOf({
+  id: required(str),
+  severity: required({ type: 'string', enum: ['blocker', 'advisory'] as const }),
+  dimension: required(str),
+  location: required(str),
+  problem: required(str),
+  fix: required(str),
+  status: required({ type: 'string', enum: ['open', 'fixed', 'waived'] as const }),
+  evidence: str,
+})
+const issueUpdateSchema = objectOf({
+  id: required(str),
+  status: required({ type: 'string', enum: ['open', 'fixed', 'waived'] as const }),
+  evidence: str,
+  severity: { type: 'string', enum: ['blocker', 'advisory'] as const },
+  dimension: str,
+  location: str,
+  problem: str,
+  fix: str,
+})
+const dimensionSchema = objectOf({
+  id: required(str),
+  max: required(int),
+  deductions: required(
+    arrayOf(
+      objectOf({
+        rule: required(str),
+        location: required(str),
+        delta: required(int),
+        note: required(str),
+      }),
+    ),
+  ),
+})
+const summarySchema = required(
+  objectOf({
+    events: required(arrayOf(str)),
+    characters_appeared: required(arrayOf(str)),
+    foreshadows: required(
+      objectOf({
+        planted: required(
+          arrayOf(
+            objectOf({
+              key: required(str),
+              title: required(str),
+              description: required(str),
+              anchor: str,
+            }),
+          ),
+        ),
+        advanced: required(
+          arrayOf(
+            objectOf({
+              key: required(str),
+              note: required(str),
+              new_info: required(bool),
+            }),
+          ),
+        ),
+        resolved: required(arrayOf(str)),
+      }),
+    ),
+    new_elements: required(
+      objectOf({
+        locations: required(arrayOf(str)),
+        abilities: required(arrayOf(str)),
+        artifacts: required(arrayOf(str)),
+      }),
+    ),
+    new_element_anchors: openObject('实体名到正文锚点数组的动态映射；值形状由引擎校验'),
+    resource_changes: required(
+      arrayOf(
+        objectOf({
+          character: required(str),
+          resource: required(str),
+          delta: required(int),
+          reason: required(str),
+        }),
+      ),
+    ),
+    opening: required(str),
+    continuity: required(objectOf({ opens_from: required(str), ends_with: required(str) })),
+    hook_strength: required({ type: 'integer', enum: [1, 2, 3, 4, 5] as const }),
+    pleasure_points: required(arrayOf(str)),
+    plot_advancement: required({ type: 'string', enum: ['high', 'mid', 'low'] as const }),
+  }),
+)
+const volumeSchema = objectOf({
+  id: str,
+  title: required(str),
+  start_chapter: required(int),
+  end_chapter: required(int),
+  goal: str,
+  arc: str,
+  climax: str,
+  status: { type: 'string', enum: ['planned', 'writing', 'done'] as const },
+})
+const chapterCardSchema = openObjectWith({
+  num: required(int),
+  volume: nullableInt,
+  title: required(str),
+  scene_type: required({ type: 'string', enum: SCENE_TYPES }),
+  goal: required(str),
+  conflict: required(str),
+  hook: required(str),
+  cast: arrayOf(str),
+  target_words: required(arrayOf(int)),
+  notes: str,
+  status: { type: 'string', enum: ['planned', 'archived'] as const },
+  archived_at: nullableStr,
+  word_count: nullableInt,
+  score: nullableInt,
+})
+const dynamicSection = (description: string): ParameterPropertySpec => openObject(description)
+const stateDeltaSchema = required(
+  objectOf({
+    characters: required(
+      dynamicSection('人物名到 {action,reason?,role?,profile?,current_state?,growth?} 的映射'),
+    ),
+    foreshadows: required(
+      dynamicSection('key 到 {action,title?,anchor?,description?,note?,new_info?} 的映射'),
+    ),
+    timeline: required(
+      dynamicSection('summary.events 下标到 {action,story_time?,description?,location?,characters?} 的映射'),
+    ),
+    world: required(dynamicSection('名称到 {action,kind?,description?,layout?,capacity?} 的映射')),
+    relationships: required(dynamicSection('"甲|乙" 到 {action,type?,description?,note?} 的映射')),
+  }),
+)
+const handoffSchema = objectOf({
+  volume: int,
+  volume_name: str,
+  act: str,
+  act_progress: str,
+})
+const worldbookRule = objectOf({ name: required(str), description: required(str) })
+const worldbookFaction = objectOf({
+  name: required(str),
+  description: required(str),
+  goal: str,
+})
+const worldbookLocation = objectOf({
+  name: required(str),
+  description: required(str),
+  layout: str,
+  capacity: int,
+})
+const worldbookCharacter = objectOf({
+  name: required(str),
+  role: required(str),
+  description: required(str),
+  arc: str,
+})
+const worldbookGlossary = objectOf({ term: required(str), definition: required(str) })
+const worldbookBackstory = objectOf({ time: required(str), event: required(str) })
+const worldbookFact = objectOf({
+  alias: required(str),
+  value: required(num),
+  unit: required(str),
+  tolerance: num,
+  note: str,
+})
+
 const root = {
   type: 'string' as const,
-  description:
-    'Project root. Passing it selects this project for the current session and persists the choice. When omitted: session binding -> unique project in the workspace -> single registered project -> configured projectRoot -> error. Multiple projects require an explicit choice.',
+  description: 'Project root; omit to use the session binding or the only project.',
 }
 const initRoot = {
   type: 'string' as const,
-  description:
-    'Project root for the new project. Passing it creates the project there. When omitted, only the configured projectRoot is used; novel_init does not follow the session binding, workspace discovery or registry active. The created project is bound to the current session on success.',
+  description: 'New project root; omit to use the configured projectRoot.',
 }
 const utilityRoot = {
   type: 'string' as const,
-  description:
-    'Project root for the project-backed mode of this tool. Text-only word_count/diff calls ignore it and do not create a session binding; use a project-backed call when you want to select a book.',
+  description: 'Project root for project-backed mode; text-only calls ignore it.',
 }
 
 /**
@@ -345,11 +555,11 @@ export function createNovelTools(
         objective: { type: 'string', required: true },
         constraints: stringArray('replace', 'P1 constraints; supplied list replaces the plan list.'),
         characters: {
-          type: 'json',
+          ...arrayOf(objectOf({ name: required(str), role: required(str), current_state: required(str) })),
           description: arraySemanticsDescription('replace', 'P1 cast; supplied list replaces the cast.'),
         },
         locations: {
-          type: 'json',
+          ...arrayOf(objectOf({ name: required(str), layout: required(str), capacity: required(num) })),
           description: arraySemanticsDescription('replace', 'P1 locations; supplied list replaces them.'),
         },
         continuity_notes: stringArray('replace', 'P1 continuity notes; supplied list replaces them.'),
@@ -388,10 +598,18 @@ export function createNovelTools(
           description: arraySemanticsDescription('replace', 'Plan [min,max] word target.'),
         },
         cast: {
-          type: 'json',
+          ...arrayOf(
+            objectOf({
+              name: required(str),
+              entry_state: str,
+              goal: str,
+              knowledge: arrayOf(str),
+              exit_change: str,
+            }),
+          ),
           description: arraySemanticsDescription(
             'replace',
-            'Optional 1–8 characters on stage this chapter. Each: name, entry_state, goal, knowledge, exit_change. Names must exist in the P1 world plan or the character ledger.',
+            'Optional 1–8 characters on stage this chapter; names must exist in the P1 world plan or the character ledger.',
           ),
         },
         project_root: root,
@@ -423,10 +641,9 @@ export function createNovelTools(
         scene_type: { type: 'string', required: true, enum: SCENE_TYPES },
         narrator: { type: 'string', required: true },
         summary: {
-          type: 'json',
-          required: true,
+          ...summarySchema,
           description:
-            'The ten-field chapter summary required by PG-05. Pass an object (events, characters_appeared, foreshadows, new_elements, resource_changes, opening, continuity, hook_strength, pleasure_points, plot_advancement); a JSON string is accepted too.',
+            'The ten-field chapter summary required by PG-05; send a JSON object, not a JSON string.',
         },
         project_root: root,
       },
@@ -450,12 +667,12 @@ export function createNovelTools(
       parameters: {
         chapter: { type: 'integer', required: true },
         dimensions: {
-          type: 'json',
+          ...arrayOf(dimensionSchema),
           required: true,
           description: arraySemanticsDescription('replace', 'Fifteen scored dimensions.'),
         },
         issues: {
-          type: 'json',
+          ...arrayOf(issueSchema),
           description: arraySemanticsDescription('replace', 'Review issue list.'),
         },
         total: {
@@ -464,8 +681,7 @@ export function createNovelTools(
           description: '150 - Σdelta, the same number the review reports.',
         },
         proof: {
-          type: 'json',
-          required: true,
+          ...proofSchema,
           description: arraySemanticsDescription('replace', 'Three reading-proof quotes.'),
         },
         project_root: root,
@@ -491,22 +707,29 @@ export function createNovelTools(
           type: 'string',
           description: 'Full revised text; mutually exclusive with patch.',
         },
-        patch: {
-          type: 'json',
-          description:
-            'Patch mode: {expected_hash, edits:[{old_text,new_text,occurrence?}]}; edits must be unique unless occurrence is set.',
-        },
+        patch: objectOf({
+          expected_hash: required(str),
+          edits: required(
+            arrayOf(
+              objectOf({
+                old_text: required(str),
+                new_text: required(str),
+                occurrence: int,
+              }),
+            ),
+          ),
+        }),
         summary: {
-          type: 'json',
+          ...optional(summarySchema),
           description:
             'Full ten-field summary. Omit content+patch with a summary to repair only pipeline.draft.summary; this does not consume a revise round.',
         },
         issues: {
-          type: 'json',
+          ...arrayOf(issueUpdateSchema),
           description: arraySemanticsDescription('replace', 'Updated issue statuses and evidence for PG-08.'),
         },
         proof: {
-          type: 'json',
+          ...optional(proofSchema),
           description: arraySemanticsDescription(
             'replace',
             'Three quotes from the revised text; required unless this is a summary-only repair. PG-09 verifies them.',
@@ -535,7 +758,23 @@ export function createNovelTools(
         chapter: { type: 'integer', required: true },
         scope: stringArray('replace', 'Requested check scopes; supplied list replaces the request.'),
         semantic: {
-          type: 'json',
+          ...arrayOf(
+            objectOf({
+              id: required({
+                type: 'string',
+                enum: [
+                  'L2-SCENE-ANCHOR',
+                  'L2-CHARACTER-STATE',
+                  'L2-CAUSALITY',
+                  'L2-VOICE',
+                  'L2-POV',
+                ] as const,
+              }),
+              verdict: required({ type: 'string', enum: ['pass', 'fail'] as const }),
+              evidence: required(str),
+              note: required(str),
+            }),
+          ),
           required: true,
           description: arraySemanticsDescription(
             'replace',
@@ -569,8 +808,11 @@ export function createNovelTools(
         'Archive the active chapter: all gates run, then one transaction writes the index, eight ledgers and handoff.',
       parameters: {
         chapter: { type: 'integer', required: true },
-        state_delta: { type: 'json', required: true },
-        handoff: { type: 'json' },
+        state_delta: {
+          ...stateDeltaSchema,
+          description: 'Five ledger sections; entry values are dynamic maps validated by the engine.',
+        },
+        handoff: handoffSchema,
         project_root: root,
       },
       output: {
@@ -701,7 +943,10 @@ export function createNovelTools(
             'outline/worldbook.yaml',
           ] as const,
         },
-        content: { type: 'json', required: true },
+        content: {
+          ...openObject('按 path 的完整替换文档；根必须是映射。'),
+          required: true,
+        },
         reason: { type: 'string', required: true },
         project_root: root,
       },
@@ -822,7 +1067,7 @@ export function createNovelTools(
         ending: { type: 'string' },
         strict: { type: 'boolean', description: 'Require a chapter card before P2/P3.' },
         volumes: {
-          type: 'json',
+          ...arrayOf(volumeSchema),
           description: arraySemanticsDescription(
             'replace',
             'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Replaces the current volumes; dropping any volume requires confirm_remove:true.',
@@ -857,16 +1102,29 @@ export function createNovelTools(
       description:
         'Upsert volume/chapter cards by key: chapters by num, volumes by title. Omitted cards are preserved; deletion requires remove/remove_volumes. Archived cards are preserved and cannot be rewritten. Use dry_run to preview. On the first submission strict mode defaults on; with an existing card, PG-13 checks title, scene, target words and cast even in non-strict mode.',
       parameters: {
-        book: { type: 'json', description: 'Optional partial book blueprint patch.' },
+        book: {
+          ...objectOf({
+            premise: str,
+            logline: str,
+            themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
+            tone: str,
+            pov: str,
+            audience: str,
+            selling_points: stringArray('replace', 'Selling points; supplied list replaces the list.'),
+            ending: str,
+            strict: bool,
+          }),
+          description: 'Optional partial book blueprint patch.',
+        },
         volumes: {
-          type: 'json',
+          ...arrayOf(volumeSchema),
           description: arraySemanticsDescription(
             'upsert',
             'Volume list: [{title,start_chapter,end_chapter,goal?,arc?,climax?,status?}]. Upserts by title; omitted volumes are kept.',
           ),
         },
         chapters: {
-          type: 'json',
+          ...arrayOf(chapterCardSchema),
           description: arraySemanticsDescription(
             'upsert',
             'Chapter cards: [{num,title,scene_type,goal,conflict,hook,cast?,target_words:[min,max],volume?,notes?}]. Upserts by num; omitted cards are kept.',
@@ -927,29 +1185,32 @@ export function createNovelTools(
       parameters: {
         premise: { type: 'string' },
         setting: { type: 'string' },
-        rules: { type: 'json', description: arraySemanticsDescription('replace', 'Rules section list.') },
+        rules: {
+          ...arrayOf(worldbookRule),
+          description: arraySemanticsDescription('replace', 'Rules section list.'),
+        },
         factions: {
-          type: 'json',
+          ...arrayOf(worldbookFaction),
           description: arraySemanticsDescription('replace', 'Factions section list.'),
         },
         locations: {
-          type: 'json',
+          ...arrayOf(worldbookLocation),
           description: arraySemanticsDescription('replace', 'Locations section list.'),
         },
         characters: {
-          type: 'json',
+          ...arrayOf(worldbookCharacter),
           description: arraySemanticsDescription('replace', 'Characters section list.'),
         },
         glossary: {
-          type: 'json',
+          ...arrayOf(worldbookGlossary),
           description: arraySemanticsDescription('replace', 'Glossary section list.'),
         },
         backstory: {
-          type: 'json',
+          ...arrayOf(worldbookBackstory),
           description: arraySemanticsDescription('replace', 'Backstory section list.'),
         },
         facts: {
-          type: 'json',
+          ...arrayOf(worldbookFact),
           description: arraySemanticsDescription(
             'replace',
             'Declared numeric canon: [{alias,value,unit,tolerance?,note?}].',

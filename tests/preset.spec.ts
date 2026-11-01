@@ -28,12 +28,12 @@ describe('root patch', () => {
     expect(rows[0]).toMatchObject({ id: 'novel-write-engine', name: 'dsh-novel-write-engine' })
   })
 
-  it('declares the 0.2.8 host range without admitting the next minor prerelease', () => {
+  it('declares the 0.2.9 host range without admitting the next minor prerelease', () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
       version: string
       engines: { node: string; dsh: string }
     }
-    expect(manifest.version).toBe('0.2.8')
+    expect(manifest.version).toBe('0.2.9')
     expect(manifest.engines).toEqual({
       node: '>=24.9.0',
       dsh: '>=0.2.1-rc.2 <0.3.0-0',
@@ -130,5 +130,16 @@ describe('preset patch', () => {
     expect(persona?.config?.prefix).toContain('主笔')
     expect(persona?.config?.prefix).toContain('novel_status')
     expect(persona?.config?.prefix).toContain('novel_archive')
+  })
+
+  it('teaches strict JSON, serial writes and recovery in the persona', () => {
+    const config = rows[0]!.config as { plugins: Entry[] }
+    const persona = config.plugins.find((entry) => entry.id === 'persona')!
+    const prefix = String((persona.config as { prefix?: string }).prefix ?? '')
+    expect(prefix).toContain('严格 JSON')
+    expect(prefix).toContain('一次只提交一个')
+    expect(prefix).toContain('参数解析失败')
+    expect(prefix).toContain('归档只带 state_delta')
+    expect(prefix).not.toContain('也可以是 JSON 字符串')
   })
 })

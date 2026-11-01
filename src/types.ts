@@ -311,6 +311,19 @@ export interface WordMetrics {
   paragraph_max_words: number
 }
 
+/** Protected evidence copied from the archived outline card at archive time. */
+export interface ArchivedCardSnapshot {
+  title: string
+  scene_type: SceneType
+  target_words: [number, number]
+  cast: string[]
+  goal: string
+  conflict: string
+  hook: string
+  notes: string
+  archived_at: string | null
+}
+
 /** Derived chapter row kept in `state/chapters.yaml`. */
 export interface ChapterRecord {
   num: number
@@ -333,6 +346,10 @@ export interface ChapterRecord {
   assigned_ids?: Record<string, string>
   /** Digest of the archive request that produced this row. */
   archive_digest?: string
+  /** Immutable card fields written by the archive transaction, not by amend. */
+  archive_card?: ArchivedCardSnapshot
+  /** Canonical digest of archive_card; v1-prefixed like archive_digest. */
+  archive_card_digest?: string
 }
 
 /** Summary block the model supplies with a draft and the engine persists. */
@@ -830,7 +847,7 @@ export interface BookReport {
     target: number | null
     words: number
     average_words: number
-    percent: number
+    percent: number | null
     remaining_words: number | null
     remaining_words_min: number | null
     remaining_words_average: number | null
@@ -876,7 +893,7 @@ export interface BookReport {
     samples: number
     /** Committed review rounds for this report, including history. */
     attempts: number
-    dimensions: Array<{ id: string; average: number; samples: number }>
+    dimensions: Array<{ id: string; average: number; samples: number; max: number }>
   }
   /** Per-chapter effort survives archive (pipeline rounds are reset). */
   effort: {

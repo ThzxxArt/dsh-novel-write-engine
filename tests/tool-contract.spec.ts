@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createNovelTools } from '../src/tools/index.js'
 import {
   ARRAY_PARAMETER_CONTRACT,
+  arraySemanticsDescription,
   NON_ARRAY_JSON_PARAMS,
   declaredArraySemantics,
 } from '../src/tools/semantics.js'
@@ -65,5 +66,11 @@ describe('0.2.4 tool array semantics contract', () => {
         }
       }
     }
+  })
+
+  it('returns null for missing or unknown semantics markers', () => {
+    expect(declaredArraySemantics(undefined)).toBeNull()
+    expect(declaredArraySemantics('plain description')).toBeNull()
+    expect(declaredArraySemantics(arraySemanticsDescription('append', 'x'))).toBe('append')
   })
 })

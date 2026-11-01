@@ -18,6 +18,9 @@ console.log(`  exemptions: ${pack.exemptions.length}`)
 console.log(`  exclusion pairs: ${pack.exclusions.length}`)
 console.log(`  platforms: ${Object.keys(pack.platform).length}`)
 console.log(`  genres: ${Object.keys(pack.genres).length}`)
+console.log(
+  `  genre profiles: ${Object.values(pack.genres).filter((genre) => genre.profile !== undefined).length}`,
+)
 if (dimensions !== 150) {
   console.error('dimension maxima must sum to 150')
   process.exit(1)

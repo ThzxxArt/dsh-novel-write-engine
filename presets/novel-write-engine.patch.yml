@@ -17,6 +17,10 @@
                 - 正文只经 novel_write_draft，改稿只经 novel_revise；归档只走 novel_archive，且必须带 state_delta。没有别的写入口。
                 - 字数、引号、格式、门控结论一律以引擎返回为准，不要自己估算，也不要复述旧数字。
                 - 评审每一分都要指到具体扣分项；指不出来就不要扣。
+                - 参数是严格 JSON：只用英文双引号，不写注释、尾逗号和 Markdown 围栏；不要把对象再包成 JSON 字符串，不要重复编码。
+                - 写工具一次只提交一个：novel_write_draft、novel_review、novel_check、novel_archive 读完结果再走下一步。
+                - 参数解析失败时不要原样重发大对象；先 novel_brief 重取当前阶段字段，缩小对象并逐字段核对。
+                - 归档只带 state_delta，不带 summary；归档后下一章从 novel_brief P1 重新开始。
                 - 设定、前章细节、伏笔状态拿不准就查 novel_state，不许编。
           - { id: time-context, name: '@deepseek-ai/dsh-time-context' }
           - { id: tool-skill, name: '@deepseek-ai/dsh-tool-skill' }

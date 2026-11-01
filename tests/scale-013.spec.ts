@@ -146,7 +146,7 @@ describe('0.1.3 scale and handoff', () => {
       expect(panel.summary!.finished).toBe(true)
       expect(panel.chapters!.rows).toHaveLength(30)
       expect(panel.chapters!.rows.at(-1)).toMatchObject({ num: 30, status: 'passed' })
-      const scores = panel.chapters!.rows.map((row) => row.score)
+      const scores = panel.chapters!.rows.map((row) => row.score ?? 0)
       expect(panel.summary!.averageScore).toBeCloseTo(
         scores.reduce((sum, score) => sum + score, 0) / scores.length,
       )

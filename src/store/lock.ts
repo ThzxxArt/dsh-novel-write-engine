@@ -193,13 +193,32 @@ export class FileLock {
     // away from its owner. Compare the linked record before unlinking, and
     // only unlink if the original path still carries the same record; a newer
     // lock created in the meantime is left alone.
-    const claimPath = `${this.absolutePath}.reclaim-${randomUUID()}`
+    // One fixed claim path per lock makes the claim itself atomic: two
+    // processes cannot both hard-link the same stale record under different
+    // names and then both believe they won.
+    const claimPath = `${this.absolutePath}.reclaim`
     let claimByRename = false
     try {
       await fs.link(this.absolutePath, claimPath)
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code === 'ENOENT') return true
+      if (code === 'EEXIST') {
+        const claimMtime = await fs
+          .stat(claimPath)
+          .then((info) => {
+            // A hard link shares the lock's inode, so its mtime is the stale
+            // lock's mtime and would make every fresh claim look expired. The
+            // link updates ctime; only plain (nlink=1) claim markers use mtime.
+            return info.nlink > 1 ? info.ctimeMs : info.mtimeMs
+          })
+          .catch(() => Date.now())
+        if (Date.now() - claimMtime > this.staleMs) {
+          await fs.rm(claimPath, { force: true }).catch(() => undefined)
+          return true
+        }
+        return false
+      }
       // A Windows sharing/AV window can make link fail while the owner is
       // still releasing. Do not fail the writer; retry until the deadline.
       if (code === 'EPERM' || code === 'EACCES') return false

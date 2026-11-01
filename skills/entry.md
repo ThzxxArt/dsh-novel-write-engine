@@ -77,7 +77,8 @@ description: 引擎版小说创作流程——状态、门控、字数与写盘�
 
 ## 工具怎么用
 
-- 参数是 JSON 对象；`summary`、`dimensions`、`issues`、`proof` 是结构化对象，按任务书字段填。
+- 参数是严格 JSON 对象：英文双引号、无注释/尾逗号/围栏；`summary`、`dimensions`、`issues`、`proof` 是结构化对象/数组，按任务书字段填，不要再包成 JSON 字符串。
+- 写工具一次只提交一个；参数解析失败时先重取 `novel_brief`，缩小对象再试，不要原样重发。
 - `novel_check` 必须带五个语义项（`L2-SCENE-ANCHOR` / `L2-CHARACTER-STATE` / `L2-CAUSALITY` / `L2-VOICE` / `L2-POV`），每项都要有正文逐字引用，且来自不同句子；缺一项即校验不过。
 - 失败分三类：参数错（改参数）、门控没过（改正文）、系统故障（查目录/稍后重试）。错误消息里的 code 说明属于哪类。
 - 门控失败会一次列出**全部**阻塞项；一次改完再交，不要逐条试。

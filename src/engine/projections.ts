@@ -7,7 +7,7 @@ export interface PanelDraft {
   num: number
   title: string
   wordCount: number
-  score: number
+  score: number | null
   status: 'draft' | 'blocked'
   details: string
 }
@@ -49,6 +49,7 @@ export interface PanelSnapshot {
   book?: PanelBook
   quality?: {
     averageScore: number
+    last_ten_average?: number | null
     scores: number[]
     trend: number | null
     trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
@@ -133,6 +134,7 @@ export interface PanelSummaryDto {
   book?: PanelBook
   quality?: {
     averageScore: number
+    last_ten_average?: number | null
     scores: number[]
     trend: number | null
     trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
@@ -157,7 +159,7 @@ export interface PanelChapterRow {
   num: number
   title: string
   wordCount: number
-  score: number
+  score: number | null
   stage: Stage
   status: 'passed' | 'blocked' | 'draft'
   /** One-line summary shown when the row is expanded. */
@@ -212,12 +214,38 @@ export interface PanelMissing {
   hint: string
 }
 
+/** Additive v7 sections; the v6 bundle stays unchanged for old tabs. */
+export type PanelSectionName =
+  | 'overview'
+  | 'chapters'
+  | 'characters'
+  | 'foreshadows'
+  | 'timeline'
+  | 'relationships'
+  | 'worldbook'
+  | 'quality'
+  | 'quality_detail'
+  | 'health'
+  | 'chapter_detail'
+
+export interface PanelSectionMeta {
+  payload_version: 7
+  section: PanelSectionName
+  items: unknown
+  total: number
+  returned: number
+  truncated: boolean
+  next_cursor: string | null
+  updated_at: string
+  etag: string
+}
+
 export interface PanelBundle {
   projects: PanelProjectOption[]
   selection: PanelSelection
   summary?: PanelSummaryDto
   chapters?: PanelChaptersDto
-  gates?: PanelGatesDto
+  etag?: string
   resume?: { text: string }
   missing?: PanelMissing
   empty?: true

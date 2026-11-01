@@ -84,6 +84,7 @@ export interface SummaryDto {
   }
   quality?: {
     averageScore: number
+    last_ten_average?: number | null
     scores: number[]
     trend: number | null
     trend_basis?: 'last_five_vs_previous_five' | 'insufficient_samples' | 'insufficient_history'
@@ -106,7 +107,7 @@ export interface ChapterRowDto {
   num: number
   title: string
   wordCount: number
-  score: number
+  score: number | null
   stage: string
   status: 'passed' | 'blocked' | 'draft'
   details?: string
@@ -125,14 +126,6 @@ export interface ChaptersDto {
   schemaVersion: number
   panelId: string
   rows: ChapterRowDto[]
-}
-
-export interface GatesDto {
-  schemaVersion: number
-  panelId: string
-  stage: string
-  blocking: BlockingDto[]
-  explanations: string[]
 }
 
 export interface ProjectOptionDto {
@@ -163,9 +156,18 @@ export interface PanelPayloadDto {
   selection: PanelSelectionDto
   summary?: SummaryDto
   chapters?: ChaptersDto
-  gates?: GatesDto
   resume?: { text: string }
   missing?: PanelMissingDto
   error?: string
   empty?: true
+  /** Additive v7 section payload. */
+  payload_version?: 7
+  section?: string
+  items?: unknown
+  total?: number
+  returned?: number
+  truncated?: boolean
+  next_cursor?: string | null
+  updated_at?: string
+  etag?: string
 }

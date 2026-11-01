@@ -67,8 +67,18 @@ export interface Rulepack {
       dialogue_ratio: [number, number]
     }
   >
-  /** Genre guides injected into the task-book context; no threshold branches on them. */
-  genres: Record<Genre, { note: string }>
+  /** Genre guides plus optional advisory-only threshold profiles. */
+  genres: Record<
+    Genre,
+    {
+      note: string
+      profile?: {
+        period_density?: { min: number; max: number }
+        water_words?: number
+        pleasure_density?: number
+      }
+    }
+  >
   crosschapter: {
     duplicate_similarity: number
     duplicate_advisory: number

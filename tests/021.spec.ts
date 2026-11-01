@@ -73,7 +73,7 @@ describe('0.2.1 state truth', () => {
     const noTarget = outlineSummary(outline, 0, null)
     expect(noTarget.plannedCoverage).toBeNull()
     expect(noTarget.archivedCoverage).toBeNull()
-    expect(noTarget.coverage).toBe(0)
+    expect(noTarget.coverage).toBe(1)
   })
 
   it('separates punctuation from CJK and uses quote-bearing dialogue lines', () => {
@@ -542,9 +542,10 @@ describe('0.2.1 history and backup readers', () => {
       const onlyOne = await listHistory(store, 1)
       expect(onlyOne).toHaveLength(2)
       expect(await listHistory(store, 2)).toHaveLength(1)
+      expect((await listHistory(store, 2))[0]?.chars).toBeUndefined()
       const originalRead = store.readText.bind(store)
       store.readText = async (path: string) => (path.includes('ch002') ? null : originalRead(path))
-      expect((await listHistory(store, 2))[0]?.chars).toBe(0)
+      expect((await listHistory(store, 2, { withChars: true }))[0]?.chars).toBe(0)
       store.readText = originalRead
     } finally {
       await cleanup()

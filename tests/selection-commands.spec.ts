@@ -356,7 +356,7 @@ describe('status command family', () => {
         targetChapters: null,
         worldbookEntries: 3,
         revision: 2,
-        rulepack: 'default@1.0.1',
+        rulepack: 'default@1.1.0',
       }),
     } as unknown as EngineService
     const result = await novel(engine).handler(invocation('stats'))

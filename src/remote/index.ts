@@ -1,24 +1,61 @@
 import { PANEL_ROUTE, REMOTE_VERSION } from '../constants.js'
 import { EngineError, ERROR_CODES } from '../types.js'
-import type { EngineService } from '../engine/service.js'
+import type { EngineService, PanelSectionQuery } from '../engine/service.js'
+import type { PanelSectionName } from '../engine/projections.js'
 
 /** The read-only payload the browser panel fetches. */
 export interface PanelPayload {
   schemaVersion: number
-  projects: unknown
-  selection: unknown
+  projects?: unknown
+  selection?: unknown
   summary?: unknown
   chapters?: unknown
-  gates?: unknown
   resume?: unknown
   missing?: unknown
   empty?: true
   error?: string
+  payload_version?: 7
+  section?: PanelSectionName
+  items?: unknown
+  total?: number
+  returned?: number
+  truncated?: boolean
+  next_cursor?: string | null
+  updated_at?: string
+  etag?: string
 }
 
-/** Build the payload for one optional panel query root. */
-export async function panelPayload(engine: EngineService, root?: string): Promise<PanelPayload> {
-  const bundle = await engine.panelBundle(root === undefined ? {} : { root })
+const SECTION_NAMES: ReadonlySet<string> = new Set([
+  'overview',
+  'chapters',
+  'characters',
+  'foreshadows',
+  'timeline',
+  'relationships',
+  'worldbook',
+  'quality',
+  'quality_detail',
+  'health',
+  'chapter_detail',
+])
+
+/** Build the payload for one optional panel query root; section is additive. */
+export async function panelPayload(
+  engine: EngineService,
+  root?: string,
+  section?: string,
+  query: PanelSectionQuery = {},
+  lean = false,
+): Promise<PanelPayload> {
+  if (section !== undefined && SECTION_NAMES.has(section)) {
+    const payload = await engine.panelSection({
+      ...(root === undefined ? {} : { root }),
+      section: section as PanelSectionName,
+      query,
+    })
+    return { ...payload, schemaVersion: REMOTE_VERSION }
+  }
+  const bundle = await engine.panelBundle({ ...(root === undefined ? {} : { root }), lean })
   return { ...bundle, schemaVersion: REMOTE_VERSION }
 }
 
@@ -42,6 +79,26 @@ const queryRoot = (url: string | undefined): string | undefined => {
     return value === null || value.trim() === '' ? undefined : value
   } catch {
     return undefined
+  }
+}
+
+const queryPanel = (url: string | undefined): { section?: string; query: PanelSectionQuery } => {
+  if (url === undefined || url === '') return { query: {} }
+  try {
+    const parsed = new URL(url, 'http://panel.local')
+    const section = parsed.searchParams.get('section') ?? undefined
+    const query: PanelSectionQuery = {}
+    for (const key of ['search', 'status', 'scene', 'sort', 'cursor'] as const) {
+      const value = parsed.searchParams.get(key)
+      if (value !== null && value !== '') query[key] = value
+    }
+    const limit = parsed.searchParams.get('limit')
+    if (limit !== null && /^\d+$/.test(limit)) query.limit = Number(limit)
+    const chapter = parsed.searchParams.get('chapter')
+    if (chapter !== null && /^\d+$/.test(chapter)) query.chapter = Number(chapter)
+    return section === undefined ? { query } : { section, query }
+  } catch {
+    return { query: {} }
   }
 }
 
@@ -83,7 +140,26 @@ export function panelHandler(engine: EngineService, guard: PanelGuard = denyAll)
       return
     }
     try {
-      const payload = await panelPayload(engine, queryRoot(request.url))
+      const { section, query } = queryPanel(request.url)
+      let lean = false
+      try {
+        lean = new URL(request.url ?? '', 'http://panel.local').searchParams.get('lean') === '1'
+      } catch {
+        // Invalid URLs fall through to the normal lookup and its typed error.
+      }
+      const payload = await panelPayload(engine, queryRoot(request.url), section, query, lean)
+      const etag = typeof payload.etag === 'string' ? payload.etag : null
+      if (etag !== null) {
+        response.setHeader('etag', `"${etag}"`)
+        const ifNoneMatch = request.headers?.['if-none-match']
+        const candidate = Array.isArray(ifNoneMatch) ? ifNoneMatch[0] : ifNoneMatch
+        if (candidate === `"${etag}"` || candidate === etag) {
+          response.statusCode = 304
+          response.setHeader('cache-control', 'no-store')
+          response.end('')
+          return
+        }
+      }
       const body = method === 'HEAD' ? '' : JSON.stringify(payload)
       response.statusCode = 200
       response.setHeader('content-type', 'application/json; charset=utf-8')

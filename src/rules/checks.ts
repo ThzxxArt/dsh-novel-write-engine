@@ -284,7 +284,8 @@ const dashBudget: Rule = (ctx) => {
 }
 
 const periodDensity: Rule = (ctx) => {
-  const { min, max } = ctx.rulepack.punctuation.period_density
+  const profile = ctx.rulepack.genres[ctx.genre]?.profile?.period_density
+  const { min, max } = profile ?? ctx.rulepack.punctuation.period_density
   const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
@@ -635,12 +636,14 @@ const numericFactMismatch: Rule = (ctx) => {
     // (「数了三遍」 next to 「船价」), and ignoring the unit makes the advisory
     // permanently noisy.
     const pattern = new RegExp(
-      `${escapePattern(fact.alias)}\\s*(?:是|为|约|有|：|:)?\\s*(${NUMBER_TOKEN})\\s*${escapePattern(fact.unit)}`,
+      `${escapePattern(fact.alias)}\\s*(?:是|为|约|有|：|:)?\\s*(${NUMBER_TOKEN})\\s*${escapePattern(fact.unit)}(?:\\s*([零一二两三四五六七八九]))?(?![零一二两三四五六七八九十百千万\\d])`,
       'g',
     )
     for (const match of ctx.text.matchAll(pattern)) {
-      const value = parseSmallNumber(match[1] ?? '')
-      if (value === null) continue
+      const base = parseSmallNumber(match[1] ?? '')
+      if (base === null) continue
+      const tail = match[2] === undefined ? 0 : (CN_DIGITS[match[2]] ?? 0) / 10
+      const value = base + tail
       if (Math.abs(value - fact.value) <= tolerance) continue
       const paragraph = paragraphs.findIndex((candidate) => candidate.includes(match[0]))
       results.push(
@@ -658,7 +661,9 @@ const numericFactMismatch: Rule = (ctx) => {
 }
 
 const pleasureDensity: Rule = (ctx) => {
-  const { min, keywords, window } = ctx.rulepack.semantics.pleasure_density
+  const { keywords, window } = ctx.rulepack.semantics.pleasure_density
+  const min =
+    ctx.rulepack.genres[ctx.genre]?.profile?.pleasure_density ?? ctx.rulepack.semantics.pleasure_density.min
   if (keywords.length === 0) return []
   const results: Violation[] = []
   const windows = slidingWindows(ctx.text, window)
@@ -699,8 +704,9 @@ const sensoryDensity: Rule = (ctx) => {
 
 const waterWords: Rule = (ctx) => {
   const { window, threshold, terms, scene_thresholds } = ctx.rulepack.semantics.water_words
+  const genreThreshold = ctx.rulepack.genres[ctx.genre]?.profile?.water_words
   if (terms.length === 0) return []
-  const sceneThreshold = scene_thresholds?.[ctx.sceneType] ?? threshold
+  const sceneThreshold = genreThreshold ?? scene_thresholds?.[ctx.sceneType] ?? threshold
   const results: Violation[] = []
   for (const slice of slidingWindows(ctx.text, window)) {
     const hits = terms.reduce((total, term) => total + countOccurrences(slice, term), 0)
@@ -901,7 +907,7 @@ const resourceMismatch: Rule = (ctx) => {
     // Only report an explicit opposite sign in the amount's clause. Chinese
     // narrative often writes 「三块钱压在数簿底下」 without a mathematical
     // minus sign; absence of a sign is not a contradiction.
-    let conflict: { index: number; amount: string; sign: string } | null = null
+    let conflict: { index: number; trigger: string } | null = null
     for (const match of ctx.text.matchAll(new RegExp(`(${NUMBER_TOKEN})`, 'g'))) {
       if (parseSmallNumber(match[1] ?? '') !== magnitude) continue
       const index = match.index ?? 0
@@ -931,27 +937,35 @@ const resourceMismatch: Rule = (ctx) => {
           !(previousHasNumber && previousHasSign) && previousClauseText.includes(change.resource)
       }
       if (!resourceVisible) continue
-      const names = ctx.summary?.characters_appeared ?? []
-      const otherCharacter = names.some(
-        (name) => name !== '' && name !== change.character && clauseText.includes(name),
-      )
-      let characterVisible = clauseText.includes(change.character)
+      const names = [
+        ...(ctx.summary?.characters_appeared ?? []),
+        ...(ctx.evidence.characters?.characters.map((character) => character.name) ?? []),
+      ]
+      const otherCharacter =
+        mentionedNames(
+          clauseText,
+          names.filter((name) => name !== '' && name !== change.character),
+        ).length > 0
+      let characterVisible =
+        mentionedNames(clauseText, [change.character]).length > 0 ||
+        (!otherCharacter &&
+          mentionedNames(ctx.text.slice(sentence.start, sentence.end), [change.character]).length > 0)
       if (!characterVisible && !otherCharacter) {
         // An elided subject can be carried by the previous clause, but a
         // different named person in this clause owns the amount instead.
-        characterVisible = previousClauseText.includes(change.character)
+        characterVisible = mentionedNames(previousClauseText, [change.character]).length > 0
       }
       if (!characterVisible && !otherCharacter && sentence.start > 0) {
         // A pronoun in the current sentence may refer to the single character
         // named in the previous sentence: 角色甲走进院子。他随手花掉五枚代币。
         const previous = sentenceBounds(ctx.text, sentence.start - 1, sentence.start - 1)
         const previousText = ctx.text.slice(previous.start, previous.end)
-        const named = names.filter((name) => previousText.includes(name))
+        const named = mentionedNames(previousText, names)
         const pronoun = /(?:他|她|它|我|他们|她们)/.test(clauseText)
         characterVisible = pronoun && named.length === 1 && named[0] === change.character
       }
       if (!characterVisible) continue
-      conflict = { index, amount: match[1] ?? '', sign: sign[0] }
+      conflict = { index, trigger: sign[0] }
       break
     }
     return conflict === null
@@ -961,7 +975,7 @@ const resourceMismatch: Rule = (ctx) => {
             CROSS_RULES.RESOURCE_MISMATCH,
             'advisory',
             paragraphOfIndex(ctx.text, conflict.index),
-            `${change.character}'s ${change.resource} change is ${change.delta >= 0 ? '+' : ''}${change.delta}, but the text states the opposite sign "${conflict.sign}" near amount ${conflict.amount}`,
+            `${change.character}'s ${change.resource} change is ${change.delta >= 0 ? '+' : ''}${change.delta}, but the text states the opposite-sign trigger "${conflict.trigger}"`,
           ),
         ]
   })
@@ -1009,6 +1023,36 @@ const timeRegression: Rule = (ctx) => {
   ]
 }
 
+const mentionedNames = (text: string, names: readonly string[]): string[] => {
+  const found: string[] = []
+  for (const name of names) {
+    if (name === '') continue
+    let index = text.indexOf(name)
+    let present = false
+    while (index >= 0) {
+      // Chinese prose has no word separators. A short name is "present" only
+      // when that occurrence lies inside any occurrence of a longer known name,
+      // not merely when it starts one (e.g. 玉 inside 小玉).
+      const coveredByLonger = names.some((other) => {
+        if (other.length <= name.length || !other.includes(name)) return false
+        let otherIndex = text.indexOf(other)
+        while (otherIndex >= 0) {
+          if (index >= otherIndex && index + name.length <= otherIndex + other.length) return true
+          otherIndex = text.indexOf(other, otherIndex + 1)
+        }
+        return false
+      })
+      if (!coveredByLonger) {
+        present = true
+        break
+      }
+      index = text.indexOf(name, index + name.length)
+    }
+    if (present) found.push(name)
+  }
+  return found
+}
+
 const relationUnknown: Rule = (ctx) => {
   const characters = ctx.evidence.characters
   const known = characters === null ? [] : characters.characters.map((character) => character.name)
@@ -1022,7 +1066,7 @@ const relationUnknown: Rule = (ctx) => {
   if (names.size < 2) return []
   const results: Violation[] = []
   for (const [index, paragraph] of splitParagraphs(ctx.text).entries()) {
-    const present = [...names].filter((name) => paragraph.includes(name))
+    const present = mentionedNames(paragraph, [...names])
     for (let first = 0; first < present.length; first += 1) {
       for (let second = first + 1; second < present.length; second += 1) {
         const a = present[first]!
@@ -1047,12 +1091,11 @@ const relationUnknown: Rule = (ctx) => {
   return results
 }
 
-const lastDescribedMention = (
+const describedMentions = (
   name: string,
   locked: string,
   text: string,
-  order: 'first' | 'last',
-): { index: number; text: string; coverage: number } | null => {
+): Array<{ index: number; text: string; coverage: number }> => {
   const candidates: Array<{ index: number; text: string; coverage: number }> = []
   const strippedLock = locked.split(name).join('')
   for (const [index, paragraph] of splitParagraphs(text).entries()) {
@@ -1072,12 +1115,16 @@ const lastDescribedMention = (
     if (coverage === 0 && (content.length < 16 || speech)) continue
     candidates.push({ index, text: paragraph, coverage })
   }
-  if (candidates.length === 0) return null
-  // A character lock is its first appearance; a location lock is the latest
-  // *described* appearance, so a correct early description followed by drift
-  // is still caught while a later bare mention is ignored.
-  return order === 'first' ? candidates[0]! : candidates[candidates.length - 1]!
+  return candidates
 }
+
+const bestMention = (
+  mentions: ReadonlyArray<{ index: number; text: string; coverage: number }>,
+): { index: number; text: string; coverage: number } | null =>
+  mentions.reduce<{ index: number; text: string; coverage: number } | null>(
+    (best, mention) => (best === null || mention.coverage > best.coverage ? mention : best),
+    null,
+  )
 
 const lockedDetailDrift: Rule = (ctx) => {
   if (ctx.evidence.locks === null) return []
@@ -1086,7 +1133,7 @@ const lockedDetailDrift: Rule = (ctx) => {
   for (const [name, lock] of Object.entries(locks.locations)) {
     if (!ctx.text.includes(name)) continue
     if (lock.layout.trim() === '') continue
-    const mention = lastDescribedMention(name, lock.layout, ctx.text, 'last')
+    const mention = bestMention(describedMentions(name, lock.layout, ctx.text))
     if (mention === null) continue
     if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
@@ -1102,7 +1149,7 @@ const lockedDetailDrift: Rule = (ctx) => {
   for (const [name, lock] of Object.entries(locks.characters)) {
     if (!ctx.text.includes(name)) continue
     if (lock.appearance.trim() === '') continue
-    const mention = lastDescribedMention(name, lock.appearance, ctx.text, 'first')
+    const mention = bestMention(describedMentions(name, lock.appearance, ctx.text))
     if (mention === null) continue
     if (mention.coverage < ctx.rulepack.crosschapter.lock_similarity) {
       results.push(
@@ -1110,7 +1157,7 @@ const lockedDetailDrift: Rule = (ctx) => {
           CROSS_RULES.LOCKED_DETAIL_DRIFT,
           'advisory',
           mention.index + 1,
-          `${name} is described differently from the locked first appearance; expected "${lock.appearance.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
+          `${name} is described differently from its locked appearance; expected "${lock.appearance.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
         ),
       )
     }

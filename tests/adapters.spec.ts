@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createNovelTools, toolNames } from '../src/tools/index.js'
+import { createNovelTools, emptySummary, toolNames } from '../src/tools/index.js'
 import { createCommands } from '../src/commands/index.js'
 import { runAdminOperation } from '../src/commands/admin.js'
 import { panelHandler, panelPayload, panelRoute } from '../src/remote/index.js'
@@ -144,7 +144,7 @@ const fakeEngine = () => {
       totalWords: 100,
       chapters: 1,
       revision: 2,
-      rulepack: 'default@1.0.1',
+      rulepack: 'default@1.1.0',
       averageScore: 0,
       lastScore: 0,
       openForeshadows: 0,
@@ -171,6 +171,17 @@ const fakeEngine = () => {
       blocking: [],
       explanations: [],
     })),
+    panelSection: vi.fn(async () => ({
+      payload_version: 7 as const,
+      section: 'chapters' as const,
+      items: [],
+      total: 0,
+      returned: 0,
+      truncated: false,
+      next_cursor: null,
+      updated_at: '2026-01-01T00:00:00.000Z',
+      etag: 'section-etag',
+    })),
     panelBundle: vi.fn(async () => ({
       summary: {
         schemaVersion: 1,
@@ -187,7 +198,6 @@ const fakeEngine = () => {
         blocking: [],
       },
       chapters: { schemaVersion: 1, panelId: 'novel-workshop', rows: [] },
-      gates: { schemaVersion: 1, panelId: 'novel-workshop', stage: 'P3', blocking: [], explanations: [] },
     })),
   }
   return engine
@@ -217,7 +227,13 @@ describe('tool adapters', () => {
     const cases: Array<[string, unknown]> = [
       ['novel_status', { chapter: 1 }],
       ['novel_brief', { stage: 'P1' }],
-      ['novel_archive', { chapter: 1, state_delta: {} }],
+      [
+        'novel_archive',
+        {
+          chapter: 1,
+          state_delta: { characters: {}, foreshadows: {}, timeline: {}, world: {}, relationships: {} },
+        },
+      ],
     ]
     for (const [name, args] of cases) {
       const tool = map.get(name)!
@@ -245,29 +261,37 @@ describe('tool adapters', () => {
     expect(engine.withSignal).toHaveBeenCalledWith(signal, expect.any(Function))
   })
 
-  it('parses a provider-serialized JSON string for free-form parameters', async () => {
+  it('rejects a provider-serialized JSON string at the typed schema boundary', async () => {
     const engine = fakeEngine()
     const map = tools(engine)
-    await map.get('novel_write_draft')!.execute(
-      {
-        chapter: 1,
-        content: '正文',
-        chapter_title: '标题',
-        scene_type: '日常过渡章',
-        narrator: '他',
-        summary: JSON.stringify({ events: ['事件'] }),
-      },
-      {},
-    )
-    expect(engine.submitDraft).toHaveBeenLastCalledWith(
-      expect.objectContaining({ summary: { events: ['事件'] } }),
-    )
-    await map
-      .get('novel_archive')!
-      .execute({ chapter: 1, state_delta: JSON.stringify({ characters: {} }) }, {})
-    expect(engine.archiveChapter).toHaveBeenLastCalledWith(
-      expect.objectContaining({ state_delta: { characters: {} } }),
-    )
+    await expect(
+      map.get('novel_write_draft')!.execute(
+        {
+          chapter: 1,
+          content: '正文',
+          chapter_title: '标题',
+          scene_type: '日常过渡章',
+          narrator: '他',
+          summary: JSON.stringify(emptySummary()),
+        },
+        {},
+      ),
+    ).rejects.toThrow(/summary.*object/)
+    await expect(
+      map.get('novel_archive')!.execute(
+        {
+          chapter: 1,
+          state_delta: JSON.stringify({
+            characters: {},
+            foreshadows: {},
+            timeline: {},
+            world: {},
+            relationships: {},
+          }),
+        },
+        {},
+      ),
+    ).rejects.toThrow(/state_delta.*object/)
   })
 
   it('narrows arguments and calls exactly one operation', async () => {
@@ -289,7 +313,7 @@ describe('tool adapters', () => {
         chapter_title: '标题',
         scene_type: '日常过渡章',
         narrator: '他',
-        summary: {},
+        summary: emptySummary(),
       },
       {},
     )
@@ -610,7 +634,7 @@ describe('command adapters', () => {
     ).toBe('success')
     expect(
       (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
-    ).toContain('default@1.0.1')
+    ).toContain('default@1.1.0')
     expect(
       (await commands.find((command) => command.name === 'novel-stats')!.handler(invocation(''))).text,
     ).toContain('revision 2')
@@ -636,6 +660,15 @@ describe('command adapters', () => {
     expect(
       (await commands.find((command) => command.name === 'novel-admin')!.handler(invocation(''))).text,
     ).toContain('novel_word_count')
+    engine.stats.mockResolvedValueOnce({
+      state_errors: [{ path: 'state/chapters.yaml', code: 'CHAPTERS_UNREADABLE', message: '坏了' }],
+      partial: true,
+    } as never)
+    const brokenStats = await commands
+      .find((command) => command.name === 'novel-stats')!
+      .handler(invocation(''))
+    expect(brokenStats.kind).toBe('error')
+    expect(brokenStats.text).toContain('章节索引不可读')
   })
 
   it('executes hidden operations through /novel admin', async () => {
@@ -912,5 +945,47 @@ describe('panel route', () => {
     await panelHandler(engine as unknown as EngineService, () => undefined)({ method: 'GET' }, failed)
     expect(failed.record.statusCode).toBe(500)
     expect(JSON.parse(failed.record.body)).toMatchObject({ error: 'disk failed' })
+  })
+
+  it('parses section queries, tolerates an invalid URL, handles HEAD and array ETags', async () => {
+    const engine = fakeEngine()
+    const section = await panelPayload(engine as unknown as EngineService, '/root', 'chapters', {
+      status: 'draft',
+      limit: 2,
+    })
+    expect(section.section).toBe('chapters')
+    expect(engine.panelSection).toHaveBeenCalledWith({
+      root: '/root',
+      section: 'chapters',
+      query: { status: 'draft', limit: 2 },
+    })
+    const invalid = await panelPayload(engine as unknown as EngineService, undefined, 'not-a-section')
+    expect(invalid.summary).toBeDefined()
+
+    const head = response()
+    await panelHandler(engine as unknown as EngineService, () => undefined)(
+      { method: 'HEAD', url: '/api/novel-write-engine/panel?section=health&limit=no' },
+      head,
+    )
+    expect(head.record.statusCode).toBe(200)
+    expect(head.record.body).toBe('')
+
+    const invalidUrl = response()
+    await panelHandler(engine as unknown as EngineService, () => undefined)(
+      { method: 'GET', url: 'http://[bad' },
+      invalidUrl,
+    )
+    expect(invalidUrl.record.statusCode).toBe(200)
+
+    const notModified = response()
+    await panelHandler(engine as unknown as EngineService, () => undefined)(
+      {
+        method: 'GET',
+        url: '/api/novel-write-engine/panel?section=chapters',
+        headers: { 'if-none-match': ['"section-etag"'] },
+      },
+      notModified,
+    )
+    expect(notModified.record.statusCode).toBe(304)
   })
 })

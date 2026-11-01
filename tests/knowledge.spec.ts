@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { BriefLibrary } from '../src/engine/brief.js'
 import { createSkill } from '../src/skills/index.js'
@@ -51,6 +51,18 @@ describe('task books', () => {
       await rm(empty, { recursive: true, force: true })
     }
   })
+})
+
+it('uses an override file and leaves unknown placeholders visible', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'briefs-override-'))
+  try {
+    await writeFile(join(dir, 'P1.md'), '{{known}} {{unknown}}', 'utf8')
+    const brief = new BriefLibrary(dir).render('P1', { known: '值' })
+    expect(brief.content).toBe('值 {{unknown}}')
+    expect(brief.contentHash.startsWith('sha256:')).toBe(true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 describe('entry skill', () => {

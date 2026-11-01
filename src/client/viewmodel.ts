@@ -18,8 +18,8 @@ export interface PanelChapter {
   words: string
   wordCount: number
   score: string
-  scoreValue: number
-  scorePercent: number
+  scoreValue: number | null
+  scorePercent: number | null
   badge: string
   tone: 'ok' | 'bad' | 'muted'
   details: string
@@ -73,6 +73,8 @@ export interface PanelView {
   stageLabel: string
   /** The whole book reached its configured target; stage `done` alone is only one chapter. */
   finished: boolean
+  /** Active chapter number for lazy quality detail. */
+  chapter: number
   revisionLabel: string
   phases: PanelPhase[]
   rows: PanelChapter[]
@@ -113,11 +115,11 @@ export interface PanelView {
   }
   quality: {
     averageScore: number
-    lastTenAverage: number
+    lastTenAverage: number | null
     bookMedian: number
     bookMin: number
     bookMax: number
-    dimensions: Array<{ id: string; average: number; samples: number }>
+    dimensions: Array<{ id: string; average: number; samples: number; max?: number }>
     scores: number[]
     trend: number | null
     trendText: string
@@ -140,6 +142,9 @@ export interface PanelView {
   nextDetail: string
   nextTool: string
   emptyCommand: string
+  /** Last successful sync / last background failure; filled by NovelPanel. */
+  lastSync?: string | null
+  syncError?: string | null
   /** Compatibility fields used by older cards and tests. */
   revision: string
   next: string
@@ -220,6 +225,7 @@ const loading = (): PanelView => ({
   damaged: false,
   stageLabel: '读取中',
   finished: false,
+  chapter: 0,
   revisionLabel: '',
   phases: [],
   rows: [],
@@ -245,7 +251,7 @@ const loading = (): PanelView => ({
   },
   quality: {
     averageScore: 0,
-    lastTenAverage: 0,
+    lastTenAverage: null,
     bookMedian: 0,
     bookMin: 0,
     bookMax: 0,
@@ -440,15 +446,16 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     hint: item.hint ?? '',
   }))
   const rows: PanelChapter[] = chapterRows.map((row) => {
-    const scoreValue = Number.isFinite(row.score) ? Math.max(0, Math.min(150, row.score)) : 0
+    const scoreValue =
+      row.score === null ? null : Math.max(0, Math.min(150, Number.isFinite(row.score) ? row.score : 0))
     return {
       num: String(row.num),
       title: row.title,
       words: row.wordCount.toLocaleString('zh-CN'),
       wordCount: row.wordCount,
-      score: `${scoreValue}/150`,
+      score: scoreValue === null ? '—' : `${scoreValue}/150`,
       scoreValue,
-      scorePercent: Math.round((scoreValue / 150) * 100),
+      scorePercent: scoreValue === null ? null : Math.round((scoreValue / 150) * 100),
       badge: row.status === 'passed' ? '已归档' : row.status === 'blocked' ? '阻塞' : '草稿',
       tone: row.status === 'passed' ? 'ok' : row.status === 'blocked' ? 'bad' : 'muted',
       details: row.details ?? '',
@@ -464,9 +471,9 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
       archivedAt: row.archivedAt ?? null,
     }
   })
-  const scored = rows.filter((row) => row.tone === 'ok')
+  const scored = rows.filter((row) => row.tone === 'ok' && row.scoreValue !== null)
   const rowAverage =
-    scored.length === 0 ? 0 : scored.reduce((sum, row) => sum + row.scoreValue, 0) / scored.length
+    scored.length === 0 ? 0 : scored.reduce((sum, row) => sum + (row.scoreValue ?? 0), 0) / scored.length
   const average =
     summary.averageScore !== undefined && Number.isFinite(summary.averageScore)
       ? summary.averageScore
@@ -495,6 +502,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     subtitle: `${summary.genre} · ${platformLabel(summary.platform)} · ${progressLine}${volumeLabel(summary)}`,
     stageLabel: doneLabel,
     finished,
+    chapter: summary.chapter,
     revisionLabel: `第 ${summary.bookData?.current.rounds.revise ?? summary.revision} 次修订`,
     phases: summary.phases.map((phase) => ({ ...phase, label: phaseLabel(phase.id) })),
     rows,
@@ -540,7 +548,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
     },
     quality: {
       averageScore: summary.bookData?.quality.average ?? summary.averageScore ?? average,
-      lastTenAverage: summary.bookData?.quality.last_ten_average ?? summary.quality?.averageScore ?? average,
+      lastTenAverage: summary.bookData?.quality.last_ten_average ?? summary.quality?.last_ten_average ?? null,
       bookMedian: summary.bookData?.quality.median ?? 0,
       bookMin: summary.bookData?.quality.min ?? 0,
       bookMax: summary.bookData?.quality.max ?? 0,
@@ -561,10 +569,7 @@ export function buildView(payload: PanelPayloadDto | null, error: string | null 
               summary.bookData?.quality.trend ?? summary.quality!.trend
             }`,
       samples: summary.bookData?.quality.samples ?? summary.quality?.samples ?? 0,
-      attempts: Math.max(
-        summary.bookData?.quality.attempts ?? summary.quality?.attempts ?? 0,
-        summary.bookData?.quality.samples ?? summary.quality?.samples ?? 0,
-      ),
+      attempts: summary.bookData?.quality.attempts ?? summary.quality?.attempts ?? 0,
     },
     health: {
       ok: summary.health?.ok ?? blocking.length === 0,
@@ -600,12 +605,17 @@ export async function fetchPanel(
   fetcher: typeof fetch,
   path: string,
   signal?: AbortSignal,
-): Promise<{ payload: PanelPayloadDto | null; error: string | null }> {
+  etag?: string,
+): Promise<{ payload: PanelPayloadDto | null; error: string | null; notModified?: boolean }> {
   try {
     const response = await fetcher(path, {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        ...(etag === undefined ? {} : { 'if-none-match': etag }),
+      },
       ...(signal === undefined ? {} : { signal }),
     })
+    if (response.status === 304) return { payload: null, error: null, notModified: true }
     if (!response.ok) {
       let detail = `宿主返回 ${response.status}`
       try {

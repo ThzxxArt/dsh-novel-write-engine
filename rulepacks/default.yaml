@@ -1,6 +1,6 @@
 schema_version: 1
 name: default
-version: "1.0.1"
+version: "1.1.0"
 
 lexicon:
   zero_tolerance:
@@ -182,10 +182,16 @@ platform:
   jinjiang: { words_per_chapter: [2500, 4000], dialogue_ratio: [0.35, 0.55] }
 
 genres:
-  玄幻修仙: { note: "力量体系必须自洽；升级要有代价，境界不能靠形容词抬升。" }
-  都市现代: { note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。" }
+  玄幻修仙:
+    note: "力量体系必须自洽；升级要有代价，境界不能靠形容词抬升。"
+    profile: { water_words: 0.30, pleasure_density: 2 }
+  都市现代:
+    note: "现实都市，冲突来自资源、关系与规则；爽点要落在可验证的行动上。"
+    profile: { water_words: 0.32, pleasure_density: 1 }
   西方奇幻: { note: "种族、语言与力量来源要建条目；奇观不能替代人物选择。" }
-  悬疑推理: { note: "线索先于解答出现；每个伏笔都要在归档台账中可核销。" }
+  悬疑推理:
+    note: "线索先于解答出现；每个伏笔都要在归档台账中可核销。"
+    profile: { period_density: { min: 1.5, max: 12 }, water_words: 0.30 }
   科幻: { note: "技术设定只写对情节有用的部分；禁止用术语代替冲突。" }
   游戏系统: { note: "系统提示是世界观内文本；奖励与惩罚必须可追踪。" }
   历史架空: { note: "礼制、称谓与器物要经得起基本推敲；不写现代口号。" }
@@ -193,7 +199,9 @@ genres:
   轻小说: { note: "关系推进靠具体互动，不靠内心独白宣布；对话要能区分说话人。" }
   军事: { note: "战术细节服务于人物选择；不写武器参数清单。" }
   末世流: { note: "生存资源必须记账；恐惧来自规则崩塌，不靠突然的音效式形容词。" }
-  言情: { note: "亲密关系按阶梯推进；单次独白要短，情绪落在动作上。" }
+  言情:
+    note: "亲密关系按阶梯推进；单次独白要短，情绪落在动作上。"
+    profile: { period_density: { min: 1.5, max: 12 }, pleasure_density: 2 }
 
 crosschapter:
   duplicate_similarity: 0.9

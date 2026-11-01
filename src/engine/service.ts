@@ -79,7 +79,6 @@ import {
   type ExportChapter,
 } from '../export/render.js'
 import {
-  autoCardCast,
   bookPlanPresent,
   emptyOutline,
   emptyWorldbook,
@@ -126,6 +125,8 @@ import {
   type PanelGatesDto,
   type PanelProjectOption,
   type PanelSelection,
+  type PanelSectionMeta,
+  type PanelSectionName,
   type PanelSnapshot,
   type PanelSummaryDto,
 } from './projections.js'
@@ -161,6 +162,7 @@ import {
   EngineInputError,
   type AuditRow,
   type ArchiveHandoff,
+  type ArchivedCardSnapshot,
   type BlockingItem,
   type BriefReceiptsDocument,
   type BriefStage,
@@ -198,10 +200,21 @@ import {
   type DoctorReport,
   type DraftState,
   type GuideReport,
+  type OutlineChapter,
   type OutlineDocument,
   type SearchReport,
   type WorldbookDocument,
 } from '../types.js'
+
+export interface PanelSectionQuery {
+  search?: string
+  status?: string
+  scene?: string
+  sort?: string
+  cursor?: string
+  limit?: number
+  chapter?: number
+}
 
 export interface InitProjectInput {
   title: string
@@ -563,6 +576,17 @@ export class EngineService {
   private readonly briefContextCache = new WeakMap<Snapshot, Map<string, Record<string, unknown>>>()
   /** The 15s panel poll reuses the heavy book projection until revision/damage changes. */
   private readonly panelCache = new Map<string, { key: string; snapshot: PanelSnapshot }>()
+  /** Section-level cache; writes bump revision, so a stale entry cannot survive a commit. */
+  private readonly sectionCache = new Map<string, { key: string; value: PanelSectionMeta }>()
+  private readonly journalCache = new WeakMap<
+    Snapshot,
+    Promise<{
+      key: string
+      journal: Awaited<ReturnType<typeof readJournal>>
+      blocking: BlockingItem[]
+    }>
+  >()
+  private readonly reviewKeyCache = new WeakMap<Snapshot, Promise<string>>()
   private readonly briefs: BriefLibrary
   private readonly now: () => Date
   private readonly metadataMutex = new KeyedMutex()
@@ -2744,7 +2768,7 @@ export class EngineService {
         }
       }
       case 'history': {
-        const entries = await listHistory(store, input.chapter)
+        const entries = await listHistory(store, input.chapter, { withChars: true })
         if (input.revision !== undefined) {
           if (!Number.isInteger(input.revision) || input.revision < 1) {
             throw new EngineInputError(
@@ -3200,9 +3224,18 @@ export class EngineService {
         ? {}
         : { hint: 'read novel_state {kind:"novel"} and repair it with novel_amend' }),
     })
+    const profileCount = Object.values(this.rulepack.genres).filter(
+      (genre) => genre.profile !== undefined,
+    ).length
+    add({
+      id: 'rulepack',
+      severity: 'ok',
+      title: '规则包',
+      detail: `${this.rulepack.name}@${this.rulepack.version} · ${Object.keys(this.rulepack.genres).length} 个题材 · ${profileCount} 个题材 profile`,
+    })
     add({
       id: 'pipeline',
-      severity: 'ok',
+      severity: snapshot.pipelineError === null ? 'ok' : 'error',
       title: '流水线',
       detail: `revision ${snapshot.pipeline.revision} · ${
         projectChapterProgress({
@@ -3666,7 +3699,7 @@ export class EngineService {
       foreshadows: snapshot.foreshadows,
       relationships: snapshot.relationships,
       reviews: currentReviews,
-      activity: journal.rows.slice(-8),
+      activity: journal.rows.filter((row) => row.op !== 'lock_reclaimed').slice(-8),
       journal: journal.rows,
       // The journal is the authoritative attempt ledger; history fills gaps
       // per chapter and duplicate history copies are de-duplicated.
@@ -3674,6 +3707,9 @@ export class EngineService {
       finalChecks,
       targetChapters: snapshot.project.targets.total_chapters,
       minScore: this.config.quality.minScore,
+      dimensionMax: Object.fromEntries(
+        this.rulepack.quality.dimensions.map((dimension) => [dimension.id, dimension.max]),
+      ),
       foreshadowDormantAfter: this.rulepack.crosschapter.foreshadow_dormant_after,
     })
     if (snapshot.projectError !== null) {
@@ -5273,6 +5309,16 @@ export class EngineService {
           snapshot.project.targets.words_per_chapter,
         )
         this.assertOutlineWritable(snapshot, outline, 'novel_archive')
+        const archivedCard = outline.chapters.find((card) => card.num === chapter)
+        if (archivedCard === undefined) {
+          throw new EngineFaultError(
+            ERROR_CODES.TXN_ABORTED,
+            `archive did not produce an outline card for chapter ${chapter}`,
+            'restore the outline from backups/ and retry the archive',
+          )
+        }
+        record.archive_card = archivedCardSnapshot(archivedCard)
+        record.archive_card_digest = archivedCardDigest(record.archive_card)
         const foreshadows = ledger.foreshadows
         const timeline = ledger.timeline
         for (const item of foreshadows.items) {
@@ -5534,60 +5580,33 @@ export class EngineService {
             }
           }
         }
-        // A corrupt outline may have no backup card for an auto-created
-        // archived card. Reconstruct the comparison card only from independent
-        // evidence (the archive record plus the stored plan/project target);
-        // title/scene/word/score are still checked by amendProblems below.
-        if (kind === 'outline' && (snapshot.outlineError !== null || !snapshot.outlinePresent)) {
+        // The archive record is the primary evidence for an archived card.
+        // Unlike the old reconstruction, this never derives the "before" image
+        // from the candidate: a forged card can therefore only be rejected.
+        if (kind === 'outline') {
           const old = recordOf(oldDocument)
           const oldChapters = Array.isArray(old?.chapters) ? [...old.chapters] : []
-          const known = new Set(
-            oldChapters
-              .map((raw) => recordOf(raw))
-              .filter((row): row is Record<string, unknown> => row !== null)
-              .map((row) => row.num)
-              .filter((num): num is number => Number.isInteger(num)),
-          )
-          const candidates = new Map(
-            (Array.isArray(document.chapters) ? document.chapters : [])
-              .map((raw) => recordOf(raw))
-              .filter((row): row is Record<string, unknown> => row !== null && Number.isInteger(row.num))
-              .map((row) => [row.num as number, row] as const),
-          )
+          const indexOf = new Map<number, number>()
+          for (const [index, raw] of oldChapters.entries()) {
+            const row = recordOf(raw)
+            if (row !== null && Number.isInteger(row.num)) indexOf.set(row.num as number, index)
+          }
           for (const record of snapshot.chapters.chapters) {
-            if (known.has(record.num)) continue
-            const candidate = candidates.get(record.num)
-            if (candidate === undefined || candidate.status !== 'archived') continue
-            let plan: Record<string, unknown> | null = null
-            const planRaw = await context.store.readText(planChapterFile(record.num))
-            if (planRaw !== null) {
-              try {
-                const parsed = parsePlanYaml(planRaw, planChapterFile(record.num))
-                validateStoredChapterPlan(parsed, planChapterFile(record.num))
-                plan = parsed
-              } catch {
-                plan = null
-              }
+            if (record.archive_card === undefined) continue
+            if (
+              record.archive_card_digest === undefined ||
+              record.archive_card_digest !== archivedCardDigest(record.archive_card)
+            ) {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `archived chapter ${record.num} has an archive_card whose digest does not match`,
+                'restore state/chapters.yaml from backups/ or repair the card evidence manually',
+              )
             }
-            const planCast = Array.isArray(plan?.cast)
-              ? plan.cast
-                  .map((member) => (recordOf(member)?.name as string | undefined) ?? '')
-                  .filter((name) => name !== '')
-              : []
-            const allowedTargets = [
-              snapshot.project.targets.words_per_chapter,
-              ...(Array.isArray(plan?.target_words) ? [plan.target_words] : []),
-            ]
-            const allowedCasts = [planCast, autoCardCast(record)]
-            const targetMatches = allowedTargets.some(
-              (target) => JSON.stringify(target) === JSON.stringify(candidate.target_words),
-            )
-            const castMatches = allowedCasts.some(
-              (cast) => JSON.stringify(cast) === JSON.stringify(candidate.cast),
-            )
-            if (!targetMatches || !castMatches) continue
-            oldChapters.push({ ...candidate })
-            known.add(record.num)
+            const archiveCardRow = archivedCardRecord(record)
+            const index = indexOf.get(record.num)
+            if (index === undefined) oldChapters.push(archiveCardRow)
+            else oldChapters[index] = { ...(recordOf(oldChapters[index]) ?? {}), ...archiveCardRow }
           }
           oldDocument = { ...(old ?? {}), chapters: oldChapters }
         }
@@ -6067,11 +6086,491 @@ export class EngineService {
   }
 
   /**
+   * Additive v7 section read model. Catalog sections reuse the Snapshot; only
+   * the quality section reads archived reviews, and only chapter/quality
+   * detail reads manuscripts or check files. Every section is byte-capped.
+   */
+  async panelSection(
+    input: { root?: string; section: PanelSectionName; query?: PanelSectionQuery } = {
+      section: 'overview',
+    },
+  ): Promise<PanelSectionMeta> {
+    const selection = await this.resolveRoot(input.root)
+    if (input.root !== undefined && selection.root !== null) {
+      const selected = resolve(selection.root)
+      const registry = await this.registry().read()
+      const configured = this.defaultRoot()
+      const allowed =
+        registry.active !== null && resolve(registry.active) === selected
+          ? true
+          : registry.projects.some((entry) => resolve(entry.root) === selected) ||
+            selected === resolve(configured)
+      if (!allowed) {
+        throw new EngineInputError(
+          ERROR_CODES.PROJECT_NOT_FOUND,
+          `panel section root is not registered: ${selected}`,
+          '用 /novel scan --register 或 /novel admin novel_registry_register 登记后刷新；面板不读取任意路径',
+        )
+      }
+    }
+    const snapshot = await this.loadAt(selection)
+    const section = input.section
+    const query = input.query ?? {}
+    const cacheable = section !== 'chapter_detail' && section !== 'quality_detail'
+    let sectionKey: string | null = null
+    if (cacheable) {
+      const journalIdentity = await this.panelJournalIdentity(snapshot)
+      const reviewKey = section === 'quality' ? await this.panelReviewKey(snapshot) : ''
+      sectionKey = sha256(
+        stableJson({
+          root: snapshot.root,
+          revision: snapshot.pipeline.revision,
+          journalKey: journalIdentity.key,
+          reviewKey,
+          section,
+          query,
+          stage: snapshot.pipeline.stage,
+          errors: [
+            snapshot.projectError,
+            snapshot.pipelineError,
+            snapshot.planError,
+            snapshot.reviewError,
+            snapshot.checkError,
+            snapshot.outlineError,
+            snapshot.worldbookError,
+            ...snapshot.ledgerErrors.map((error) => error.code),
+          ],
+        }),
+      )
+      const cachedSection = this.sectionCache.get(sectionKey)
+      if (cachedSection !== undefined) return cachedSection.value
+    }
+    let items: unknown = null
+    let total = 0
+    let truncated = false
+    let nextCursor: string | null = null
+    if (section === 'overview') {
+      const panel = await this.panelSnapshot(undefined, { snapshot, includeQuality: false })
+      items = {
+        ...panel,
+        chapters: panel.chapters.slice(-5),
+        bookData:
+          panel.bookData === undefined
+            ? undefined
+            : {
+                ...panel.bookData,
+                quality: {
+                  ...panel.bookData.quality,
+                  dimensions: [],
+                  samples: 0,
+                  attempts: 0,
+                },
+                effort: { ...panel.bookData.effort, chapters: [] },
+              },
+      }
+      total = 1
+    } else if (section === 'chapter_detail' || section === 'quality_detail') {
+      const chapter = query.chapter ?? snapshot.pipeline.chapter
+      if (!Number.isInteger(chapter) || chapter < 1) {
+        throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'chapter detail requires a positive chapter')
+      }
+      const row = snapshot.chapters.chapters.find((record) => record.num === chapter) ?? null
+      const active = chapter === snapshot.pipeline.chapter
+      const store = this.storeFor(snapshot.root)
+      if (section === 'quality_detail') {
+        const review = await store.readText(reviewFile(chapter))
+        const check = await store.readText(checkFile(chapter))
+        items = { chapter, review, check }
+        total = row === null && !active ? 0 : 1
+      } else {
+        const manuscript =
+          row === null || row.file === '' ? (active ? snapshot.text : null) : await store.readText(row.file)
+        const plan = await store.readText(planChapterFile(chapter))
+        const worldPlan = await store.readText(planWorldFile(chapter))
+        const summaryEvents = row?.summary.events ?? snapshot.pipeline.draft?.summary?.events ?? []
+        items = {
+          chapter,
+          row,
+          manuscript,
+          plan,
+          world_plan: worldPlan,
+          summary_events: summaryEvents.slice(0, 4),
+        }
+        total = row === null && !active ? 0 : 1
+      }
+    } else if (section === 'chapters') {
+      const archivedCurrent = snapshot.chapters.chapters.some(
+        (record) => record.num === snapshot.pipeline.chapter,
+      )
+      const draftWords =
+        snapshot.text === null || archivedCurrent || snapshot.pipeline.stage === 'done'
+          ? 0
+          : countWordMetrics(snapshot.text).total_word_count
+      const rows: Array<Record<string, unknown>> = snapshot.chapters.chapters.map((record) => ({
+        num: record.num,
+        title: record.title,
+        file: record.file,
+        word_count: record.word_count,
+        score: record.score,
+        status: 'archived',
+        scene_type: record.scene_type,
+        dialogue_ratio: record.dialogue_ratio,
+        final_check: record.final_check ?? null,
+        archived_at: record.archived_at ?? null,
+        summary_events: record.summary.events.slice(0, 4),
+        rounds: record.rounds ?? null,
+      }))
+      if (!archivedCurrent && snapshot.pipeline.stage !== 'done') {
+        rows.push({
+          num: snapshot.pipeline.chapter,
+          title: stripTitlePrefix(snapshot.plan?.title ?? '') || `第${snapshot.pipeline.chapter}章`,
+          file: null,
+          word_count: draftWords,
+          score: snapshot.review?.total ?? null,
+          status: 'draft',
+          scene_type: snapshot.plan?.scene_type ?? null,
+          dialogue_ratio: null,
+          final_check: null,
+          archived_at: null,
+          summary_events: (snapshot.pipeline.draft?.summary?.events ?? []).slice(0, 4),
+          rounds: snapshot.pipeline.rounds,
+        })
+      }
+      const filtered = rows.filter((row) => {
+        if (query.status !== undefined && query.status !== '' && row.status !== query.status) return false
+        if (query.scene !== undefined && query.scene !== '' && row.scene_type !== query.scene) return false
+        if (query.search !== undefined && query.search !== '') {
+          const title = String(row.title ?? '')
+          if (!title.includes(query.search)) return false
+        }
+        return true
+      })
+      const sorted = filtered.sort((left, right) => {
+        const byNum = Number(left.num) - Number(right.num)
+        return query.sort === 'num_asc' ? byNum : -byNum
+      })
+      total = sorted.length
+      const page = this.panelSectionPage(sorted, query)
+      items = page.items
+      truncated = page.truncated
+      nextCursor = page.nextCursor
+    } else if (section === 'characters') {
+      const seen = new Map<string, { first: number; last: number; appearances: number }>()
+      for (const record of snapshot.chapters.chapters) {
+        for (const name of record.summary.characters_appeared) {
+          const current = seen.get(name) ?? { first: record.num, last: record.num, appearances: 0 }
+          current.first = Math.min(current.first, record.num)
+          current.last = Math.max(current.last, record.num)
+          current.appearances += 1
+          seen.set(name, current)
+        }
+      }
+      const rows = snapshot.characters.characters.map((character) => ({
+        ...character,
+        ...(seen.get(character.name) ?? { first: character.first_appearance, last: null, appearances: 0 }),
+      }))
+      const filtered = rows.filter((row) =>
+        query.search === undefined || query.search === ''
+          ? true
+          : row.name.includes(query.search) || row.role.includes(query.search),
+      )
+      total = filtered.length
+      const page = this.panelSectionPage(filtered, query, 200)
+      items = page.items
+      truncated = page.truncated
+      nextCursor = page.nextCursor
+    } else if (section === 'foreshadows') {
+      const rows = snapshot.foreshadows.items
+      const filtered = rows.filter((row) => {
+        if (query.status !== undefined && query.status !== '' && row.status !== query.status) return false
+        return query.search === undefined || query.search === '' ? true : row.title.includes(query.search)
+      })
+      const page = this.panelSectionPage(filtered, query, 200)
+      total = filtered.length + snapshot.timeline.items.length + snapshot.relationships.items.length
+      truncated =
+        page.truncated || snapshot.timeline.items.length > 200 || snapshot.relationships.items.length > 200
+      items = {
+        foreshadows: page.items,
+        timeline: snapshot.timeline.items.slice(0, 200),
+        relationships: snapshot.relationships.items.slice(0, 200),
+      }
+      nextCursor = page.nextCursor
+    } else if (section === 'timeline') {
+      const rows = snapshot.timeline.items
+      const filtered = rows.filter((row) =>
+        query.search === undefined || query.search === ''
+          ? true
+          : row.description.includes(query.search) || (row.location ?? '').includes(query.search),
+      )
+      total = filtered.length
+      const page = this.panelSectionPage(filtered, query, 200)
+      items = page.items
+      truncated = page.truncated
+      nextCursor = page.nextCursor
+    } else if (section === 'relationships') {
+      const rows = snapshot.relationships.items
+      const filtered = rows.filter((row) =>
+        query.search === undefined || query.search === ''
+          ? true
+          : row.a.includes(query.search) || row.b.includes(query.search) || row.type.includes(query.search),
+      )
+      total = filtered.length
+      const page = this.panelSectionPage(filtered, query, 200)
+      items = page.items
+      truncated = page.truncated
+      nextCursor = page.nextCursor
+    } else if (section === 'worldbook') {
+      const world = snapshot.world
+      const book = snapshot.worldbook
+      const search = query.search?.trim() ?? ''
+      const matches = (value: unknown): boolean => {
+        if (search === '') return true
+        if (typeof value === 'string') return value.includes(search)
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value).includes(search)
+        if (Array.isArray(value)) return value.some((item) => matches(item))
+        if (typeof value === 'object' && value !== null) {
+          return Object.values(value as Record<string, unknown>).some((item) => matches(item))
+        }
+        return false
+      }
+      const filterRows = <T>(rows: readonly T[]): T[] => rows.filter((row) => matches(row))
+      const capRows = <T>(rows: readonly T[]): T[] => rows.slice(0, 200)
+      const groups = {
+        rules: filterRows(book.rules),
+        factions: filterRows(book.factions),
+        locations: filterRows(book.locations),
+        characters: filterRows(book.characters),
+        glossary: filterRows(book.glossary),
+        backstory: filterRows(book.backstory),
+        facts: filterRows(book.facts ?? []),
+        themes: filterRows(book.themes),
+      }
+      const ledger = {
+        locations: filterRows(world.locations),
+        abilities: filterRows(world.abilities),
+        artifacts: filterRows(world.artifacts),
+        factions: filterRows(world.factions),
+        rules: filterRows(world.rules),
+      }
+      const outlineCards = filterRows(snapshot.outline.chapters)
+      const all = [...Object.values(groups), ...Object.values(ledger), outlineCards]
+      total = all.reduce((count, rows) => count + rows.length, 0)
+      truncated = all.some((rows) => rows.length > 200)
+      items = {
+        premise: book.premise,
+        setting: book.setting,
+        blueprint: snapshot.outline.book,
+        volumes: snapshot.outline.volumes,
+        rules: capRows(groups.rules),
+        factions: capRows(groups.factions),
+        locations: capRows(groups.locations),
+        characters: capRows(groups.characters),
+        glossary: capRows(groups.glossary),
+        backstory: capRows(groups.backstory),
+        facts: capRows(groups.facts),
+        themes: capRows(groups.themes),
+        ledger: {
+          locations: capRows(ledger.locations),
+          abilities: capRows(ledger.abilities),
+          artifacts: capRows(ledger.artifacts),
+          factions: capRows(ledger.factions),
+          rules: capRows(ledger.rules),
+        },
+        outline_cards: capRows(outlineCards),
+        drift: outlineDrift(snapshot.outline, snapshot.chapters.chapters),
+      }
+    } else if (section === 'quality') {
+      const panel = await this.panelSnapshot(undefined, { snapshot, includeQuality: true })
+      const maxById = new Map(
+        this.rulepack.quality.dimensions.map((dimension) => [dimension.id, dimension.max]),
+      )
+      items = {
+        quality: panel.bookData?.quality ?? null,
+        dimensions: (panel.bookData?.quality.dimensions ?? []).map((dimension) => ({
+          ...dimension,
+          max: maxById.get(dimension.id) ?? null,
+        })),
+        pacing: panel.bookData?.pacing ?? null,
+        effort: panel.bookData?.effort ?? null,
+      }
+      total = items === null ? 0 : 1
+    } else {
+      const panel = await this.panelSnapshot(undefined, { snapshot, includeQuality: false })
+      items = {
+        health: panel.health ?? null,
+        blocking: panel.blocking,
+        state_errors: this.stateErrors(snapshot),
+        outline: {
+          present: snapshot.outlinePresent && snapshot.outlineError === null,
+          file_existed: snapshot.outlinePresent,
+          error: snapshot.outlineError,
+        },
+        worldbook: {
+          present: snapshot.worldbookPresent && snapshot.worldbookError === null,
+          file_existed: snapshot.worldbookPresent,
+          error: snapshot.worldbookError,
+        },
+        drift: outlineDrift(snapshot.outline, snapshot.chapters.chapters),
+        pending: panel.pending ?? null,
+      }
+      total = 1
+    }
+    const clipped =
+      section === 'chapter_detail' || section === 'quality_detail'
+        ? { items, truncated: false }
+        : this.panelSectionClip(items, section)
+    items = clipped.items
+    truncated = truncated || clipped.truncated
+    const budgeted = this.panelSectionBudget(items, 64 * 1024)
+    items = budgeted.items
+    truncated = truncated || budgeted.truncated
+    if (budgeted.truncated) nextCursor = null
+    const updatedAt = this.now().toISOString()
+    const etag = sha256(
+      stableJson({
+        root: snapshot.root,
+        revision: snapshot.pipeline.revision,
+        section,
+        query,
+        items,
+        total,
+        truncated,
+      }),
+    )
+    const result: PanelSectionMeta = {
+      payload_version: 7,
+      section,
+      items,
+      total,
+      returned: this.panelSectionReturned(items),
+      truncated,
+      next_cursor: nextCursor,
+      updated_at: updatedAt,
+      etag,
+    }
+    if (sectionKey !== null) {
+      this.sectionCache.set(sectionKey, { key: sectionKey, value: result })
+      if (this.sectionCache.size > 64) {
+        const oldest = this.sectionCache.keys().next().value
+        if (oldest !== undefined) this.sectionCache.delete(oldest)
+      }
+    }
+    return result
+  }
+
+  private panelSectionPage<T>(
+    rows: readonly T[],
+    query: PanelSectionQuery,
+    defaultLimit = 50,
+  ): { items: T[]; truncated: boolean; nextCursor: string | null } {
+    const requested = query.limit ?? defaultLimit
+    const limit = Number.isInteger(requested) ? Math.min(200, Math.max(1, requested)) : defaultLimit
+    const cursor = Number.parseInt(query.cursor ?? '0', 10)
+    const start = Number.isInteger(cursor) && cursor >= 0 ? cursor : 0
+    const items = rows.slice(start, start + limit)
+    const truncated = start + items.length < rows.length
+    return { items, truncated, nextCursor: truncated ? String(start + items.length) : null }
+  }
+
+  private panelSectionReturned(items: unknown): number {
+    if (Array.isArray(items)) return items.length
+    if (typeof items === 'object' && items !== null) {
+      return Object.values(items).reduce(
+        (total, value) => total + (Array.isArray(value) ? value.length : 1),
+        0,
+      )
+    }
+    return items === null ? 0 : 1
+  }
+
+  /** WP3.7 free-text caps before the byte budget; both report truncation. */
+  private panelSectionClip(value: unknown, section: string): { items: unknown; truncated: boolean } {
+    let truncated = false
+    const walk = (input: unknown, path: string[]): unknown => {
+      if (typeof input === 'string') {
+        const keys = path.filter((part) => !/^\d+$/.test(part))
+        const key = keys[keys.length - 1] ?? ''
+        const worldbookText =
+          section === 'worldbook' || keys.some((part) => part === 'ledger' || part === 'worldbook')
+        const max = key === 'description' && worldbookText ? 240 : 400
+        const chars = Array.from(input)
+        if (chars.length > max) {
+          truncated = true
+          return chars.slice(0, max).join('')
+        }
+        return input
+      }
+      if (Array.isArray(input)) {
+        return input.map((item, index) => walk(item, [...path, String(index)]))
+      }
+      if (typeof input === 'object' && input !== null) {
+        return Object.fromEntries(
+          Object.entries(input as Record<string, unknown>).map(([key, item]) => [
+            key,
+            walk(item, [...path, key]),
+          ]),
+        )
+      }
+      return input
+    }
+    return { items: walk(value, []), truncated }
+  }
+
+  private panelSectionBudget(value: unknown, limit: number): { items: unknown; truncated: boolean } {
+    const bytes = (input: unknown): number => Buffer.byteLength(JSON.stringify(input) ?? 'null')
+    if (bytes(value) <= limit) return { items: value, truncated: false }
+    const clipStrings = (input: unknown, maxChars: number): unknown => {
+      if (typeof input === 'string') {
+        const chars = Array.from(input)
+        return chars.length <= maxChars ? input : chars.slice(0, maxChars).join('')
+      }
+      if (Array.isArray(input)) return input.map((item) => clipStrings(item, maxChars))
+      if (typeof input === 'object' && input !== null) {
+        return Object.fromEntries(
+          Object.entries(input as Record<string, unknown>).map(([key, item]) => [
+            key,
+            clipStrings(item, maxChars),
+          ]),
+        )
+      }
+      return input
+    }
+    const popOne = (input: unknown): boolean => {
+      if (Array.isArray(input)) {
+        if (input.length > 1) {
+          input.pop()
+          return true
+        }
+        return input.some((item) => popOne(item))
+      }
+      if (typeof input === 'object' && input !== null) {
+        return Object.values(input as Record<string, unknown>).some((item) => popOne(item))
+      }
+      return false
+    }
+    for (const maxChars of [2000, 1000, 500, 200, 80, 20, 0]) {
+      const candidate = clipStrings(value, maxChars)
+      while (bytes(candidate) > limit) {
+        if (!popOne(candidate)) break
+      }
+      if (bytes(candidate) <= limit) return { items: candidate, truncated: true }
+    }
+    const fallback = Array.isArray(value)
+      ? []
+      : typeof value === 'object' && value !== null
+        ? {}
+        : typeof value === 'string'
+          ? ''
+          : null
+    return { items: fallback, truncated: true }
+  }
+
+  /**
    * Build the read-only panel payload. The query root is accepted only when it
    * is registered, active or the configured root; arbitrary paths never reach
    * the filesystem from the panel route.
    */
-  async panelBundle(input: { root?: string } = {}): Promise<PanelBundle> {
+  async panelBundle(input: { root?: string; lean?: boolean } = {}): Promise<PanelBundle> {
     const registry = await this.registry().read()
     const active = registry.active
     const rows = new Map<string, PanelProjectOption>()
@@ -6123,11 +6622,15 @@ export class EngineService {
       add(await optionFor(active, known !== undefined, known?.title, known?.created_at))
     }
     const configured = this.defaultRoot()
+    // An explicit configured projectRoot that is currently missing is a
+    // recoverable mount, not a fresh install. The default ./novel remains
+    // quiet so first-run still shows the empty state.
+    const explicitConfigured = this.config.projectRoot !== './novel' && configured !== resolve('./novel')
     if (!rows.has(configured)) {
       const option = await optionFor(configured, false)
       // A never-created ./novel should not look like a broken project on a
       // fresh install; an active/config path that actually has evidence does.
-      if (option.state !== 'missing' || active === configured) add(option)
+      if (option.state !== 'missing' || active === configured || explicitConfigured) add(option)
     }
     const selectedRoot = input.root === undefined ? undefined : resolve(input.root)
     // The configured projectRoot is a trusted query target even when it is
@@ -6207,7 +6710,7 @@ export class EngineService {
     }
     let snapshot: PanelSnapshot
     try {
-      snapshot = await this.panelSnapshot(selection.root)
+      snapshot = await this.panelSnapshot(selection.root, { includeQuality: input.lean !== true })
     } catch (error) {
       // The directory can disappear between the cheap option inspection and the
       // full read. Keep the project list/selector and report the same missing
@@ -6256,12 +6759,23 @@ export class EngineService {
               ...(summary.progress === undefined ? {} : { progress: summary.progress }),
             }),
           }
+    const chapters = projectChapters(snapshot)
+    const etag = sha256(
+      stableJson({
+        root: snapshot.root,
+        projects,
+        selection,
+        summary,
+        chapters,
+        ...(resume === undefined ? {} : { resume }),
+      }),
+    )
     return {
       projects,
       selection,
       summary,
-      chapters: projectChapters(snapshot),
-      gates: projectGates(snapshot),
+      chapters,
+      etag,
       ...(resume === undefined ? {} : { resume }),
     }
   }
@@ -6321,8 +6835,11 @@ export class EngineService {
     worldbookEntries: number
     strictOutline: boolean
     targetChapters: number | null
+    state_errors: StateError[]
+    partial: boolean
   }> {
     const snapshot = await this.load(input.root)
+    const stateErrors = this.stateErrors(snapshot)
     const archivedWords = snapshot.chapters.chapters.reduce((total, chapter) => total + chapter.word_count, 0)
     const activeIndexed = snapshot.chapters.chapters.some(
       (chapter) => chapter.num === snapshot.pipeline.chapter,
@@ -6369,6 +6886,8 @@ export class EngineService {
         counts.facts,
       strictOutline: snapshot.outline.book.strict,
       targetChapters: snapshot.project.targets.total_chapters,
+      state_errors: stateErrors,
+      partial: stateErrors.length > 0,
     }
   }
 
@@ -6406,6 +6925,22 @@ export class EngineService {
         }
       }),
     )
+    const configured = this.defaultRoot()
+    if (
+      configured !== '' &&
+      !document.projects.some((entry) => resolve(entry.root) === resolve(configured))
+    ) {
+      const inspection = await inspectProject(configured)
+      if (inspection.state === 'missing') {
+        projects.push({
+          root: configured,
+          title: '配置项目根',
+          created_at: '',
+          updated_at: '',
+          state: inspection.state,
+        })
+      }
+    }
     return { active: document.active, projects }
   }
 
@@ -7029,12 +7564,57 @@ export class EngineService {
     }
   }
 
-  private async panelSnapshot(root?: string): Promise<PanelSnapshot> {
+  private panelReviewKey(snapshot: Snapshot): Promise<string> {
+    const cached = this.reviewKeyCache.get(snapshot)
+    if (cached !== undefined) return cached
+    const pending = (async (): Promise<string> => {
+      const store = this.storeFor(snapshot.root)
+      const names = await store.list('reviews')
+      const files = await Promise.all(
+        names.map(async (name) => {
+          const stat = await store.stat(`reviews/${name}`)
+          return [name, stat === null ? null : [stat.size, Math.round(stat.mtimeMs)]] as const
+        }),
+      )
+      return sha256(stableJson(files))
+    })()
+    this.reviewKeyCache.set(snapshot, pending)
+    return pending
+  }
+
+  private panelJournalIdentity(snapshot: Snapshot): Promise<{
+    key: string
+    journal: Awaited<ReturnType<typeof readJournal>>
+    blocking: BlockingItem[]
+  }> {
+    const cached = this.journalCache.get(snapshot)
+    if (cached !== undefined) return cached
+    const pending = (async () => {
+      const journal = await readJournal(this.storeFor(snapshot.root))
+      const journalBlocking = await this.journalBlocking(snapshot)
+      const tail = journal.rows[journal.rows.length - 1]
+      const key = sha256(
+        stableJson({
+          rows: journal.rows.length,
+          tail: tail === undefined ? null : [tail.seq, tail.at, tail.status],
+          blocking: journalBlocking,
+        }),
+      )
+      return { key, journal, blocking: journalBlocking }
+    })()
+    this.journalCache.set(snapshot, pending)
+    return pending
+  }
+
+  private async panelSnapshot(
+    root?: string,
+    options: { includeQuality?: boolean; snapshot?: Snapshot } = {},
+  ): Promise<PanelSnapshot> {
     // The panel is a read-only projection. Use loadAt rather than load() so an
     // explicit query root or a workspace fallback can never write a session
     // binding or auto-register a project as a side effect of viewing it.
-    const selection = await this.resolveRoot(root)
-    const snapshot = await this.loadAt(selection)
+    const snapshot = options.snapshot ?? (await this.loadAt(await this.resolveRoot(root)))
+    const includeQuality = options.includeQuality !== false
     const archived = snapshot.chapters.chapters
     const archivedCurrent = archived.some((chapter) => chapter.num === snapshot.pipeline.chapter)
     const target = snapshot.project.targets.total_chapters
@@ -7056,19 +7636,16 @@ export class EngineService {
     // journal identity into the cache key prevents an external ledger edit or a
     // fresh append from serving a stale "health.ok" card after the underlying
     // status already reports a mismatch.
-    const journal = await readJournal(this.storeFor(snapshot.root))
-    const journalBlocking = await this.journalBlocking(snapshot)
-    const journalTail = journal.rows[journal.rows.length - 1]
-    const journalKey = sha256(
-      stableJson({
-        rows: journal.rows.length,
-        tail: journalTail === undefined ? null : [journalTail.seq, journalTail.at, journalTail.status],
-        blocking: journalBlocking,
-      }),
-    )
+    const journalIdentity = await this.panelJournalIdentity(snapshot)
+    const journalKey = journalIdentity.key
+    const journal = journalIdentity.journal
+    const journalBlocking = journalIdentity.blocking
+    const reviewKey = includeQuality ? await this.panelReviewKey(snapshot) : ''
     const panelCacheKey = `${snapshot.root}:${snapshot.pipeline.revision}:${pending.state}:${stateErrorCount}:${
       snapshot.outlineError ?? ''
-    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}:${journalKey}`
+    }:${snapshot.worldbookError ?? ''}:${JSON.stringify(snapshot.briefs)}:${journalKey}:${reviewKey}:${
+      includeQuality ? 'full' : 'base'
+    }`
     const cachedPanel = this.panelCache.get(snapshot.root)
     if (cachedPanel?.key === panelCacheKey) return cachedPanel.snapshot
     const outline = outlineSummary(
@@ -7129,31 +7706,35 @@ export class EngineService {
     // cannot read. Reading only the names would make deleted and corrupt
     // reviews look identical in the two surfaces.
     const store = this.storeFor(snapshot.root)
-    const reviewNames = new Set(await store.list(REVIEW_DIR))
-    const sampleChapters = new Set<number>()
     const currentReviews: import('../types.js').ReviewDocument[] = []
-    for (const record of archived) {
-      const name = reviewFile(record.num).slice(`${REVIEW_DIR}/`.length)
-      if (!reviewNames.has(name)) continue
-      try {
-        const review = await store.readDoc(reviewFile(record.num), 'review')
-        if (review !== null) {
-          sampleChapters.add(record.num)
-          currentReviews.push(review as unknown as import('../types.js').ReviewDocument)
+    let samples = 0
+    let attempts = 0
+    if (includeQuality) {
+      const reviewNames = new Set(await store.list(REVIEW_DIR))
+      const sampleChapters = new Set<number>()
+      for (const record of archived) {
+        const name = reviewFile(record.num).slice(`${REVIEW_DIR}/`.length)
+        if (!reviewNames.has(name)) continue
+        try {
+          const review = await store.readDoc(reviewFile(record.num), 'review')
+          if (review !== null) {
+            sampleChapters.add(record.num)
+            currentReviews.push(review as unknown as import('../types.js').ReviewDocument)
+          }
+        } catch {
+          // Keep the panel count aligned with report()'s readable-review count.
         }
-      } catch {
-        // Keep the panel count aligned with report()'s readable-review count.
       }
+      samples = sampleChapters.size
+      const archivedChapterNums = new Set(archived.map((record) => record.num))
+      const attemptCounts = await this.reviewAttemptsByChapter(
+        store,
+        journal.rows,
+        [...archivedChapterNums],
+        sampleChapters,
+      )
+      attempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
     }
-    const samples = sampleChapters.size
-    const archivedChapterNums = new Set(archived.map((record) => record.num))
-    const attemptCounts = await this.reviewAttemptsByChapter(
-      store,
-      journal.rows,
-      [...archivedChapterNums],
-      sampleChapters,
-    )
-    const attempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
     const qualityTrendBasis =
       samples < 3
         ? ('insufficient_samples' as const)
@@ -7161,8 +7742,13 @@ export class EngineService {
           ? ('insufficient_history' as const)
           : ('last_five_vs_previous_five' as const)
     const quality = {
+      // Book-wide average; the last-ten window has its own field.
       averageScore:
-        scores.length === 0 ? 0 : scores.reduce((total, score) => total + score, 0) / scores.length,
+        archived.length === 0
+          ? 0
+          : archived.reduce((total, chapter) => total + chapter.score, 0) / archived.length,
+      last_ten_average:
+        scores.length === 0 ? null : scores.reduce((total, score) => total + score, 0) / scores.length,
       scores,
       trend:
         qualityTrendBasis === 'last_five_vs_previous_five'
@@ -7196,12 +7782,15 @@ export class EngineService {
         hint: `第 ${violation.location.paragraph} 段`,
       }))
     const legacy = await this.legacyIssues(snapshot, false)
-    const activity = journal.rows.slice(-5).map((row) => ({
-      at: row.at,
-      op: row.op,
-      chapter: row.chapter,
-      status: row.status,
-    }))
+    const activity = journal.rows
+      .filter((row) => row.op !== 'lock_reclaimed')
+      .slice(-5)
+      .map((row) => ({
+        at: row.at,
+        op: row.op,
+        chapter: row.chapter,
+        status: row.status,
+      }))
     const draftMetrics = snapshot.text === null ? null : countWordMetrics(snapshot.text)
     const panelReport = buildBookReport({
       project: snapshot.project,
@@ -7218,7 +7807,7 @@ export class EngineService {
       foreshadows: snapshot.foreshadows,
       relationships: snapshot.relationships,
       reviews: currentReviews,
-      activity: journal.rows.slice(-8),
+      activity: journal.rows.filter((row) => row.op !== 'lock_reclaimed').slice(-8),
       journal: journal.rows,
       reviewAttempts: attempts,
       finalChecks: Object.fromEntries(
@@ -7228,8 +7817,38 @@ export class EngineService {
       ),
       targetChapters: target,
       minScore: this.config.quality.minScore,
+      dimensionMax: Object.fromEntries(
+        this.rulepack.quality.dimensions.map((dimension) => [dimension.id, dimension.max]),
+      ),
       foreshadowDormantAfter: this.rulepack.crosschapter.foreshadow_dormant_after,
     })
+    if (!includeQuality) {
+      const baseScores = archived.map((chapter) => chapter.score)
+      const sorted = [...baseScores].sort((left, right) => left - right)
+      const middle = Math.floor(sorted.length / 2)
+      const median =
+        sorted.length === 0
+          ? 0
+          : sorted.length % 2 === 0
+            ? (sorted[middle - 1]! + sorted[middle]!) / 2
+            : sorted[middle]!
+      panelReport.quality = {
+        ...panelReport.quality,
+        average:
+          baseScores.length === 0
+            ? 0
+            : baseScores.reduce((total, score) => total + score, 0) / baseScores.length,
+        median,
+        min: baseScores.length === 0 ? 0 : Math.min(...baseScores),
+        max: baseScores.length === 0 ? 0 : Math.max(...baseScores),
+        last_five: baseScores.slice(-5),
+        trend: null,
+        trend_basis: 'insufficient_samples',
+        samples: 0,
+        attempts: 0,
+        dimensions: [],
+      }
+    }
     const bookData = buildPanelBookData({
       report: panelReport,
       project: snapshot.project,
@@ -7243,7 +7862,7 @@ export class EngineService {
       rounds: snapshot.pipeline.rounds,
       draftWords,
       lastTenAverage:
-        scores.length === 0 ? 0 : scores.reduce((total, score) => total + score, 0) / scores.length,
+        scores.length === 0 ? null : scores.reduce((total, score) => total + score, 0) / scores.length,
       manuscriptHash:
         snapshot.pipeline.draft?.content_hash ?? (snapshot.text === null ? null : sha256(snapshot.text)),
       metrics: draftMetrics,
@@ -7266,7 +7885,7 @@ export class EngineService {
             num: snapshot.pipeline.chapter,
             title: stripTitlePrefix(snapshot.plan?.title ?? '') || `第${snapshot.pipeline.chapter}章`,
             wordCount: draftWords,
-            score: snapshot.review?.total ?? 0,
+            score: snapshot.review?.total ?? null,
             status: (blocking.length > 0 ? 'blocked' : 'draft') as 'blocked' | 'draft',
             details: (snapshot.pipeline.draft?.summary?.events ?? []).join('；').slice(0, 240),
           }
@@ -9522,6 +10141,32 @@ const machineWarnings = (machine: MachineResult, acknowledged: readonly string[]
     }))
 
 /** 0.1.2 archive digests used localeCompare; keep that comparison only for upgrades. */
+const archivedCardSnapshot = (card: OutlineChapter): ArchivedCardSnapshot => ({
+  title: card.title,
+  scene_type: card.scene_type,
+  target_words: [card.target_words[0], card.target_words[1]],
+  cast: [...card.cast],
+  goal: card.goal,
+  conflict: card.conflict,
+  hook: card.hook,
+  notes: card.notes,
+  archived_at: card.archived_at,
+})
+
+const archivedCardDigest = (card: ArchivedCardSnapshot): string => `v1:${sha256(stableJson(card))}`
+
+const archivedCardRecord = (record: ChapterRecord): Record<string, unknown> => {
+  const card = record.archive_card
+  if (card === undefined) return {}
+  return {
+    num: record.num,
+    ...card,
+    status: 'archived',
+    word_count: record.word_count,
+    score: record.score,
+  }
+}
+
 const legacyStableJson = (value: unknown): string => {
   const normalize = (input: unknown): unknown => {
     if (Array.isArray(input)) return input.map(normalize)
@@ -9757,6 +10402,18 @@ const amendProblems = (
       }
       if (before.archive_digest !== after.archive_digest) {
         problems.push(`archived chapter ${String(before.num)} cannot change its archive_digest`)
+      }
+      if (before.archive_card === undefined && after.archive_card !== undefined) {
+        problems.push(`archived chapter ${String(before.num)} cannot add archive_card through amend`)
+      } else if (
+        before.archive_card !== undefined &&
+        (after.archive_card === undefined ||
+          stableJson(before.archive_card) !== stableJson(after.archive_card))
+      ) {
+        problems.push(`archived chapter ${String(before.num)} cannot change its archive_card`)
+      }
+      if (before.archive_card_digest !== after.archive_card_digest) {
+        problems.push(`archived chapter ${String(before.num)} cannot change its archive_card_digest`)
       }
       if (stableJson(before.assigned_ids ?? {}) !== stableJson(after.assigned_ids ?? {})) {
         problems.push(`archived chapter ${String(before.num)} cannot change its assigned_ids`)
@@ -10003,6 +10660,25 @@ const amendProblems = (
     }
     const indexed = new Set(snapshot.chapters.chapters.map((record) => record.num))
     const chaptersUnreadable = snapshot.ledgerErrors.some((error) => error.code === 'CHAPTERS_UNREADABLE')
+    if (chaptersUnreadable) {
+      // With no readable index, archive_card evidence is unavailable too. A
+      // repair may only preserve cards already proven by the old image; it
+      // must not invent or rewrite an archived card in this window.
+      for (const [num, card] of byNum) {
+        if (card.status === 'archived' && !oldCards.has(num)) {
+          problems.push(
+            `cannot verify archived chapter ${num} while chapters.yaml is unreadable; restore the chapter index from backups/ first`,
+          )
+        }
+      }
+      for (const num of archivedChapterNumbers ?? []) {
+        if (byNum.get(num)?.status !== 'archived') {
+          problems.push(
+            `cannot verify archived chapter ${num} while chapters.yaml is unreadable; keep its archived card`,
+          )
+        }
+      }
+    }
     if (!chaptersUnreadable) {
       for (const [num, card] of byNum) {
         if (card.status === 'archived' && !indexed.has(num)) {

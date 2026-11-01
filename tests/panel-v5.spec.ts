@@ -72,10 +72,10 @@ describe('panel bundle v6', () => {
     const missingConfig = join(await mkdtemp(join(tmpdir(), 'novel-panel-config-')), 'absent')
     const fresh = await harness({ stateDir, projectRoot: missingConfig })
     try {
-      const empty = await fresh.engine.panelBundle()
-      expect(empty.empty).toBe(true)
-      expect(empty.selection).toEqual({ root: null, source: 'none' })
-      expect(empty.error).toContain('novel_init')
+      const missing = await fresh.engine.panelBundle()
+      expect(missing.selection).toEqual({ root: missingConfig, source: 'config' })
+      expect(missing.missing?.reason).toBe('missing')
+      expect(missing.empty).toBeUndefined()
     } finally {
       await fresh.cleanup()
     }

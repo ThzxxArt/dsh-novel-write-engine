@@ -1,3 +1,10 @@
+## 0.2.9 工具契约
+
+- 28 个工具的 148 个入参中，不再有 author-only `type:"json"`；`summary`、review、check、archive、handoff、worldbook 均为显式对象/数组 schema。
+- 只有 `state_delta` 的 section 值、`new_element_anchors` 等真正动态映射保留开放对象；它们的具体形状仍由引擎校验。
+- 正文 `content` 仍是字符串，但 schema 和任务书都要求它是一次 JSON 字符串：段落 `\n`、正文直引号 `\"`，不要二次编码。
+- 模型侧提示已删除“对象或 JSON 字符串都接受”；`asJson` 仅作为旧调用方的运行时兼容，不再出现在 schema 文案里。
+
 # 工具面
 
 28 个工具全部是 `EngineService` 的薄适配器：参数窄化 → 一次操作 → 规范值 + render。

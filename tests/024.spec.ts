@@ -397,4 +397,107 @@ describe('0.2.4 outline upsert contract', () => {
       await cleanup()
     }
   })
+
+  it('rejects a volume title/id pair that points at two different volumes', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await project(engine, root)
+      await engine.submitOutline({
+        volumes: [
+          { id: 'V1', title: '第一卷', start_chapter: 1, end_chapter: 2 },
+          { id: 'V2', title: '第二卷', start_chapter: 3, end_chapter: 5 },
+        ],
+        root,
+      })
+      const before = await readProjectFile(root, OUTLINE_FILE)
+      await expect(
+        engine.submitOutline({
+          volumes: [{ id: 'V2', title: '第一卷', start_chapter: 1, end_chapter: 2 }],
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      expect(await readProjectFile(root, OUTLINE_FILE)).toBe(before)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects an explicit id that was already generated in the same submission', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await project(engine, root)
+      await expect(
+        engine.submitOutline({
+          volumes: [
+            { title: '甲', start_chapter: 1, end_chapter: 2 },
+            { id: 'V1', title: '乙', start_chapter: 3, end_chapter: 5 },
+          ],
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('keeps a stable volume id when the title changes', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await project(engine, root)
+      const first = await engine.submitOutline({
+        volumes: [{ title: '第一卷', start_chapter: 1, end_chapter: 5 }],
+        chapters: [card(1, '开端之雨')],
+        root,
+      })
+      const before = await outline(engine, root)
+      const id = before.volumes[0]!.id as string
+      expect(first.data.volumes_added).toEqual(['第一卷'])
+      await engine.submitOutline({
+        volumes: [{ id, title: '改名卷', start_chapter: 1, end_chapter: 5 }],
+        root,
+      })
+      const after = await outline(engine, root)
+      expect(after.volumes).toHaveLength(1)
+      expect(after.volumes[0]).toMatchObject({ id, title: '改名卷' })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects duplicate volume ids and a markdown range that omits chapters', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await project(engine, root)
+      await expect(
+        engine.submitOutline({
+          volumes: [
+            { id: 'V1', title: '第一卷', start_chapter: 1, end_chapter: 2 },
+            { id: 'V1', title: '第二卷', start_chapter: 3, end_chapter: 5 },
+          ],
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      const markdown = [
+        '# 书',
+        '## 第一卷（第1-3章）',
+        '### 第1章 开端',
+        '- 场景：日常过渡章',
+        '- 字数：80-400',
+        '- 目标：目标',
+        '- 冲突：冲突',
+        '- 钩子：钩子',
+        '### 第4章 越界',
+        '- 场景：日常过渡章',
+        '- 字数：80-400',
+        '- 目标：目标',
+        '- 冲突：冲突',
+        '- 钩子：钩子',
+      ].join('\n')
+      await expect(
+        engine.importOutline({ format: 'markdown', content: markdown, root }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+    } finally {
+      await cleanup()
+    }
+  })
 })

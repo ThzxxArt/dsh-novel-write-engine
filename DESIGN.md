@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.8`                                                                                                  |
+| 插件版本 | `0.2.9`                                                                                                  |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1385,6 +1385,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.9 是可信工作台与工具契约版本：`ChapterRecord` 增加可选 `archive_card`/`archive_card_digest`，归档卡受保护字段有独立证据；26 个自由 JSON 入参改为类型化 schema，只有真正的动态映射保持开放；面板新增 v7 section 读模型（overview/chapters/characters/foreshadows/timeline/relationships/worldbook/quality/health），每 section 有窗口元数据、64KB 字节上限和 ETag/304；`listHistory` 默认不读正文，基础 section 不读归档 review；规则包增加题材 advisory profile；卷 upsert 支持稳定 id。没有新增阶段、工具、操作、门控、语义项或导出种类。
+
 0.2.8 是边界与可信性版本：新增 `ChapterProgress` 单一投影，修正归档后 `pipeline.chapter` 指向下一章而 `stage` 仍为 `done` 被读成“下一章已完成”；`backups/` 经 `safePath`/`ensureDir` 创建，拒绝符号链接逃逸；PG-05 与 state_delta 共用 `isNarratorAlias`；panel 缓存纳入 journal 健康；`ready_to_archive` 缺 P8 任务书的既有 brief 顺序补回归；归档卡的 `goal/conflict/hook/notes` 不可改写，`chapters.yaml` 损坏时也以旧卡为证据；created 角色的 `growth` 落盘。无 schema、工具、阶段、门控或配置键变化。
 
 0.2.7 是通用性与发布边界版本：产品示例、任务书与测试夹具去具体项目化，新增三题材归档矩阵与发布面隐私守卫；无 schema、工具、阶段或门控变化。
@@ -1842,7 +1844,7 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 **状态与可达性**：loading 用骨架 + `role=status`；choose 显示“发现多本书，先选一本”与项目按钮；missing 显示项目根、原因和建议，并保留选择器；empty 显示 `novel_init`；error 用 `role=alert` + 重试；outdated 用 `location.reload()`；damaged 仍渲染只读数据但在顶部提示用 `novel_state`/`novel_amend` 修复。根节点 `aria-busy`，统计区 `role=group`，选择器 `aria-label="切换项目"`，章节摘要 `aria-label`，评分条 `progressbar`，焦点环与 `prefers-reduced-motion` 均有 CSS。
 
-**刷新与选择**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次。选择项目只更新 `?root=` 与浏览器 `localStorage`，不调用 activate、不写会话绑定；请求带递增 `requestId` + `AbortController`，旧响应丢弃。`not_registered` 的 localStorage 偏好会被清掉并回退到同一响应的 active/唯一项目；登记仍在但目录不存在的偏好会保留。
+**刷新与选择**：手动刷新 + 每 15 秒轮询；页面重新可见或窗口 focus 时静默刷新一次。选择项目只更新后续请求的 query root 与浏览器 `localStorage`，不改浏览器地址栏，不调用 activate、不写会话绑定；请求带递增 `requestId` + `AbortController`，旧响应丢弃。`not_registered` 的 localStorage 偏好会被清掉并回退到同一响应的 active/唯一项目；登记仍在但目录不存在的偏好会保留。
 
 **只读**。所有写操作仍走工具/对话；面板没有改名、归档、回退或“设为当前会话项目”按钮，也不读取项目外路径。
 

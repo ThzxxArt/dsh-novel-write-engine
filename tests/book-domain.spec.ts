@@ -438,7 +438,7 @@ describe('chapter cards', () => {
     blueprintOnly.book.themes = ['记忆']
     expect(bookPlanPresent(emptyBookPlan())).toBe(false)
     expect(bookPlanPresent(blueprintOnly.book)).toBe(true)
-    expect(outlineSummary(blueprintOnly, 0)).toMatchObject({ present: true, total: 0, coverage: 0 })
+    expect(outlineSummary(blueprintOnly, 0)).toMatchObject({ present: true, total: 0, coverage: 1 })
 
     const partial = emptyWorldbook('2026-01-01')
     partial.themes = ['记忆']

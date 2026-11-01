@@ -1,3 +1,18 @@
+## 0.2.9
+
+0.2.9 是可信工作台与工具契约版本，不新增阶段、工具、操作、门控、语义项或导出种类。
+
+- **归档卡证据链**：归档时把受保护章卡字段（title/scene_type/target_words/cast/goal/conflict/hook/notes/archived_at）写入 `ChapterRecord.archive_card` 及 digest；`novel_amend` 优先用该证据，outline 不可读且无前像时 fail closed，不再从 candidate 伪造旧卡。`chapters.yaml` 不可读时同样拒绝新建/改写归档卡。
+- **工具契约**：把 26 个自由 JSON 入参收敛为类型化 schema，只剩 `state_delta` 值、`new_element_anchors` 等真正动态映射；`summary`/review/check/archive/handoff/worldbook 定形；删除“JSON 字符串也可以”的模型提示；加入 2,000 字引号/换行压力用例和 32KB 参数预算。
+- **面板 v7**：新增 overview/chapters/characters/foreshadows/timeline/relationships/worldbook/quality/health section，带 `{total,returned,truncated,next_cursor}` 与 ETag/304；bundle 与 section 都支持 304，bundle 连续 304 按 30s/60s 退避；`chapter_detail`/`quality_detail` 详情不套 400 字自由文本上限；section 缓存键纳入 journal identity；`listHistory` 默认不读正文，面板基础 section 不读归档 review；所有 section 有 64KB 字节上限。人物/线索/设定/质量/健康改为语义卡片，章节改为可筛选/排序/翻页、可懒加载详情的表格，不再裸出 section JSON。
+- **面板可信度**：修复未定义 CSS 变量导致的空维度条/焦点环、教程复制不可键盘操作、轮询失败仍称自动同步、项目选择无法回到跟随当前项目；新增顶部七栏、跟随当前项目、同步失败提示、浅/深色 token、12px 最小字号、模态背景 inert、图表可访问数值、本地时间、草稿未评审不显示 0/150、章节计数分离、长 hash 换行。
+- **读模型**：health.present 改为“文件存在且无 error”；无目标书 `progress.percent=null`、coverage 回退 card coverage；quality 维度带 max；`listHistory` 默认不读正文；`stats` 在 chapters 不可读时返回 `state_errors/partial`；配置根缺失显示 missing；`summary.quality.averageScore` 明确为全书均分并新增 `last_ten_average`。
+- **规则包**：修复角色短名子串 (`甲`/`甲某`)、数值单位 `一米八`、资源符号/角色绑定/证据词；LOCKED_DETAIL_DRIFT 检查每个有描述段落、取最高覆盖，仅当全部低于阈值才报告并引用最佳段落；新增可选 `genres.*.profile`（period_density/water_words/pleasure_density，仅 advisory），doctor 显示规则包版本与 profile 数；compiler 默认 period_density 与规则包同步为 10。
+- **大纲**：卷 upsert 支持稳定 id 改名，拒绝重复 id/title/区间；Markdown 导入不再把声明 1–3 章的卷悄悄扩到 9 章。
+- **文档**：README、DESIGN、docs/tools、docs/states、docs/rulepack 与 0.2.9 验收记录同步；DSH 侧 malformed tool JSON 诊断包含工具名/参数片段，并把 `MALFORMED_RESPONSE` 纳入有限重试。
+- **验证**：真实模型 P3 20 章跑通到 archive（P1/P2/P4/P6 为确定性夹具）；第二轮以 `agnes-2.5-flash` 复跑都市/玄幻/西方奇幻三题材各 1 章完整 P1→archive；静态 Chromium 390/768/1440 浅/深色视觉检查；真实宿主临时 profile 空态 1440/390 截图；未做有项目态真实宿主、触屏真机与屏幕阅读器验收。
+- 测试：94 个文件 / 1000 项通过；覆盖率 93.47 / 89.01 / 96.82 / 93.47，client 函数 85.59%，逐文件门禁通过；client 158.50 KB（react-dom 外置）。
+
 # Changelog
 
 ## 0.2.8

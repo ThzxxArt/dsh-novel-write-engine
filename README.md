@@ -19,9 +19,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.8**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.9**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.8 是边界与可信性版本：修正归档后“下一章被误标为 done”的读模型、备份路径符号链接逃逸、PG-05 与归档叙述者别名不一致、面板健康缓存假绿、完结书仍生成续写指令；同时保护归档章卡字段并修复 created growth 丢失。没有改工具、阶段、门控、schema 或配置键；改变的是人类读法、路径安全和少量状态契约，不迁移项目数据。历史版本的内部方案与验收稿留在对应发布 tag，不再复制进 `main`。
+> 0.2.9 是可信工作台与工具契约版本：归档卡证据链、26 个自由 JSON 入参类型化、面板 v7 分栏/64KB 预算/ETag、规则包精度、稳定卷 id 与一批读模型修复。没有新增阶段、工具、操作、门控、语义项或导出种类；`archive_card` 是可选新字段，旧项目只读回退并在无法证明时 fail closed。
 
 ---
 
@@ -203,7 +203,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.8
+dsh plugin --profile web add dsh-novel-write-engine@0.2.9
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -251,10 +251,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.8.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.9.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.8.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.9.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -266,7 +266,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.8`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.9`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -340,7 +340,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 - 双栏工作台：阶段轨、门控、提示、旧数据、全书规划、质量趋势、健康度、最近活动；
 - 底部章节卡。
 
-面板每 15 秒静默同步一次，也可以点刷新。它**只读**，所有写操作仍在对话/工具里。
+面板按概览/章节/人物/线索/设定/质量/健康七栏读取；每栏有独立 section、窗口元数据和 64KB 字节上限，失败时显式显示同步错误。它**只读**，所有写操作仍在对话/工具里。
 
 ---
 
@@ -615,25 +615,25 @@ corepack pnpm test
 
 - **运行在宿主进程里**：Host 半边在 DSH 进程内执行，不受工作区沙箱限制。安装本插件等于允许它在 DSH 进程权限下读写你给它的项目目录和 `stateDir`。
 - **不向外联网**：Host 侧没有 `fetch`、HTTP 客户端或遥测；运行期依赖只有 `yaml`。它不读取环境变量里的 API Key，也不会把正文发到第三方服务。
-- **面板只读**：`/api/novel-write-engine/panel` 只接受 `GET`/`HEAD`，复用 DSH connection 的认证与 Origin 校验；项目选择器只改 `?root=` 与浏览器 `localStorage`。
+- **面板只读**：`/api/novel-write-engine/panel` 只接受 `GET`/`HEAD`，复用 DSH connection 的认证与 Origin 校验；项目选择器只改后续请求的 query root 与浏览器 `localStorage`，不改浏览器地址栏。
 - **安装来源**：优先从 npm 官方 registry 安装，并核对包名、发布者与版本；离线环境用自己构建的 tarball 并记录 SHA-256。不要从聊天记录里复制来路不明的 Git 地址并给 `allowBuilds` 授权。
 
 ---
 
 ## 升级与卸载
 
-### 升级到 0.2.8
+### 升级到 0.2.9
 
-0.2.8 没有 schema、工具、阶段、门控、导出或配置键变更，不需要迁移项目文件。
+0.2.9 没有破坏性 schema 迁移、阶段/门控/导出或配置键变更；`ChapterRecord.archive_card` 是可选新字段，旧记录缺它时按只读回退处理，无法证明的归档卡修改会 fail closed。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.8
+dsh plugin --profile web add dsh-novel-write-engine@0.2.9
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.7 升到 0.2.8；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.8 升到 0.2.9；旧标签页显示“需要刷新”时刷新即可。
 
-历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.8 不再在 `main` 保留旧版方案与验收稿；需要溯源时使用对应发布 tag 或 Release 快照。
+历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.9 不再在 `main` 保留旧版方案与验收稿；需要溯源时使用对应发布 tag 或 Release 快照。
 
 ### 从源码目录升级
 
@@ -788,15 +788,16 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 本次 0.2.8 验证
+### 本次 0.2.9 验证
 
 以本次发布实际跑出的结果为准：
 
-- `corepack pnpm test`：**91 个测试文件 / 923 项全部通过**；
-- 覆盖率：**语句 93.55% / 分支 89.23% / 函数 98.14% / 行 93.55%**；逐文件门禁通过；
+- `corepack pnpm test`：**94 个测试文件 / 1000 项全部通过**；
+- 覆盖率：**语句 93.47% / 分支 89.01% / 函数 96.82% / 行 93.47%**；逐文件门禁通过；client 函数覆盖 85.59%；client bundle 158.50 KB（react-dom 外置）；
 - `typecheck`、`lint`、`build`：通过；
-- `check:hygiene`（157 files，0 v8 ignore）、`test:isolated`（63 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash`：通过；
-- 三题材矩阵：玄幻修仙、都市现代、西方奇幻各跑一遍 `init → archive`；
+- `check:hygiene`（160 files，0 v8 ignore）、`test:isolated`（63 源文件）、`validate:rulepack`、`check:pack`（26 files）、`check:artifacts`、`check:install`（26 packages）、`check:preset`（13 packages）、`check:host`、`check:crash`：通过；
+- 真实模型 P3 20 章：已跑（`agnes-2.5-flash`，总正文 16,625 字，P1/P2/P4/P6 为确定性夹具）；第二轮复跑都市/玄幻/西方奇幻三题材各 1 章完整 P1→archive；三题材矩阵另有 `tests/generality.spec.ts` 覆盖。
+- 视觉：静态 Chromium 390/768/1440 与浅/深色截图已看；真实宿主临时 profile 0.2.9 的空态 1440/390 已截图；有项目态真实宿主、触屏真机与屏幕阅读器未验收。
 - 隐私守卫：`src / briefs / skills / presets / rulepacks / docs` 与根文档均无具体项目身份。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。

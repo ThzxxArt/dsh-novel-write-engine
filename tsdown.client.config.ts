@@ -15,7 +15,7 @@ export default defineConfig({
   sourcemap: false,
   dts: false,
   deps: {
-    neverBundle: ['react', 'react/jsx-runtime'],
+    neverBundle: ['react', 'react/jsx-runtime', 'react-dom'],
   },
   outputOptions: {
     entryFileNames: 'client.js',
