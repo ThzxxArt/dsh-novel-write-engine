@@ -635,7 +635,7 @@ dsh plugin --profile web add dsh-novel-write-engine@0.2.10
 
 升级后刷新页面、新开会话。面板教程版本从 0.2.9 升到 0.2.10；旧标签页显示“需要刷新”时刷新即可。
 
-历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)。0.2.9 的方案与验收稿仍保留在 `docs/`；更早版本使用对应发布 tag 或 Release 快照查看。
+历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
 ### 从源码目录升级
 
