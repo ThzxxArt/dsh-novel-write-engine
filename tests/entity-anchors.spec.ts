@@ -14,14 +14,16 @@ import { EngineInputError } from '../src/types.js'
 
 describe('entity anchors', () => {
   it('normalizes, de-duplicates and limits explicit anchors', () => {
-    expect(normalizeAnchors([' 二楼书房 ', '二楼书房', '楼梯底'], 'x')).toEqual(['二楼书房', '楼梯底'])
+    expect(
+      normalizeAnchors([' 他站在二楼书房门口 ', '他站在二楼书房门口', '楼梯底下的灯还亮着'], 'x'),
+    ).toEqual(['他站在二楼书房门口', '楼梯底下的灯还亮着'])
     expect(() => normalizeAnchors('x', 'x')).toThrow(EngineInputError)
-    expect(() => normalizeAnchors(['一'], 'x')).toThrow(/2..120/)
+    expect(() => normalizeAnchors(['一二三四五六七'], 'x')).toThrow(/8..120/)
     expect(() => normalizeAnchors([1], 'x')).toThrow(/must be a string/)
-    expect(() => normalizeAnchors([xLong()], 'x')).toThrow(/2..120/)
+    expect(() => normalizeAnchors([xLong()], 'x')).toThrow(/8..120/)
     expect(() =>
       normalizeAnchors(
-        Array.from({ length: 9 }, (_, index) => `a${index}`),
+        Array.from({ length: 9 }, (_, index) => `anchor0${index}`),
         'x',
       ),
     ).toThrow(/limit is 8/)
@@ -30,26 +32,34 @@ describe('entity anchors', () => {
   it('validates the chapter anchor map shape and entity names', () => {
     const names = { locations: ['屋'], abilities: [], artifacts: [] }
     expect(normalizeNewElementAnchors(undefined, names)).toEqual(emptyAnchorMap())
-    expect(normalizeNewElementAnchors({ locations: { 屋: ['门口'] } }, names)).toEqual({
-      locations: { 屋: ['门口'] },
+    expect(normalizeNewElementAnchors({ locations: { 屋: ['他站在门口的那个人'] } }, names)).toEqual({
+      locations: { 屋: ['他站在门口的那个人'] },
       abilities: {},
       artifacts: {},
     })
     expect(() => normalizeNewElementAnchors([], names)).toThrow(/must be an object/)
     expect(() => normalizeNewElementAnchors({ other: {} }, names)).toThrow(/unknown group/)
     expect(() => normalizeNewElementAnchors({ locations: [] }, names)).toThrow(/must be an object/)
-    expect(() => normalizeNewElementAnchors({ locations: { 不存在: ['门口'] } }, names)).toThrow(
-      /has no such entity/,
-    )
+    expect(() =>
+      normalizeNewElementAnchors({ locations: { 不存在: ['他站在门口的那个人'] } }, names),
+    ).toThrow(/has no such entity/)
     expect(anchorsFromSummary(null)).toEqual(emptyAnchorMap())
     expect(anchorsFromSummary({ new_elements: { locations: ['屋'], abilities: [], artifacts: [] } })).toEqual(
       emptyAnchorMap(),
     )
     expect(
-      anchorsForGroup(normalizeNewElementAnchors({ locations: { 屋: ['门口'] } }, names), 'locations', '屋'),
-    ).toEqual(['门口'])
+      anchorsForGroup(
+        normalizeNewElementAnchors({ locations: { 屋: ['他站在门口的那个人'] } }, names),
+        'locations',
+        '屋',
+      ),
+    ).toEqual(['他站在门口的那个人'])
     expect(
-      anchorsForGroup(normalizeNewElementAnchors({ locations: { 屋: ['门口'] } }, names), 'locations', '无'),
+      anchorsForGroup(
+        normalizeNewElementAnchors({ locations: { 屋: ['他站在门口的那个人'] } }, names),
+        'locations',
+        '无',
+      ),
     ).toEqual([])
   })
 

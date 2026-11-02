@@ -140,8 +140,26 @@ export function maxOf(id: string): number {
 export function applyExclusions(
   dimensions: readonly ScoreDimension[],
   exclusions: readonly Exclusion[],
-): { dimensions: ScoreDimension[]; dropped: number } {
+): {
+  dimensions: ScoreDimension[]
+  dropped: number
+  /** 0.2.14: the exact rows the rulepack removed, so a score mismatch is explainable. */
+  dropped_entries: Array<{
+    rule: string
+    location: string
+    delta: number
+    dimension: string
+    reason: string
+  }>
+} {
   let dropped = 0
+  const droppedEntries: Array<{
+    rule: string
+    location: string
+    delta: number
+    dimension: string
+    reason: string
+  }> = []
   const safeDimensions = Array.isArray(dimensions) ? dimensions : []
   const canonical = (location: unknown): string => {
     if (typeof location !== 'string') return ''
@@ -174,7 +192,16 @@ export function applyExclusions(
         const entry = deduction as Partial<Deduction>
         const identity = `${String(entry.rule ?? '')}@${canonical(entry.location)}`
         const winner = best.get(identity) === deduction
-        if (!winner) dropped += 1
+        if (!winner) {
+          dropped += 1
+          droppedEntries.push({
+            rule: String(entry.rule ?? ''),
+            location: String(entry.location ?? ''),
+            delta: Number(entry.delta ?? 0),
+            dimension: String((record as { id?: unknown }).id ?? ''),
+            reason: 'duplicate',
+          })
+        }
         return winner
       }) as Deduction[],
     }
@@ -207,8 +234,15 @@ export function applyExclusions(
           (deduction: Deduction) => deduction !== entry.deduction,
         )
         dropped += 1
+        droppedEntries.push({
+          rule: entry.rule,
+          location: String(entry.deduction.location ?? ''),
+          delta: Number(entry.deduction.delta ?? 0),
+          dimension: String((dimension as { id?: unknown }).id ?? ''),
+          reason: `exclusion:${left}|${right}`,
+        })
       }
     }
   }
-  return { dimensions: deduped, dropped }
+  return { dimensions: deduped, dropped, dropped_entries: droppedEntries }
 }

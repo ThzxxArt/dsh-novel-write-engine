@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { allocateIds } from '../domain/ids.js'
 import { isNarratorAlias, narratorAliasesFor, narratorName as narratorNameOf } from '../domain/narrator.js'
-import { splitParagraphs } from '../domain/text.js'
+import { matchEvidence, splitParagraphs } from '../domain/text.js'
 import {
   anchorsForGroup,
   anchorsFromSummary,
@@ -14,6 +14,7 @@ import {
   ERROR_CODES,
   EngineInputError,
   type ChapterSummary,
+  type ErrorDetails,
   type CharactersDocument,
   type CharacterDelta,
   type DeltaAction,
@@ -35,6 +36,26 @@ import {
 const SECTIONS = ['characters', 'foreshadows', 'timeline', 'world', 'relationships'] as const
 const ACTIONS: readonly DeltaAction[] = ['created', 'updated', 'no_change']
 
+/** Every key a delta entry may carry; anything else is refused, not ignored. */
+const DELTA_KEYS: Readonly<Record<(typeof SECTIONS)[number], readonly string[]>> = {
+  characters: ['action', 'reason', 'role', 'profile', 'current_state', 'unset', 'growth'],
+  foreshadows: [
+    'action',
+    'reason',
+    'title',
+    'anchor',
+    'description',
+    'note',
+    'new_info',
+    'planned_resolve',
+    'resolved_anchor',
+    'kind',
+  ],
+  timeline: ['action', 'reason', 'story_time', 'description', 'location', 'characters'],
+  world: ['action', 'reason', 'kind', 'description', 'layout', 'capacity', 'detail'],
+  relationships: ['action', 'reason', 'a', 'b', 'type', 'type_code', 'description', 'note'],
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -48,27 +69,62 @@ const setOwn = <T>(record: Record<string, T>, key: string, value: T): void => {
 }
 
 /** Validate resource balances without accepting numeric strings or fractions. */
-const validateResources = (state: Record<string, unknown>, who: string): void => {
+const validateResources = (
+  state: Record<string, unknown>,
+  who: string,
+  allowNegative: boolean,
+  // The balance before this patch. Without it the set channel could only say
+  // "original 0" for a character that already held a balance (M4).
+  base?: Record<string, unknown>,
+): void => {
   if (state.resources === undefined) return
-  if (!isRecord(state.resources)) fail(`${who}.current_state.resources must be an object`)
+  if (!isRecord(state.resources)) {
+    fail(`${who}.current_state.resources must be an object`, {
+      field: `${who}.current_state.resources`,
+      expected: 'object',
+      received: state.resources,
+      received_type: Array.isArray(state.resources) ? 'array' : typeof state.resources,
+      example: { resources: { 资源名: 3 } },
+    })
+  }
+  const previous = isRecord(base?.resources) ? base.resources : {}
   for (const [name, value] of Object.entries(state.resources)) {
     if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
-      fail(`${who}.current_state.resources.${name} must be an integer`)
+      fail(`${who}.current_state.resources.${name} must be an integer`, {
+        field: `${who}.current_state.resources.${name}`,
+        expected: 'integer',
+        received: value,
+        received_type: typeof value,
+      })
     }
-    if (value < 0) {
+    const original = typeof previous[name] === 'number' ? (previous[name] as number) : 0
+    if (value < 0 && !allowNegative) {
       throw new EngineInputError(
         ERROR_CODES.RESOURCE_NEGATIVE_BALANCE,
-        `${who}'s ${name} balance is ${value}`,
-        'state a non-negative integer balance; spend the resource before the balance reaches zero',
+        `resource ${name} would be ${value}: original ${original}, set ${value}, result ${value} (absolute set in current_state.resources)`,
+        `a negative balance is refused unless novel.yaml targets.allow_negative_balances is true; set a non-negative balance, or let summary.resource_changes apply an increment`,
+        {
+          details: {
+            field: `${who}.current_state.resources.${name}`,
+            expected: 'non-negative integer (or allow_negative_balances: true)',
+            received: { original, set: value, result: value },
+            allowed: ['0 or positive integer'],
+            example: { resources: { [name]: 0 } },
+          },
+        },
       )
     }
   }
 }
 
-/** Current state is a patch; resources are a nested map, not a whole replacement. */
+/**
+ * Current state is a patch; resources are a nested map, not a whole replacement.
+ * `unset` is the only way to remove a top-level key; a null value is still a value.
+ */
 const mergeCurrentState = (
   base: Record<string, unknown>,
   patch: Record<string, unknown>,
+  unset: readonly string[] = [],
 ): Record<string, unknown> => {
   const merged = { ...base, ...patch }
   if (patch.resources !== undefined && !isRecord(patch.resources)) {
@@ -78,28 +134,104 @@ const mergeCurrentState = (
     const baseResources = isRecord(base.resources) ? base.resources : {}
     merged.resources = { ...baseResources, ...(patch.resources as Record<string, unknown>) }
   }
+  for (const key of unset) {
+    delete merged[key]
+  }
   return merged
 }
 
-function fail(detail: string): never {
+/**
+ * U4: a delta rejection without `details` gives the author a sentence and no
+ * field to fix. Call sites that know the exact shape pass their own object;
+ * the rest still get the leading field path and the requirement sentence, so
+ * no rejection reaches the tool layer bare. `derived: true` marks the ones
+ * whose `received` value the message did not carry.
+ */
+function deriveDeltaDetails(detail: string): ErrorDetails {
+  const head = /^(\S+)\s/.exec(detail)
+  const token = head?.[1] ?? ''
+  const path = token.includes('.') || /^[A-Za-z_][\w-]*$/.test(token) ? token : 'state_delta'
+  return { field: path, expected: detail, derived: true }
+}
+
+function fail(detail: string, details?: ErrorDetails): never {
   throw new EngineInputError(
     ERROR_CODES.DELTA_UNVERIFIED,
     `state_delta is incomplete: ${detail}`,
     'declare every entity the chapter touched as created, updated, or no_change with a reason',
+    { details: details ?? deriveDeltaDetails(detail) },
   )
+}
+
+/** Refuse unknown keys instead of silently dropping them (0.2.14). */
+const assertDeltaKeys = (
+  value: unknown,
+  section: (typeof SECTIONS)[number],
+  where: string,
+  entryKey?: string,
+): void => {
+  // Shape errors (null, array, scalar) are reported by entry(), with a better
+  // message than an unknown-key scan.
+  if (!isRecord(value)) return
+  const allowed = DELTA_KEYS[section]
+  for (const key of Object.keys(value)) {
+    if (allowed.includes(key)) continue
+    // Echoing the map key as `name` is harmless and common; a different name
+    // is a silent rename, which is not harmless.
+    if ((section === 'characters' || section === 'world') && key === 'name') {
+      if (entryKey === undefined || value.name === entryKey) continue
+      fail(`${where}.name "${String(value.name)}" does not match its key "${entryKey}"`, {
+        field: `${where}.name`,
+        expected: entryKey,
+        received: value.name,
+        received_type: typeof value.name,
+      })
+    }
+    fail(`${where} has unknown key "${key}"`, {
+      field: `${where}.${key}`,
+      expected: `one of ${allowed.join('|')}`,
+      received: value[key],
+      allowed: [...allowed],
+      example:
+        section === 'foreshadows'
+          ? { action: 'updated', note: 'chapter resolved it', resolved_anchor: '正文原句' }
+          : { action: 'updated', reason: '...' },
+    })
+  }
 }
 
 const entry = <T extends { action?: unknown }>(
   value: T | undefined,
   where: string,
 ): T & { action: DeltaAction } => {
-  if (value === undefined) fail(`${where} is not declared`)
-  if (!isRecord(value))
-    fail(`${where} must be an object; expected {"action":"created|updated|no_change", ...}`)
+  if (value === undefined) {
+    fail(`${where} is not declared`, {
+      field: where,
+      expected: 'a declared entry',
+      received: 'missing',
+      received_type: 'undefined',
+      allowed: [...ACTIONS],
+      example: { action: 'updated', reason: '...' },
+    })
+  }
+  if (!isRecord(value)) {
+    fail(`${where} must be an object`, {
+      field: where,
+      expected: 'object',
+      received: value,
+      received_type: Array.isArray(value) ? 'array' : typeof value,
+      example: { action: 'updated', reason: '...' },
+    })
+  }
   if (!ACTIONS.includes(value.action as DeltaAction)) {
-    fail(
-      `${where} must declare action created|updated|no_change; expected {"action":"updated","reason":"..."} or {"action":"no_change","reason":"..."}`,
-    )
+    fail(`${where} must declare action created|updated|no_change`, {
+      field: `${where}.action`,
+      expected: 'created|updated|no_change',
+      received: value.action,
+      received_type: typeof value.action,
+      allowed: [...ACTIONS],
+      example: { action: 'updated', reason: '...' },
+    })
   }
   return value as T & { action: DeltaAction }
 }
@@ -107,7 +239,13 @@ const entry = <T extends { action?: unknown }>(
 const requireReason = (value: { action: DeltaAction; reason?: string }, where: string): void => {
   if (value.action !== 'no_change') return
   if (typeof value.reason !== 'string' || value.reason.trim() === '') {
-    fail(`${where} is no_change but has no reason`)
+    fail(`${where} is no_change but has no reason`, {
+      field: `${where}.reason`,
+      expected: 'a non-empty string',
+      received: value.reason ?? 'missing',
+      received_type: typeof value.reason,
+      example: { action: 'no_change', reason: '本章没有出现' },
+    })
   }
 }
 
@@ -139,6 +277,17 @@ const requireForeshadowFields = (value: ForeshadowDelta, where: string): void =>
   if (value.kind !== undefined && value.kind !== 'plot' && value.kind !== 'motif') {
     fail(`${where}.kind must be plot|motif`)
   }
+}
+
+/** Nearest paragraph hint for a failed verbatim match. */
+const nearestParagraph = (
+  text: string,
+  quote: string,
+): { paragraph: number; text: string; offset: number } | undefined => {
+  const match = matchEvidence(text, quote)
+  return match.nearest === undefined
+    ? undefined
+    : { paragraph: match.nearest.paragraph, text: match.nearest.text, offset: match.nearest.offset }
 }
 
 const withoutQuotedSpeech = (text: string): string =>
@@ -196,6 +345,10 @@ export interface DeltaInput {
   narrator?: string | null
   /** Role hints from P1 / the worldbook, keyed by character name. */
   roleHints?: Readonly<Record<string, string>>
+  /** Project target: a negative balance is debt, not a typo. */
+  allowNegativeBalances?: boolean
+  /** strict outline: a plot foreshadow must name its planned payoff chapter. */
+  strict?: boolean
 }
 
 const ROLE_ALIASES: Readonly<Record<string, string>> = {
@@ -241,12 +394,38 @@ const canonicalRole = (value: string | undefined): string | null => {
  */
 export function applyStateDelta(input: DeltaInput): DeltaResult {
   const { chapter, summary, delta } = input
-  if (!isRecord(delta)) fail('the delta must be an object')
+  const allowNegative = input.allowNegativeBalances === true
+  if (!isRecord(delta)) {
+    fail('the delta must be an object', {
+      field: 'state_delta',
+      expected: 'object',
+      received: delta,
+      received_type: Array.isArray(delta) ? 'array' : typeof delta,
+      example: { characters: {}, foreshadows: {}, timeline: {}, world: {}, relationships: {} },
+    })
+  }
   for (const key of Object.keys(delta)) {
-    if (!(SECTIONS as readonly string[]).includes(key)) fail(`unknown section "${key}"`)
+    if (!(SECTIONS as readonly string[]).includes(key)) {
+      fail(`unknown section "${key}"`, {
+        field: `state_delta.${key}`,
+        expected: `one of ${SECTIONS.join('|')}`,
+        received: key,
+        received_type: 'string',
+        allowed: [...SECTIONS],
+      })
+    }
   }
   for (const section of SECTIONS) {
-    if (!isRecord(delta[section])) fail(`missing section "${section}"`)
+    if (!isRecord(delta[section])) {
+      fail(`missing section "${section}"`, {
+        field: `state_delta.${section}`,
+        expected: 'object',
+        received: delta[section] ?? 'missing',
+        received_type: delta[section] === undefined ? 'undefined' : typeof delta[section],
+        allowed: [...SECTIONS],
+        example: { [section]: {} },
+      })
+    }
   }
 
   if (!isRecord(summary.new_elements)) fail('summary.new_elements must be an object')
@@ -303,6 +482,16 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
 
   const appeared = [...new Set(summary.characters_appeared)]
   const byName = new Map(characters.characters.map((character) => [character.name, character]))
+  // Balances before this delta, so a set/add collision can name the original
+  // instead of claiming it was zero (M4/U1).
+  const originalBalances = new Map<string, number>()
+  for (const record of characters.characters) {
+    const state = isRecord(record.current_state) ? record.current_state : {}
+    const resources = isRecord(state.resources) ? state.resources : {}
+    for (const [resource, value] of Object.entries(resources)) {
+      if (typeof value === 'number') originalBalances.set(`${record.name}\u0000${resource}`, value)
+    }
+  }
   const narrator = input.narrator ?? ''
   const narratorName = narratorNameOf(narrator)
   // A first-person plan names the protagonist in `narrator`, while the
@@ -312,27 +501,99 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
 
   for (const name of appeared) {
     if (!appearsInManuscript(name)) {
-      fail(`character "${name}" is listed in characters_appeared but does not appear in the manuscript`)
+      fail(`character "${name}" is listed in characters_appeared but does not appear in the manuscript`, {
+        field: `summary.characters_appeared`,
+        expected: 'names that appear verbatim in the manuscript',
+        received: name,
+        received_type: 'string',
+        allowed: [...appeared],
+      })
     }
     if (!Object.hasOwn(delta.characters, name)) {
-      fail(`character "${name}" appeared in the chapter but is not declared in characters`)
+      fail(`character "${name}" appeared in the chapter but is not declared in characters`, {
+        field: `characters.${name}`,
+        expected: 'a declared entry',
+        received: 'missing',
+        received_type: 'undefined',
+        allowed: [...ACTIONS],
+        example: { [name]: { action: 'updated', reason: '出场了但状态不变' } },
+      })
     }
   }
 
   for (const [name, raw] of Object.entries(delta.characters)) {
+    assertDeltaKeys(raw, 'characters', `characters.${name}`, name)
     const declared = entry<CharacterDelta>(raw, `characters.${name}`)
     requireReason(declared, `characters.${name}`)
+    if (declared.action === 'no_change') {
+      const ignored = (['current_state', 'profile', 'growth'] as const).filter(
+        (field) => declared[field] !== undefined,
+      )
+      if (ignored.length > 0 || (declared.unset?.length ?? 0) > 0) {
+        fail(
+          `characters.${name} is no_change but also declares ${[...ignored, ...(declared.unset === undefined ? [] : ['unset'])].join(', ')}; no_change accepts only role`,
+          {
+            field: `characters.${name}.action`,
+            expected: 'updated',
+            received: 'no_change',
+            allowed: [...ACTIONS],
+            example: { action: 'updated', current_state: { status: '...' } },
+          },
+        )
+      }
+    }
+    if (declared.role !== undefined && typeof declared.role !== 'string') {
+      fail(`characters.${name}.role must be a string`, {
+        field: `characters.${name}.role`,
+        expected: 'string',
+        received: declared.role,
+        received_type: Array.isArray(declared.role) ? 'array' : typeof declared.role,
+        example: 'protagonist',
+      })
+    }
+    if (declared.unset !== undefined) {
+      if (!Array.isArray(declared.unset) || declared.unset.some((key) => typeof key !== 'string')) {
+        fail(`characters.${name}.unset must be a string array`, {
+          field: `characters.${name}.unset`,
+          expected: 'string[]',
+          received: declared.unset,
+          received_type: Array.isArray(declared.unset) ? 'array' : typeof declared.unset,
+          example: { unset: ['deadline'] },
+        })
+      }
+      if (declared.unset.includes('resources')) {
+        fail(`characters.${name}.unset cannot remove resources; set an explicit balance instead`, {
+          field: `characters.${name}.unset`,
+          expected: 'top-level scalar keys, not resources',
+          received: declared.unset,
+          allowed: Object.keys(declared.current_state ?? {}).filter((key) => key !== 'resources'),
+        })
+      }
+      if (declared.action !== 'updated') {
+        fail(`characters.${name}.unset requires action updated`, {
+          field: `characters.${name}.action`,
+          expected: 'updated',
+          received: declared.action,
+          allowed: ['updated'],
+        })
+      }
+    }
     for (const field of ['profile', 'current_state', 'growth'] as const) {
       if (declared[field] !== undefined && !isRecord(declared[field])) {
-        fail(
-          `characters.${name}.${field} must be an object; expected ${
-            field === 'current_state'
-              ? '{"resources":{"资源名":3},"status":"..."}'
-              : field === 'profile'
-                ? '{"age":31,"occupation":"..."}'
-                : '{"change":"...","status_change":"..."}'
-          }`,
-        )
+        const value = declared[field]
+        const shape =
+          field === 'current_state'
+            ? { resources: { 资源名: 3 }, status: '...' }
+            : field === 'profile'
+              ? { age: 31, occupation: '...' }
+              : { change: '...', status_change: '...' }
+        fail(`characters.${name}.${field} must be an object; expected ${JSON.stringify(shape)}`, {
+          field: `characters.${name}.${field}`,
+          expected: 'object',
+          received: value,
+          received_type: Array.isArray(value) ? 'array' : typeof value,
+          example: { [field]: shape },
+        })
       }
     }
     if (declared.growth !== undefined) {
@@ -354,7 +615,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         canonicalRole(rawHint) ??
         (rawHint === undefined && (name === narratorName || name === narrator) ? 'protagonist' : 'extra')
       const currentState = (declared.current_state ?? {}) as Record<string, unknown>
-      validateResources(currentState, `characters.${name}`)
+      validateResources(currentState, `characters.${name}`, allowNegative)
       const growth =
         declared.growth === undefined
           ? []
@@ -391,9 +652,10 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
     if (declared.action === 'updated') {
       if (declared.profile !== undefined) existing.profile = { ...existing.profile, ...declared.profile }
-      if (declared.current_state !== undefined) {
-        const merged = mergeCurrentState(existing.current_state, declared.current_state)
-        validateResources(merged, `characters.${name}`)
+      if (declared.current_state !== undefined || declared.unset !== undefined) {
+        const before = existing.current_state
+        const merged = mergeCurrentState(before, declared.current_state ?? {}, declared.unset ?? [])
+        validateResources(merged, `characters.${name}`, allowNegative, before)
         existing.current_state = merged
       }
       if (declared.growth !== undefined) {
@@ -403,6 +665,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     }
   }
 
+  const resourceSeen = new Map<string, number>()
   for (const change of summary.resource_changes) {
     if (
       !isRecord(change) ||
@@ -425,23 +688,80 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     const character = byName.get(change.character)
     if (character === undefined) fail(`resource change names unknown character "${change.character}"`)
     if (!Number.isInteger(change.delta) || change.delta === 0) {
-      fail(`resource change for "${change.character}" must have a non-zero integer delta`)
+      fail(`resource change for "${change.character}" must have a non-zero integer delta`, {
+        field: `summary.resource_changes[${change.character}.${change.resource}].delta`,
+        expected: 'non-zero integer',
+        received: change.delta,
+        received_type: typeof change.delta,
+      })
+    }
+    const pair = `${change.character}\u0000${change.resource}`
+    const previousDelta = resourceSeen.get(pair)
+    if (previousDelta === change.delta) {
+      throw new EngineInputError(
+        ERROR_CODES.RESOURCE_DOUBLE_COUNT,
+        `${change.character} ${change.resource} appears twice with the same delta ${change.delta}`,
+        'each resource change must appear once; merge the duplicate rows (resource_changes is the only incremental channel)',
+        {
+          details: {
+            field: 'summary.resource_changes',
+            expected: 'one row per character+resource+delta',
+            received: { character: change.character, resource: change.resource, delta: change.delta },
+          },
+        },
+      )
+    }
+    resourceSeen.set(pair, change.delta)
+    // The absolute channel is current_state.resources; the incremental channel
+    // is summary.resource_changes. Writing both is the silent double count this
+    // version refuses instead of guessing which one the author meant.
+    const declaredResources = delta.characters[change.character]?.current_state?.resources
+    if (isRecord(declaredResources) && Object.hasOwn(declaredResources, change.resource)) {
+      const absolute = declaredResources[change.resource]
+      const original = originalBalances.get(pair) ?? 0
+      throw new EngineInputError(
+        ERROR_CODES.RESOURCE_DOUBLE_COUNT,
+        `${change.character} ${change.resource}: set ${String(absolute)} (absolute) and ${change.delta} (increment) in one delta; original ${original}, set result ${String(absolute)}, add result ${original + change.delta}`,
+        'pick one channel: current_state.resources is an absolute set, summary.resource_changes[].delta is an increment',
+        {
+          details: {
+            field: `characters.${change.character}.current_state.resources.${change.resource}`,
+            expected: 'exactly one of set or add',
+            received: {
+              original,
+              set: absolute,
+              delta: change.delta,
+              set_result: absolute,
+              add_result: original + change.delta,
+            },
+            allowed: ['current_state.resources (set)', 'summary.resource_changes (add)'],
+          },
+        },
+      )
     }
     const state = isRecord(character.current_state) ? character.current_state : {}
     const resources: Record<string, unknown> = isRecord(state.resources) ? { ...state.resources } : {}
     const current =
       typeof resources[change.resource] === 'number' ? (resources[change.resource] as number) : 0
     const next = current + change.delta
-    if (next < 0) {
+    if (next < 0 && !allowNegative) {
       throw new EngineInputError(
         ERROR_CODES.RESOURCE_NEGATIVE_BALANCE,
-        `${change.character}'s ${change.resource} would drop to ${next}`,
-        'state the resource cap or earn the balance before spending it',
+        `${change.character} ${change.resource}: original ${current}, change ${change.delta}, result ${next}`,
+        'set novel.yaml targets.allow_negative_balances=true for debt, or earn the balance before spending it',
+        {
+          details: {
+            field: `summary.resource_changes[${change.character}.${change.resource}].delta`,
+            expected: 'result >= 0',
+            received: { original: current, delta: change.delta, result: next },
+            allowed: ['reduce the delta', 'raise the balance first', 'allow_negative_balances: true'],
+          },
+        },
       )
     }
     resources[change.resource] = next
     character.current_state = { ...state, resources }
-    validateResources(character.current_state, `characters.${change.character}`)
+    validateResources(character.current_state, `characters.${change.character}`, allowNegative, state)
   }
 
   const findWorld = (
@@ -516,6 +836,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   }
 
   for (const [name, raw] of Object.entries(delta.world)) {
+    assertDeltaKeys(raw, 'world', `world.${name}`, name)
     const declared = entry<WorldDelta>(raw, `world.${name}`)
     requireReason(declared, `world.${name}`)
     if (declared.description !== undefined && typeof declared.description !== 'string') {
@@ -692,6 +1013,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (!Object.hasOwn(delta.foreshadows, plant.key)) {
       fail(`foreshadows.${plant.key} is not declared`)
     }
+    assertDeltaKeys(delta.foreshadows[plant.key], 'foreshadows', `foreshadows.${plant.key}`)
     const declared = entry<ForeshadowDelta>(delta.foreshadows[plant.key], `foreshadows.${plant.key}`)
     requireReason(declared, `foreshadows.${plant.key}`)
     requireForeshadowFields(declared, `foreshadows.${plant.key}`)
@@ -717,6 +1039,30 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (declared.title !== undefined && typeof declared.title !== 'string') {
       fail(`foreshadows.${plant.key}.title must be a string`)
     }
+    const plantedKind = declared.kind ?? plant.kind ?? 'plot'
+    const plannedResolve =
+      declared.planned_resolve !== undefined ? declared.planned_resolve : plant.planned_resolve
+    if (plantedKind === 'plot' && (plannedResolve === undefined || plannedResolve === null)) {
+      if (input.strict === true) {
+        throw new EngineInputError(
+          ERROR_CODES.FORESHADOW_UNPLANNED,
+          `strict mode: plot foreshadow "${plant.key}" has no planned_resolve chapter`,
+          'add planned_resolve (the chapter that pays it off) or declare kind:"motif"; a plot thread without a plan is not tracking, it is a note',
+          {
+            details: {
+              field: `summary.foreshadows.planted[${plant.key}].planned_resolve`,
+              expected: 'a positive chapter number',
+              received: plannedResolve ?? null,
+              example: { planned_resolve: chapter + 3 },
+            },
+          },
+        )
+      }
+      warnings.push({
+        code: 'FORESHADOW_UNPLANNED',
+        message: `plot foreshadow ${plant.key} "${plant.title}" has no planned_resolve; strict mode would refuse it`,
+      })
+    }
     const title = declared.title ?? plant.title
     if (title.trim() === '') fail(`foreshadow "${plant.key}" has an empty title`)
     if (Array.from(title.trim()).length < 2 || Array.from(title.trim()).length > 16) {
@@ -737,8 +1083,13 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
           `planted foreshadow "${title}" has no anchor and does not appear verbatim in the manuscript; add a verbatim anchor or keep the title as text`,
         )
       }
-    } else if (!input.text.includes(anchor)) {
-      fail(`planted foreshadow "${title}" anchor "${anchor}" does not appear verbatim in the manuscript`)
+    } else if (!matchEvidence(input.text, anchor).found) {
+      fail(`planted foreshadow "${title}" anchor "${anchor}" does not appear verbatim in the manuscript`, {
+        field: `foreshadows.${plant.key}.anchor`,
+        expected: 'a verbatim quote from this chapter',
+        received: anchor,
+        nearest: nearestParagraph(input.text, anchor),
+      })
     }
     const allocated = allocateIds('FS', foreshadows.next_seq, 1)
     const id = allocated.ids[0]!
@@ -780,11 +1131,17 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (!Object.hasOwn(delta.foreshadows, advance.key)) {
       fail(`foreshadows.${advance.key} is not declared`)
     }
+    assertDeltaKeys(delta.foreshadows[advance.key], 'foreshadows', `foreshadows.${advance.key}`)
     const declared = entry<ForeshadowDelta>(delta.foreshadows[advance.key], `foreshadows.${advance.key}`)
     requireReason(declared, `foreshadows.${advance.key}`)
     requireForeshadowFields(declared, `foreshadows.${advance.key}`)
-    if (declared.anchor !== undefined && !input.text.includes(declared.anchor)) {
-      fail(`foreshadows.${advance.key}.anchor does not appear verbatim in the manuscript`)
+    if (declared.anchor !== undefined && !matchEvidence(input.text, declared.anchor).found) {
+      fail(`foreshadows.${advance.key}.anchor does not appear verbatim in the manuscript`, {
+        field: `foreshadows.${advance.key}.anchor`,
+        expected: 'a verbatim quote from this chapter',
+        received: declared.anchor,
+        nearest: nearestParagraph(input.text, declared.anchor),
+      })
     }
     if (declared.action !== 'updated') {
       fail(`foreshadows.${advance.key} is advanced; its action must be updated`)
@@ -812,6 +1169,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (!Object.hasOwn(delta.foreshadows, key)) {
       fail(`foreshadows.${key} is not declared`)
     }
+    assertDeltaKeys(delta.foreshadows[key], 'foreshadows', `foreshadows.${key}`)
     const declared = entry<ForeshadowDelta>(delta.foreshadows[key], `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
     requireForeshadowFields(declared, `foreshadows.${key}`)
@@ -825,8 +1183,13 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
     if (declared.resolved_anchor === undefined) {
       fail(`foreshadow "${key}" resolved without resolved_anchor; a note cannot replace manuscript evidence`)
     }
-    if (!input.text.includes(declared.resolved_anchor)) {
-      fail(`foreshadow "${key}" resolved_anchor does not appear verbatim in the manuscript`)
+    if (!matchEvidence(input.text, declared.resolved_anchor).found) {
+      fail(`foreshadow "${key}" resolved_anchor does not appear verbatim in the manuscript`, {
+        field: `foreshadows.${key}.resolved_anchor`,
+        expected: 'a verbatim quote from this chapter',
+        received: declared.resolved_anchor,
+        nearest: nearestParagraph(input.text, declared.resolved_anchor),
+      })
     }
     item.status = 'resolved'
     item.last_touched = chapter
@@ -852,11 +1215,17 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   ])
   for (const [key, raw] of Object.entries(delta.foreshadows)) {
     if (consumed.has(key)) continue
+    assertDeltaKeys(raw, 'foreshadows', `foreshadows.${key}`)
     const declared = entry<ForeshadowDelta>(raw, `foreshadows.${key}`)
     requireReason(declared, `foreshadows.${key}`)
     requireForeshadowFields(declared, `foreshadows.${key}`)
-    if (declared.anchor !== undefined && !input.text.includes(declared.anchor)) {
-      fail(`foreshadows.${key}.anchor does not appear verbatim in the manuscript`)
+    if (declared.anchor !== undefined && !matchEvidence(input.text, declared.anchor).found) {
+      fail(`foreshadows.${key}.anchor does not appear verbatim in the manuscript`, {
+        field: `foreshadows.${key}.anchor`,
+        expected: 'a verbatim quote from this chapter',
+        received: declared.anchor,
+        nearest: nearestParagraph(input.text, declared.anchor),
+      })
     }
     const item = byId.get(key)
     if (item === undefined) fail(`foreshadow "${key}" is not in the ledger`)
@@ -880,10 +1249,11 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   for (const [index, event] of summary.events.entries()) {
     const key = String(index)
     const stableKey = eventKeys[index]!
-    const declared = entry<TimelineDelta>(
-      delta.timeline[stableKey] ?? delta.timeline[key],
-      `timeline.${stableKey}`,
-    )
+    const rawTimeline = delta.timeline[stableKey] ?? delta.timeline[key]
+    if (rawTimeline !== undefined) {
+      assertDeltaKeys(rawTimeline, 'timeline', `timeline.${stableKey}`)
+    }
+    const declared = entry<TimelineDelta>(rawTimeline, `timeline.${stableKey}`)
     if (declared.action !== 'created') {
       fail(`timeline.${stableKey} is a new event; its action must be created`)
     }
@@ -928,6 +1298,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
   const findRelationship = (a: string, b: string): RelationshipsDocument['items'][number] | undefined =>
     relationships.items.find((item) => (item.a === a && item.b === b) || (item.a === b && item.b === a))
   for (const [key, raw] of Object.entries(delta.relationships)) {
+    assertDeltaKeys(raw, 'relationships', `relationships.${key}`)
     const declared = entry<RelationshipDelta>(raw, `relationships.${key}`)
     requireReason(declared, `relationships.${key}`)
     const [left, right] = key.split('|')

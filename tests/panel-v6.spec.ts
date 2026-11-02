@@ -14,7 +14,7 @@ describe('panel v6 book data', () => {
       await readyToArchive({ root, engine, text: cleanText() })
       const summary = sampleSummary({
         new_elements: { locations: ['旧商铺'], abilities: [], artifacts: [] },
-        new_element_anchors: { locations: { 旧商铺: ['门口'] } },
+        new_element_anchors: { locations: { 旧商铺: ['不快不慢，在门口停了两秒。'] } },
       })
       await engine.submitRevision({ chapter: 1, summary, root })
       await engine.getBrief({ stage: 'P8', root })
@@ -29,7 +29,7 @@ describe('panel v6 book data', () => {
       expect(data!.progress.words_archived).toBeGreaterThan(0)
       expect(data!.quality.samples).toBe(1)
       expect(data!.quality.attempts).toBe(1)
-      expect(data!.worldbook.locations[0]?.anchors).toEqual(['门口'])
+      expect(data!.worldbook.locations[0]?.anchors).toEqual(['不快不慢，在门口停了两秒。'])
       expect(data!.health.outline).toMatchObject({ error: null })
       expect(data!.health.worldbook).toMatchObject({ error: null })
       expect(bundle.summary?.pending).toBeUndefined()
@@ -52,7 +52,7 @@ describe('panel v6 book data', () => {
       expect(html.match(/nwe-info-card-title">质量与节奏/g)).toHaveLength(1)
       expect(html).toContain('第 1 章')
       expect(html).toContain('卷进度')
-      expect(html).toContain('锚点：门口')
+      expect(html).toContain('锚点：不快不慢，在门口停了两秒。')
       expect(html).not.toContain('{"日常')
       expect(html).not.toContain('actual_average')
       const leanBundle = await engine.panelBundle({ root, lean: true })

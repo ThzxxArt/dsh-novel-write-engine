@@ -603,7 +603,7 @@ describe('rule edge cases', () => {
     expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
   })
 
-  it('does not flag drift when an earlier location description is correct', () => {
+  it('reports a contradictory later description even when an earlier one matches', () => {
     const locks = {
       schema_version: 1 as const,
       locked_at_chapter: 1,
@@ -619,7 +619,9 @@ describe('rule edge cases', () => {
     }
     const text =
       '他推开旧办公室的门，靠窗一张旧办公桌还在，墙角堆满文件箱，桌上的台灯没有开。\n\n后来旧办公室重新装修，桌子换成红木桌，墙角空荡荡的。'
-    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).not.toContain('LOCKED_DETAIL_DRIFT')
+    // 0.2.14 (X11): the worst paragraph is the drift; a compliant opening must
+    // not hide a contradictory later paragraph.
+    expect(codesOf(text, { evidence: { ...options().evidence, locks } })).toContain('LOCKED_DETAIL_DRIFT')
   })
 
   it('reports the best of several sub-threshold descriptions', () => {
@@ -735,6 +737,8 @@ describe('rule edge cases', () => {
         evidence: { ...options().evidence, locks },
       }),
     ).not.toContain('LOCKED_DETAIL_DRIFT')
+    // A bare mention is not drift; a described renovation is, even when the
+    // previous paragraph matched exactly (X11 worst-segment reporting).
     expect(
       codesOf(
         '旧办公室的门朝北，桌上一盏绿灯，墙上有一张旧地图。\n\n他走进旧办公室，屋里的桌子换成了红木桌，墙角还多了一台机器。',
@@ -742,7 +746,7 @@ describe('rule edge cases', () => {
           evidence: { ...options().evidence, locks },
         },
       ),
-    ).not.toContain('LOCKED_DETAIL_DRIFT')
+    ).toContain('LOCKED_DETAIL_DRIFT')
   })
 
   it('applies a genre water-word profile without changing the global rule', () => {

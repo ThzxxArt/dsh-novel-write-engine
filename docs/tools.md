@@ -1,3 +1,18 @@
+## 0.2.14 工具契约
+
+- 仍是 28 个工具、13 个门控、15 维、5 语义项、6 种导出；只增加可选输入/输出字段。
+- 所有失败在 `[CODE] message — hint` 之后追加 `details: {...}`：`field/expected/received/received_type/allowed/example/nearest/candidates`。`EngineBlockedError.blocking[]` 同样带 `details`。
+- `novel_brief` 新增 `stages: BriefStage[]`：一次事务签发多阶段，返回第一个阶段字段 + `briefs[]`；每阶段 digest 只覆盖自己的依赖（见下）。带 `dependencies` 的收据在同一 `(chapter, stage, digest)` 重放不写盘；0.2.13 之前没有 `dependencies` 的 current 收据会重签一次（否则 PG-01 永远说不清变了什么）。
+  依赖表：P1=project/outline/worldbook/handoff/chapters；P2=world_plan/outline/worldbook/chapters；P3=plan/world_plan/characters/world/outline；P4=text/plan/machine；P5=text/review；P6=text/review/machine/check；P8=text/review/check/plan/foreshadows/最近 5 章摘要。`rounds`、`pipeline.last_action` 与无关台账不再进入 digest；`rollback_epoch` 使 rollback 后必须重领。
+- `novel_amend` 新增 `patch: [{op:"replace"|"add"|"remove", path:"items.3.title", value}]` 与 `allow_delete`；`content` 与 `patch` 二选一；`novel.yaml` 同样支持 `patch`，只提交实际变化的键（`genre/platform/created_at/words_per_chapter/dialogue_ratio` 仍不可变）。返回 `{path, revision, before, after, changes}`。服务端按 section 重新读取行数/主键，缺行即拒绝（`allow_delete:true` 才允许删除）；去掉 `page` 不再能绕过。
+- `novel_restore.paths` 接受 7 个台账文件；恢复校验 `next_seq` 不降、文档可窄化、跨台账引用不新增悬空（locks/timeline/relationships 的实体须由 characters 声明，handoff 卷号/章序自洽）；归档章文件仍走 reopen。
+- `novel_check`：`advisories` 计数为「按 code 聚合后仍可见的显示行」，`advisory_instances` 是逐条明细；`acknowledge` 同时接受 code 与实例 id，`acknowledge_until_chapter` 设置复核到期。`machine.advisories` 持久化为逐条实例，面板读取时聚合。
+- `novel_review`：`total` 可省略（引擎实算）；`amend_issues: [{id,status?,severity?,location?,problem?,fix?}]` 在 P5/P6/ready_to_archive 就地修正评审元数据，不消耗 review 轮次；blocker 不可降级/waive。
+- `novel_doctor` 新增 `baseline:true`（写 `state/doctor-baseline.yaml`，同 id+detail 不再 warning；重写时只保留仍在复现的条目）与 `reset:true`（清空）。基线写入本身是一次 journal 事务。已不再复现的基线条目单独报 `doctor-baseline-stale`，不与「已接受、仍待办」混成一行。
+- `novel_state {kind:"briefs"}` 新增 `view:"current"|"all"`；`all` 合并 `history/briefs/chNNN.yaml`，返回 `history_receipts`。`kind:"pipeline"` 增加 `briefs_source`、`briefs_note`、`previous_chapter_effort` 与 `effort:{lifetime,basis}`（与 report/status 同源）。`briefs_source` 标明实际答复的来源，取 `none`（还没有收据）、`pipeline.briefs (legacy)`（0.2.13 之前只写在 pipeline 里的收据，且没有 `state/briefs.yaml`）、`state/briefs.yaml`（文件是唯一来源）、`state/briefs.yaml (pipeline.briefs ignored)`（文件存在即权威，pipeline 里的旧行不参与）。
+- `novel_status` 增加 `target_words`（含标点/汉字下限口径）与 `dialogue`（双口径 + verdict）；`novel_report.effort` 增加 `basis` 与 `current_chapter`，`quality.attempts === effort.reviews`。
+- `state_delta`：`characters[].unset` 删除顶层键；`current_state.resources` 是绝对值，`resource_changes` 是增量，同章同资源双写 `ENGINE_RESOURCE_DOUBLE_COUNT`；负余额需 `targets.allow_negative_balances`。
+
 ## 0.2.13 工具契约
 
 - 仍是 28 个工具、13 个门控、15 维评分、5 个语义项、6 种导出；只增加可选输入/输出字段。
@@ -66,12 +81,12 @@
 | `novel_plan_world`   | P1       | `submitWorldPlan`；数组/对象形状在服务边界窄化                                                                                           | 是                                                                           |
 | `novel_plan_chapter` | P2       | `submitChapterPlan`；标题长度读 rulepack、5–8 个节拍、narrator/opening/ending 非空；可选 `cast` 1–8 人                                   | 是                                                                           |
 | `novel_write_draft`  | P3       | `submitDraft`                                                                                                                            | 是                                                                           |
-| `novel_review`       | P4       | `submitReview`                                                                                                                           | 是（`total` 必填；issue 维度/段落校验；blocker 不可 waived）                 |
+| `novel_review`       | P4       | `submitReview`                                                                                                                           | 是（`total` 可省略，传了必须等于引擎实算；issue 维度/段落校验；blocker 不可 waived）                 |
 | `novel_revise`       | P5/P6    | `submitRevision`；`content` 与 `patch:{expected_hash,edits}` 二选一；或只传 `summary` 做 summary-only | 是（blocker 不可降级或 waived；issue 只能改 status/evidence；content/patch 需 `proof`） |
-| `novel_check`        | P6       | `runCheck`；`acknowledge` 只能列 advisory code，blocker 不可被知悉放行                                                                   | 是（五个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
+| `novel_check`        | P6       | `runCheck`；`acknowledge` 可列 advisory code 或实例 id，blocker 不可被知悉放行                                                            | 是（五个语义项必填；`scope` 默认 content+integrity；单 scope 通过仍停留 P6） |
 | `novel_archive`      | 归档     | `archiveChapter`                                                                                                                         | 事务（必须带 `state_delta`；旧 review 无 digest 时拒绝）                     |
 | `novel_word_count`   | 任意     | `countWords`；纯文本模式不读项目，`project_root` 仅用于项目模式                                                                           | 项目正文否；项目模式显式 `project_root` 会写会话绑定                          |
-| `novel_state`        | 任意     | `queryState`；chapters 默认紧凑索引，支持 `include_summary` / `chapter_range`；`history` / `backups` / `briefs` 只读；损坏文档返回 raw     | 否                                                                           |
+| `novel_state`        | 任意     | `queryState`；chapters 默认紧凑索引，支持 `include_summary` / `chapter_range`；`history` / `backups` / `briefs` 只读；损坏文档返回 raw（上限 64KB，超限标 `raw_truncated`） | 否 |
 | `novel_amend`        | 任意     | `amend`；支持 `novel.yaml` 元数据、八个 ledger 与 outline/worldbook，带不变量、归档卡保护与单一目标 repair                              | 是                                                                           |
 | `novel_rollback`     | 任意     | `rollback`；只能退回当前阶段或更早                                                                                                       | 是                                                                           |
 | `novel_diff`         | 任意     | `diff`；`before`+`after` 文本模式不读项目，`project_root` 仅用于项目模式                                                                  | 项目正文否；项目模式显式 `project_root` 会写会话绑定                          |
@@ -83,11 +98,11 @@
 | `novel_outline_import` | 任意   | `importOutline`；Markdown/YAML/JSON，`dry_run` 预览                                                                                      | 可选                                                                         |
 | `novel_worldbook`    | 任意     | `submitWorldbook`；按段替换                                                                                                              | 是                                                                           |
 | `novel_search`       | 任意     | `search`；正文/摘要/大纲/世界观/台账                                                                                                     | 否                                                                           |
-| `novel_doctor`       | 任意     | `doctor`；项目/流水线/状态/journal/正文/大纲覆盖与漂移/阶段产物/锁/备份                                                                  | 否                                                                           |
+| `novel_doctor`       | 任意     | `doctor`；项目/流水线/状态/journal/正文/大纲覆盖与漂移/阶段产物/锁/备份/期限标量（已过期 vs 仍待办）                                       | 否                                                                           |
 | `novel_report`       | 任意     | `report`；进度/质量/节奏/角色/伏笔/时间线/关系                                                                                           | 否                                                                           |
 | `novel_guide`        | 任意     | `guide`；六态引导（no-project/new/planning/writing/blocked/finished），无项目可用                                                        | 否                                                                           |
 | `novel_reopen`       | 已归档章 | `reopenChapter`；从归档备份恢复并重开 P3；`chapter` 与 `reason` 必填                                                                     | 事务                                                                         |
-| `novel_restore`      | 活动章/大纲/损坏 pipeline | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验、outline/outline.yaml，或损坏的 state/pipeline.yaml；已归档章拒绝，先 `novel_reopen` | 事务 |
+| `novel_restore`      | 活动章/大纲/损坏 pipeline/7 个台账 | `restoreBackup`；从带 manifest 的备份恢复正文/计划/评审/校验、outline/outline.yaml、损坏的 state/pipeline.yaml，或 state 的 7 个台账文件；台账恢复另外校验 `next_seq` 不降与跨台账引用不新增悬空；已归档章拒绝，先 `novel_reopen` | 事务 |
 
 ## 错误三分类
 
@@ -100,7 +115,7 @@
 ## 0.1.3 契约补充
 
 - 八个 ledger 损坏时 `state_errors` 的 code 为 `CHAPTERS_UNREADABLE`、`CHARACTERS_UNREADABLE`、`WORLD_UNREADABLE`、`LOCKS_UNREADABLE`、`TIMELINE_UNREADABLE`、`FORESHADOWS_UNREADABLE`、`RELATIONSHIPS_UNREADABLE`、`HANDOFF_UNREADABLE`，plan/review/check/worldPlan 有对应 `*_UNREADABLE`，`novel.yaml` 为 `PROJECT_UNREADABLE`，规划文档为 `OUTLINE_UNREADABLE` / `WORLDBOOK_UNREADABLE`。status/panel 仍可读，损坏 ledger/project/规划文档的 `next.tool = novel_amend`。
-- `novel_state` 对损坏 ledger/project/review/check/outline/worldbook 返回 `{error,message,path,raw}`；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters、targets.min_cjk_chars 与 targets.dialogue_ratio_metric；损坏时接受完整项目文档。
+- `novel_state` 对损坏的 **ledger** 返回 `{error,message,path,damaged,summary,raw,raw_truncated}`（raw 上限 64KB；`summary` 给字节/行/`next_seq`/样本 id 与名称/是否缺尾换行，`locks` 这类 map 形状同样计数）；project/review/check/outline/worldbook 损坏只回 `{error,message,path,raw,raw_truncated}`，没有 `damaged/summary`；`planWorld`/`planChapter` 损坏直接抛错，不回 raw；`novel_amend` 的 `content` 对损坏目标必须是完整新文档，对可读 `novel.yaml` 是可变量字段 patch（目标文档与 `state/pipeline.yaml` 同一事务写入），`reason` 必填。amend 支持 `novel.yaml`，可修 title/author/description/targets.total_chapters、targets.min_cjk_chars、targets.dialogue_ratio_metric 与 targets.allow_negative_balances；损坏时接受完整项目文档。`novel_amend` 同时支持 `patch:[{op,path,value}]` 局部修改与 `before/after/changes` 回执；`novel_report.debt` 列出负数余额（需项目打开 `allow_negative_balances`）。
 - `novel_plan_chapter.cast` 可选 1–8 人：`{name,entry_state?,goal?,knowledge?,exit_change?}`；名字必须来自 P1 世界计划或角色台账；标题不得自带 `第N章` 前缀。
 - P2/P3/P4/P5/P6 brief 的 `context.world_plan` 来自 P1；P3/P4 的 `context.characters` 是本章活跃卡，`other_characters` 是压缩索引；P6 的 `context.active_cast` 受预算保护。world_plan 的目标/约束受保护，角色/地点名单可裁剪。
 - `novel_state {kind:"chapters"}` 默认返回紧凑索引且不带 summary；`chapter_range:[start,end]` 只做范围过滤，完整 summary 仍须同时传 `include_summary:true`。panel 只返回最近 30 行。
@@ -126,7 +141,7 @@
 - 续写与导出：`resume`、`export md|txt|epub|outline|worldbook|proposal`；
 - 隐藏与运维：`admin [<op> <json>]`。
 
-面板「? 教程 → 全部命令」展示 5 个入口、25 种带名写法、6 种导出、25 个 admin 操作和常用组合；`/novel admin` 空参数列出全部操作名。`scan`/`resume` 只是 `/novel` 子命令，不进入工具 schema；工具仍 28 个、服务操作仍 32 个。
+面板「? 教程 → 全部命令」展示 5 个入口、25 种带名写法、6 种导出、25 个 admin 操作和常用组合；`/novel admin` 空参数列出全部操作名。`scan`/`resume` 只是 `/novel` 子命令，不进入工具 schema；工具仍 28 个、服务操作 34 个（0.2.14 新增 `reviewAmendment` 与 `doctorBaseline`，都不是独立工具，前者是 `novel_review {amend_issues}` 的子操作、后者是 `novel_doctor {baseline}` 的子操作）。
 
 ## core 模式
 
@@ -174,8 +189,8 @@
 - 通过参数形状校验并进入项目锁后，被 gate/delta/state 拒绝的写操作会追加 `status:"aborted"`、`attempt:true` 的 journal 行，带 `code`、`reason`、`hint` 与 `blocking`；内容文件不动，`novel_audit` 可按章、操作、状态和时间过滤，用 `seq` 游标翻页。锁前的纯参数形状错误不会写 journal（此时还没有可证明的项目上下文）。
 - `novel_state {kind:"history"}` 列出 `history/` 下的评审/校验/正文/废弃稿/计划版本，默认 `limit:50` 并返回 `page`（`total/returned/next_cursor`）；用 `limit`/`cursor` 继续翻页，不会静默截断。带 `chapter` 与正整数 `revision` 时返回该章该版本文本，未带 chapter 时默认活动章。`kind:"backups"` 返回 manifest（op/chapter/revision/files/reason）；没有 manifest 的旧备份只可列出。
 - `novel_revise` 的 `patch` 模式必须带 `expected_hash`；`old_text` 默认必须唯一，`occurrence` 才允许多处；hash 不匹配时零写入。
-- `novel_check` 把 blocker 放 `machine.violations`，advisory 放 `machine.advisories`；`acknowledge` 只接受本次 advisory code，未知 code 或 blocker 返回 `ENGINE_SCHEMA_INVALID`。
-- `novel_restore` 可恢复活动章、`paths: ["outline/outline.yaml"]` 的整份大纲，或 `paths: ["state/pipeline.yaml"]` 的损坏 pipeline（只在该文件不可读时）；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。
+- `novel_check` 把 blocker 放 `machine.violations`，advisory 放 `machine.advisories`；`acknowledge` 接受本次 advisory 的 code 或实例 id（`acknowledge_reasons` 给理由、`acknowledge_until_chapter` 设到期章），未知 code/id 或 blocker 返回 `ENGINE_SCHEMA_INVALID`。
+- `novel_restore` 可恢复活动章、`paths: ["outline/outline.yaml"]` 的整份大纲、`paths: ["state/pipeline.yaml"]` 的损坏 pipeline（只在该文件不可读时），或 `state/` 的 7 个台账（`characters|world|locks|timeline|foreshadows|relationships|handoff`，台账路径必须单列、不能与章节文件混用）；已归档章返回 `ENGINE_STAGE_ORDER`，必须先 `novel_reopen`。台账恢复额外校验：`next_seq` 不降、文档能窄化、跨台账引用不新增悬空（locks/timeline/relationships 的实体须由 characters 声明，handoff 卷号/章序自洽），只拒绝本次恢复新引入的问题，已坏的旧项目仍可逐文件修。`paths` 省略时恢复 manifest 记录的本章正文/计划/世界观计划/评审/校验 pre-image；显式 paths 也必须在 manifest 内。每次恢复本身是事务并再建备份，不做 replay。P2/P4/P6 在已有旧文件时会建备份，因此第二次提交起计划/评审/校验可恢复；outline 事务的 pre-image 同样可恢复。
 - P2 计划文件不再写 `summary`；活动摘要/标题/场景/叙述者位于 `pipeline.draft`，归档时写入 `ChapterRecord`，`ChapterRecord.rounds/final_check/archived_at`（含 `rollbacks`）供 `novel_report.effort` 使用。归档前正文 hash 必须仍等于 `draft.content_hash`，否则返回 `ENGINE_TXN_ABORTED`；`status` 用 `DRAFT_STALE` 指回 P3。
 - `card_coverage` 是“已归档章中有 archived 章卡”的逐章比例；`planned_coverage`/`archived_coverage` 才以目标章数为分母。worldbook 的 `facts` 同时进入计数、brief 上下文与 P6 数字事实检查。
 - `NUMERIC_CONTRADICTION` 固定为 advisory（中文主语不明确，不能可靠区分车/船等不同对象），`NUMERIC_FACT_MISMATCH` 只匹配“别名 + 数字 + 声明单位”的相邻写法，避免把旁边的数量词当成事实。

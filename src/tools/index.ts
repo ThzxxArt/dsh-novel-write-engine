@@ -44,8 +44,12 @@ const fail = (error: unknown): never => {
       'items' in error && Array.isArray((error as { items?: unknown }).items)
         ? `\nitems: ${JSON.stringify((error as { items: unknown[] }).items)}`
         : ''
+    // field/expected/received/allowed are the whole point of the diagnostics
+    // contract; without this line the model only saw the prose message (U4,
+    // M11, M16).
+    const structured = error.details === undefined ? '' : `\ndetails: ${JSON.stringify(error.details)}`
     throw new Error(
-      `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}${details}`,
+      `[${error.code}] ${error.message}${error.hint === undefined ? '' : ` — ${error.hint}`}${blocking}${details}${structured}`,
     )
   }
   throw error
@@ -554,6 +558,14 @@ export function createNovelTools(
       description: 'Fetch the task book for a stage. Issuing it records the digest PG-01 checks.',
       parameters: {
         stage: { type: 'string', required: true, enum: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8'] as const },
+        stages: {
+          type: 'array',
+          items: { type: 'string', enum: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8'] as const },
+          description: arraySemanticsDescription(
+            'replace',
+            '一次性签发多个阶段：同一事务写一条批量收据，返回 briefs[]。',
+          ),
+        },
         chapter: { type: 'integer' },
         project_root: root,
       },
@@ -574,7 +586,12 @@ export function createNovelTools(
         },
       },
       execute: guarded(async (args) =>
-        engine.getBrief({ stage: args.stage, chapter: args.chapter, root: args.project_root }),
+        engine.getBrief({
+          stage: args.stage,
+          ...(args.stages === undefined ? {} : { stages: args.stages as never[] }),
+          chapter: args.chapter,
+          root: args.project_root,
+        }),
       ),
     }),
     defineTool({
@@ -632,7 +649,13 @@ export function createNovelTools(
               name: required(str),
               entry_state: str,
               goal: str,
-              knowledge: arrayOf(str),
+              // Item types are checked by the engine, which can say which index
+              // held which type; a tool-level `array of string` can only say
+              // "must be an array" (M16).
+              knowledge: {
+                type: 'array',
+                description: 'String array of what this character knows entering the chapter.',
+              },
               exit_change: str,
             }),
           ),
@@ -697,7 +720,9 @@ export function createNovelTools(
         chapter: { type: 'integer', required: true },
         dimensions: {
           ...arrayOf(dimensionSchema),
-          required: true,
+          // Optional at the boundary: `amend_issues` never reads it, and the
+          // engine still rejects a normal review that omits it with a message
+          // that names all three required parts.
           description: arraySemanticsDescription('replace', 'Fifteen scored dimensions.'),
         },
         issues: {
@@ -706,13 +731,31 @@ export function createNovelTools(
         },
         total: {
           type: 'integer',
-          required: true,
-          description: '150 - Σdelta, the same number the review reports.',
+          description: '150 - Σdelta；省略时由引擎实算，传了就必须一致。',
         },
         proof: {
-          ...proofSchema,
-          description: arraySemanticsDescription('replace', 'Three reading-proof quotes.'),
+          ...optional(proofSchema),
+          description: arraySemanticsDescription(
+            'replace',
+            'Three reading-proof quotes; omitted only for amend_issues.',
+          ),
         },
+        amend_issues: {
+          type: 'array',
+          items: objectOf({
+            id: required(str),
+            status: { type: 'string', enum: ['open', 'fixed', 'waived'] as const },
+            severity: { type: 'string', enum: ['blocker', 'advisory'] as const },
+            location: str,
+            problem: str,
+            fix: str,
+          }),
+          description: arraySemanticsDescription(
+            'replace',
+            'P5/P6/ready_to_archive 就地修正评审元数据；不消耗评审轮次。',
+          ),
+        },
+        amend_note: str,
         project_root: root,
       },
       output: jsonOutput,
@@ -721,8 +764,10 @@ export function createNovelTools(
           chapter: args.chapter,
           dimensions: asJson(args.dimensions, 'dimensions') as never,
           issues: (asJson(args.issues, 'issues') as never) ?? [],
-          total: args.total,
+          ...(args.total === undefined ? {} : { total: args.total }),
           proof: asJson(args.proof, 'proof') as never,
+          ...(args.amend_issues === undefined ? {} : { amend_issues: args.amend_issues as never[] }),
+          ...(typeof args.amend_note === 'string' ? { amend_note: args.amend_note } : {}),
           root: args.project_root,
         }),
       ),
@@ -819,6 +864,7 @@ export function createNovelTools(
           ),
         },
         acknowledge_reasons: openObject('Token 到理由的映射；每个 acknowledge 项都必须有非空理由。'),
+        acknowledge_until_chapter: int,
         project_root: root,
       },
       output: jsonOutput,
@@ -831,6 +877,9 @@ export function createNovelTools(
           ...(args.acknowledge_reasons === undefined
             ? {}
             : { acknowledge_reasons: args.acknowledge_reasons as Record<string, string> }),
+          ...(typeof args.acknowledge_until_chapter === 'number'
+            ? { acknowledge_until_chapter: args.acknowledge_until_chapter }
+            : {}),
           root: args.project_root,
         }),
       ),
@@ -959,6 +1008,11 @@ export function createNovelTools(
           type: 'boolean',
           description: 'For kind=briefs: only the current receipt per chapter/stage.',
         },
+        view: {
+          type: 'string',
+          enum: ['all', 'current'] as const,
+          description: 'For kind=briefs: current is an alias of current_only; all includes history/briefs.',
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -976,6 +1030,7 @@ export function createNovelTools(
           ...(args.status === undefined ? {} : { status: args.status }),
           ...(args.include_history === undefined ? {} : { include_history: args.include_history }),
           ...(args.current_only === undefined ? {} : { current_only: args.current_only }),
+          ...(args.view === 'all' || args.view === 'current' ? { view: args.view } : {}),
           root: args.project_root,
         }),
       ),
@@ -1001,10 +1056,20 @@ export function createNovelTools(
             'outline/worldbook.yaml',
           ] as const,
         },
-        content: {
-          ...openObject('按 path 的完整替换文档；根必须是映射。'),
-          required: true,
+        content: openObject('按 path 的完整替换文档；根必须是映射。与 patch 二选一。'),
+        patch: {
+          type: 'array',
+          items: objectOf({
+            op: required({ type: 'string', enum: ['replace', 'add', 'remove'] as const }),
+            path: required(str),
+            value: { type: 'json' },
+          }),
+          description: arraySemanticsDescription(
+            'replace',
+            '局部修改：点路径（items.3.title）；与 content 二选一。',
+          ),
         },
+        allow_delete: bool,
         reason: { type: 'string', required: true },
         project_root: root,
       },
@@ -1012,7 +1077,11 @@ export function createNovelTools(
       execute: guarded(async (args) =>
         engine.amend({
           path: args.path,
-          content: asJson<Record<string, unknown>>(args.content, 'content'),
+          ...(args.content === undefined
+            ? {}
+            : { content: asJson<Record<string, unknown>>(args.content, 'content') }),
+          ...(args.patch === undefined ? {} : { patch: args.patch as never[] }),
+          ...(typeof args.allow_delete === 'boolean' ? { allow_delete: args.allow_delete } : {}),
           reason: args.reason,
           root: args.project_root,
         }),
@@ -1320,10 +1389,20 @@ export function createNovelTools(
     defineTool({
       name: 'novel_doctor',
       description:
-        'Run a read-only health check: project, pipeline, state, journal, manuscripts, outline coverage/drift, stage products, backups, lock and next step.',
-      parameters: { project_root: root },
+        'Run a health check. baseline:true accepts the current warnings (state/doctor-baseline.yaml); reset:true clears it.',
+      parameters: {
+        baseline: bool,
+        reset: bool,
+        project_root: root,
+      },
       output: jsonOutput,
-      execute: guarded(async (args) => engine.doctor({ root: args.project_root })),
+      execute: guarded(async (args) =>
+        engine.doctor({
+          ...(typeof args.baseline === 'boolean' ? { baseline: args.baseline } : {}),
+          ...(typeof args.reset === 'boolean' ? { reset: args.reset } : {}),
+          root: args.project_root,
+        }),
+      ),
     }),
     defineTool({
       name: 'novel_report',
@@ -1358,7 +1437,7 @@ export function createNovelTools(
     defineTool({
       name: 'novel_restore',
       description:
-        'Restore an active chapter file, outline/outline.yaml, or a damaged state/pipeline.yaml from a marked backup transaction. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
+        'Restore a pre-image from a marked backup transaction: an active chapter file, outline/outline.yaml, a damaged state/pipeline.yaml, or any of the seven state ledgers (characters/world/locks/timeline/foreshadows/relationships/handoff). A ledger restore refuses a lower next_seq and any cross-ledger reference the restore would newly dangle; restore ledger files on their own, not mixed with chapter files. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
       parameters: {
         txid: { type: 'string', required: true },
         chapter: { type: 'integer' },
@@ -1367,7 +1446,7 @@ export function createNovelTools(
           items: { type: 'string' },
           description: arraySemanticsDescription(
             'replace',
-            'Project-relative chapter files, exactly [outline/outline.yaml], or exactly [state/pipeline.yaml] when the pipeline is unreadable; omitted restores every restorable chapter file the manifest records.',
+            'Project-relative chapter files, outline/outline.yaml, state/pipeline.yaml when unreadable, or the seven state ledgers (state/characters.yaml, state/world.yaml, state/locks.yaml, state/timeline.yaml, state/foreshadows.yaml, state/relationships.yaml, state/handoff.yaml); omitted restores every restorable chapter file the manifest records. Ledger paths must be given on their own.',
           ),
         },
         project_root: root,

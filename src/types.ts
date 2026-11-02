@@ -52,6 +52,7 @@ export const OPERATIONS = [
   'submitChapterPlan',
   'submitDraft',
   'submitReview',
+  'reviewAmendment',
   'submitRevision',
   'runCheck',
   'submitBookPlan',
@@ -75,6 +76,8 @@ export const OPERATIONS = [
   'panelGates',
   'stats',
   'restoreBackup',
+  /** Not a tool: the doctor baseline write, journaled like any other mutation. */
+  'doctorBaseline',
 ] as const
 export type Operation = (typeof OPERATIONS)[number]
 
@@ -84,12 +87,35 @@ export interface Warning {
   message: string
 }
 
+/**
+ * Machine-readable repair context attached to a refusal. A string message is
+ * enough for a human; a model needs the field, the expected shape, what it
+ * actually sent, and the legal values in one answer.
+ */
+export interface ErrorDetails {
+  field?: string
+  expected?: unknown
+  received?: unknown
+  received_type?: string
+  allowed?: string[]
+  example?: unknown
+  nearest?: { paragraph: number; text: string; offset: number }
+  candidates?: Array<{ index: number; text: string }>
+  /** PG-01: which dependency block changed, and which tool re-signs the brief. */
+  stale_reason?: string
+  stale_stage?: BriefStage
+  required_tool?: string
+  changed?: string[]
+  [key: string]: unknown
+}
+
 /** One reason a gate refused progress. */
 export interface BlockingItem {
   code: string
   scope?: string
   detail: string
   hint?: string
+  details?: ErrorDetails
 }
 
 /** Uniform success envelope of every service operation. */
@@ -135,6 +161,10 @@ export const ERROR_CODES = {
   ISSUE_IMMUTABLE: 'ENGINE_ISSUE_IMMUTABLE',
   DELTA_UNVERIFIED: 'ENGINE_DELTA_UNVERIFIED',
   RESOURCE_NEGATIVE_BALANCE: 'ENGINE_RESOURCE_NEGATIVE_BALANCE',
+  /** The same resource was written by both the absolute and incremental channels. */
+  RESOURCE_DOUBLE_COUNT: 'ENGINE_RESOURCE_DOUBLE_COUNT',
+  /** strict mode: a plot foreshadow was planted without a planned payoff. */
+  FORESHADOW_UNPLANNED: 'ENGINE_FORESHADOW_UNPLANNED',
   SCHEMA_TOO_NEW: 'ENGINE_SCHEMA_TOO_NEW',
   SCHEMA_INVALID: 'ENGINE_SCHEMA_INVALID',
   PATH_ESCAPE: 'ENGINE_PATH_ESCAPE',
@@ -152,12 +182,19 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]
 export class EngineError extends Error {
   readonly code: string
   readonly hint: string | undefined
+  readonly details: ErrorDetails | undefined
 
-  constructor(code: string, message: string, hint?: string, options?: { cause?: unknown }) {
+  constructor(
+    code: string,
+    message: string,
+    hint?: string,
+    options?: { cause?: unknown; details?: ErrorDetails },
+  ) {
     super(message, options)
     this.name = new.target.name
     this.code = code
     this.hint = hint
+    this.details = options?.details
   }
 }
 
@@ -168,8 +205,14 @@ export class EngineInputError extends EngineError {}
 export class EngineBlockedError extends EngineError {
   readonly blocking: BlockingItem[]
 
-  constructor(code: string, message: string, blocking: BlockingItem[], hint?: string) {
-    super(code, message, hint)
+  constructor(
+    code: string,
+    message: string,
+    blocking: BlockingItem[],
+    hint?: string,
+    details?: ErrorDetails,
+  ) {
+    super(code, message, hint, details === undefined ? undefined : { details })
     this.blocking = blocking
   }
 }
@@ -178,8 +221,13 @@ export class EngineBlockedError extends EngineError {
 export class EngineFaultError extends EngineError {}
 
 /** Convenience constructor set, kept close to the classes so adapters agree. */
-export const inputError = (code: string, message: string, hint?: string): EngineInputError =>
-  new EngineInputError(code, message, hint)
+export const inputError = (
+  code: string,
+  message: string,
+  hint?: string,
+  details?: ErrorDetails,
+): EngineInputError =>
+  new EngineInputError(code, message, hint, details === undefined ? undefined : { details })
 export const blockedError = (
   code: string,
   message: string,
@@ -227,16 +275,37 @@ export interface ReviewDocument {
   total: number
   /** The three reading proofs accepted at P4; PG-09 re-verifies them at P6. */
   proof?: ReadingProof
+  /** 0.2.14: reviewer metadata corrections; does not consume a review round. */
+  amendments?: Array<{ at: string; note: string; issues: string[] }>
+}
+
+/** Where a finding lives: manuscript paragraph, ledger entry, or both. */
+export interface ViolationLocation {
+  paragraph?: number
+  /** 0.2.14: ledger-level findings name the ledger instead of paragraph 1. */
+  ledger?: 'foreshadows' | 'timeline' | 'relationships' | 'characters' | 'world' | 'locks' | 'check'
+  entity?: string
+}
+
+/** One acknowledgement arm of a rolled-up advisory row. */
+export interface AdvisoryInstance {
+  id: string
+  location: ViolationLocation
+  detail: string
 }
 
 /** Structured machine finding. */
 export interface Violation {
   code: string
   severity: Severity
-  location: { paragraph: number }
+  location: ViolationLocation
   detail: string
   /** Stable instance id for per-finding acknowledgement; computed for new checks. */
   id?: string
+  /** 0.2.14: per-instance rows behind one aggregated advisory display row. */
+  instances?: AdvisoryInstance[]
+  /** 0.2.14: every distinct location merged into this display row. */
+  locations?: ViolationLocation[]
 }
 
 /** Metric block produced by the machine pass. */
@@ -258,14 +327,31 @@ export interface CheckDocument {
     violations: Violation[]
     advisories?: Violation[]
     metrics: WordMetrics
+    /** 0.2.14: the two dialogue measures, the configured metric and its verdict. */
+    dialogue?: {
+      target: [number, number] | null
+      metric: 'lines' | 'chars' | 'both'
+      line_ratio: number
+      char_ratio: number
+      verdict: 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured'
+    }
     numeric?: {
       facts_declared: number
       facts_checked: number
+      /** 0.2.14: declared facts the manuscript never mentions. */
+      facts_unused?: number
       equations_checked: number
       findings: number
     }
     /** 0.2.13 per-finding acknowledgements; kept under machine so 0.2.12 can read the document. */
-    acknowledged_findings?: Array<{ id: string; code: string; reason: string; at: string }>
+    acknowledged_findings?: Array<{
+      id: string
+      code: string
+      reason: string
+      at: string
+      /** 0.2.14: a long-lived waiver may expire at a chapter boundary. */
+      expires_at_chapter?: number
+    }>
   }
   semantic: {
     items: Array<{ id: string; verdict: 'pass' | 'fail'; evidence: string; note: string }>
@@ -279,6 +365,12 @@ export interface CheckDocument {
   /** 0.2.5: content failures consume the check budget; submission errors never persist. */
   failure_class?: 'submission' | 'content'
   counted?: boolean
+  /**
+   * 0.2.14 read-time normalization marker: the stored document predates `scope`
+   * and mixed advisories into `violations`. The in-memory view splits them, and
+   * doctor names the chapter instead of failing the read.
+   */
+  legacy_format?: true
   verdict: 'pass' | 'fail'
 }
 
@@ -356,6 +448,13 @@ export interface ChapterRecord {
   title: string
   file: string
   word_count: number
+  /**
+   * 0.2.14 (R7): CJK characters only. PG-03 can require a CJK floor, and
+   * `word_count` counts punctuation too, so a chapter could pass the total and
+   * still be short of the CJK target with no number to prove it. Legacy rows
+   * archived before 0.2.14 omit it.
+   */
+  cjk_words?: number
   dialogue_lines: number
   dialogue_ratio: number
   scene_type: SceneType
@@ -428,6 +527,8 @@ export interface CharacterDelta {
   role?: string
   profile?: Record<string, unknown>
   current_state?: Record<string, unknown>
+  /** 0.2.14: top-level current_state keys to delete; null stays a value. */
+  unset?: string[]
   /** Chapter is engine-assigned from the archive transaction, not caller-supplied. */
   growth?: { change: string; status_change: string }
 }
@@ -531,6 +632,8 @@ export interface BriefReceipt {
   current?: boolean
   superseded_at?: string
   superseded_by?: string
+  /** 0.2.14: per-dependency digests, so PG-01 can name what changed. */
+  dependencies?: Record<string, string>
 }
 
 /** `state/briefs.yaml`: append-only task-book evidence outside content transactions. */
@@ -557,7 +660,7 @@ export interface PipelineState {
   chapter: number
   stage: Stage
   rounds: RoundCounters
-  briefs: Record<string, { issued_at: string; digest: string }>
+  briefs: Record<string, { issued_at: string; digest: string; dependencies?: Record<string, string> }>
   blocking: BlockingItem[]
   /** Current draft summary/title; never written into the P2 plan file. */
   draft?: DraftState
@@ -703,6 +806,8 @@ export interface NovelProject {
     min_cjk_chars?: number | null
     /** 0.2.13 which dialogue measure the advisory uses; default both. */
     dialogue_ratio_metric?: 'lines' | 'chars' | 'both'
+    /** 0.2.14: allow a ledger balance to go negative (debt). Default false. */
+    allow_negative_balances?: boolean
   }
 }
 
@@ -784,6 +889,8 @@ export interface OutlineChapter {
   status: 'planned' | 'archived'
   archived_at: string | null
   word_count: number | null
+  /** 0.2.14 (R7): CJK-only count for archived cards; null before 0.2.14. */
+  cjk_words?: number | null
   score: number | null
 }
 
@@ -970,18 +1077,32 @@ export interface BookReport {
     samples: number
     /** The unit behind `samples`; 0.2.13 makes the old ambiguity explicit. */
     sample_basis?: 'final_review_per_chapter'
+    /** Which chapters the average covers (U7). */
+    sample_chapters?: number[]
     /** Committed review rounds for this report, including history. */
     attempts: number
-    attempt_basis?: 'committed_review_submissions'
+    /** 0.2.14: the projection that produced `attempts`, not a second addition. */
+    attempt_basis?: 'committed_review_submissions' | 'committed_journal' | 'chapter_record'
     dimensions: Array<{ id: string; average: number; samples: number; max: number }>
   }
   /** Per-chapter effort survives archive (pipeline rounds are reset). */
   effort: {
-    review_basis?: 'committed_review_submissions'
+    /** Mirrors `basis`; kept for callers that read the older field. */
+    review_basis?: 'committed_review_submissions' | 'committed_journal' | 'chapter_record'
+    /** 0.2.14: one projection, three views; this names the source of the numbers. */
+    basis?: 'committed_journal' | 'chapter_record'
     reviews: number
     revisions: number
     checks: number
     rollbacks: number
+    /** Current chapter counters; reset at archive, unlike the lifetime totals. */
+    current_chapter?: {
+      chapter: number
+      reviews: number
+      revisions: number
+      checks: number
+      rollbacks: number
+    }
     chapters: Array<{
       num: number
       reviews: number
@@ -1009,6 +1130,12 @@ export interface BookReport {
     total: number
     top: Array<{ name: string; appearances: number; last_seen: number; role: string }>
   }
+  /**
+   * 0.2.14: balances below zero. Only reachable when the project sets
+   * `targets.allow_negative_balances`; a debt is a real ledger state, not a
+   * silent clamp, so the report names it instead of hiding it.
+   */
+  debt: Array<{ character: string; resource: string; balance: number }>
   foreshadows: {
     open: number
     dormant: number
@@ -1026,6 +1153,10 @@ export interface BookReport {
     total: number
     types: Record<string, number>
     type_codes?: Record<string, number>
+    /** 0.2.14: canonical coverage, not "uncategorized counts as a category". */
+    classified?: number
+    uncategorized?: number
+    coverage?: number
   }
   activity: Array<{ at: string; op: string; chapter: number; status: string }>
   warnings: string[]
@@ -1065,8 +1196,8 @@ export interface ReviewInput {
   chapter: number
   dimensions: ScoreDimension[]
   issues: ReviewIssue[]
-  /** The model's claimed headline score; checked against 150 - Σdelta. */
-  total: number
+  /** The model's claimed headline score; omitted means the engine computes it. */
+  total?: number
   proof: ReadingProof
 }
 
@@ -1110,6 +1241,8 @@ export interface GateInput {
   pipeline: PipelineState
   chapters: ChaptersDocument
   briefDigest: string | null
+  /** Dependency digests of the brief the gate is comparing against, when known. */
+  briefDependencies?: Record<string, string> | null
   briefStage: BriefStage | null
   draftTitle: string | null
   sceneType: SceneType | null
@@ -1143,6 +1276,8 @@ export interface GateInput {
   previousText: string | null
   /** The three preceding chapters, newest first, for the duplicate rule. */
   previousTexts: string[]
+  /** Chapter numbers matching `previousTexts`, so evidence names the real chapter. */
+  previousChapterNums?: number[]
   priorSceneTypes: SceneType[]
   /** 0.2.0 planning input; undefined means "no outline" for older fixtures. */
   outline?: OutlineDocument | null
@@ -1156,6 +1291,8 @@ export interface GateInput {
 export interface GateResult {
   passed: boolean
   blocking: BlockingItem[]
+  /** Non-fatal gate notes, e.g. a card-pinned scene type repeating. */
+  warnings: Warning[]
 }
 
 /** A chapter row projected to the panel and status output. */
@@ -1228,6 +1365,8 @@ export interface StatusReport {
     rollbacks: number
     final_check: 'pass' | 'fail' | null
     archived_at: string | null
+    /** 0.2.14: journal backfill vs a stored chapter record. */
+    basis?: 'committed_journal' | 'chapter_record' | 'unavailable'
     totals: {
       reviews: number
       revisions: number
@@ -1241,6 +1380,22 @@ export interface StatusReport {
   /** plan/review/check/ledger files that exist but cannot be read safely. */
   state_errors: StateError[]
   metrics: WordMetrics | null
+  /** 0.2.14: the length contract in the same place as the numbers. */
+  target_words?: {
+    min: number
+    max: number
+    includes_punctuation: true
+    min_cjk_chars: number | null
+    basis: 'total_word_count = cjk_chars + english_words + numbers + punctuation_chars'
+  }
+  /** 0.2.14: the same dialogue verdict the check records, visible before a check. */
+  dialogue?: {
+    target: [number, number] | null
+    metric: 'lines' | 'chars' | 'both'
+    line_ratio: number
+    char_ratio: number
+    verdict: 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured'
+  }
   /** Inherited handoff labels; absent before the first archive. */
   volume?: number
   volume_name?: string
@@ -1310,6 +1465,8 @@ export interface AuditRow {
   stage?: string
   /** True when no transaction started: the gate/input refused the call. */
   attempt?: boolean
+  /** 0.2.14: the revision an aborted attempt would have written. */
+  intended_revision?: number
   blocking?: BlockingItem[]
   /** Keyed operation fingerprint; lets an identical failed retry be refused. */
   retry_key?: string

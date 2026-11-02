@@ -109,6 +109,10 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     // Optional for documents written before P6 began re-checking PG-09; a
     // missing proof makes the P6 gate fail rather than silently passing.
     proof: f('object'),
+    // 0.2.14: `novel_review {amend_issues}` records what it corrected. The
+    // field was written but not declared, so the engine could not read back
+    // the review it had just amended (REVIEW_UNREADABLE).
+    amendments: f('array'),
   },
   check: {
     chapter: req('integer'),
@@ -120,6 +124,7 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     acknowledged_findings: f('array'),
     failure_class: f('string', { enum: ['submission', 'content'] }),
     counted: f('boolean'),
+    legacy_format: f('boolean'),
     verdict: req('string', { enum: ['pass', 'fail'] }),
   },
   worldPlan: {
@@ -328,6 +333,12 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         if (!['lines', 'chars', 'both'].includes(metric)) {
           invalid(kind, 'targets.dialogue_ratio_metric must be one of lines, chars, both')
         }
+      }
+      if (
+        targets.allow_negative_balances !== undefined &&
+        typeof targets.allow_negative_balances !== 'boolean'
+      ) {
+        invalid(kind, 'targets.allow_negative_balances must be a boolean')
       }
       return
     }

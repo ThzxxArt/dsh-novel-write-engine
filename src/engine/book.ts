@@ -686,6 +686,9 @@ export function normalizeOutlineChapters(
         status: 'archived',
         archived_at: base.archived_at ?? record.archived_at ?? null,
         word_count: record.word_count,
+        // R7: the card is where a writer checks "did this chapter hit the
+        // CJK floor"; the number lives on the chapter record, not the card.
+        ...(record.cjk_words === undefined ? {} : { cjk_words: record.cjk_words }),
         score: record.score,
       })
       continue
@@ -896,6 +899,10 @@ export function validateOutlineDocument(
         status,
         archived_at: archivedAt as string | null,
         word_count: wordCount as number | null,
+        // R7: the card carries the CJK count next to word_count. Without this
+        // line `narrow` dropped the field on every read, so the archive wrote
+        // it and the next load silently removed it.
+        cjk_words: typeof raw.cjk_words === 'number' ? raw.cjk_words : null,
         score: score as number | null,
       })
     }
@@ -1149,6 +1156,9 @@ export function markOutlineArchived(
           status: 'archived' as const,
           archived_at: now,
           word_count: record.word_count,
+          // R7: the card is where an author checks the PG-03 CJK floor, so it
+          // carries the same count the record does (older records leave null).
+          cjk_words: record.cjk_words ?? null,
           score: record.score,
         }
       : card,
@@ -1172,6 +1182,7 @@ export function markOutlineArchived(
       status: 'archived',
       archived_at: now,
       word_count: record.word_count,
+      cjk_words: record.cjk_words ?? null,
       score: record.score,
     })
     chapters.sort((left, right) => left.num - right.num)

@@ -151,13 +151,14 @@ describe('state_delta shape and character reconciliation', () => {
   it('applies created/updated/no_change and accumulates resources', () => {
     const summary = sampleSummary({
       characters_appeared: ['甲'],
-      resource_changes: [{ character: '甲', resource: '钱', delta: -2, reason: '买' }],
+      resource_changes: [],
     })
     const delta = empty()
     delta.characters['甲'] = character('甲', {
       role: 'protagonist',
       profile: { identity: 'A' },
-      current_state: { emotion: '平静', resources: { 钱: 10 } },
+      // Absolute channel only: 10 before the purchase, 8 after it.
+      current_state: { emotion: '平静', resources: { 钱: 8 } },
     })
     delta.timeline['0'] = { action: 'created' }
     const first = run(summary, delta)
@@ -1170,7 +1171,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       events: [],
       characters_appeared: [],
       new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
+      new_element_anchors: { locations: { 旧宅: ['他爬上二楼书房，敲了敲门。'] } },
     })
     const delta = empty()
     delta.world['旧宅'] = { action: 'created', kind: 'location', description: '旧宅内部' }
@@ -1183,7 +1184,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
     })
     expect(result.world.locations[0]).toMatchObject({
       name: '旧宅',
-      anchors: ['二楼书房'],
+      anchors: ['他爬上二楼书房，敲了敲门。'],
     })
     expect(result.world.locations[0]?.description).toBe('旧宅内部')
   })
@@ -1193,7 +1194,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       events: [],
       characters_appeared: [],
       new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
+      new_element_anchors: { locations: { 旧宅: ['他爬上二楼书房，敲了敲门。'] } },
     })
     const delta = empty()
     delta.world['旧宅'] = { action: 'created', kind: 'location' }
@@ -1232,7 +1233,7 @@ describe('state_delta foreshadow and relationship reconciliation', () => {
       events: [],
       characters_appeared: [],
       new_elements: { locations: [], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
+      new_element_anchors: { locations: { 旧宅: ['他爬上二楼书房，敲了敲门。'] } },
     })
     expect(() => run(summary, empty())).toThrowError(/has no such entity/)
   })
@@ -1491,5 +1492,59 @@ describe('0.2.13 invalid enrichment is rejected', () => {
     const kindDelta = empty()
     kindDelta.foreshadows.bad = { action: 'created', title: '欠账', anchor }
     expect(() => run(badKind, kindDelta)).toThrowError(/kind must be plot\|motif/)
+  })
+})
+
+describe('U4: a delta rejection is always diagnosable', () => {
+  it('carries field and expected even for the shape errors that used to be bare', () => {
+    // Twenty-odd `fail()` call sites passed no details, so the tool layer could
+    // only forward a sentence (U4/M16). The helper now derives them; this test
+    // walks the classes the audit reproduced by hand.
+    const cases: Array<{ label: string; summary: ChapterSummary; delta: Record<string, unknown> }> = []
+    {
+      const delta = empty()
+      ;(delta as Record<string, unknown>).bogus = {}
+      cases.push({ label: 'unknown section', summary: sampleSummary(), delta })
+    }
+    {
+      const delta = empty()
+      delta.characters['甲'] = { action: 'created', role: 'supporting', growth: { arc: '' } }
+      cases.push({
+        label: 'empty growth field',
+        summary: sampleSummary({ characters_appeared: ['甲'] }),
+        delta,
+      })
+    }
+    {
+      const delta = empty()
+      delta.characters['甲'] = { action: 'no_change' }
+      cases.push({
+        label: 'no_change without reason',
+        summary: sampleSummary({ characters_appeared: ['甲'] }),
+        delta,
+      })
+    }
+    {
+      const delta = empty()
+      delta.foreshadows['fs-a'] = { action: 'created', planned_resolve: '3' }
+      cases.push({ label: 'string planned_resolve', summary: sampleSummary(), delta })
+    }
+    {
+      const delta = empty()
+      delta.timeline['E1-1-x'] = { action: 'updated' }
+      cases.push({ label: 'new timeline event updated', summary: sampleSummary(), delta })
+    }
+    for (const item of cases) {
+      let error: unknown
+      try {
+        run(item.summary, item.delta)
+      } catch (caught) {
+        error = caught
+      }
+      expect(error, item.label).toBeDefined()
+      const details = (error as { details?: { field?: string; expected?: unknown } }).details
+      expect(details?.field, item.label).toBeTruthy()
+      expect(details?.expected, item.label).toBeTruthy()
+    }
   })
 })

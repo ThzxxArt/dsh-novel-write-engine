@@ -433,7 +433,12 @@ interface ContextMeta {
   protected: string[]
   truncated: string[]
   omitted: Record<string, number>
-  strategy: 'stage-v2'
+  /** 0.2.14: required blocks that survived the trim. */
+  floor_kept?: Record<string, number>
+  /** Must stay 0: a required floor is never sacrificed for the budget. */
+  required_omitted?: number
+  over_budget_reason?: 'protected_block' | 'required_floor' | null
+  strategy: 'stage-v3'
 }
 
 type MutableRecord = Record<string, unknown>
@@ -475,9 +480,12 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
     'machine',
     'summary',
     'world_plan',
-    'book_plan',
-    'outline_card',
-    'worldbook',
+    // P1 reads the world bible for premise/setting/rules. Its cast, place,
+    // faction, glossary and backstory lists are candidates: protecting all of
+    // worldbook is what emptied the foreshadow/summary floors.
+    ...(stage === 'P1' ? [] : ['worldbook']),
+    ...(stage === 'P1' ? [] : ['book_plan']),
+    ...(stage === 'P1' ? [] : ['outline_card']),
     'outline_error',
     'worldbook_error',
     'active_cast',
@@ -501,8 +509,12 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
   interface Candidate {
     key: string
     count: () => number
+    /** Minimum rows that must survive; a required floor is never trimmed. */
+    floor: () => number
     trim: () => boolean
     prepare: () => void
+    /** Trim order: lower tiers are cut before higher ones. */
+    tier: number
   }
 
   const candidates: Candidate[] = []
@@ -520,6 +532,7 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
     array: () => unknown[] | null,
     rank: (value: unknown) => number,
     tie: (value: unknown) => string = stableKey,
+    options: { tier?: number; floor?: number } = {},
   ): void => {
     if (protectedKeys.includes(key)) return
     let prepared = false
@@ -531,23 +544,27 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
         return byRank !== 0 ? byRank : compareText(tie(left), tie(right))
       })
     }
+    const floor = options.floor ?? 0
     candidates.push({
       key,
       count: () => array()?.length ?? 0,
+      floor: () => floor,
       trim: () => {
         sort()
         const list = array()
-        if (list === null || list.length === 0) return false
+        if (list === null || list.length <= floor) return false
         list.pop()
         return true
       },
       prepare: sort,
+      tier: options.tier ?? 0,
     })
   }
   const addObject = (
     key: string,
     map: () => MutableRecord | null,
     rank: (key: string, value: unknown) => number,
+    options: { tier?: number; floor?: number } = {},
   ): void => {
     if (protectedKeys.includes(key)) return
     let keys: string[] | null = null
@@ -560,19 +577,23 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
       })
       return keys
     }
+    const floor = options.floor ?? 0
     candidates.push({
       key,
       count: () => Object.keys(map() ?? {}).length,
+      floor: () => floor,
       trim: () => {
         const target = map()
         if (target === null) return false
         const ordered = ensure()
+        if (ordered.length <= floor) return false
         const keyToDelete = ordered.pop()
         if (keyToDelete === undefined || !Object.hasOwn(target, keyToDelete)) return false
         delete target[keyToDelete]
         return true
       },
       prepare: ensure,
+      tier: options.tier ?? 0,
     })
   }
 
@@ -681,6 +702,7 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
         typeof row?.id === 'string' ? row.id : ''
       }`
     },
+    { floor: Math.min(8, asArray(context.open_foreshadows)?.length ?? 0) },
   )
   const foreshadows = asRecord(context.foreshadows)
   addArray(
@@ -731,11 +753,68 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
       )}`
     },
   )
+  // P1: the world bible's lists are optional context. Its premise/setting/rules
+  // stay untouched because they have no candidate here.
+  const worldbook = asRecord(context.worldbook)
+  for (const key of ['characters', 'locations', 'factions', 'glossary', 'backstory'] as const) {
+    addArray(
+      `worldbook.${key}`,
+      () => asArray(worldbook?.[key]),
+      (value) => {
+        const row = asRecord(value)
+        const name =
+          typeof row?.name === 'string'
+            ? row.name
+            : typeof row?.term === 'string'
+              ? row.term
+              : typeof row?.event === 'string'
+                ? row.event
+                : ''
+        return mentionScore(mentioned, name) * 1_000
+      },
+      (value) => {
+        const row = asRecord(value)
+        return typeof row?.name === 'string'
+          ? row.name
+          : typeof row?.term === 'string'
+            ? row.term
+            : stableKey(value)
+      },
+      { tier: 1 },
+    )
+  }
+  const bookPlan = asRecord(context.book_plan)
+  // P1 protects premise/logline/strict; every other book-plan field is optional
+  // colour and can be trimmed before a required foreshadow or summary floor.
+  addObject(
+    'book_plan',
+    () => bookPlan,
+    (key) => (['premise', 'logline', 'strict'].includes(key) ? 1_000_000 : 0),
+    { tier: 2, floor: Math.min(3, Object.keys(bookPlan ?? {}).length) },
+  )
+  for (const key of ['themes', 'selling_points'] as const) {
+    addArray(
+      `book_plan.${key}`,
+      () => asArray(bookPlan?.[key]),
+      (value) => mentionScore(mentioned, String(value)) * 100,
+      (value) => String(value),
+      { tier: 2 },
+    )
+  }
+  // P1 does not act on the chapter card; it is the first thing to drop when the
+  // protected world-bible block alone is over budget.
+  addObject(
+    'outline_card',
+    () => asRecord(context.outline_card),
+    () => 0,
+    { tier: 1 },
+  )
   addArray(
     'recent_summaries',
     () => asArray(context.recent_summaries),
     (value) => chapter(value),
     (value) => String(chapter(value)).padStart(8, '0'),
+    { tier: 3, floor: Math.min(2, asArray(context.recent_summaries)?.length ?? 0) },
   )
   addArray(
     'score_history',
@@ -752,52 +831,95 @@ function withContextBudget(stage: string, raw: Record<string, unknown>): Record<
   // `context` does not carry context_meta yet; measuring it directly avoids a
   // full clone and a second stringify on every trim decision.
   const used = (): number => jsonSize(context)
-  const buildMeta = (finalUsed: number): ContextMeta => ({
+  /** Required-floor status, recomputed while measuring so the metadata is honest. */
+  const floorState = (): { floorKept: Record<string, number>; requiredOmitted: number } => {
+    const floorKept: Record<string, number> = {}
+    let requiredOmitted = 0
+    for (const candidate of candidates) {
+      const floor = candidate.floor()
+      if (floor <= 0) continue
+      const remaining = candidate.count()
+      floorKept[candidate.key] = Math.min(floor, remaining)
+      if (remaining < floor) requiredOmitted += floor - remaining
+    }
+    return { floorKept, requiredOmitted }
+  }
+  const buildMeta = (finalUsed: number): ContextMeta => {
+    const floors = floorState()
+    return {
+      version: 1,
+      stage,
+      budget,
+      used: finalUsed,
+      over_budget: false,
+      protected: protectedKeys,
+      truncated: [...truncated].sort(compareText),
+      omitted: Object.fromEntries(
+        Object.entries(omitted).sort(([left], [right]) => compareText(left, right)),
+      ),
+      floor_kept: floors.floorKept,
+      required_omitted: floors.requiredOmitted,
+      // Measured with the worst-case reason so the final value cannot push the
+      // document past the budget it was trimmed to.
+      over_budget_reason: 'protected_block',
+      strategy: 'stage-v3',
+    }
+  }
+  // Trim by tier: optional ledgers first, then worldbook lists, then book-plan
+  // fields, and only then the two-summary floor. Round-robin inside a tier.
+  // Size is measured on the real document (including metadata) so the final
+  // `over_budget_reason` cannot push it past the budget it was trimmed to.
+  const exactSize = (): number => jsonSize({ ...context, context_meta: buildMeta(used()) })
+  const tiers = [...new Set(candidates.map((candidate) => candidate.tier))].sort((a, b) => a - b)
+  for (const tier of tiers) {
+    const tierCandidates = candidates.filter((candidate) => candidate.tier === tier)
+    while (exactSize() > budget) {
+      let changed = false
+      for (const candidate of tierCandidates) {
+        if (exactSize() <= budget) break
+        if (candidate.count() === 0) continue
+        candidate.prepare()
+        if (candidate.trim()) {
+          omitted[candidate.key] = (omitted[candidate.key] ?? 0) + 1
+          truncated.add(candidate.key)
+          changed = true
+        }
+      }
+      if (!changed) break
+    }
+  }
+
+  const overBudget = exactSize() > budget
+  const floors = floorState()
+  // Floors are never trimmed, so an over-budget document with every floor met
+  // is limited by its protected content — unless the floors themselves are what
+  // blew the budget. Reporting "protected_block" for a pack whose protected
+  // list does not even contain the floor blocks (eight long foreshadows at 25k
+  // of a 6k budget) is a label the author cannot act on.
+  const floorBytes = Object.keys(floors.floorKept).reduce(
+    (total, key) => total + jsonSize({ [key]: (context as Record<string, unknown>)[key] }),
+    0,
+  )
+  const reason: ContextMeta['over_budget_reason'] = !overBudget
+    ? null
+    : floors.requiredOmitted > 0 || floorBytes > budget
+      ? 'required_floor'
+      : 'protected_block'
+  const finalMeta: ContextMeta = {
     version: 1,
     stage,
     budget,
-    used: finalUsed,
-    over_budget: false,
+    used: used(),
+    over_budget: overBudget,
     protected: protectedKeys,
     truncated: [...truncated].sort(compareText),
     omitted: Object.fromEntries(Object.entries(omitted).sort(([left], [right]) => compareText(left, right))),
-    strategy: 'stage-v2',
-  })
-  // Measure the real document, including the `"context_meta":` key and the
-  // comma that joins it. Adding jsonSize(meta) to the content size alone is a
-  // few bytes short and can overshoot the advertised budget at the boundary.
-  const totalWith = (finalUsed: number, meta: ContextMeta): number => {
-    // The exact serialized object = content JSON + comma + `"context_meta":` +
-    // the metadata's own JSON. `context` always has at least project/chapter.
-    const metaSize = jsonSize({ ...meta, used: finalUsed })
-    return finalUsed + 1 + '"context_meta":'.length + metaSize
+    floor_kept: floors.floorKept,
+    required_omitted: floors.requiredOmitted,
+    over_budget_reason: reason,
+    strategy: 'stage-v3',
   }
-
-  // Round-robin: one item from every candidate per pass, so P6 does not spend
-  // the whole budget on characters before noticing the timeline. The metadata
-  // itself is measured in the loop: its omitted/truncated lists grow as we trim.
-  let finalUsed = used()
-  let metaBase = buildMeta(finalUsed)
-  while (totalWith(finalUsed, metaBase) > budget) {
-    let changed = false
-    for (const candidate of candidates) {
-      if (totalWith(finalUsed, metaBase) <= budget) break
-      if (candidate.count() === 0) continue
-      candidate.prepare()
-      if (candidate.trim()) {
-        omitted[candidate.key] = (omitted[candidate.key] ?? 0) + 1
-        truncated.add(candidate.key)
-        changed = true
-        finalUsed = used()
-        metaBase = buildMeta(finalUsed)
-      }
-    }
-    if (!changed) break
-  }
-
-  const overBudget = totalWith(finalUsed, metaBase) > budget
-  const meta: ContextMeta = { ...metaBase, over_budget: overBudget }
-  return { ...context, context_meta: meta }
+  return { ...context, context_meta: finalMeta }
 }
 
 /**

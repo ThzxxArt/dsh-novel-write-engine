@@ -753,7 +753,7 @@ describe('gate evaluation', () => {
   it('PG-05 accepts a readable new entity through an explicit anchor', () => {
     const summary = sampleSummary({
       new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
+      new_element_anchors: { locations: { 旧宅: ['他爬上二楼书房，敲了敲门。'] } },
     })
     const gateInput = input({
       text: `${text}\n\n他爬上二楼书房，敲了敲门。`,
@@ -765,12 +765,12 @@ describe('gate evaluation', () => {
   it('PG-05 keeps the name fallback and names the attempted anchors on failure', () => {
     const withAnchors = sampleSummary({
       new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },
-      new_element_anchors: { locations: { 旧宅: ['二楼书房'] } },
+      new_element_anchors: { locations: { 旧宅: ['他爬上二楼书房，敲了敲门。'] } },
     })
     const anchored = evaluateGates(input({ summary: withAnchors }), options).blocking.find(
       (item) => item.code === 'PG-05',
     )
-    expect(anchored?.detail).toContain('二楼书房')
+    expect(anchored?.detail).toContain('他爬上二楼书房，敲了敲门。')
 
     const noAnchors = sampleSummary({
       new_elements: { locations: ['旧宅'], abilities: [], artifacts: [] },

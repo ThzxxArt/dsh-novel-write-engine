@@ -48,6 +48,21 @@ export interface ReportInput {
   journal?: AuditRow[]
   /** Committed review rounds for the report, including history. */
   reviewAttempts?: number
+  /** Which ledger the attempt count came from, echoed in quality.attempt_basis. */
+  effortBasis?: 'committed_journal' | 'chapter_record'
+  /** 0.2.14: the service's single effort projection; overrides local arithmetic. */
+  effortProjection?: {
+    basis: 'committed_journal' | 'chapter_record'
+    chapters: Array<{ num: number; reviews: number; revisions: number; checks: number; rollbacks: number }>
+  }
+  /** Live chapter counters (reset at archive) for the current_chapter view. */
+  currentEffort?: {
+    chapter: number
+    reviews: number
+    revisions: number
+    checks: number
+    rollbacks: number
+  } | null
   /** Check verdicts recovered from disk for legacy chapters without final_check. */
   finalChecks?: Record<number, 'pass' | 'fail'>
   targetChapters: number | null
@@ -207,6 +222,20 @@ export function buildBookReport(input: ReportInput): BookReport {
         compareText(left.name, right.name),
     )
     .slice(0, 10)
+  // A negative balance is only legal when the project opts in. Report it as
+  // debt so an opted-in overdraft is visible instead of reading like a typo.
+  const debt = input.characters.characters
+    .flatMap((character) =>
+      Object.entries(character.current_state.resources ?? {})
+        .filter(([, balance]) => typeof balance === 'number' && balance < 0)
+        .map(([resource, balance]) => ({ character: character.name, resource, balance })),
+    )
+    .sort(
+      (left, right) =>
+        left.balance - right.balance ||
+        compareText(left.character, right.character) ||
+        compareText(left.resource, right.resource),
+    )
   const latestChapter = records.length === 0 ? 0 : records[records.length - 1]!.num
   const open = input.foreshadows.items.filter((item) => item.status !== 'resolved')
   const dormant = open.filter((item) => item.status === 'dormant' && item.kind !== 'motif')
@@ -255,10 +284,14 @@ export function buildBookReport(input: ReportInput): BookReport {
   })()
   const relationshipTypes: Record<string, number> = {}
   const relationshipTypeCodes: Record<string, number> = {}
+  let relationshipClassified = 0
   for (const relationship of input.relationships.items) {
     relationshipTypes[relationship.type] = (relationshipTypes[relationship.type] ?? 0) + 1
-    relationshipTypeCodes[relationship.type_code ?? 'uncategorized'] =
-      (relationshipTypeCodes[relationship.type_code ?? 'uncategorized'] ?? 0) + 1
+    // `uncategorized` is a gap, not a category (M6).
+    if (relationship.type_code !== undefined) {
+      relationshipTypeCodes[relationship.type_code] = (relationshipTypeCodes[relationship.type_code] ?? 0) + 1
+      relationshipClassified += 1
+    }
   }
   const hook13 = (hookStrength['1'] ?? 0) + (hookStrength['2'] ?? 0) + (hookStrength['3'] ?? 0)
   const plotLow = plotAdvancement.low ?? 0
@@ -325,14 +358,17 @@ export function buildBookReport(input: ReportInput): BookReport {
       .find((entry) => entry.op === 'archiveChapter' && entry.chapter === chapter)
     return row?.at ?? null
   }
+  const projected = new Map((input.effortProjection?.chapters ?? []).map((row) => [row.num, row]))
   const effortChapters = records.map((record) => {
     const rounds = record.rounds
+    const row = projected.get(record.num)
     return {
       num: record.num,
-      reviews: Math.max(rounds?.review ?? 0, committedCount('submitReview', record.num)),
-      revisions: Math.max(rounds?.revise ?? 0, committedCount('submitRevision', record.num)),
-      checks: Math.max(rounds?.check ?? 0, committedCount('runCheck', record.num)),
-      rollbacks: Math.max(rounds?.rollbacks ?? 0, committedCount('rollback', record.num)),
+      reviews: row?.reviews ?? Math.max(rounds?.review ?? 0, committedCount('submitReview', record.num)),
+      revisions:
+        row?.revisions ?? Math.max(rounds?.revise ?? 0, committedCount('submitRevision', record.num)),
+      checks: row?.checks ?? Math.max(rounds?.check ?? 0, committedCount('runCheck', record.num)),
+      rollbacks: row?.rollbacks ?? Math.max(rounds?.rollbacks ?? 0, committedCount('rollback', record.num)),
       final_check: record.final_check ?? input.finalChecks?.[record.num] ?? null,
       archived_at: record.archived_at ?? archivedAt(record.num),
     }
@@ -386,8 +422,14 @@ export function buildBookReport(input: ReportInput): BookReport {
       trend_basis: trendBasis,
       samples: qualitySamples,
       sample_basis: 'final_review_per_chapter',
+      // Which chapters the average actually covers, so a reader can verify the
+      // sample rather than trust the count (U7).
+      sample_chapters: [...input.reviews]
+        .map((review) => review.chapter)
+        .filter((chapter, index, all) => all.indexOf(chapter) === index)
+        .sort((left, right) => left - right),
       attempts: qualityAttempts,
-      attempt_basis: 'committed_review_submissions',
+      attempt_basis: input.effortBasis === undefined ? 'committed_review_submissions' : input.effortBasis,
       dimensions: [...dimensions.entries()]
         .map(([id, value]) => ({
           id,
@@ -398,7 +440,15 @@ export function buildBookReport(input: ReportInput): BookReport {
         .sort((left, right) => compareText(left.id, right.id)),
     },
     effort: {
-      review_basis: 'committed_review_submissions',
+      // A22: `review_basis` is the same fact as `basis`. Hard-coding it said
+      // "committed_review_submissions" on a book whose review counts came from
+      // `ChapterRecord.rounds` (journal cleared or truncated).
+      review_basis:
+        input.effortProjection === undefined ? 'committed_review_submissions' : input.effortProjection.basis,
+      ...(input.effortProjection === undefined ? {} : { basis: input.effortProjection.basis }),
+      ...(input.currentEffort === undefined || input.currentEffort === null
+        ? {}
+        : { current_chapter: input.currentEffort }),
       reviews: effortChapters.reduce((total, chapter) => total + chapter.reviews, 0),
       revisions: effortChapters.reduce((total, chapter) => total + chapter.revisions, 0),
       checks: effortChapters.reduce((total, chapter) => total + chapter.checks, 0),
@@ -414,6 +464,7 @@ export function buildBookReport(input: ReportInput): BookReport {
       calibration,
     },
     cast: { total: input.characters.characters.length, top: castTop },
+    debt,
     foreshadows: {
       open: open.length,
       dormant: dormant.length,
@@ -449,6 +500,12 @@ export function buildBookReport(input: ReportInput): BookReport {
       total: input.relationships.items.length,
       types: relationshipTypes,
       type_codes: relationshipTypeCodes,
+      classified: relationshipClassified,
+      uncategorized: input.relationships.items.length - relationshipClassified,
+      coverage:
+        input.relationships.items.length === 0
+          ? 1
+          : Math.round((relationshipClassified / input.relationships.items.length) * 1000) / 1000,
     },
     activity: input.activity.map((row) => ({
       at: row.at,

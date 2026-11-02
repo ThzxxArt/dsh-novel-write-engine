@@ -113,6 +113,8 @@ export interface RuleContext {
     previousText: string | null
     /** Three preceding chapters, newest first, for the duplicate rule. */
     previousTexts: string[]
+    /** Chapter numbers matching `previousTexts`, so evidence names the real chapter. */
+    previousChapterNums?: number[]
     foreshadows: import('../types.js').ForeshadowsDocument | null
     timeline: import('../types.js').TimelineDocument | null
     relationships: import('../types.js').RelationshipsDocument | null

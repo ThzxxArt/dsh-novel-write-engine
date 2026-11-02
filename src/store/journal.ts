@@ -28,6 +28,8 @@ export interface JournalRecord {
   hint?: string
   stage?: string
   attempt?: boolean
+  /** The revision this refused attempt would have written. */
+  intended_revision?: number
   blocking?: import('../types.js').BlockingItem[]
   retry_key?: string
   retry_context?: string
@@ -91,6 +93,7 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
       if (typeof raw.hint === 'string') record.hint = raw.hint
       if (typeof raw.stage === 'string') record.stage = raw.stage
       if (raw.attempt === true) record.attempt = true
+      if (typeof raw.intended_revision === 'number') record.intended_revision = raw.intended_revision
       if (typeof raw.retry_key === 'string') record.retry_key = raw.retry_key
       if (typeof raw.retry_context === 'string') record.retry_context = raw.retry_context
       if (Array.isArray(raw.blocking)) {
@@ -129,6 +132,7 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
           ...(record.hint === undefined ? {} : { hint: record.hint }),
           ...(record.stage === undefined ? {} : { stage: record.stage }),
           ...(record.attempt === true ? { attempt: true } : {}),
+          ...(record.intended_revision === undefined ? {} : { intended_revision: record.intended_revision }),
           ...(record.blocking === undefined ? {} : { blocking: record.blocking }),
           ...(record.retry_key === undefined ? {} : { retry_key: record.retry_key }),
           ...(record.retry_context === undefined ? {} : { retry_context: record.retry_context }),

@@ -1,6 +1,6 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "keywords": [
     "dsh-plugin",
@@ -73,6 +73,7 @@
     "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
   "scripts": {
+    "prepack": "node scripts/check-build-fresh.mjs",
     "build": "tsdown && tsdown -c tsdown.client.config.ts && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "lint": "eslint . && prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.mjs\"",
@@ -86,7 +87,8 @@
     "check:install": "node scripts/check-install.mjs",
     "check:host": "node scripts/check-host.mjs",
     "check:crash": "node scripts/check-crash.mjs",
-    "check:hygiene": "node scripts/check-hygiene.mjs"
+    "check:hygiene": "node scripts/check-hygiene.mjs",
+    "check:real-project": "node scripts/check-real-project.mjs"
   },
   "dependencies": {
     "yaml": "^2.6.0"

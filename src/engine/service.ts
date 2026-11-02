@@ -7,6 +7,7 @@ import {
   BACKUP_DIR,
   BRIEF_RECEIPTS_FILE,
   CHAPTERS_DIR,
+  DOCTOR_BASELINE_FILE,
   EXPORT_DIR,
   LIMITS,
   LOCK_FILE,
@@ -33,7 +34,7 @@ import {
 import { canRun, roundsExhausted, STAGE_NEXT, nextStage as computeNextStage } from '../domain/index.js'
 import { textSimilarity } from '../domain/simhash.js'
 import { compareText, stableJson } from '../domain/stable.js'
-import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
+import { matchEvidence, openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { reviewArithmeticProblems, totalScore } from '../domain/scoring.js'
 import {
@@ -68,6 +69,7 @@ import {
   reconcileJournal,
 } from '../store/journal.js'
 import { listBackups, readBackupManifest } from '../store/backup.js'
+import { normalizeLegacyCheck } from '../store/migrate.js'
 import { narrow, type DocKind } from '../store/schema.js'
 import { buildEpub } from '../export/epub.js'
 import {
@@ -195,6 +197,7 @@ import {
   type StateError,
   type StatusReport,
   type Warning,
+  type Violation,
   type WordMetrics,
   type WorldPlanInput,
   type BookReport,
@@ -251,6 +254,8 @@ export interface StatusInput {
 
 export interface BriefInput {
   stage: import('../types.js').BriefStage
+  /** 0.2.14: sign several stages in one transaction. */
+  stages?: import('../types.js').BriefStage[]
   chapter?: number
   root?: string
 }
@@ -259,6 +264,9 @@ type BriefPayload = {
   stage: BriefStage
   chapter: number
   digest: string
+  dependencies?: Record<string, string>
+  /** Present when more than one stage was requested in one transaction. */
+  briefs?: BriefPayload[]
   title: string
   content: string
   content_hash: string
@@ -295,7 +303,20 @@ export interface DraftSubmission {
   root?: string
 }
 
-export interface ReviewSubmission extends ReviewInput {
+export interface ReviewAmendment {
+  id: string
+  status?: 'open' | 'fixed' | 'waived'
+  severity?: 'blocker' | 'advisory'
+  location?: string
+  problem?: string
+  fix?: string
+}
+
+export interface ReviewSubmission extends Partial<Omit<ReviewInput, 'chapter'>> {
+  chapter: number
+  /** 0.2.14: correct reviewer metadata without opening a new review round. */
+  amend_issues?: ReviewAmendment[]
+  amend_note?: string
   root?: string
 }
 
@@ -317,6 +338,8 @@ export interface CheckSubmission {
   acknowledge?: string[]
   /** 0.2.13 per-finding reason; required for every acknowledged code or id. */
   acknowledge_reasons?: Record<string, string>
+  /** 0.2.14: stop re-reporting this acknowledged class after this chapter. */
+  acknowledge_until_chapter?: number
   root?: string
 }
 
@@ -329,9 +352,21 @@ export interface ArchiveSubmission {
   root?: string
 }
 
+/** One JSON-Pointer subset operation for a local amend. */
+export interface AmendPatchOp {
+  op: 'replace' | 'add' | 'remove'
+  /** Dot path into the document, e.g. `items.3.title` or `book.logline`. */
+  path: string
+  value?: unknown
+}
+
 export interface AmendSubmission {
   path: string
-  content: Record<string, unknown>
+  content?: Record<string, unknown>
+  /** 0.2.14 local edit; mutually exclusive with `content`. */
+  patch?: AmendPatchOp[]
+  /** Explicit permission to drop rows; a truncated read is refused without it. */
+  allow_delete?: boolean
   reason: string
   root?: string
 }
@@ -377,6 +412,8 @@ export interface ExportInput {
 
 export interface StateQueryInput {
   kind: DocKind | 'novel' | 'planWorld' | 'planChapter' | 'history' | 'backups' | 'briefs'
+  /** Briefs view: `current` equals current_only:true. */
+  view?: 'all' | 'current'
   chapter?: number
   /** Select one historical revision instead of listing history. */
   revision?: number
@@ -460,6 +497,9 @@ export interface SearchInput {
 }
 
 export interface DoctorInput {
+  /** Persist the current warning set as accepted; `reset` clears it. */
+  baseline?: boolean
+  reset?: boolean
   root?: string
 }
 
@@ -509,6 +549,8 @@ interface Snapshot {
   text: string | null
   previousText: string | null
   previousTexts: string[]
+  /** Chapter numbers matching `previousTexts` (newest first). */
+  previousChapterNums: number[]
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
   /** An unreadable plan is reported to the model instead of wedging every read. */
   planError: string | null
@@ -702,6 +744,8 @@ export class EngineService {
   }
 
   private readonly onEvent: ((event: EngineEvent) => void) | undefined
+  /** Internal: capture the raw warning set when writing a doctor baseline. */
+  private skipDoctorBaseline = false
   private readonly signalContext = new AsyncLocalStorage<AbortSignal | undefined>()
 
   /** Bind the host cancellation signal to the engine work of one tool call. */
@@ -2287,6 +2331,153 @@ export class EngineService {
             warnings: [],
           }
         }
+        // 0.2.14: a ledger amendment has a pre-image, so a mistaken amend must
+        // be restorable instead of only repairable by hand.
+        const ledgerKinds: Record<string, DocKind> = {
+          [joinRel(STATE_DIR, STATE_FILES.characters)]: 'characters',
+          [joinRel(STATE_DIR, STATE_FILES.world)]: 'world',
+          [joinRel(STATE_DIR, STATE_FILES.locks)]: 'locks',
+          [joinRel(STATE_DIR, STATE_FILES.timeline)]: 'timeline',
+          [joinRel(STATE_DIR, STATE_FILES.foreshadows)]: 'foreshadows',
+          [joinRel(STATE_DIR, STATE_FILES.relationships)]: 'relationships',
+          [joinRel(STATE_DIR, STATE_FILES.handoff)]: 'handoff',
+        }
+        // Named once so the dangling-reference hint can point at the ledger
+        // that would have to be restored alongside.
+        const charactersPath = joinRel(STATE_DIR, STATE_FILES.characters)
+        const handoffPath = joinRel(STATE_DIR, STATE_FILES.handoff)
+        const ledgerPaths = (input.paths ?? []).filter((path) => ledgerKinds[path] !== undefined)
+        if (ledgerPaths.length > 0) {
+          if (ledgerPaths.length !== (input.paths ?? []).length) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'restore mixes ledger files with chapter or outline files',
+              `restore either ledger files (${Object.keys(ledgerKinds).join(', ')}) or chapter files in one call`,
+            )
+          }
+          if (input.chapter !== undefined) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              'restoring a state ledger does not accept a chapter',
+              'omit chapter when restoring state/*.yaml',
+            )
+          }
+          const restored: string[] = []
+          const files: StagedFile[] = []
+          const current: Record<string, unknown> = {
+            characters: snapshot.characters,
+            world: snapshot.world,
+            locks: snapshot.locks,
+            timeline: snapshot.timeline,
+            foreshadows: snapshot.foreshadows,
+            relationships: snapshot.relationships,
+            handoff: snapshot.handoff,
+          }
+          for (const path of ledgerPaths) {
+            const kind = ledgerKinds[path]!
+            if (!manifest.files.includes(path)) {
+              throw new EngineInputError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} manifest does not record ${path}`,
+                'restore only files that the transaction captured as pre-images',
+              )
+            }
+            const text = await context.store.readText(`backups/${input.txid}/${path}`)
+            if (text === null) {
+              throw new EngineInputError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} does not contain ${path}`,
+                'the file was created by that transaction, so it has no pre-image to restore',
+              )
+            }
+            let document: unknown
+            try {
+              document = narrow(kind, parseYaml(text))
+            } catch (error) {
+              throw new EngineFaultError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} contains an invalid ${kind} document: ${errorMessage(error)}`,
+                'choose a different backup or repair the file manually',
+              )
+            }
+            const before = recordOf(current[kind])
+            const after = recordOf(document)
+            // next_seq is the id allocator: restoring an older ledger that has
+            // already issued FS-030 would re-issue FS-030 on the next archive.
+            if (
+              before !== null &&
+              after !== null &&
+              typeof before.next_seq === 'number' &&
+              typeof after.next_seq === 'number' &&
+              after.next_seq < before.next_seq
+            ) {
+              throw new EngineInputError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `backup ${input.txid} would move ${kind}.next_seq back from ${before.next_seq} to ${after.next_seq}`,
+                'ids already issued must never be reissued; edit the restored next_seq forward, or restore a newer backup',
+              )
+            }
+            files.push({ path, text })
+            restored.push(path)
+            current[kind] = document
+          }
+          // A restore may only put back a pre-image, never a ledger that names
+          // rows the rest of the state does not have (R2).
+          const before = ledgerReferenceProblems(
+            {
+              characters: snapshot.characters,
+              locks: snapshot.locks,
+              timeline: snapshot.timeline,
+              relationships: snapshot.relationships,
+              handoff: snapshot.handoff,
+            },
+            snapshot.project.targets.total_chapters,
+          )
+          const after = ledgerReferenceProblems(
+            {
+              characters: current.characters as Snapshot['characters'],
+              locks: current.locks as Snapshot['locks'],
+              timeline: current.timeline as Snapshot['timeline'],
+              relationships: current.relationships as Snapshot['relationships'],
+              handoff: current.handoff as Snapshot['handoff'],
+            },
+            snapshot.project.targets.total_chapters,
+          )
+          const alreadyBroken = new Set(before)
+          const introduced = after.filter((problem) => !alreadyBroken.has(problem))
+          if (introduced.length > 0) {
+            // A restore can only replay the files this transaction captured as
+            // pre-images, so "restore the other ledgers too" is advice the
+            // author cannot follow unless the manifest holds them.
+            const candidates = [charactersPath, handoffPath].filter(
+              (path) => manifest.files.includes(path) && !restored.includes(path),
+            )
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `backup ${input.txid} would dangle ${introduced.length} cross-ledger reference(s): ${introduced
+                .slice(0, 3)
+                .join('; ')}`,
+              candidates.length > 0
+                ? `also restore ${candidates.join(', ')} in this call, or edit the restored file so those rows are declared`
+                : `backup ${input.txid} captured only ${restored.join(', ')}; edit the restored file so those rows are declared, or restore a transaction that captured the declaring ledger`,
+            )
+          }
+          const nextPipeline = pipelineWith(snapshot, context.revision, {
+            last_action: action('novel_restore', this.now(), shortDigest(input.txid)),
+          })
+          files.push({ path: pipelinePath, text: yaml(nextPipeline) })
+          return {
+            files,
+            backup: true,
+            data: { txid: input.txid, chapter: snapshot.pipeline.chapter, restored },
+            warnings: [
+              {
+                code: 'LEDGER_RESTORED',
+                message: `restored ${restored.length} ledger file(s) from ${input.txid}; chapter files were not touched`,
+              },
+            ],
+          }
+        }
         const chapter = input.chapter ?? snapshot.pipeline.chapter
         if (snapshot.chapters.chapters.some((record) => record.num === chapter)) {
           throw new EngineInputError(
@@ -2381,7 +2572,12 @@ export class EngineService {
                   throw new Error(`document belongs to chapter ${String(row.chapter)}, not ${chapter}`)
                 }
               } else {
-                const restored = narrow(kind, parsed)
+                // A 0.2.0 check has no `scope` and keeps advisories inside
+                // `violations`; restoring it verbatim used to fail validation
+                // and, worse, would have replayed an advisory as a blocker (U16).
+                const document =
+                  kind === 'check' ? normalizeLegacyCheck(parsed as Record<string, unknown>) : parsed
+                const restored = narrow(kind, document)
                 if (restored.chapter !== chapter) {
                   throw new Error(`document belongs to chapter ${String(restored.chapter)}, not ${chapter}`)
                 }
@@ -2446,11 +2642,15 @@ export class EngineService {
             effectiveCheck === null || !checkMatches || effectiveCheck.verdict === 'pass'
               ? []
               : [
-                  ...effectiveCheck.machine.violations.map((violation) => ({
-                    code: violation.code,
-                    scope: 'check',
-                    detail: violation.detail,
-                  })),
+                  // A 0.2.0 check stored advisories inside `violations`; only
+                  // blockers may come back as pipeline blocking (X5).
+                  ...effectiveCheck.machine.violations
+                    .filter((violation) => violation.severity !== 'advisory')
+                    .map((violation) => ({
+                      code: violation.code,
+                      scope: 'check',
+                      detail: violation.detail,
+                    })),
                   ...evaluateSemantic(snapshot.text ?? '', effectiveCheck.semantic.items).blocking,
                 ]
           nextPipeline.blocking = [...reviewBlocking, ...checkBlocking]
@@ -2568,7 +2768,12 @@ export class EngineService {
     store: FsStore,
     journalRows: readonly AuditRow[],
     archived: readonly number[],
-    readableCurrent: ReadonlySet<number>,
+    // Optional: report() already knows which current reviews it could read.
+    // Readers that do not (status, pipeline) resolve it lazily, and only for a
+    // chapter with no journal row and no history copy, where it can change the
+    // answer. Skipping the full sweep keeps a status refresh cheap without
+    // letting status and report disagree on the same book (U6/M19).
+    readableCurrent?: ReadonlySet<number>,
     historicalEntries?: readonly HistoryEntry[],
   ): Promise<Map<number, number>> {
     const journalCounts = new Map<number, number>()
@@ -2611,14 +2816,17 @@ export class EngineService {
       historyCounts.set(chapter, documents.size)
     }
     for (const chapter of archived) {
-      result.set(
-        chapter,
-        Math.max(
-          journalCounts.get(chapter) ?? 0,
-          readableCurrent.has(chapter) ? 1 : 0,
-          historyCounts.get(chapter) ?? 0,
-        ),
-      )
+      const journalCount = journalCounts.get(chapter) ?? 0
+      const historyCount = historyCounts.get(chapter) ?? 0
+      let readable = readableCurrent?.has(chapter) ?? false
+      if (!readable && readableCurrent === undefined && journalCount === 0 && historyCount === 0) {
+        try {
+          readable = (await store.readDoc(reviewFile(chapter), 'review')) !== null
+        } catch {
+          readable = false
+        }
+      }
+      result.set(chapter, Math.max(journalCount, readable ? 1 : 0, historyCount))
     }
     return result
   }
@@ -2629,55 +2837,152 @@ export class EngineService {
    * the retry budget fair; it is not the chapter's lifetime effort.
    */
   private async lifetimeRounds(snapshot: Snapshot, chapter: number): Promise<RoundCounters> {
-    const { rows } = await readJournal(this.storeFor(snapshot.root))
+    const store = this.storeFor(snapshot.root)
+    const { rows } = await readJournal(store)
     const committed = (op: string): number =>
       rows.filter((row) => row.status === 'committed' && row.chapter === chapter && row.op === op).length
+    // The archived snapshot must record the same review count the read model
+    // will report, so a history copy counts here too (U6/M19).
+    const attempts = await this.reviewAttemptsByChapter(store, rows, [chapter])
     return {
-      review: Math.max(snapshot.pipeline.rounds.review, committed('submitReview')),
+      review: Math.max(
+        snapshot.pipeline.rounds.review,
+        committed('submitReview'),
+        attempts.get(chapter) ?? 0,
+      ),
       revise: Math.max(snapshot.pipeline.rounds.revise, committed('submitRevision')),
       check: Math.max(snapshot.pipeline.rounds.check, committed('runCheck')),
       rollbacks: committed('rollback'),
     }
   }
 
+  /**
+   * The only owner of effort arithmetic: journal rows, the chapter record and
+   * review history are merged per chapter, then summed once. Report, status,
+   * pipeline and the panel all read this projection.
+   */
+  private effortProjection(
+    chapters: ChaptersDocument,
+    committed: readonly AuditRow[],
+    reviewCounts: ReadonlyMap<number, number> | null = null,
+  ): {
+    lifetime: { reviews: number; revisions: number; checks: number; rollbacks: number }
+    chapters: Map<number, { reviews: number; revisions: number; checks: number; rollbacks: number }>
+    basis: 'committed_journal' | 'chapter_record'
+  } {
+    const count = (op: string, chapter: number): number =>
+      committed.filter((row) => row.status === 'committed' && row.op === op && row.chapter === chapter).length
+    const rows = new Map<number, { reviews: number; revisions: number; checks: number; rollbacks: number }>()
+    const lifetime = { reviews: 0, revisions: 0, checks: 0, rollbacks: 0 }
+    for (const record of chapters.chapters) {
+      const entry = {
+        reviews: Math.max(
+          record.rounds?.review ?? 0,
+          count('submitReview', record.num),
+          reviewCounts?.get(record.num) ?? 0,
+        ),
+        revisions: Math.max(record.rounds?.revise ?? 0, count('submitRevision', record.num)),
+        checks: Math.max(record.rounds?.check ?? 0, count('runCheck', record.num)),
+        rollbacks: Math.max(record.rounds?.rollbacks ?? 0, count('rollback', record.num)),
+      }
+      rows.set(record.num, entry)
+      lifetime.reviews += entry.reviews
+      lifetime.revisions += entry.revisions
+      lifetime.checks += entry.checks
+      lifetime.rollbacks += entry.rollbacks
+    }
+    return {
+      lifetime,
+      chapters: rows,
+      basis: committed.some((row) => row.status === 'committed') ? 'committed_journal' : 'chapter_record',
+    }
+  }
+
+  /**
+   * Waivers carried from the previous chapter's check. Chaining one chapter
+   * back keeps this O(1) while still honouring `acknowledge_until_chapter`
+   * across a whole run: chapter N stores what chapter N+1 needs (M8).
+   */
+  private async carriedAcknowledgements(
+    snapshot: Snapshot,
+    chapter: number,
+  ): Promise<NonNullable<CheckDocument['machine']['acknowledged_findings']>> {
+    if (chapter <= 1) return []
+    const store = this.storeFor(snapshot.root)
+    const previous = (await store
+      .readDoc(checkFile(chapter - 1), 'check')
+      .catch(() => null)) as unknown as CheckDocument | null
+    if (previous === null || previous === undefined) return []
+    const findings = (previous.machine?.acknowledged_findings ??
+      previous.acknowledged_findings ??
+      []) as NonNullable<CheckDocument['machine']['acknowledged_findings']>
+    return carryAcknowledgements(findings, chapter)
+  }
+
   /** Journal-backed lifetime effort, using chapter rounds as the floor. */
   private async lifetimeEffort(
     store: FsStore,
     chapters: ChaptersDocument,
-  ): Promise<{ reviews: number; revisions: number; checks: number; rollbacks: number }> {
-    const totals = { reviews: 0, revisions: 0, checks: 0, rollbacks: 0 }
-    let committed: Awaited<ReturnType<typeof readJournal>>['records'] = []
+  ): Promise<ReturnType<EngineService['effortProjection']>> {
+    let committed: AuditRow[] = []
     try {
-      committed = (await readJournal(store)).records
+      committed = (await readJournal(store)).rows
     } catch {
       // A damaged journal is already reported elsewhere; use the chapter floor.
     }
-    const count = (op: string, chapter: number): number =>
-      committed.filter((row) => row.status === 'committed' && row.op === op && row.chapter === chapter).length
-    for (const record of chapters.chapters) {
-      totals.reviews += Math.max(record.rounds?.review ?? 0, count('submitReview', record.num))
-      totals.revisions += Math.max(record.rounds?.revise ?? 0, count('submitRevision', record.num))
-      totals.checks += Math.max(record.rounds?.check ?? 0, count('runCheck', record.num))
-      totals.rollbacks += Math.max(record.rounds?.rollbacks ?? 0, count('rollback', record.num))
-    }
-    return totals
+    // Review history fills journal gaps, so a lifetime that ignored it would
+    // disagree with report() on the same book (U6/M19).
+    const attempts = await this.reviewAttemptsByChapter(
+      store,
+      committed,
+      chapters.chapters.map((record) => record.num),
+    )
+    return this.effortProjection(chapters, committed, attempts)
+  }
+
+  /** One dialogue verdict shared by status, check and the brief. */
+  private dialogueVerdict(
+    targets: NovelProject['targets'],
+    metrics: WordMetrics,
+  ): 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured' {
+    const target = targets.dialogue_ratio
+    const metric = targets.dialogue_ratio_metric ?? 'both'
+    const lower = Math.max(0, target[0] - 0.005)
+    const upper = Math.min(1, target[1] + 0.005)
+    const line = metrics.dialogue_ratio
+    const chars = metrics.dialogue_char_ratio ?? 0
+    const lineOut = line < lower || line > upper
+    const charOut = chars < lower || chars > upper
+    if (!lineOut && !charOut) return 'pass'
+    if (metric === 'lines') return lineOut ? 'line_out' : 'pass'
+    if (metric === 'chars') return charOut ? 'char_out' : 'pass'
+    if (lineOut && charOut) return 'both_out'
+    return 'skewed'
   }
 
   /** 0.2.13 read model: pipeline rounds reset after archive, chapter records do not. */
   private previousChapterEffort(
     snapshot: Snapshot,
     totals: { reviews: number; revisions: number; checks: number; rollbacks: number },
+    projection?: {
+      chapters: Map<number, { reviews: number; revisions: number; checks: number; rollbacks: number }>
+      basis: 'committed_journal' | 'chapter_record'
+    },
   ): StatusReport['previous_chapter_effort'] {
     const prior = [...snapshot.chapters.chapters].sort((left, right) => right.num - left.num)[0]
     if (prior === undefined) return null
+    const entry = projection?.chapters.get(prior.num)
     return {
       chapter: prior.num,
-      reviews: prior.rounds?.review ?? 0,
-      revisions: prior.rounds?.revise ?? 0,
-      checks: prior.rounds?.check ?? 0,
-      rollbacks: prior.rounds?.rollbacks ?? 0,
+      // Journal backfill, not `record.rounds ?? 0`: old chapters archived
+      // without rounds used to report 0 while the totals had the real number (X1).
+      reviews: entry?.reviews ?? prior.rounds?.review ?? 0,
+      revisions: entry?.revisions ?? prior.rounds?.revise ?? 0,
+      checks: entry?.checks ?? prior.rounds?.check ?? 0,
+      rollbacks: entry?.rollbacks ?? prior.rounds?.rollbacks ?? 0,
       final_check: prior.final_check ?? null,
       archived_at: prior.archived_at ?? null,
+      basis: projection?.basis ?? 'unavailable',
       totals: { ...totals },
     }
   }
@@ -2695,7 +3000,21 @@ export class EngineService {
    */
   private async statusFor(snapshot: Snapshot, chapter: number): Promise<OpResult<StatusReport>> {
     const metrics = await this.metricsFor(snapshot, chapter)
-    const effortTotals = await this.lifetimeEffort(this.storeFor(snapshot.root), snapshot.chapters)
+    let projection: ReturnType<EngineService['effortProjection']> | undefined
+    try {
+      const rows = (await readJournal(this.storeFor(snapshot.root))).rows
+      // Same inputs as report(): a review history copy that the journal never
+      // recorded must not make status report a shorter lifetime than report.
+      const attempts = await this.reviewAttemptsByChapter(
+        this.storeFor(snapshot.root),
+        rows,
+        snapshot.chapters.chapters.map((record) => record.num),
+      )
+      projection = this.effortProjection(snapshot.chapters, rows, attempts)
+    } catch {
+      projection = undefined
+    }
+    const effortTotals = projection?.lifetime ?? { reviews: 0, revisions: 0, checks: 0, rollbacks: 0 }
     const progress = projectChapterProgress({
       activeChapter: snapshot.pipeline.chapter,
       stage: snapshot.pipeline.stage,
@@ -2735,12 +3054,30 @@ export class EngineService {
       stage: snapshot.pipeline.stage,
       progress,
       rounds: { ...snapshot.pipeline.rounds },
-      previous_chapter_effort: this.previousChapterEffort(snapshot, effortTotals),
+      previous_chapter_effort: this.previousChapterEffort(snapshot, effortTotals, projection),
       blocking: [...this.effectiveBlocking(snapshot), ...journal],
       ...(pendingWarnings.length === 0 ? {} : { warnings: pendingWarnings }),
       state_errors: this.stateErrors(snapshot),
       selection: { source: snapshot.selection.source, root: snapshot.selection.root },
       metrics,
+      target_words: {
+        min: snapshot.project.targets.words_per_chapter[0],
+        max: snapshot.project.targets.words_per_chapter[1],
+        includes_punctuation: true,
+        min_cjk_chars: snapshot.project.targets.min_cjk_chars ?? null,
+        basis: 'total_word_count = cjk_chars + english_words + numbers + punctuation_chars',
+      },
+      ...(metrics === null
+        ? {}
+        : {
+            dialogue: {
+              target: snapshot.project.targets.dialogue_ratio,
+              metric: snapshot.project.targets.dialogue_ratio_metric ?? 'both',
+              line_ratio: metrics.dialogue_ratio,
+              char_ratio: metrics.dialogue_char_ratio ?? 0,
+              verdict: this.dialogueVerdict(snapshot.project.targets, metrics),
+            },
+          }),
       ...(snapshot.handoff === null
         ? {}
         : (() => {
@@ -2810,6 +3147,14 @@ export class EngineService {
   }
 
   async queryState(input: StateQueryInput): Promise<OpResult<unknown>> {
+    const result = await this.queryStateUnsafe(input)
+    // A read model must be JSON-serializable: callers proxy it over HTTP. Drop
+    // `undefined` members instead of letting JSON.stringify silently omit them,
+    // and fall back to an error summary rather than throwing at the wire.
+    return { ...result, data: jsonSafeValue(result.data) }
+  }
+
+  private async queryStateUnsafe(input: StateQueryInput): Promise<OpResult<unknown>> {
     if (input.chapter !== undefined) this.assertChapterParameter(input.chapter)
     const snapshot = await this.load(input.root)
     const chapter = input.chapter ?? snapshot.pipeline.chapter
@@ -2841,12 +3186,17 @@ export class EngineService {
     if (ledgerPath !== undefined) {
       const damage = snapshot.ledgerErrors.find((error) => error.path === ledgerPath)
       if (damage !== undefined) {
+        const raw = await store.readText(damage.path)
         return {
           data: {
             error: damage.code,
             message: damage.message,
             path: damage.path,
-            raw: await store.readText(damage.path),
+            // 0.2.14 (R3): a damaged ledger still answers "how much is in here",
+            // so the author can choose between restoring and repairing.
+            damaged: true,
+            summary: damagedLedgerSummary(raw),
+            ...rawForRepair(raw),
           },
           revision: snapshot.pipeline.revision,
           warnings: [],
@@ -2857,8 +3207,39 @@ export class EngineService {
       case 'pipeline':
         // `pipeline.briefs` is a legacy fallback; the effective receipts live in
         // state/briefs.yaml and are merged into snapshot.briefs at load time.
+        const legacyBriefCount = Object.keys(snapshot.pipeline.briefs ?? {}).length
+        // A20: the label must name the store that actually answered. A
+        // pre-0.2.13 book has no receipt file at all, and once the file exists
+        // the loader ignores the legacy map entirely — reporting the pair in
+        // either case named a file that either did not exist or did not count.
+        const receiptFilePresent = (await store.readText(BRIEF_RECEIPTS_FILE)) !== null
+        const receiptSource =
+          Object.keys(snapshot.briefs).length === 0
+            ? 'none'
+            : !receiptFilePresent
+              ? 'pipeline.briefs (legacy)'
+              : legacyBriefCount === 0
+                ? BRIEF_RECEIPTS_FILE
+                : `${BRIEF_RECEIPTS_FILE} (pipeline.briefs ignored)`
+        const effort = await this.lifetimeEffort(store, snapshot.chapters)
         return {
-          data: { ...snapshot.pipeline, briefs: snapshot.briefs },
+          data: {
+            ...snapshot.pipeline,
+            briefs: snapshot.briefs,
+            // Only claim the receipt file when it is the file that answered; a
+            // legacy project with receipts solely in pipeline.briefs said
+            // state/briefs.yaml and no such file existed (U8).
+            briefs_source: receiptSource,
+            briefs_note:
+              'briefs 只列出当前章 current 收据；历史收据在 history/briefs/ 与 novel_state {kind:"briefs", view:"current"}',
+            // 0.2.14 (R9): pipeline is where a writer looks after an archive,
+            // and it reset every round counter. Carrying the same projection
+            // status uses keeps "how hard was the last chapter" one number.
+            previous_chapter_effort: this.previousChapterEffort(snapshot, effort.lifetime, effort),
+            // R9: the same lifetime totals report/status use, so the pipeline
+            // view is not the one place where "how much work" is missing.
+            effort: { lifetime: effort.lifetime, basis: effort.basis },
+          },
           revision: snapshot.pipeline.revision,
           warnings: [],
         }
@@ -2896,6 +3277,9 @@ export class EngineService {
                   num: row.num,
                   title: row.title,
                   word_count: row.word_count,
+                  // R7: `null` means the row predates 0.2.14; the count is not
+                  // missing, it was never recorded.
+                  cjk_words: row.cjk_words ?? null,
                   score: row.score,
                   status: row.status,
                 })),
@@ -3123,7 +3507,7 @@ export class EngineService {
               error: 'OUTLINE_UNREADABLE',
               message: snapshot.outlineError,
               path: OUTLINE_FILE,
-              raw: await store.readText(OUTLINE_FILE),
+              ...rawForRepair(await store.readText(OUTLINE_FILE)),
             },
             revision: snapshot.pipeline.revision,
             warnings: [],
@@ -3137,7 +3521,7 @@ export class EngineService {
               error: 'WORLDBOOK_UNREADABLE',
               message: snapshot.worldbookError,
               path: WORLDBOOK_FILE,
-              raw: await store.readText(WORLDBOOK_FILE),
+              ...rawForRepair(await store.readText(WORLDBOOK_FILE)),
             },
             revision: snapshot.pipeline.revision,
             warnings: [],
@@ -3146,21 +3530,51 @@ export class EngineService {
         return { data: snapshot.worldbook, revision: snapshot.pipeline.revision, warnings: [] }
       case 'briefs': {
         const receipts = await this.readBriefReceipts(store)
+        const currentOnly = input.current_only === true || input.view === 'current'
         const pageFilters = {
           ...(input.chapter === undefined ? {} : { chapter: input.chapter }),
-          current_only: input.current_only === true,
+          current_only: currentOnly,
+          ...(input.view === undefined ? {} : { view: input.view }),
+        }
+        // Archive compresses superseded receipts into history/briefs/chNNN.yaml.
+        // Reading both keeps "the whole audit is still here" true while the hot
+        // file stays bounded.
+        const historyRows: Array<BriefReceiptsDocument['receipts'][number] & { archived?: true }> = []
+        try {
+          for (const name of await store.list('history/briefs')) {
+            const match = /^ch(\d+)\.yaml$/.exec(name)
+            if (match === null) continue
+            const chapter = Number(match[1])
+            if (input.chapter !== undefined && chapter !== input.chapter) continue
+            const text = await store.readText(`history/briefs/${name}`)
+            if (text === null) continue
+            const parsed = parseYaml(text) as Partial<BriefReceiptsDocument> | null
+            if (parsed === null || !Array.isArray(parsed.receipts)) continue
+            for (const receipt of parsed.receipts) {
+              if (typeof receipt?.digest !== 'string' || typeof receipt?.stage !== 'string') continue
+              historyRows.push({ ...receipt, current: false, archived: true })
+            }
+          }
+        } catch {
+          // A damaged history file is reported by doctor; the live receipts
+          // remain readable and are the ones gates use.
         }
         const filterReceipts = <T extends { chapter: number; current?: boolean }>(rows: T[]): T[] =>
           rows.filter(
             (receipt) =>
               (input.chapter === undefined || receipt.chapter === input.chapter) &&
-              (input.current_only !== true || receipt.current !== false),
+              (!currentOnly || receipt.current !== false),
           )
-        if (receipts.receipts.length > 0) {
-          const filtered = filterReceipts(receipts.receipts)
+        if (receipts.receipts.length > 0 || historyRows.length > 0) {
+          const filtered = filterReceipts([...receipts.receipts, ...historyRows])
           const { items, page } = this.statePage('briefs', filtered, input, pageFilters)
           return {
-            data: { schema_version: 1 as const, receipts: items, page },
+            data: {
+              schema_version: 1 as const,
+              receipts: items,
+              history_receipts: historyRows.length,
+              page,
+            },
             revision: snapshot.pipeline.revision,
             warnings: [],
           }
@@ -3232,7 +3646,7 @@ export class EngineService {
               error: 'REVIEW_UNREADABLE',
               message: snapshot.reviewError,
               path: reviewFile(chapter),
-              raw: await store.readText(reviewFile(chapter)),
+              ...rawForRepair(await store.readText(reviewFile(chapter))),
             },
             revision: snapshot.pipeline.revision,
             warnings: [],
@@ -3251,7 +3665,7 @@ export class EngineService {
               error: 'CHECK_UNREADABLE',
               message: snapshot.checkError,
               path: checkFile(chapter),
-              raw: await store.readText(checkFile(chapter)),
+              ...rawForRepair(await store.readText(checkFile(chapter))),
             },
             revision: snapshot.pipeline.revision,
             warnings: [],
@@ -3270,7 +3684,7 @@ export class EngineService {
               error: 'PROJECT_UNREADABLE',
               message: snapshot.projectError,
               path: PROJECT_FILE,
-              raw: await store.readText(PROJECT_FILE),
+              ...rawForRepair(await store.readText(PROJECT_FILE)),
             },
             revision: snapshot.pipeline.revision,
             warnings: [],
@@ -3480,7 +3894,7 @@ export class EngineService {
       })
     }
     if (includeChecks) {
-      let oldChecks = 0
+      const oldChecks: number[] = []
       for (const record of snapshot.chapters.chapters) {
         try {
           const check = (await store.readDoc(
@@ -3492,20 +3906,27 @@ export class EngineService {
             advisories?: unknown
             violations?: Array<{ severity?: unknown }>
           }
+          // 0.2.0 checks had no `scope` and stored advisories inside
+          // `violations`. readDoc normalizes them in memory and marks the row;
+          // a modern check with zero advisories is not legacy just because the
+          // optional array is absent (X5).
           const mixed =
-            machine.advisories === undefined ||
+            (check as unknown as { legacy_format?: unknown }).legacy_format === true ||
+            !Array.isArray((check as unknown as { scope?: unknown }).scope) ||
             (Array.isArray(machine.violations) &&
               machine.violations.some((violation) => violation.severity === 'advisory'))
-          if (mixed) oldChecks += 1
+          if (mixed) oldChecks.push(record.num)
         } catch {
           // A damaged check already surfaces through state_errors/doctor; do not
           // turn it into a second legacy warning.
         }
       }
-      if (oldChecks > 0) {
+      if (oldChecks.length > 0) {
+        // Name the chapters: "3 chapters are legacy" is not actionable when the
+        // author wants to re-run exactly those checks.
         issues.push({
           code: 'LEGACY_CHECK_FORMAT',
-          detail: `${oldChecks} 章 check 是 0.2.0 旧格式（advisory 混在 violations）；重新跑 novel_check 或按 0.2.3 迁移说明标记`,
+          detail: `${oldChecks.length} 章（第 ${oldChecks.join('、')} 章）check 是 0.2.0 旧格式（advisory 混在 violations）；重新跑 novel_check 或按 0.2.3 迁移说明标记`,
         })
       }
     }
@@ -3585,6 +4006,7 @@ export class EngineService {
   }
 
   async doctor(input: DoctorInput = {}): Promise<OpResult<DoctorReport>> {
+    if (input.baseline === true || input.reset === true) return this.writeDoctorBaseline(input)
     const selection = await this.resolveRootForInspection(input.root)
     const root = selection.root
     const store = this.storeFor(root)
@@ -3877,14 +4299,23 @@ export class EngineService {
     )
     const percentText = (value: number | null): string =>
       value === null ? '—' : `${Math.round(value * 1000) / 10}%`
+    const coverageComplete =
+      missingCards.length === 0 &&
+      extraCards.length === 0 &&
+      (outlineProgress.target === null || outlineProgress.missingCards === 0)
     add({
       id: 'outline-coverage',
-      severity:
-        missingCards.length === 0 &&
-        extraCards.length === 0 &&
-        (outlineProgress.target === null || outlineProgress.missingCards === 0)
-          ? 'ok'
-          : 'warning',
+      // Early books are still planning; a 3-chapter project cannot have 200
+      // cards. Warning only once the plan should exist.
+      severity: coverageComplete
+        ? 'ok'
+        : missingCards.length > 0 || extraCards.length > 0
+          ? // A card that disappeared for an archived chapter is damage, not a
+            // young book still planning.
+            'warning'
+          : archivedRecords.length < 3
+            ? 'info'
+            : 'warning',
       title: '大纲覆盖率',
       detail: `规划覆盖 ${percentText(outlineProgress.plannedCoverage)}（${outlineProgress.total}/${outlineProgress.target ?? '不限'} 张卡）· 归档覆盖 ${percentText(outlineProgress.archivedCoverage)}（${archivedRecords.length}/${outlineProgress.target ?? '不限'} 章）· ${outlineProgress.missingCards} 章缺卡 · ${missingCards.length} 章有正文无卡 · ${extraCards.length} 张卡无正文`,
       ...(missingCards.length === 0 &&
@@ -3976,6 +4407,54 @@ export class EngineService {
                 hint: '最新备份不属于活动章或没有本章可恢复的 pre-image；用 novel_state {kind:"backups"} 列出，归档章先 novel_reopen',
               }),
     })
+    // A scalar such as `deadline` is written once and never expires by itself.
+    // 0.2.14 (R8): a bare list could not tell a passed deadline from a live one.
+    // A chapter-number scalar is compared with the chapter being written; any
+    // other shape stays "cannot judge", because the engine does not parse story
+    // time.
+    const currentChapter = snapshot.pipeline.chapter
+    const expiredKeys: string[] = []
+    const pendingKeys: string[] = []
+    const unjudgedKeys: string[] = []
+    for (const character of snapshot.characters.characters) {
+      for (const [key, value] of Object.entries(character.current_state ?? {})) {
+        if (key === 'resources') continue
+        if (!/(deadline|due|expires|expiry|期限|截止|到期|deadline_at)/i.test(key)) continue
+        const label = `${character.name}.${key}=${String(value)}`
+        const numeric =
+          typeof value === 'number'
+            ? value
+            : typeof value === 'string' && /^\d+$/.test(value.trim())
+              ? Number(value.trim())
+              : null
+        if (numeric === null) unjudgedKeys.push(label)
+        else if (numeric < currentChapter) expiredKeys.push(label)
+        else pendingKeys.push(label)
+      }
+    }
+    if (expiredKeys.length + pendingKeys.length + unjudgedKeys.length > 0) {
+      const parts = [
+        expiredKeys.length === 0
+          ? ''
+          : `${expiredKeys.length} 个已过期（章号 < 当前第 ${currentChapter} 章）：${expiredKeys.slice(0, 3).join('、')}`,
+        pendingKeys.length === 0
+          ? ''
+          : `${pendingKeys.length} 个仍待办（章号 ≥ 当前第 ${currentChapter} 章）：${pendingKeys.slice(0, 3).join('、')}`,
+        unjudgedKeys.length === 0
+          ? ''
+          : `${unjudgedKeys.length} 个无法判断（非章号）：${unjudgedKeys.slice(0, 3).join('、')}`,
+      ].filter((part) => part !== '')
+      add({
+        id: 'scalar-state',
+        severity: expiredKeys.length > 0 ? 'warning' : 'info',
+        title: '可过期的标量状态',
+        detail: parts.join('；'),
+        hint:
+          expiredKeys.length > 0
+            ? '已过期的用 state_delta characters[].unset 清掉或写入新值；章号比较只说明叙事位置已越过，不等于剧情里一定到期'
+            : '用 state_delta characters[].unset 清掉或写入新值；引擎不会替你判断故事时间',
+      })
+    }
     const uncategorized = snapshot.relationships.items.filter((item) => item.type_code === undefined).length
     if (uncategorized > 0) {
       add({
@@ -4080,6 +4559,48 @@ export class EngineService {
       title: '下一步',
       detail: `${next.tool}: ${next.reason}`,
     })
+    // A project may accept its current warnings once, instead of seeing the
+    // same three rows forever. The baseline stores id+detail, so a changed
+    // count or message starts warning again.
+    const baseline = this.skipDoctorBaseline ? new Map() : await this.readDoctorBaseline(store)
+    if (baseline.size > 0) {
+      const liveWarnings = new Set(
+        checks
+          .filter((check) => check.severity === 'warning')
+          .map((check) => `${check.id}\u0000${check.detail}`),
+      )
+      const kept = checks.filter(
+        (check) => check.severity !== 'warning' || !baseline.has(`${check.id}\u0000${check.detail}`),
+      )
+      const suppressed = checks.length - kept.length
+      // 0.2.14 (R8): "accepted" and "gone" are different states. An entry that
+      // no longer reproduces keeps a permanent silent veto in the baseline
+      // file, so it must be reported as expired instead of being folded into
+      // the same count as the rows it is still hiding.
+      const stale = [...baseline.entries()].filter(([key]) => !liveWarnings.has(key))
+      if (suppressed > 0) {
+        checks.splice(0, checks.length, ...kept)
+        checks.push({
+          id: 'doctor-baseline',
+          severity: 'info',
+          title: '告警基线',
+          detail: `${suppressed} 条既有 warning 已按 state/doctor-baseline.yaml 接受（待办）；计数或文案变化会重新告警`,
+          hint: 'novel_doctor {reset:true} 清空基线',
+        })
+      }
+      if (stale.length > 0) {
+        checks.push({
+          id: 'doctor-baseline-stale',
+          severity: 'info',
+          title: '基线过期',
+          detail: `${stale.length} 条基线条目已不再复现：${stale
+            .slice(0, 3)
+            .map(([, entry]) => `${entry.id}（${entry.detail.slice(0, 40)}）`)
+            .join('；')}`,
+          hint: '这些条目已经失效，novel_doctor {baseline:true} 会重写基线并可清理；{reset:true} 全部清空',
+        })
+      }
+    }
     const summary = {
       errors: checks.filter((check) => check.severity === 'error').length,
       warnings: checks.filter((check) => check.severity === 'warning').length,
@@ -4090,6 +4611,97 @@ export class EngineService {
       revision: snapshot.pipeline.revision,
       warnings: [],
     }
+  }
+
+  /**
+   * Accepted-warning baseline; empty when the file is missing or unreadable.
+   * A map (not a set) so doctor can also name the entries that stopped
+   * reproducing (R8).
+   */
+  private async readDoctorBaseline(store: FsStore): Promise<Map<string, { id: string; detail: string }>> {
+    const raw = await store.readText(DOCTOR_BASELINE_FILE)
+    if (raw === null) return new Map()
+    try {
+      const parsed = parseYaml(raw) as { entries?: Array<{ id?: unknown; detail?: unknown }> } | null
+      const entries = Array.isArray(parsed?.entries) ? parsed.entries : []
+      const accepted = new Map<string, { id: string; detail: string }>()
+      for (const entry of entries) {
+        if (typeof entry.id !== 'string' || typeof entry.detail !== 'string') continue
+        accepted.set(`${entry.id}\u0000${entry.detail}`, { id: entry.id, detail: entry.detail })
+      }
+      return accepted
+    } catch {
+      return new Map()
+    }
+  }
+
+  /** `novel_doctor {baseline|reset}`: journaled write of the accepted warning set. */
+  private async writeDoctorBaseline(input: DoctorInput): Promise<OpResult<DoctorReport>> {
+    // Capture the exact checks the read-only report produces; a second,
+    // hand-maintained list would drift and suppress the wrong rows.
+    let fresh: Array<{ id: string; detail: string }> = []
+    if (input.reset !== true) {
+      this.skipDoctorBaseline = true
+      try {
+        const report = await this.doctor({ root: input.root })
+        fresh = report.data.checks
+          .filter((check) => check.severity === 'warning')
+          .map((check) => ({ id: check.id, detail: check.detail }))
+      } finally {
+        this.skipDoctorBaseline = false
+      }
+    }
+    return this.mutate({
+      root: input.root,
+      op: 'doctorBaseline',
+      reason: input.reset === true ? 'reset doctor baseline' : 'accept current doctor warnings',
+      run: async (snapshot, context) => {
+        // 0.2.14 (R8): `baseline:true` rewrites the accepted set to the
+        // warnings that still reproduce. Merging forever kept every entry that
+        // had already stopped reproducing, so the file grew while its rows
+        // suppressed nothing — doctor now calls those rows expired, and this is
+        // the operation that clears them.
+        const merged = new Map<string, { id: string; detail: string }>()
+        for (const entry of fresh) {
+          merged.set(`${entry.id}\u0000${entry.detail}`, entry)
+        }
+        const files: StagedFile[] = [
+          {
+            path: DOCTOR_BASELINE_FILE,
+            text: yaml({
+              schema_version: 1,
+              updated_at: this.now().toISOString(),
+              entries: [...merged.values()],
+            }),
+          },
+          {
+            path: joinRel(STATE_DIR, STATE_FILES.pipeline),
+            text: yaml(
+              pipelineWith(snapshot, context.revision, {
+                last_action: action('novel_doctor', this.now(), shortDigest(String(merged.size))),
+              }),
+            ),
+          },
+        ]
+        return {
+          files,
+          data: {
+            ok: true,
+            root: snapshot.root,
+            checks: [
+              {
+                id: 'doctor-baseline',
+                severity: 'info' as const,
+                title: '基线已写入',
+                detail: `${merged.size} 条已接受（reset=${String(input.reset === true)}）`,
+              },
+            ],
+            summary: { errors: 0, warnings: 0, infos: 1 },
+          },
+          warnings: [],
+        }
+      },
+    })
   }
 
   private recoveryForSafe(error: unknown): string {
@@ -4158,7 +4770,10 @@ export class EngineService {
       new Set(currentReviews.map((review) => review.chapter)),
       historicalEntries,
     )
-    const reviewAttempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
+    const effort = this.effortProjection(snapshot.chapters, journal.rows, attemptCounts)
+    // One number for "how many reviews did this book take": the effort
+    // projection, not a second addition of the same rows (U6/M19).
+    const reviewAttempts = effort.lifetime.reviews
     const report = buildBookReport({
       project: snapshot.project,
       outline: snapshot.outline,
@@ -4179,6 +4794,18 @@ export class EngineService {
       // The journal is the authoritative attempt ledger; history fills gaps
       // per chapter and duplicate history copies are de-duplicated.
       reviewAttempts,
+      effortBasis: effort.basis,
+      effortProjection: {
+        basis: effort.basis,
+        chapters: [...effort.chapters.entries()].map(([num, row]) => ({ num, ...row })),
+      },
+      currentEffort: {
+        chapter: snapshot.pipeline.chapter,
+        reviews: snapshot.pipeline.rounds.review,
+        revisions: snapshot.pipeline.rounds.revise,
+        checks: snapshot.pipeline.rounds.check,
+        rollbacks: 0,
+      },
       finalChecks,
       targetChapters: snapshot.project.targets.total_chapters,
       minScore: this.config.quality.minScore,
@@ -4315,57 +4942,87 @@ export class EngineService {
       advanceRevision: false,
       run: async (snapshot, context) => {
         const chapter = input.chapter ?? snapshot.pipeline.chapter
-        this.assertBriefChapter(input.stage, snapshot.pipeline.chapter, chapter)
+        // 0.2.14: one transaction may sign several stages. A caller that needs
+        // P4/P6/P8 currently pays three journal rows and three lock round-trips.
+        const stages = [...new Set(input.stages ?? [input.stage])]
+        if (stages.length === 0) {
+          throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'stages must not be empty')
+        }
+        for (const stage of stages) this.assertBriefChapter(stage, snapshot.pipeline.chapter, chapter)
         await this.assertBriefReceiptsWritable(context.store)
-        const effortTotals = await this.lifetimeEffort(context.store, snapshot.chapters)
-        const data = this.briefPayload(snapshot, input.stage, chapter, effortTotals)
+        const effort = await this.lifetimeEffort(context.store, snapshot.chapters)
+        const payloads = stages.map((stage) =>
+          this.briefPayload(snapshot, stage, chapter, effort.lifetime, effort),
+        )
         const rawReceipts = await this.readRawBriefReceipts(context.store)
         const view = this.normalizeBriefReceipts(rawReceipts.receipts)
-        const alreadyView = view.find(
-          (receipt) =>
-            receipt.chapter === chapter && receipt.stage === input.stage && receipt.digest === data.digest,
-        )
-        if (alreadyView !== undefined && alreadyView.current !== false) {
+        const issuedAt = this.now().toISOString()
+        let changed = false
+        for (const data of payloads) {
+          const alreadyView = view.find(
+            (receipt) =>
+              receipt.chapter === chapter && receipt.stage === data.stage && receipt.digest === data.digest,
+          )
+          if (
+            alreadyView !== undefined &&
+            alreadyView.current !== false &&
+            // A 0.2.13 receipt has no dependency digest. Replaying it would make
+            // PG-01 unable to say what changed, so fall through and re-sign it
+            // with dependencies instead of returning the blind receipt (M1).
+            alreadyView.dependencies !== undefined
+          ) {
+            continue
+          }
+          const alreadyRaw = rawReceipts.receipts.find(
+            (receipt) =>
+              receipt.chapter === chapter && receipt.stage === data.stage && receipt.digest === data.digest,
+          )
+          for (const previous of rawReceipts.receipts) {
+            if (
+              previous.chapter === chapter &&
+              previous.stage === data.stage &&
+              previous !== alreadyRaw &&
+              previous.current === true
+            ) {
+              previous.current = false
+              previous.superseded_at = issuedAt
+              previous.superseded_by = `${chapter}:${data.stage}:${data.digest}`
+            }
+          }
+          if (alreadyRaw !== undefined) {
+            // The same digest existed but had been superseded. Promote it back
+            // to current without adding derived fields to legacy rows.
+            alreadyRaw.current = true
+            alreadyRaw.dependencies = data.dependencies
+            delete alreadyRaw.superseded_at
+            delete alreadyRaw.superseded_by
+          } else {
+            rawReceipts.receipts.push({
+              chapter,
+              stage: data.stage,
+              digest: data.digest,
+              issued_at: issuedAt,
+              id: `${chapter}:${data.stage}:${data.digest}`,
+              current: true,
+              ...(data.dependencies === undefined ? {} : { dependencies: data.dependencies }),
+            })
+          }
+          changed = true
+        }
+        if (!changed) {
           // Same chapter/stage/content: replay the signed context without
           // appending a second receipt. The receipt itself is the evidence.
-          return { files: [], data, replay: true }
-        }
-        const issuedAt = this.now().toISOString()
-        const alreadyRaw = rawReceipts.receipts.find(
-          (receipt) =>
-            receipt.chapter === chapter && receipt.stage === input.stage && receipt.digest === data.digest,
-        )
-        for (const previous of rawReceipts.receipts) {
-          if (
-            previous.chapter === chapter &&
-            previous.stage === input.stage &&
-            previous !== alreadyRaw &&
-            previous.current === true
-          ) {
-            previous.current = false
-            previous.superseded_at = issuedAt
-            previous.superseded_by = `${chapter}:${input.stage}:${data.digest}`
+          return {
+            files: [],
+            data:
+              payloads.length === 1 ? payloads[0]! : { ...payloads[0]!, briefs: payloads, replayed: true },
+            replay: true,
           }
-        }
-        if (alreadyRaw !== undefined) {
-          // The same digest existed but had been superseded. Promote it back to
-          // current without adding derived fields to legacy rows.
-          alreadyRaw.current = true
-          delete alreadyRaw.superseded_at
-          delete alreadyRaw.superseded_by
-        } else {
-          rawReceipts.receipts.push({
-            chapter,
-            stage: input.stage,
-            digest: data.digest,
-            issued_at: issuedAt,
-            id: `${chapter}:${input.stage}:${data.digest}`,
-            current: true,
-          })
         }
         // Receipts are append-only evidence. Only the rows that actually carried
         // a current flag are marked superseded; pre-0.2.13 rows are left byte-for-
         // byte intact and current is derived on read.
+        const data = payloads.length === 1 ? payloads[0]! : { ...payloads[0]!, briefs: payloads }
         return {
           files: [
             {
@@ -4397,9 +5054,11 @@ export class EngineService {
     stage: BriefStage,
     chapter: number,
     totals: { reviews: number; revisions: number; checks: number; rollbacks: number },
+    effort?: ReturnType<EngineService['effortProjection']>,
   ): BriefPayload {
     const contextPack = this.briefContextFor(stage, snapshot, chapter)
-    const digest = this.briefDigest(stage, snapshot, contextPack)
+    const dependencies = this.briefDependencies(stage, snapshot, chapter)
+    const digest = this.briefDigest(stage, snapshot, chapter)
     const variables = this.briefVariables(snapshot, chapter)
     const rendered = this.briefs.render(stage, variables)
     const manuscriptHash =
@@ -4425,7 +5084,7 @@ export class EngineService {
       dialogue_ratio_metric: snapshot.project.targets.dialogue_ratio_metric ?? 'both',
       dialogue_char_ratio: countWordMetrics(snapshot.text ?? '').dialogue_char_ratio,
       punctuation_breakdown: countWordMetrics(snapshot.text ?? '').punctuation_breakdown,
-      previous_chapter_effort: this.previousChapterEffort(snapshot, totals),
+      previous_chapter_effort: this.previousChapterEffort(snapshot, totals, effort),
       timeline_event_keys:
         (snapshot.pipeline.draft?.summary ?? snapshot.plan?.summary)?.events.map((event, index) =>
           eventKeyFor(chapter, index, event),
@@ -4556,6 +5215,7 @@ export class EngineService {
       stage,
       chapter,
       digest,
+      dependencies,
       title: rendered.title,
       content: rendered.content,
       content_hash: rendered.contentHash,
@@ -4745,6 +5405,21 @@ export class EngineService {
           blocking: [],
           last_action: action('novel_plan_chapter', this.now(), shortDigest(stableJson(plan))),
         })
+        // PG-06 used to fire only at P3, after the prose existed; the plan now
+        // warns at P2 while changing the scene type is still free (M13).
+        const recentSceneTypes = snapshot.chapters.chapters.slice(-2).map((record) => record.scene_type)
+        const pinnedCard = snapshot.outline.chapters.find((candidate) => candidate.num === chapter)
+        const monotony =
+          recentSceneTypes.length === 2 && recentSceneTypes.every((type) => type === input.scene_type)
+        const warnings: Warning[] =
+          monotony && pinnedCard === undefined
+            ? [
+                {
+                  code: 'PG-06_PLAN_CONFLICT',
+                  message: `三章连续「${input.scene_type}」；P3 会被 PG-06 拦下。改 scene_type，或先在 outline 里给第 ${chapter} 章建卡（卡优先）。`,
+                },
+              ]
+            : []
         return {
           files: [
             ...(snapshot.plan === null
@@ -4760,6 +5435,7 @@ export class EngineService {
           ],
           backup: snapshot.plan !== null,
           data: { chapter, stage: 'P3' as Stage, plan_file: path },
+          warnings,
         }
       },
     })
@@ -4875,11 +5551,19 @@ export class EngineService {
     })
   }
 
-  async submitReview(
-    input: ReviewSubmission,
-  ): Promise<
-    OpResult<{ chapter: number; round: number; total: number; open_blockers: number; next_stage: Stage }>
+  async submitReview(input: ReviewSubmission): Promise<
+    OpResult<{
+      chapter: number
+      round: number
+      total: number
+      open_blockers: number
+      next_stage: Stage
+      /** Present only for an issue amendment. */
+      amended?: string[]
+      rounds?: RoundCounters
+    }>
   > {
+    if (input.amend_issues !== undefined) return this.amendReviewIssues(input)
     return this.mutate({
       root: input.root,
       op: 'submitReview',
@@ -4896,24 +5580,49 @@ export class EngineService {
       run: async (snapshot, context) => {
         this.assertChapter(snapshot, input.chapter)
         const text = snapshot.text ?? ''
+        if (!Array.isArray(input.dimensions) || !Array.isArray(input.issues) || input.proof === undefined) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            'submitReview needs dimensions, issues and proof (or amend_issues)',
+            'pass the fifteen dimensions, the issue list and the three reading proofs; amend_issues is only for corrections',
+          )
+        }
         const provided: ScoreDimension[] = input.dimensions
         const excluded = applyExclusions(provided, this.rulepack.exclusions)
         const computed = totalScore(excluded.dimensions)
-        if (!Number.isInteger(input.total) || input.total !== computed) {
+        // The engine already computes the total; requiring the caller to
+        // recompute it only produced "claimed X != actual Y" loops (M14).
+        const claimed = input.total ?? computed
+        if (input.total !== undefined && (!Number.isInteger(input.total) || input.total !== computed)) {
           throw new EngineInputError(
             ERROR_CODES.SCORE_MISMATCH,
             `claimed total ${String(input.total)} does not equal 150 - Σdelta (${computed})`,
-            'recompute the total after applying the rulepack exclusions',
+            'omit total and let the engine compute it, or recompute after the rulepack exclusions',
+            {
+              details: {
+                field: 'total',
+                expected: computed,
+                received: input.total,
+                required_tool: 'novel_review',
+                changed: [],
+                engine_total: computed,
+                raw_total: totalScore(provided),
+                // The rulepack can drop duplicate or mutually exclusive
+                // deductions. A bare "claimed ≠ computed" hides that policy;
+                // list exactly which rows were removed (M14).
+                exclusions_applied: excluded.dropped_entries,
+              },
+            },
           )
         }
-        const arithmetic = reviewArithmeticProblems(excluded.dimensions, input.total)
+        const arithmetic = reviewArithmeticProblems(excluded.dimensions, claimed)
         if (arithmetic.length > 0) {
           throw new EngineInputError(
             ERROR_CODES.SCORE_MISMATCH,
             `review arithmetic does not close: ${arithmetic.join('; ')}`,
           )
         }
-        const issues = Array.isArray(input.issues) ? input.issues : []
+        const issues = input.issues
         const seenIssues = new Set<string>()
         for (const [index, issue] of issues.entries()) {
           if (
@@ -4986,7 +5695,7 @@ export class EngineService {
           content_hash: sha256(text),
           dimensions: excluded.dimensions,
           issues,
-          total: input.total,
+          total: claimed,
           proof: input.proof,
         }
         await this.assertGates(snapshot, 'submitReview', {
@@ -5001,7 +5710,7 @@ export class EngineService {
             'call novel_write_draft first',
           )
         }
-        const belowMin = input.total < this.config.quality.minScore
+        const belowMin = claimed < this.config.quality.minScore
         const openBlockers =
           issues.filter((issue) => issue.severity === 'blocker' && issue.status !== 'fixed').length +
           (belowMin ? 1 : 0)
@@ -5018,7 +5727,7 @@ export class EngineService {
           blocking.push({
             code: 'SCORE-BELOW-MIN',
             scope: 'quality',
-            detail: `score ${input.total} is below the minimum ${this.config.quality.minScore}`,
+            detail: `score ${claimed} is below the minimum ${this.config.quality.minScore}`,
             hint: 'revise the chapter and submit a new P4 review',
           })
         }
@@ -5056,10 +5765,152 @@ export class EngineService {
               ? [
                   {
                     code: 'SCORE_EXCLUSIONS',
-                    message: `${excluded.dropped} mutually exclusive deduction(s) were dropped`,
+                    // M14: the count alone leaves the author unable to see
+                    // which deductions the rulepack removed when `total` was
+                    // omitted and nothing failed.
+                    message:
+                      `${excluded.dropped} mutually exclusive deduction(s) were dropped: ` +
+                      excluded.dropped_entries
+                        .map(
+                          (entry) =>
+                            `${entry.rule}${entry.location === undefined ? '' : ` at ${entry.location}`} (${entry.reason})`,
+                        )
+                        .join('; '),
                   },
                 ]
               : [],
+        }
+      },
+    })
+  }
+
+  /**
+   * Correct reviewer-owned metadata (location/problem/fix/severity) in place.
+   * This is not a new P4 round: the total, the dimensions and the review count
+   * are untouched, and the journal records `reviewAmendment`.
+   */
+  private async amendReviewIssues(input: ReviewSubmission): Promise<
+    OpResult<{
+      chapter: number
+      round: number
+      total: number
+      open_blockers: number
+      next_stage: Stage
+      amended: string[]
+      rounds: RoundCounters
+    }>
+  > {
+    const patches = input.amend_issues ?? []
+    if (patches.length === 0) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend_issues must not be empty')
+    }
+    return this.mutate({
+      root: input.root,
+      op: 'reviewAmendment',
+      chapter: input.chapter,
+      reason: input.amend_note ?? 'correct review metadata',
+      run: async (snapshot, context) => {
+        this.assertChapter(snapshot, input.chapter)
+        const review = snapshot.review
+        if (review === null) {
+          throw new EngineInputError(
+            ERROR_CODES.STAGE_ORDER,
+            `chapter ${input.chapter} has no review to amend`,
+            'submit the P4 review first; amendments correct an existing review',
+          )
+        }
+        if (!['P5', 'P6', 'ready_to_archive'].includes(snapshot.pipeline.stage)) {
+          throw new EngineInputError(
+            ERROR_CODES.STAGE_ORDER,
+            `review amendments are not allowed at stage ${snapshot.pipeline.stage}`,
+            'amend issues during P5/P6/ready_to_archive',
+          )
+        }
+        const issues = review.issues.map((issue) => ({ ...issue }))
+        const byId = new Map(issues.map((issue) => [issue.id, issue]))
+        const amended: string[] = []
+        for (const patch of patches) {
+          const issue = byId.get(patch.id)
+          if (issue === undefined) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `issue ${patch.id} is not in the current review`,
+              `current issues: ${issues.map((row) => row.id).join(', ') || 'none'}`,
+            )
+          }
+          if (patch.severity === 'advisory' && issue.severity === 'blocker') {
+            throw new EngineInputError(
+              ERROR_CODES.ISSUE_IMMUTABLE,
+              `issue ${patch.id} is a blocker and cannot be downgraded`,
+              'fix the issue, or keep it a blocker; severity cannot be lowered by an amendment',
+            )
+          }
+          if (patch.status === 'waived' && issue.severity === 'blocker') {
+            throw new EngineInputError(
+              ERROR_CODES.ISSUE_IMMUTABLE,
+              `issue ${patch.id} is a blocker and cannot be waived`,
+            )
+          }
+          if (patch.location !== undefined) {
+            const paragraph = parseParagraphLocation(patch.location)
+            const paragraphCount = splitParagraphs(snapshot.text ?? '').length
+            if (paragraph === null || paragraph < 1 || paragraph > paragraphCount) {
+              throw new EngineInputError(
+                ERROR_CODES.SCHEMA_INVALID,
+                `issue ${patch.id} location "${patch.location}" is outside the chapter`,
+                `use 第 1 段 .. 第 ${paragraphCount} 段`,
+              )
+            }
+            issue.location = patch.location
+          }
+          if (patch.problem !== undefined) issue.problem = patch.problem
+          if (patch.fix !== undefined) issue.fix = patch.fix
+          if (patch.severity !== undefined) issue.severity = patch.severity
+          if (patch.status !== undefined) issue.status = patch.status
+          amended.push(issue.id)
+        }
+        const updated: ReviewDocument = {
+          ...review,
+          issues,
+          amendments: [
+            ...(review.amendments ?? []),
+            {
+              at: this.now().toISOString(),
+              note: input.amend_note ?? 'review metadata corrected',
+              issues: [...new Set(amended)],
+            },
+          ],
+        }
+        const blocking: BlockingItem[] = issues
+          .filter((issue) => issue.severity === 'blocker' && issue.status !== 'fixed')
+          .map((issue) => ({
+            code: `ISSUE-${issue.id}`,
+            scope: issue.dimension,
+            detail: `${issue.problem} → ${issue.fix}`,
+            hint: issue.location,
+          }))
+        const digest = sha256(stableJson(updated))
+        const nextPipeline = pipelineWith(snapshot, context.revision, {
+          blocking,
+          review_digest: digest,
+          last_action: action('novel_review_amend', this.now(), digest),
+        })
+        return {
+          files: [
+            { path: reviewFile(input.chapter), text: yaml(updated) },
+            { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
+          ],
+          backup: true,
+          data: {
+            chapter: input.chapter,
+            round: review.round,
+            total: review.total,
+            open_blockers: blocking.length,
+            next_stage: snapshot.pipeline.stage,
+            amended: [...new Set(amended)],
+            rounds: snapshot.pipeline.rounds,
+          },
+          warnings: [],
         }
       },
     })
@@ -5426,6 +6277,11 @@ export class EngineService {
       violations: number
       advisories: number
       advisory_codes: string[]
+      advisory_instances: Array<{
+        id: string
+        location: import('../types.js').ViolationLocation
+        detail: string
+      }>
       acknowledged: string[]
       acknowledged_findings: Array<{ id: string; code: string; reason: string; at: string }>
       metrics: WordMetrics
@@ -5488,6 +6344,7 @@ export class EngineService {
             : {
                 facts_declared: 0,
                 facts_checked: 0,
+                facts_unused: 0,
                 equations_checked: 0,
                 findings: 0,
               },
@@ -5495,11 +6352,13 @@ export class EngineService {
         const machineBlocking = scopedMachine.violations.filter(
           (violation) => violation.severity === 'blocker',
         )
-        const machineAdvisories = dedupeAdvisories(
-          scopedMachine.violations.filter((violation) => violation.severity === 'advisory'),
-        )
+        // Persist one row per instance (audit evidence); the *view* below rolls
+        // them up by code so a chapter reads as one line per problem class.
+        const advisoryRows = scopedMachine.violations.filter((violation) => violation.severity === 'advisory')
+        const machineAdvisories = dedupeAdvisories(advisoryRows)
         const advisoryCodes = [...new Set(machineAdvisories.map((violation) => violation.code))]
-        const advisoryIds = machineAdvisories.map((violation) => violation.id!).filter(Boolean)
+        // A caller may acknowledge a whole code or one persisted instance id.
+        const advisoryIds = advisoryRows.map((violation) => violation.id!).filter(Boolean)
         const requestedAck = Array.isArray(input.acknowledge) ? input.acknowledge : []
         const reasons = input.acknowledge_reasons ?? {}
         const unknownAck = requestedAck.filter(
@@ -5521,18 +6380,25 @@ export class EngineService {
             )
           }
         }
+        // A waiver granted with acknowledge_until_chapter is a decision about a
+        // *problem class*, not about one chapter's instance id. Carry it forward
+        // from the previous check until it expires, or the same advisory returns
+        // every chapter and the author has to re-waive it forever (M8).
+        const carried = await this.carriedAcknowledgements(snapshot, input.chapter)
         const priorAck =
           snapshot.check !== null && snapshot.check.content_hash === sha256(text)
             ? (snapshot.check.acknowledged ?? [])
             : []
-        const priorFindings =
-          snapshot.check !== null && snapshot.check.content_hash === sha256(text)
+        const priorFindings = [
+          ...(snapshot.check !== null && snapshot.check.content_hash === sha256(text)
             ? (snapshot.check.machine.acknowledged_findings ?? snapshot.check.acknowledged_findings ?? [])
-            : []
+            : []),
+          ...carried,
+        ]
         const acknowledgedFindings = [
           ...priorFindings,
           ...requestedAck.map((token) => {
-            const finding = machineAdvisories.find(
+            const finding = advisoryRows.find(
               (violation) => violation.id === token || violation.code === token,
             )!
             return {
@@ -5540,11 +6406,20 @@ export class EngineService {
               code: finding.code,
               reason: reasons[token]!.trim(),
               at: this.now().toISOString(),
+              ...(input.acknowledge_until_chapter === undefined
+                ? {}
+                : { expires_at_chapter: input.acknowledge_until_chapter }),
             }
           }),
         ].filter((finding, index, all) => all.findIndex((candidate) => candidate.id === finding.id) === index)
         const acknowledgedFindingIds = new Set(acknowledgedFindings.map((finding) => finding.id))
+        const carriedCodes = new Set(
+          carried
+            .filter((finding) => (finding.expires_at_chapter ?? 0) >= input.chapter)
+            .map((finding) => finding.code),
+        )
         const fullyAcknowledgedCodes = advisoryCodes.filter((code) => {
+          if (carriedCodes.has(code)) return true
           const findings = machineAdvisories.filter((violation) => violation.code === code)
           return (
             findings.length > 0 &&
@@ -5570,8 +6445,9 @@ export class EngineService {
           content_hash: sha256(text),
           machine: {
             violations: machineBlocking,
-            advisories: machineAdvisories,
+            advisories: advisoryRows,
             metrics: scopedMachine.metrics,
+            ...(scopedMachine.dialogue === undefined ? {} : { dialogue: scopedMachine.dialogue }),
             numeric: scopedMachine.numeric,
             ...(acknowledgedFindings.length === 0 ? {} : { acknowledged_findings: acknowledgedFindings }),
           },
@@ -5648,13 +6524,24 @@ export class EngineService {
             violations: machineBlocking.length,
             advisories: machineAdvisories.filter(
               (violation) =>
-                !acknowledged.includes(violation.code) &&
-                !acknowledgedFindings.some((finding) => finding.id === violation.id),
+                !advisoryAcknowledged(violation, acknowledged, acknowledgedFindings, input.chapter),
             ).length,
+            advisory_instances: machineAdvisories.flatMap((violation) =>
+              (violation.instances ?? []).filter(
+                (instance) =>
+                  !advisoryAcknowledged(
+                    { ...violation, id: instance.id, instances: undefined },
+                    acknowledged,
+                    acknowledgedFindings,
+                    input.chapter,
+                  ),
+              ),
+            ),
             advisory_codes: advisoryCodes,
             acknowledged,
             acknowledged_findings: acknowledgedFindings,
             metrics: scopedMachine.metrics,
+            ...(scopedMachine.dialogue === undefined ? {} : { dialogue: scopedMachine.dialogue }),
             numeric: scopedMachine.numeric,
             stage: nextStage,
             semantic: { items: semanticResult.items, findings: semanticResult.findings },
@@ -5665,7 +6552,8 @@ export class EngineService {
             ...machineWarnings(
               { ...scopedMachine, violations: [...machineBlocking, ...machineAdvisories] },
               acknowledged,
-              acknowledgedFindings.map((finding) => finding.id),
+              acknowledgedFindings,
+              input.chapter,
             ),
             ...(acknowledged.length === 0
               ? []
@@ -5871,6 +6759,7 @@ export class EngineService {
           title,
           file: chapterFile(chapter),
           word_count: metrics.total_word_count,
+          cjk_words: metrics.cjk_chars,
           dialogue_lines: metrics.dialogue_lines,
           dialogue_ratio: metrics.dialogue_ratio,
           scene_type: snapshot.pipeline.draft?.scene_type ?? snapshot.plan?.scene_type ?? '日常过渡章',
@@ -5901,6 +6790,8 @@ export class EngineService {
           relationships: snapshot.relationships,
           narrator: snapshot.pipeline.draft?.narrator ?? snapshot.plan?.narrator ?? null,
           roleHints,
+          allowNegativeBalances: snapshot.project.targets.allow_negative_balances === true,
+          strict: snapshot.outline.book.strict,
         })
         // 0.2.13: RELATION_UNKNOWN has exactly one active owner. P6 cannot know
         // about a relation created by this chapter; run the same pure check only
@@ -6017,6 +6908,14 @@ export class EngineService {
             'restore the plan from backups/ before archiving',
           )
         }
+        // Keep every receipt but bound the hot file: current + newest three per
+        // stage stay in state/briefs.yaml, older rows move to a per-chapter
+        // history file that the read model merges back.
+        const compressed = await this.compressBriefReceipts(context.store, chapter)
+        if (compressed.warning !== undefined) {
+          ledger.warnings.push({ code: 'BRIEF_RECEIPT_COMPACTION_FAILED', message: compressed.warning })
+        }
+        const briefFiles = compressed.files
         const files: StagedFile[] = [
           // Re-staging the manuscript makes the archive backup a true snapshot of
           // the archived version; the body itself is unchanged by this transaction.
@@ -6033,6 +6932,7 @@ export class EngineService {
           { path: joinRel(STATE_DIR, STATE_FILES.relationships), text: yaml(ledger.relationships) },
           { path: OUTLINE_FILE, text: yaml(outline) },
           { path: ARCHIVE_DIGESTS, text: `${JSON.stringify(archiveDigests, null, 2)}\n` },
+          ...briefFiles,
         ]
         return {
           files,
@@ -6063,15 +6963,45 @@ export class EngineService {
 
   /* ------------------------------------------------------------ maintenance */
 
-  async amend(input: AmendSubmission): Promise<OpResult<{ path: string; revision: number }>> {
+  async amend(input: AmendSubmission): Promise<
+    OpResult<{
+      path: string
+      revision: number
+      before: Record<string, unknown> | null
+      after: Record<string, unknown>
+      changes: Array<{ path: string; before: unknown; after: unknown }>
+    }>
+  > {
     if (typeof input.path !== 'string' || input.path.trim() === '') {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend path must be a non-empty string')
     }
     if (typeof input.reason !== 'string' || input.reason.trim() === '') {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend requires a reason')
     }
-    if (typeof input.content !== 'object' || input.content === null || Array.isArray(input.content)) {
+    const hasContent = input.content !== undefined
+    const hasPatch = input.patch !== undefined
+    if (hasContent && hasPatch) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'amend accepts either content or patch, not both',
+        'use patch for a local edit and content for a whole-document repair',
+      )
+    }
+    if (!hasContent && !hasPatch) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'amend requires content or patch',
+        'send patch:[{op,path,value}] for one field, or content for the whole document',
+      )
+    }
+    if (
+      hasContent &&
+      (typeof input.content !== 'object' || input.content === null || Array.isArray(input.content))
+    ) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend content must be an object')
+    }
+    if (hasPatch && (!Array.isArray(input.patch) || input.patch.length === 0)) {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend patch must be a non-empty array')
     }
     const selection = await this.resolveRoot(input.root)
     const resolvedRoot = selection.root
@@ -6132,11 +7062,21 @@ export class EngineService {
             }
           }
         }
-        const amendmentContent = { ...input.content }
+        let amendmentContent: Record<string, unknown>
+        if (input.patch === undefined) {
+          amendmentContent = { ...(input.content ?? {}) }
+        } else {
+          const base = await this.readAmendBase(context.store, input.path, kind)
+          const patched = applyAmendPatch(base, input.patch)
+          // A project patch must only name the fields it changed; otherwise the
+          // immutable-field guard sees the whole document and rejects every
+          // patch as "genre is immutable" (R1).
+          amendmentContent = kind === 'project' ? projectPatchDelta(base, patched) : patched
+        }
         // `page` is a read-model wrapper added by novel_state, never a persisted
         // document field. A complete query payload can be amended, but a
         // truncated or history-stripped page must never silently delete rows.
-        const suppliedPage = recordOf(input.content.page)
+        const suppliedPage = recordOf(amendmentContent.page)
         if (suppliedPage !== null) {
           const filters = recordOf(suppliedPage.filters)
           const incomplete =
@@ -6300,7 +7240,31 @@ export class EngineService {
           projectDamaged,
           archiveDigests,
           archivedChapterNumbers,
+          input.allow_delete === true,
         )
+        // Server-side truncation guard: a caller that drops the `page` wrapper
+        // must not be able to delete rows silently. Compare the submitted row
+        // set with the document the snapshot actually holds.
+        if (!input.allow_delete && oldDocument !== undefined && oldDocument !== null) {
+          const missing = missingLedgerRows(kind, oldDocument, document)
+          if (missing.length > 0) {
+            throw new EngineInputError(
+              ERROR_CODES.SCHEMA_INVALID,
+              `amend would delete ${missing.length} existing row(s) from ${input.path}: ${missing
+                .slice(0, 5)
+                .join(', ')}`,
+              'a truncated novel_state page is not a complete document; fetch every cursor page, or set allow_delete:true for an intentional deletion',
+              {
+                details: {
+                  field: input.path,
+                  expected: 'every existing row, or allow_delete:true',
+                  received: { missing: missing.slice(0, 20), missing_count: missing.length },
+                  allowed: ['merge every cursor page', 'allow_delete:true'],
+                },
+              },
+            )
+          }
+        }
         if (kind === 'chapters') {
           for (const raw of Array.isArray(document.chapters) ? document.chapters : []) {
             const row = recordOf(raw)
@@ -6328,8 +7292,18 @@ export class EngineService {
           const chapterText = new Map<number, string | null>()
           for (const raw of Array.isArray(document.items) ? document.items : []) {
             const row = recordOf(raw)
-            if (row === null || row.status !== 'resolved' || typeof row.resolved_anchor !== 'string') continue
+            if (row === null || row.status !== 'resolved') continue
             const previous = typeof row.id === 'string' ? oldRows.get(row.id) : undefined
+            if (typeof row.resolved_anchor !== 'string' || row.resolved_anchor.trim() === '') {
+              // A row that is already resolved may predate the anchor rule. Any
+              // new resolve — including a brand-new id — must carry evidence.
+              if (previous === undefined || previous.status !== 'resolved') {
+                problems.push(
+                  `resolved foreshadow ${String(row.id)} requires resolved_anchor; a status change is not evidence`,
+                )
+              }
+              continue
+            }
             if (
               previous !== undefined &&
               previous.status === 'resolved' &&
@@ -6379,7 +7353,23 @@ export class EngineService {
             { path: joinRel(STATE_DIR, STATE_FILES.pipeline), text: yaml(nextPipeline) },
           ],
           backup: true,
-          data: { path: input.path, revision: context.revision },
+          data: {
+            path: input.path,
+            revision: context.revision,
+            before: oldDocument === undefined ? null : (oldDocument as Record<string, unknown>),
+            after: document,
+            changes:
+              input.patch === undefined
+                ? documentChanges(
+                    oldDocument === undefined ? null : (oldDocument as Record<string, unknown>),
+                    document,
+                  )
+                : patchChanges(
+                    oldDocument === undefined ? null : (oldDocument as Record<string, unknown>),
+                    document,
+                    input.patch,
+                  ),
+          },
           event: {
             name: 'novel/amended',
             payload: { schemaVersion: 1, projectRoot: snapshot.root, path: input.path, reason: input.reason },
@@ -8411,6 +9401,7 @@ export class EngineService {
     const currentReviews: import('../types.js').ReviewDocument[] = []
     let samples = 0
     let attempts = 0
+    let effort: ReturnType<EngineService['effortProjection']> | undefined
     if (includeQuality) {
       const reviewNames = new Set(await store.list(REVIEW_DIR))
       const sampleChapters = new Set<number>()
@@ -8435,7 +9426,9 @@ export class EngineService {
         [...archivedChapterNums],
         sampleChapters,
       )
-      attempts = [...attemptCounts.values()].reduce((total, count) => total + count, 0)
+      // Same projection as report(): attempts is the lifetime review count.
+      effort = this.effortProjection(snapshot.chapters, journal.rows, attemptCounts)
+      attempts = effort.lifetime.reviews
     }
     const qualityTrendBasis =
       samples < 3
@@ -8471,17 +9464,49 @@ export class EngineService {
       snapshot.check !== null &&
       snapshot.text !== null &&
       snapshot.check.content_hash === sha256(snapshot.text)
-    const acknowledged = new Set(checkCurrent ? (snapshot.check?.acknowledged ?? []) : [])
-    const currentAdvisoryCodes = new Set(
-      checkCurrent ? (snapshot.check?.machine.advisories ?? []).map((violation) => violation.code) : [],
+    const acknowledgedCodes = checkCurrent ? (snapshot.check?.acknowledged ?? []) : []
+    const advisoryFindings: AckedFinding[] = checkCurrent
+      ? ((snapshot.check?.machine.acknowledged_findings ??
+          snapshot.check?.acknowledged_findings ??
+          []) as AckedFinding[])
+      : []
+    const currentAdvisories = checkCurrent ? dedupeAdvisories(snapshot.check?.machine.advisories ?? []) : []
+    const ackChapter = snapshot.pipeline.chapter
+    const liveAckIds = new Set(
+      advisoryFindings
+        .filter(
+          (finding) => finding.expires_at_chapter === undefined || ackChapter <= finding.expires_at_chapter,
+        )
+        .map((finding) => finding.id),
     )
-    const acknowledgedAdvisories = [...acknowledged].filter((code) => currentAdvisoryCodes.has(code)).length
-    const advisories = (checkCurrent ? (snapshot.check?.machine.advisories ?? []) : [])
-      .filter((violation) => !acknowledged.has(violation.code))
+    // Count exactly what novel_check counts: a code covers every instance, a
+    // finding id covers one. The panel used to ignore instance ids entirely, so
+    // a per-instance acknowledgement never changed the UI (X12).
+    let acknowledgedAdvisories = 0
+    for (const violation of currentAdvisories) {
+      if (acknowledgedCodes.includes(violation.code)) {
+        acknowledgedAdvisories += violation.instances?.length ?? 1
+        continue
+      }
+      const instances = violation.instances ?? []
+      if (instances.length > 0) {
+        acknowledgedAdvisories += instances.filter((instance) => liveAckIds.has(instance.id)).length
+      } else if (violation.id !== undefined && liveAckIds.has(violation.id)) {
+        acknowledgedAdvisories += 1
+      }
+    }
+    const advisories = currentAdvisories
+      .filter(
+        (violation) => !advisoryAcknowledged(violation, acknowledgedCodes, advisoryFindings, ackChapter),
+      )
       .map((violation) => ({
         code: violation.code,
         detail: violation.detail,
-        hint: `第 ${violation.location.paragraph} 段`,
+        hint:
+          violation.location.paragraph !== undefined
+            ? `第 ${violation.location.paragraph} 段`
+            : `${violation.location.ledger ?? '台账'}${violation.location.entity === undefined ? '' : ` · ${violation.location.entity}`}`,
+        instances: violation.instances?.length ?? 1,
       }))
     const legacy = await this.legacyIssues(snapshot, false)
     const activity = journal.rows
@@ -8512,6 +9537,21 @@ export class EngineService {
       activity: journal.rows.filter((row) => row.op !== 'lock_reclaimed').slice(-8),
       journal: journal.rows,
       reviewAttempts: attempts,
+      ...(effort === undefined
+        ? {}
+        : {
+            effortProjection: {
+              basis: effort.basis,
+              chapters: [...effort.chapters.entries()].map(([num, row]) => ({ num, ...row })),
+            },
+            currentEffort: {
+              chapter: snapshot.pipeline.chapter,
+              reviews: snapshot.pipeline.rounds.review,
+              revisions: snapshot.pipeline.rounds.revise,
+              checks: snapshot.pipeline.rounds.check,
+              rollbacks: 0,
+            },
+          }),
       finalChecks: Object.fromEntries(
         archived
           .filter((record) => record.final_check === 'pass' || record.final_check === 'fail')
@@ -8683,7 +9723,13 @@ export class EngineService {
       { rulepack: this.rulepack, minScore: this.config.quality.minScore },
     )
     if (!gateResult.passed) {
-      const first = gateResult.blocking[0]!
+      // PG-01 says "re-sign the brief"; it is never the first thing to repair
+      // when a content gate already fails on the same manuscript. Surface the
+      // content problem so the advice is "revise", not "fetch P8 again".
+      const ordered = [...gateResult.blocking].sort(
+        (left, right) => Number(left.code === 'PG-01') - Number(right.code === 'PG-01'),
+      )
+      const first = ordered[0]!
       const target: RollbackSubmission['toStage'] =
         first.code === 'PG-03' || first.code === 'PG-04' || first.code === 'PG-05' || first.code === 'PG-06'
           ? 'P3'
@@ -8886,7 +9932,12 @@ export class EngineService {
     // matches the current snapshot. Presence alone is not enough: a failed
     // check, a revision round, or a state change makes an older brief stale,
     // and the next operation would fail PG-01 instead of advancing.
-    const briefStage = STATUS_BRIEF[stage]
+    // The archive preflight decides which brief is actually required: a
+    // revisionable archive failure is repaired at P5, so asking for P8 first
+    // would be a wasted round trip.
+    const archive = this.archivePreflight(snapshot)
+    const briefStage =
+      stage === 'ready_to_archive' && archive !== null && archive.revisionable ? 'P5' : STATUS_BRIEF[stage]
     // After a failed check the next operation is a revision, not another
     // check; the reason must name the tool that will actually be legal after
     // the brief is refreshed.
@@ -8922,7 +9973,6 @@ export class EngineService {
         reason: `CHECK_UNREADABLE@${checkFile(chapter)}; repair the check with novel_check before any stale revision blocker`,
       }
     }
-    const archive = this.archivePreflight(snapshot)
     if (archive !== null) {
       // A prose/draft/semantic archive failure can be repaired through P5
       // without losing the plan. Rollback remains the fallback for structural
@@ -9304,6 +10354,123 @@ export class EngineService {
     }
   }
 
+  /** Read the current document so a patch edits reality, not a guess. */
+  private async readAmendBase(store: FsStore, path: string, kind: DocKind): Promise<Record<string, unknown>> {
+    const raw = await store.readText(path)
+    if (raw === null) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `amend patch cannot read ${path}: the document does not exist`,
+        'pass content to create it, or check the path with novel_state',
+      )
+    }
+    let parsed: unknown
+    try {
+      parsed = parseYaml(raw)
+    } catch (error) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `amend patch cannot parse ${path}: ${errorMessage(error)}`,
+        'the document is damaged; repair it with a whole content document instead of a patch',
+      )
+    }
+    const document = recordOf(parsed)
+    if (document === null) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `amend patch cannot use ${path}: it is not a document object`,
+        'repair it with a whole content document instead of a patch',
+      )
+    }
+    // Validate the base so a patch never repairs a schema it does not understand.
+    narrow(kind, document)
+    return document
+  }
+
+  /**
+   * Move superseded receipts into `history/briefs/chNNN.yaml`. Failure is
+   * fail-open: the archive must not be blocked by an audit-file rewrite, and the
+   * unpruned file is still valid.
+   */
+  private async compressBriefReceipts(
+    store: FsStore,
+    chapter: number,
+  ): Promise<{ files: StagedFile[]; warning?: string }> {
+    try {
+      const current = await this.readRawBriefReceipts(store)
+      if (current.receipts.length === 0) return { files: [] }
+      const path = `history/briefs/ch${String(chapter).padStart(3, '0')}.yaml`
+      const existingRaw = await store.readText(path)
+      const archived: BriefReceiptsDocument['receipts'] = []
+      if (existingRaw !== null) {
+        const parsed = parseYaml(existingRaw) as Partial<BriefReceiptsDocument> | null
+        if (parsed !== null && Array.isArray(parsed.receipts)) {
+          archived.push(...parsed.receipts)
+        }
+      }
+      const keep: BriefReceiptsDocument['receipts'] = []
+      const move: BriefReceiptsDocument['receipts'] = []
+      const groups = new Map<string, BriefReceiptsDocument['receipts']>()
+      for (const receipt of current.receipts) {
+        if (receipt.chapter !== chapter) {
+          keep.push(receipt)
+          continue
+        }
+        const key = receipt.stage
+        const group = groups.get(key) ?? []
+        group.push(receipt)
+        groups.set(key, group)
+      }
+      for (const group of groups.values()) {
+        const sorted = [...group].sort((left, right) => left.issued_at.localeCompare(right.issued_at))
+        const currentRow = sorted.find((row) => row.current === true) ?? sorted.at(-1)
+        const bounded = new Set<BriefReceiptsDocument['receipts'][number]>()
+        if (currentRow !== undefined) bounded.add(currentRow)
+        // The acceptance is "at most three live receipts per chapter+stage".
+        // Adding three recent rows on top of a promoted older current row
+        // produced four (M3).
+        for (const row of sorted.slice(-(currentRow === undefined ? 3 : 2))) bounded.add(row)
+        for (const row of sorted) {
+          if (bounded.has(row)) keep.push(row)
+          else move.push(row)
+        }
+      }
+      if (move.length === 0) return { files: [] }
+      // Fail-open must cover the write, not only the read: when `history` (or
+      // `history/briefs`) is a regular file, staging the archive failed with
+      // EEXIST and the whole archive aborted instead of keeping the receipts
+      // in the hot file. Probe the path before promising to move anything.
+      for (const directory of ['history', 'history/briefs']) {
+        const info = await store.stat(directory)
+        if (info !== null && !info.isDirectory) {
+          return {
+            files: [],
+            warning: `${directory} is a file, not a directory; receipts stay in ${BRIEF_RECEIPTS_FILE}`,
+          }
+        }
+      }
+      const known = new Set(
+        archived.map((row) => `${row.chapter}:${row.stage}:${row.digest}:${row.issued_at}`),
+      )
+      for (const row of move) {
+        const id = `${row.chapter}:${row.stage}:${row.digest}:${row.issued_at}`
+        if (known.has(id)) continue
+        known.add(id)
+        archived.push(row)
+      }
+      return {
+        files: [
+          { path, text: yaml({ schema_version: 1, receipts: archived }) },
+          { path: BRIEF_RECEIPTS_FILE, text: yaml({ schema_version: 1, receipts: keep }) },
+        ],
+      }
+    } catch (error) {
+      // Compaction is best effort: the archive must still succeed. Returning the
+      // reason lets the caller attach a warning instead of failing silently.
+      return { files: [], warning: `receipt compaction failed: ${errorMessage(error)}` }
+    }
+  }
+
   /** Whether the stored brief still signs the current snapshot. */
   private async readBriefReceipts(store: FsStore): Promise<BriefReceiptsDocument> {
     const raw = await this.readRawBriefReceipts(store)
@@ -9346,6 +10513,10 @@ export class EngineService {
           issued_at: receipt.issued_at,
           id: receipt.id ?? `${receipt.chapter}:${receipt.stage}:${receipt.digest}`,
           current,
+          // Per-block digests are what let PG-01 name the dependency that
+          // changed. Rebuilding the row without them silently downgraded every
+          // stale report to "state" with an empty `changed` list.
+          ...(receipt.dependencies === undefined ? {} : { dependencies: receipt.dependencies }),
           ...(current
             ? {}
             : {
@@ -9397,8 +10568,7 @@ export class EngineService {
   private briefIsCurrent(snapshot: Snapshot, stage: BriefStage): boolean {
     const record = snapshot.briefs[stage]
     if (record === undefined) return false
-    const context = this.briefContextFor(stage, snapshot, snapshot.pipeline.chapter)
-    return record.digest === this.briefDigest(stage, snapshot, context)
+    return record.digest === this.briefDigest(stage, snapshot, snapshot.pipeline.chapter)
   }
 
   /** Arguments valid for the tool `STAGE_NEXT` recommends at this stage. */
@@ -9549,6 +10719,7 @@ export class EngineService {
         characters: snapshot.characters.characters.length > 0 ? snapshot.characters : null,
         previousText: snapshot.previousText,
         previousTexts: snapshot.previousTexts,
+        previousChapterNums: snapshot.previousChapterNums,
         foreshadows: snapshot.foreshadows.items.length > 0 ? snapshot.foreshadows : null,
         timeline: snapshot.timeline.items.length > 0 ? snapshot.timeline : null,
         relationships: snapshot.relationships.items.length > 0 ? snapshot.relationships : null,
@@ -9608,33 +10779,92 @@ export class EngineService {
     return context
   }
 
-  private briefDigest(stage: string, snapshot: Snapshot, context: Record<string, unknown>): string {
-    // The rendered file is part of the contract: editing briefs/P5.md must
-    // invalidate a digest issued against the old text.
-    const briefHash = this.briefs.render(
-      stage as import('../types.js').BriefStage,
-      this.briefVariables(snapshot, snapshot.pipeline.chapter),
-    ).contentHash
+  /**
+   * Each stage signs only the state it actually reads. A single document-wide
+   * digest made one revision invalidate P4/P6/P8 together, and made a rounds
+   * counter change look like a content change.
+   */
+  private briefDependencies(stage: BriefStage, snapshot: Snapshot, chapter: number): Record<string, string> {
+    const hash = (value: unknown): string => sha256(stableJson(value)).slice(0, 32)
+    const dependencies: Record<string, string> = {
+      brief: this.briefs.render(stage, this.briefVariables(snapshot, chapter)).contentHash,
+      rulepack: `${this.rulepack.name}@${this.rulepack.version}`,
+      min_score: String(this.config.quality.minScore),
+      // A rollback is an explicit reset: the stage must re-issue its brief even
+      // though the signed documents did not change.
+      rollback_epoch:
+        snapshot.pipeline.last_action?.op === 'novel_rollback' ? snapshot.pipeline.last_action.at : 'none',
+    }
+    switch (stage) {
+      case 'P1':
+        dependencies.project = hash(snapshot.project)
+        dependencies.outline = hash(snapshot.outline)
+        dependencies.worldbook = hash(snapshot.worldbook)
+        dependencies.handoff = hash(snapshot.handoff)
+        dependencies.chapters = hash(snapshot.chapters.chapters)
+        break
+      case 'P2':
+        dependencies.plan_error = snapshot.planError ?? ''
+        dependencies.check_error = snapshot.checkError ?? ''
+        dependencies.world_plan = hash(snapshot.worldPlan)
+        dependencies.outline = hash(snapshot.outline)
+        dependencies.worldbook = hash(snapshot.worldbook)
+        dependencies.chapters = hash(snapshot.chapters.chapters)
+        break
+      case 'P3':
+        dependencies.plan_error = snapshot.planError ?? ''
+        dependencies.plan = hash(snapshot.plan)
+        dependencies.world_plan = hash(snapshot.worldPlan)
+        dependencies.characters = hash(snapshot.characters)
+        dependencies.world = hash(snapshot.world)
+        dependencies.outline = hash(snapshot.outline)
+        break
+      case 'P4':
+        dependencies.check_error = snapshot.checkError ?? ''
+        dependencies.text = hash(snapshot.text)
+        dependencies.plan = hash(snapshot.plan)
+        dependencies.machine = this.machineHash(snapshot)
+        break
+      case 'P5':
+        dependencies.review_error = snapshot.reviewError ?? ''
+        dependencies.text = hash(snapshot.text)
+        dependencies.review = hash(snapshot.review)
+        break
+      case 'P6':
+        dependencies.review_error = snapshot.reviewError ?? ''
+        dependencies.check_error = snapshot.checkError ?? ''
+        dependencies.text = hash(snapshot.text)
+        dependencies.review = hash(snapshot.review)
+        dependencies.machine = this.machineHash(snapshot)
+        // P6 shows the current check; a failed check must be re-signed before
+        // the revision that answers it.
+        dependencies.check = hash(snapshot.check)
+        break
+      case 'P8':
+        dependencies.review_error = snapshot.reviewError ?? ''
+        dependencies.check_error = snapshot.checkError ?? ''
+        dependencies.text = hash(snapshot.text)
+        dependencies.review = hash(snapshot.review)
+        dependencies.check = hash(snapshot.check)
+        dependencies.plan = hash(snapshot.plan)
+        // P8's context shows the open foreshadow list and recent summaries,
+        // not the full world/relationship ledgers.
+        dependencies.foreshadows = hash(snapshot.foreshadows)
+        dependencies.chapters = hash(snapshot.chapters.chapters.slice(-5))
+        break
+    }
+    return dependencies
+  }
+
+  private machineHash(snapshot: Snapshot): string {
+    if (snapshot.text === null) return 'no-text'
+    const machine = this.machine(snapshot, snapshot.text, { summary: snapshot.plan?.summary ?? null })
+    return sha256(stableJson(machine)).slice(0, 32)
+  }
+
+  private briefDigest(stage: BriefStage, snapshot: Snapshot, chapter: number): string {
     return shortDigest(
-      stableJson({
-        stage,
-        briefHash,
-        chapter: snapshot.pipeline.chapter,
-        pipelineStage: snapshot.pipeline.stage,
-        rounds: snapshot.pipeline.rounds,
-        min_score: this.config.quality.minScore,
-        rulepack: `${this.rulepack.name}@${this.rulepack.version}`,
-        documents: sha256(
-          stableJson({
-            project: snapshot.project,
-            outline: snapshot.outline,
-            worldbook: snapshot.worldbook,
-            plan: snapshot.plan,
-            worldPlan: snapshot.worldPlan,
-          }),
-        ),
-        context,
-      }),
+      stableJson({ stage, chapter, dependencies: this.briefDependencies(stage, snapshot, chapter) }),
     )
   }
 
@@ -9713,11 +10943,11 @@ export class EngineService {
         extras.briefDigest ??
         (extras.briefStage === undefined || extras.briefStage === null
           ? null
-          : this.briefDigest(
-              extras.briefStage,
-              snapshot,
-              this.briefContextFor(extras.briefStage, snapshot, snapshot.pipeline.chapter),
-            )),
+          : this.briefDigest(extras.briefStage, snapshot, snapshot.pipeline.chapter)),
+      briefDependencies:
+        extras.briefStage === undefined || extras.briefStage === null
+          ? null
+          : this.briefDependencies(extras.briefStage, snapshot, snapshot.pipeline.chapter),
       briefStage: extras.briefStage ?? briefStageFor(operation, snapshot.pipeline.stage),
       draftTitle: composeTitle(
         snapshot.pipeline.chapter,
@@ -9752,6 +10982,7 @@ export class EngineService {
       },
       previousText: snapshot.previousText,
       previousTexts: snapshot.previousTexts,
+      previousChapterNums: snapshot.previousChapterNums,
       priorSceneTypes: snapshot.chapters.chapters.map((record) => record.scene_type),
       outline: snapshot.outline,
       planTargetWords: extras.planTargetWords ?? snapshot.plan?.target_words ?? null,
@@ -10028,7 +11259,11 @@ export class EngineService {
             if (receipt.current === false) continue
             const previous = next[receipt.stage]
             if (previous === undefined || previous.issued_at <= receipt.issued_at) {
-              next[receipt.stage] = { digest: receipt.digest, issued_at: receipt.issued_at }
+              next[receipt.stage] = {
+                digest: receipt.digest,
+                issued_at: receipt.issued_at,
+                ...(receipt.dependencies === undefined ? {} : { dependencies: receipt.dependencies }),
+              }
             }
           }
           briefs = next
@@ -10154,9 +11389,13 @@ export class EngineService {
     const text = await store.readText(chapterFile(chapter))
     const previousText = chapter > 1 ? await store.readText(chapterFile(chapter - 1)) : null
     const previousTexts: string[] = []
+    const previousChapterNums: number[] = []
     for (let offset = 1; offset <= 3 && chapter - offset >= 1; offset += 1) {
       const previous = await store.readText(chapterFile(chapter - offset))
-      if (previous !== null) previousTexts.push(previous)
+      if (previous !== null) {
+        previousTexts.push(previous)
+        previousChapterNums.push(chapter - offset)
+      }
     }
     const planRaw = await store.readText(planChapterFile(chapter))
     let plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null = null
@@ -10271,6 +11510,7 @@ export class EngineService {
       text,
       previousText,
       previousTexts,
+      previousChapterNums,
       plan,
       planError,
       worldPlanError,
@@ -10636,6 +11876,8 @@ export class EngineService {
             op: options.op,
             chapter: options.chapter ?? snapshot.pipeline.chapter,
             revision: snapshot.pipeline.revision,
+            intended_revision:
+              options.advanceRevision === false ? snapshot.pipeline.revision : snapshot.pipeline.revision + 1,
             files: [],
             status: 'aborted',
             reason: errorMessage(error),
@@ -10702,7 +11944,18 @@ export class EngineService {
         } else {
           this.invalidateReplay(root, options.op)
         }
-        if (outcome.event !== undefined) this.onEvent?.(outcome.event)
+        if (outcome.event !== undefined) {
+          try {
+            this.onEvent?.(outcome.event)
+          } catch (error) {
+            // The transaction is already committed. A host listener that throws
+            // must never turn a successful archive into a retryable failure.
+            result.warnings.push({
+              code: 'EVENT_LISTENER_FAILED',
+              message: `the write committed, but a host event listener threw: ${errorMessage(error)}`,
+            })
+          }
+        }
         return result
       } finally {
         await lock.release()
@@ -10751,6 +12004,7 @@ export class EngineService {
       text: null,
       previousText: null,
       previousTexts: [],
+      previousChapterNums: [],
       plan: null,
       planError: null,
       worldPlanError: null,
@@ -10788,6 +12042,360 @@ const STATUS_BRIEF: Readonly<Record<Stage, BriefStage | null>> = {
 
 const yaml = (value: unknown): string => stringify(value, { lineWidth: 0 })
 
+/** Walk a dot path; array segments are numeric indices. */
+function amendPathParts(path: string): string[] {
+  const parts = path.split('.').filter((part) => part !== '')
+  if (parts.length === 0) {
+    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend patch path must not be empty')
+  }
+  return parts
+}
+
+/**
+ * Apply the JSON-Pointer subset (`replace|add|remove`) to a document. Paths
+ * use dots; array indices are numeric segments. Unknown parents fail closed.
+ */
+export function applyAmendPatch(
+  document: Record<string, unknown>,
+  ops: readonly AmendPatchOp[],
+): Record<string, unknown> {
+  const root = structuredClone(document) as Record<string, unknown>
+  for (const [index, op] of ops.entries()) {
+    if (op === null || typeof op !== 'object') {
+      throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `amend patch[${index}] must be an object`)
+    }
+    if (!['replace', 'add', 'remove'].includes(op.op)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `amend patch[${index}].op must be replace|add|remove`,
+        'use replace for an existing field, add for a new one, remove to delete it',
+        { details: { field: `patch[${index}].op`, expected: 'replace|add|remove', received: op.op } },
+      )
+    }
+    const parts = amendPathParts(op.path)
+    let cursor: unknown = root
+    for (const part of parts.slice(0, -1)) {
+      if (Array.isArray(cursor)) {
+        const at = Number(part)
+        if (!Number.isInteger(at) || at < 0 || at >= cursor.length) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `amend patch[${index}] path "${op.path}" does not exist (${part} is out of range)`,
+          )
+        }
+        cursor = cursor[at]
+        continue
+      }
+      if (typeof cursor !== 'object' || cursor === null) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `amend patch[${index}] path "${op.path}" does not exist`,
+        )
+      }
+      cursor = (cursor as Record<string, unknown>)[part]
+      if (cursor === undefined) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `amend patch[${index}] path "${op.path}" does not exist; add creates a field but not its parents`,
+          'read the document with novel_state first and patch an existing parent',
+          {
+            details: {
+              field: op.path,
+              expected: 'an existing parent path',
+              received: op.path,
+              example: { op: 'replace', path: 'book.logline', value: '...' },
+            },
+          },
+        )
+      }
+    }
+    const last = parts[parts.length - 1]!
+    if (Array.isArray(cursor)) {
+      const at = Number(last)
+      if (!Number.isInteger(at) || at < 0) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `amend patch[${index}] array index "${last}" must be a non-negative integer`,
+        )
+      }
+      if (op.op === 'remove') {
+        if (at >= cursor.length) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `amend patch[${index}] remove index ${at} is out of range`,
+          )
+        }
+        cursor.splice(at, 1)
+      } else if (op.op === 'add') {
+        if (at > cursor.length) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `amend patch[${index}] add index ${at} skips past the end of the array`,
+          )
+        }
+        cursor.splice(at, 0, op.value)
+      } else {
+        if (at >= cursor.length) {
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `amend patch[${index}] replace index ${at} is out of range`,
+          )
+        }
+        cursor[at] = op.value
+      }
+      continue
+    }
+    if (typeof cursor !== 'object' || cursor === null) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `amend patch[${index}] path "${op.path}" has a non-object parent`,
+      )
+    }
+    const target = cursor as Record<string, unknown>
+    if (op.op === 'remove') {
+      delete target[last]
+    } else if (op.op === 'replace') {
+      if (!Object.hasOwn(target, last)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `amend patch[${index}] replace target "${op.path}" does not exist; use add`,
+        )
+      }
+      target[last] = op.value
+    } else {
+      if (Object.hasOwn(target, last) && op.value !== undefined) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `amend patch[${index}] add target "${op.path}" already exists; use replace`,
+        )
+      }
+      target[last] = op.value
+    }
+  }
+  return root
+}
+
+/** Sections amend must not shrink unless the caller says the deletion is intentional. */
+const LEDGER_SECTIONS: Partial<Record<DocKind, readonly string[]>> = {
+  foreshadows: ['items'],
+  timeline: ['items'],
+  relationships: ['items'],
+  characters: ['characters'],
+  chapters: ['chapters'],
+  world: ['locations', 'abilities', 'artifacts', 'factions', 'rules'],
+  locks: ['characters', 'locations'],
+}
+
+/** Stable identity of a ledger row: id, name, or num. */
+function ledgerRowKey(row: Record<string, unknown>, index: number): string {
+  for (const key of ['id', 'name', 'num'] as const) {
+    const value = row[key]
+    if (typeof value === 'string' || typeof value === 'number') return `${key}:${String(value)}`
+  }
+  return `index:${index}`
+}
+
+/** Rows present before but absent after; used to refuse a silent truncation. */
+function missingLedgerRows(kind: DocKind, before: unknown, after: Record<string, unknown>): string[] {
+  const sections = LEDGER_SECTIONS[kind]
+  if (sections === undefined) return []
+  const baseline = recordOf(before)
+  if (baseline === null) return []
+  const missing: string[] = []
+  for (const section of sections) {
+    const left = baseline[section]
+    const right = after[section]
+    const leftRows = Array.isArray(left) ? left : null
+    const rightRows = Array.isArray(right) ? right : null
+    if (leftRows === null) continue
+    const rightKeys = new Set((rightRows ?? []).map((row, index) => ledgerRowKey(recordOf(row) ?? {}, index)))
+    for (const [index, row] of leftRows.entries()) {
+      const record = recordOf(row)
+      if (record === null) continue
+      const key = ledgerRowKey(record, index)
+      if (!rightKeys.has(key)) missing.push(`${section}.${key}`)
+    }
+  }
+  return missing
+}
+
+/**
+ * Cross-ledger references a restore can dangle.
+ *
+ * Restoring one ledger from an older pre-image while leaving the others at HEAD
+ * was accepted: `state/relationships.yaml` could come back naming a character
+ * the restored `state/characters.yaml` no longer declares, and nothing
+ * complained until P6 rediscovered it as an advisory (R2). The guard only
+ * refuses references the restore *introduces*, because a legacy book may
+ * already carry rows an ideal ledger would not, and repairing one file must not
+ * require repairing the whole book first.
+ */
+export function ledgerReferenceProblems(
+  documents: {
+    characters: Snapshot['characters']
+    locks: Snapshot['locks']
+    timeline: Snapshot['timeline']
+    relationships: Snapshot['relationships']
+    handoff: Snapshot['handoff']
+  },
+  totalChapters: number | null,
+): string[] {
+  const problems: string[] = []
+  const known = new Set(documents.characters.characters.map((character) => character.name))
+  for (const name of Object.keys(documents.locks.characters)) {
+    if (!known.has(name)) {
+      problems.push(`locks.characters["${name}"] locks a character characters.yaml does not declare`)
+    }
+  }
+  for (const item of documents.timeline.items) {
+    for (const name of item.characters) {
+      if (!known.has(name)) {
+        problems.push(`timeline.${item.id} names "${name}", which characters.yaml does not declare`)
+      }
+    }
+  }
+  for (const item of documents.relationships.items) {
+    for (const name of [item.a, item.b]) {
+      if (!known.has(name)) {
+        problems.push(`relationships.${item.id} names "${name}", which characters.yaml does not declare`)
+      }
+    }
+  }
+  const handoff = documents.handoff
+  if (handoff !== null) {
+    if (totalChapters !== null && handoff.volume > totalChapters) {
+      problems.push(`handoff.volume ${handoff.volume} exceeds targets.total_chapters ${totalChapters}`)
+    }
+    if (handoff.current_chapter > handoff.next_chapter) {
+      problems.push(
+        `handoff.current_chapter ${handoff.current_chapter} is ahead of next_chapter ${handoff.next_chapter}`,
+      )
+    }
+  }
+  return problems
+}
+
+/**
+ * A damaged ledger has no parsed shape, but "error + 64KB of raw text" left the
+ * author unable to tell a truncated file from a reordered one without counting
+ * rows by hand (R3). The summary is deliberately regex-only: it must never
+ * claim a row the YAML parser could not see, and it must work on a file that
+ * does not parse at all.
+ */
+export function damagedLedgerSummary(raw: string | null): Record<string, unknown> {
+  if (raw === null) return { present: false }
+  const lines = raw.split('\n')
+  const rowIds = [...raw.matchAll(/^\s*-\s+id:\s*["']?([A-Za-z]+-\d+)["']?\s*$/gm)].map(
+    (match) => match[1] as string,
+  )
+  const names = [...raw.matchAll(/^\s*-\s+name:\s*(.+)$/gm)].map((match) => match[1]!.trim())
+  // `state/locks.yaml` is the one map-shaped ledger: its rows are two-space
+  // keys under `characters:`, so the list-oriented patterns reported a damaged
+  // locks file as "0 rows" while it held twenty (R3 was only exercised on the
+  // list-shaped `characters.yaml`). Only exact two-space keys with nothing
+  // after the colon qualify, which no list row or nested field matches.
+  const mapKeys = [...raw.matchAll(/^ {2}([^\s#-][^:]*):\s*$/gm)].map((match) => match[1]!.trim())
+  const nextSeq = /^next_seq:\s*(\d+)\s*$/m.exec(raw)
+  return {
+    present: true,
+    bytes: Buffer.byteLength(raw, 'utf8'),
+    lines: lines.length,
+    rows: Math.max(rowIds.length, names.length, mapKeys.length),
+    next_seq: nextSeq === null ? null : Number(nextSeq[1]),
+    sample_ids: rowIds.slice(0, 5),
+    sample_names: [...names, ...mapKeys].slice(0, 5),
+    // A truncated file has a dangling last row; a reordered file does not.
+    ends_without_newline: raw.length > 0 && !raw.endsWith('\n'),
+  }
+}
+
+/** Top-level field changes for the amend receipt; nested edits show as the parent key. */
+function documentChanges(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+): Array<{ path: string; before: unknown; after: unknown }> {
+  if (before === null) return []
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+  const changes: Array<{ path: string; before: unknown; after: unknown }> = []
+  for (const key of [...keys].sort(compareText)) {
+    const left = stableJson(before[key] ?? null)
+    const right = stableJson(after[key] ?? null)
+    if (left === right) continue
+    changes.push({ path: key, before: before[key], after: after[key] })
+  }
+  return changes
+}
+
+/**
+ * A patch is applied to the whole raw document, but `mergeProjectAmendment`
+ * treats every key it receives as an intent to change it. Sending the merged
+ * document therefore claimed `genre`, `platform` and `created_at` even when the
+ * patch only touched `title`, and every project patch was rejected as
+ * "genre is immutable" (R1). Reduce a patched project to the fields that
+ * actually differ, at both the document and the `targets` level.
+ */
+export function projectPatchDelta(
+  base: Record<string, unknown>,
+  patched: Record<string, unknown>,
+): Record<string, unknown> {
+  const delta: Record<string, unknown> = {}
+  const keys = new Set([...Object.keys(base), ...Object.keys(patched)])
+  for (const key of keys) {
+    if (key === 'targets') continue
+    if (stableJson(base[key] ?? null) !== stableJson(patched[key] ?? null)) delta[key] = patched[key]
+  }
+  const baseTargets = recordOf(base.targets) ?? {}
+  const patchedTargets = recordOf(patched.targets) ?? {}
+  const targetDelta: Record<string, unknown> = {}
+  const targetKeys = new Set([...Object.keys(baseTargets), ...Object.keys(patchedTargets)])
+  for (const key of targetKeys) {
+    if (stableJson(baseTargets[key] ?? null) !== stableJson(patchedTargets[key] ?? null)) {
+      targetDelta[key] = patchedTargets[key]
+    }
+  }
+  if (Object.keys(targetDelta).length > 0) delta.targets = targetDelta
+  return delta
+}
+
+/** Read one dot path out of a document; `undefined` when any segment is absent. */
+function readAmendPath(document: unknown, path: string): unknown {
+  let cursor: unknown = document
+  for (const part of path.split('.').filter((segment) => segment !== '')) {
+    if (Array.isArray(cursor)) {
+      const at = Number(part)
+      if (!Number.isInteger(at) || at < 0) return undefined
+      cursor = cursor[at]
+      continue
+    }
+    if (typeof cursor !== 'object' || cursor === null) return undefined
+    cursor = (cursor as Record<string, unknown>)[part]
+  }
+  return cursor
+}
+
+/**
+ * Receipt rows for a local patch. An amend that changed `items.1.title` must
+ * not report `items` as the change: the caller asked for a field-level edit and
+ * needs field-level evidence of what moved.
+ */
+function patchChanges(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+  ops: readonly AmendPatchOp[],
+): Array<{ path: string; before: unknown; after: unknown }> {
+  const changes: Array<{ path: string; before: unknown; after: unknown }> = []
+  const seen = new Set<string>()
+  for (const op of ops) {
+    if (seen.has(op.path)) continue
+    seen.add(op.path)
+    const left = readAmendPath(before, op.path) ?? null
+    const right = readAmendPath(after, op.path) ?? null
+    if (stableJson(left) === stableJson(right)) continue
+    changes.push({ path: op.path, before: left, after: right })
+  }
+  return changes
+}
+
 /** Apply a patch only to the exact manuscript the caller hashed. */
 function applyRevisionPatch(text: string, patch: import('../types.js').RevisionPatch): string {
   const actual = sha256(text)
@@ -10817,17 +12425,62 @@ function applyRevisionPatch(text: string, patch: import('../types.js').RevisionP
       cursor = found + 1
     }
     const expectedOccurrence = edit.occurrence ?? 1
+    // "0 matches" is its own failure: the old_text is simply not there. The
+    // uniqueness branch used to catch it first, so the message with the
+    // nearest paragraph (and its similarity) was unreachable (R6).
+    if (positions.length === 0) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `patch.edits[${index}] matches 0 place(s); the old_text is not in the current manuscript`,
+        'copy old_text verbatim from the current text, including punctuation',
+        {
+          details: {
+            field: `patch.edits[${index}].old_text`,
+            expected: 'a verbatim fragment of the current manuscript',
+            received: edit.old_text.slice(0, 120),
+            candidates: [],
+            nearest: nearestMatch(text, edit.old_text),
+          },
+        },
+      )
+    }
     if (edit.occurrence === undefined && positions.length !== 1) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         `patch.edits[${index}] matches ${positions.length} place(s); a unique old_text is required`,
         'include more surrounding text, or set occurrence explicitly',
+        {
+          details: {
+            field: `patch.edits[${index}].old_text`,
+            expected: 'exactly one match',
+            received: edit.old_text.slice(0, 40),
+            candidate_count: positions.length,
+            candidates: positions.slice(0, 3).map((position) => ({
+              index: paragraphOfOffset(text, position),
+              text: text.slice(Math.max(0, position - 20), position + 40),
+            })),
+            nearest: nearestMatch(text, edit.old_text),
+          },
+        },
       )
     }
     if (positions.length < expectedOccurrence) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         `patch.edits[${index}].occurrence ${expectedOccurrence} exceeds ${positions.length} match(es)`,
+        'the occurrence must be within the number of exact matches in the current manuscript',
+        {
+          details: {
+            field: `patch.edits[${index}].occurrence`,
+            expected: `${positions.length} match(es) available`,
+            received: expectedOccurrence,
+            received_type: 'integer',
+            candidates: positions.slice(0, 3).map((position) => ({
+              index: paragraphOfOffset(text, position),
+              text: text.slice(Math.max(0, position - 20), position + 40),
+            })),
+          },
+        },
       )
     }
     const start = positions[expectedOccurrence - 1]!
@@ -10850,6 +12503,87 @@ function applyRevisionPatch(text: string, patch: import('../types.js').RevisionP
     next = `${next.slice(0, edit.start)}${edit.newText}${next.slice(edit.end)}`
   }
   return next
+}
+
+/** Raw repair text is capped: a damaged 5MB ledger must not become the payload. */
+const RAW_REPAIR_LIMIT = 64 * 1024
+
+function rawForRepair(raw: string | null): { raw: string | null; raw_truncated: boolean } {
+  if (raw === null) return { raw: null, raw_truncated: false }
+  const bytes = Buffer.byteLength(raw, 'utf8')
+  if (bytes <= RAW_REPAIR_LIMIT) return { raw, raw_truncated: false }
+  return {
+    raw: Buffer.from(raw, 'utf8').subarray(0, RAW_REPAIR_LIMIT).toString('utf8'),
+    raw_truncated: true,
+  }
+}
+
+/**
+ * A read model crosses a JSON boundary. Drop `undefined` members, break cycles
+ * with a marker, and fall back to a summary if serialization still fails.
+ */
+export function jsonSafeValue<T>(value: T): T {
+  const prune = (input: unknown, seen: WeakSet<object>): unknown => {
+    if (input === undefined) return undefined
+    if (input === null) return null
+    if (Array.isArray(input)) {
+      return input.map((item) => {
+        const next = prune(item, seen)
+        return next === undefined ? null : next
+      })
+    }
+    if (typeof input === 'object') {
+      const object = input as Record<string, unknown>
+      if (seen.has(object)) return '[Circular]'
+      seen.add(object)
+      const out: Record<string, unknown> = {}
+      for (const [key, item] of Object.entries(object)) {
+        const next = prune(item, seen)
+        if (next !== undefined) out[key] = next
+      }
+      seen.delete(object)
+      return out
+    }
+    if (typeof input === 'function' || typeof input === 'symbol' || typeof input === 'bigint') {
+      return String(input)
+    }
+    return input
+  }
+  try {
+    const pruned = prune(value, new WeakSet<object>())
+    JSON.stringify(pruned)
+    return pruned as T
+  } catch (error) {
+    return {
+      error: 'UNSERIALIZABLE_READ_MODEL',
+      message: errorMessage(error),
+    } as T
+  }
+}
+
+/** 1-based paragraph containing a character offset. */
+function paragraphOfOffset(text: string, index: number): number {
+  const prefix = text.slice(0, Math.max(0, index))
+  const completed = splitParagraphs(prefix).length
+  return /\n\s*$/.test(prefix) ? completed + 1 : Math.max(1, completed)
+}
+
+/** Nearest paragraph for a failed exact match: the one sharing the longest run. */
+function nearestMatch(
+  text: string,
+  needle: string,
+): { paragraph: number; text: string; offset: number; similarity: number } | undefined {
+  const match = matchEvidence(text, needle)
+  return match.nearest === undefined
+    ? undefined
+    : {
+        paragraph: match.nearest.paragraph,
+        text: match.nearest.text,
+        offset: match.nearest.offset,
+        // Without the number the model cannot tell "only punctuation differs"
+        // from "you copied a different paragraph" (R6).
+        similarity: match.nearest.similarity,
+      }
 }
 
 const emptyChapters = (): ChaptersDocument => ({ schema_version: 1, chapters: [] })
@@ -10911,23 +12645,76 @@ const action = (op: string, at: Date, digest: string): PipelineState['last_actio
   digest,
 })
 
+/** One rule for code-level and instance-level advisory acknowledgement. */
+interface AckedFinding {
+  id: string
+  code: string
+  reason: string
+  at: string
+  expires_at_chapter?: number
+}
+
+/**
+ * Acknowledgements that still apply at `chapter`. An expiry is inclusive: a
+ * finding agreed until chapter 5 is silent in chapters 1–5 and returns in 6.
+ */
+const liveAckIds = (findings: readonly AckedFinding[], chapter: number): Set<string> =>
+  new Set(
+    findings
+      .filter((finding) => finding.expires_at_chapter === undefined || chapter <= finding.expires_at_chapter)
+      .map((finding) => finding.id),
+  )
+
+function advisoryAcknowledged(
+  violation: Violation,
+  codes: readonly string[],
+  findings: readonly AckedFinding[],
+  chapter: number,
+): boolean {
+  if (codes.includes(violation.code)) return true
+  const live = liveAckIds(findings, chapter)
+  // An aggregated row is suppressed only when every instance behind it is.
+  if (violation.instances !== undefined && violation.instances.length > 0) {
+    return violation.instances.every((instance) => live.has(instance.id))
+  }
+  return violation.id !== undefined && live.has(violation.id)
+}
+
 const machineWarnings = (
   machine: MachineResult,
   acknowledged: readonly string[] = [],
-  acknowledgedIds: readonly string[] = [],
+  acknowledgedFindings: readonly AckedFinding[] = [],
+  chapter = 0,
 ): Warning[] =>
   machine.violations
     .filter(
       (violation) =>
         violation.severity === 'advisory' &&
-        !acknowledged.includes(violation.code) &&
-        (violation.id === undefined || !acknowledgedIds.includes(violation.id)),
+        !advisoryAcknowledged(violation, acknowledged, acknowledgedFindings, chapter),
     )
     .slice(0, 5)
-    .map((violation) => ({
-      code: violation.code,
-      message: `${violation.detail} (paragraph ${violation.location.paragraph})`,
-    }))
+    .map((violation) => {
+      // U9: once one instance of an aggregated advisory has been acknowledged,
+      // the row must point at an instance that still needs work — it used to
+      // keep the detail and location of the instance already signed off.
+      const live = liveAckIds(acknowledgedFindings, chapter)
+      const pending =
+        violation.instances === undefined
+          ? []
+          : violation.instances.filter((instance) => !live.has(instance.id))
+      const location = pending[0]?.location ?? violation.location
+      const detail =
+        pending.length === 0 ? violation.detail : pending.map((instance) => instance.detail).join('；')
+      // A ledger-level finding has no paragraph; printing "paragraph undefined"
+      // is what made it impossible to locate (M8/U9).
+      const place =
+        location.ledger === undefined
+          ? location.paragraph === undefined
+            ? 'manuscript'
+            : `paragraph ${location.paragraph}`
+          : `${location.ledger}${location.entity === undefined ? '' : ` · ${location.entity}`}`
+      return { code: violation.code, message: `${detail} (${place})` }
+    })
 
 /** 0.1.2 archive digests used localeCompare; keep that comparison only for upgrades. */
 const archivedCardSnapshot = (card: OutlineChapter): ArchivedCardSnapshot => ({
@@ -10952,6 +12739,9 @@ const archivedCardRecord = (record: ChapterRecord): Record<string, unknown> => {
     ...card,
     status: 'archived',
     word_count: record.word_count,
+    // R7: derived cards must show the CJK count too, including records
+    // archived before the field existed (null, never 0).
+    cjk_words: record.cjk_words ?? null,
     score: record.score,
   }
 }
@@ -11058,13 +12848,14 @@ const mergeProjectAmendment = (
       'total_chapters',
       'min_cjk_chars',
       'dialogue_ratio_metric',
+      'allow_negative_balances',
     ])
     for (const key of Object.keys(targets)) {
       if (!allowedTargets.has(key)) {
         throw new EngineInputError(
           ERROR_CODES.SCHEMA_INVALID,
           `novel.yaml targets cannot change "${key}"`,
-          'only total_chapters, min_cjk_chars and dialogue_ratio_metric are mutable; words_per_chapter and dialogue_ratio are immutable',
+          'mutable targets: total_chapters, min_cjk_chars, dialogue_ratio_metric, allow_negative_balances; words_per_chapter and dialogue_ratio are immutable',
         )
       }
     }
@@ -11089,6 +12880,7 @@ const amendProblems = (
   projectDamaged = false,
   archiveDigests: Readonly<Record<string, string>> = {},
   archivedChapterNumbers?: readonly number[],
+  allowDelete = false,
 ): string[] => {
   const problems: string[] = []
   const old = recordOf(oldDocument)
@@ -11110,7 +12902,9 @@ const amendProblems = (
         (JSON.stringify(targets.words_per_chapter) !== JSON.stringify(oldTargets.words_per_chapter) ||
           JSON.stringify(targets.dialogue_ratio) !== JSON.stringify(oldTargets.dialogue_ratio))
       ) {
-        problems.push('words_per_chapter and dialogue_ratio are immutable; only total_chapters may change')
+        problems.push(
+          'words_per_chapter and dialogue_ratio are immutable; total_chapters, min_cjk_chars, dialogue_ratio_metric and allow_negative_balances may change',
+        )
       }
       if (
         targets.min_cjk_chars !== undefined &&
@@ -11124,6 +12918,12 @@ const amendProblems = (
         !['lines', 'chars', 'both'].includes(String(targets.dialogue_ratio_metric))
       ) {
         problems.push('targets.dialogue_ratio_metric must be lines|chars|both')
+      }
+      if (
+        targets.allow_negative_balances !== undefined &&
+        typeof targets.allow_negative_balances !== 'boolean'
+      ) {
+        problems.push('targets.allow_negative_balances must be a boolean')
       }
       const total = targets.total_chapters
       if (total !== null && (!Number.isInteger(total) || (total as number) < 1)) {
@@ -11230,6 +13030,10 @@ const amendProblems = (
         'title',
         'file',
         'word_count',
+        // R7: `cjk_words` is the number an author checks the PG-03 floor
+        // against, so it is archive evidence like `word_count`; without this
+        // row an amend could write any count and nothing would notice.
+        'cjk_words',
         'dialogue_lines',
         'dialogue_ratio',
         'scene_type',
@@ -11292,7 +13096,7 @@ const amendProblems = (
     }
     if (old !== null) {
       const removed = [...oldById.keys()].filter((id) => !ids.has(id))
-      if (removed.length > 0) {
+      if (removed.length > 0 && !allowDelete) {
         problems.push(`ledger rows cannot disappear through amend: ${removed.slice(0, 5).join(', ')}`)
       }
     }
@@ -11641,6 +13445,16 @@ const amendProblems = (
       if (card.word_count !== record.word_count || card.score !== record.score) {
         problems.push(`archived chapter ${record.num} cannot change its word_count/score`)
       }
+      // R7: a card that carries a CJK count may not disagree with the record.
+      // Cards written before the field existed (absent/null) stay editable, so
+      // older books are not locked out of a legitimate repair.
+      if (
+        card.cjk_words !== undefined &&
+        card.cjk_words !== null &&
+        card.cjk_words !== (record.cjk_words ?? null)
+      ) {
+        problems.push(`archived chapter ${record.num} cannot change its card cjk_words`)
+      }
       const before = oldCards.get(record.num)
       if (before === undefined) {
         // Without the old card there is no evidence for target_words, cast or
@@ -11749,43 +13563,121 @@ const amendProblems = (
   return problems
 }
 
-const castShapeProblems = (value: unknown): string[] => {
-  if (!Array.isArray(value)) return ['cast must be an array']
-  if (value.length < 1 || value.length > 8) return ['cast must contain 1..8 members']
-  const problems: string[] = []
+/** Waivers whose chapter window has not closed yet. Pure so it can be tested. */
+export const carryAcknowledgements = <T extends { code: string; expires_at_chapter?: number }>(
+  findings: readonly T[],
+  chapter: number,
+): T[] =>
+  findings.filter(
+    (finding) => finding.expires_at_chapter !== undefined && finding.expires_at_chapter >= chapter,
+  )
+
+export const castShapeProblems = (
+  value: unknown,
+): { messages: string[]; details?: Record<string, unknown> } => {
+  const describe = (received: unknown): string =>
+    Array.isArray(received) ? 'array' : received === null ? 'null' : typeof received
+  if (!Array.isArray(value)) {
+    return {
+      messages: ['cast must be an array'],
+      details: {
+        field: 'cast',
+        expected: 'array of 1..8 members',
+        received_type: describe(value),
+        received: typeof value === 'string' ? value.slice(0, 40) : value,
+        example: [{ name: '他', entry_state: '警觉', goal: '把信送出去', knowledge: ['信在抽屉里'] }],
+      },
+    }
+  }
+  if (value.length < 1 || value.length > 8) {
+    return {
+      messages: ['cast must contain 1..8 members'],
+      details: { field: 'cast', expected: '1..8 members', received: value.length, received_type: 'number' },
+    }
+  }
+  const messages: string[] = []
+  let details: Record<string, unknown> | undefined
+  const note = (message: string, extra: Record<string, unknown>): void => {
+    messages.push(message)
+    details ??= extra
+  }
   const names = new Set<string>()
   for (const [index, raw] of value.entries()) {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      problems.push(`cast[${index}] must be an object`)
+      note(`cast[${index}] must be an object`, {
+        field: `cast[${index}]`,
+        expected: 'object',
+        received_type: describe(raw),
+        example: { name: '他', goal: '把信送出去' },
+      })
       continue
     }
     const member = raw as Record<string, unknown>
     if (typeof member.name !== 'string' || member.name.trim() === '') {
-      problems.push(`cast[${index}].name must be non-empty`)
+      note(`cast[${index}].name must be non-empty`, {
+        field: `cast[${index}].name`,
+        expected: 'non-empty string',
+        received: member.name ?? 'missing',
+        received_type: describe(member.name),
+      })
       continue
     }
-    if (names.has(member.name)) problems.push(`cast contains duplicate name "${member.name}"`)
+    if (names.has(member.name)) {
+      note(`cast contains duplicate name "${member.name}"`, {
+        field: `cast[${index}].name`,
+        expected: 'unique name',
+        received: member.name,
+        received_type: 'string',
+        allowed: [...names],
+      })
+    }
     names.add(member.name)
     for (const field of ['entry_state', 'goal', 'exit_change'] as const) {
       if (member[field] !== undefined && typeof member[field] !== 'string') {
-        problems.push(`cast[${index}].${field} must be a string`)
+        note(`cast[${index}].${field} must be a string`, {
+          field: `cast[${index}].${field}`,
+          expected: 'string',
+          received: member[field],
+          received_type: describe(member[field]),
+        })
       }
     }
-    if (
-      member.knowledge !== undefined &&
-      (!Array.isArray(member.knowledge) || member.knowledge.some((item) => typeof item !== 'string'))
-    ) {
-      problems.push(`cast[${index}].knowledge must be a string array`)
+    if (member.knowledge !== undefined) {
+      if (!Array.isArray(member.knowledge)) {
+        note(`cast[${index}].knowledge must be a string array`, {
+          field: `cast[${index}].knowledge`,
+          expected: 'string[]',
+          received: member.knowledge,
+          received_type: describe(member.knowledge),
+          example: ['他知道信在抽屉里', '他不知道她已经走了'],
+        })
+      } else {
+        const bad = member.knowledge.findIndex((item) => typeof item !== 'string')
+        if (bad !== -1) {
+          note(`cast[${index}].knowledge[${bad}] must be a string`, {
+            field: `cast[${index}].knowledge[${bad}]`,
+            expected: 'string',
+            received: member.knowledge[bad],
+            received_type: describe(member.knowledge[bad]),
+            example: ['他知道信在抽屉里'],
+          })
+        }
+      }
     }
   }
-  return problems
+  return details === undefined ? { messages } : { messages, details }
 }
 
 const normalizeCast = (value: unknown, snapshot: Snapshot): ChapterCastMember[] | undefined => {
   if (value === undefined) return undefined
-  const problems = castShapeProblems(value)
-  if (problems.length > 0) {
-    throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, problems.join('; '))
+  const { messages, details } = castShapeProblems(value)
+  if (messages.length > 0) {
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      messages.join('; '),
+      'send cast as an array of {name, entry_state?, goal?, knowledge?: string[], exit_change?}',
+      details === undefined ? undefined : { details },
+    )
   }
   const members = value as ChapterCastMember[]
   const known = new Set([
@@ -11929,8 +13821,15 @@ const validateStoredChapterPlan = (plan: Record<string, unknown>, path: string):
     if (problems.length > 0) fail(problems.join('; '))
   }
   if (plan.cast !== undefined) {
-    const problems = castShapeProblems(plan.cast)
-    if (problems.length > 0) fail(problems.join('; '))
+    const { messages, details } = castShapeProblems(plan.cast)
+    if (messages.length > 0) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        messages.join('; '),
+        'send cast as an array of {name, entry_state?, goal?, knowledge?: string[], exit_change?}',
+        details === undefined ? undefined : { details },
+      )
+    }
   }
 }
 

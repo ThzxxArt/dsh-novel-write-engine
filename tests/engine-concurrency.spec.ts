@@ -49,6 +49,9 @@ describe('cross-process write lock', () => {
       const first = engine.amend({
         path: 'state/world.yaml',
         content: emptyWorld('A 的能力'),
+        // These two writes intentionally replace the ledger; the row-deletion
+        // guard would otherwise treat the race as an accidental truncation.
+        allow_delete: true,
         reason: 'A 的修改',
         root,
       })
@@ -71,6 +74,7 @@ describe('cross-process write lock', () => {
       const secondWrite = second.amend({
         path: 'state/world.yaml',
         content: emptyWorld('B 的能力'),
+        allow_delete: true,
         reason: 'B 的修改',
         root,
       })

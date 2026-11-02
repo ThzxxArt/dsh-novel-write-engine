@@ -206,10 +206,11 @@ describe('scoring arithmetic', () => {
     expect(applyExclusions([{ id: 'R-W-01', max: 15, deductions: null }] as never, [])).toEqual({
       dimensions: [{ id: 'R-W-01', max: 15, deductions: [] }],
       dropped: 0,
+      dropped_entries: [],
     })
     expect(sumDeductions(null as never)).toBe(0)
     expect(sumDeductions([{ deductions: [{ delta: Number.NaN }] }] as never)).toBe(0)
-    expect(applyExclusions(null as never, [])).toEqual({ dimensions: [], dropped: 0 })
+    expect(applyExclusions(null as never, [])).toEqual({ dimensions: [], dropped: 0, dropped_entries: [] })
     expect(() =>
       applyExclusions(
         [{ id: 'R-W-01', max: 15, deductions: [{ rule: 'A', delta: 3, note: 'n' }] }] as never,
@@ -219,6 +220,7 @@ describe('scoring arithmetic', () => {
     expect(applyExclusions([null] as never, [])).toEqual({
       dimensions: [{ deductions: [] }],
       dropped: 0,
+      dropped_entries: [],
     })
     expect(() =>
       applyExclusions(
@@ -271,9 +273,53 @@ describe('scoring arithmetic', () => {
     dimensions[2] = dim('R-W-03', 10, [{ rule: 'C', location: '第 2 段', delta: 5 }])
     const result = applyExclusions(dimensions, [{ pair: ['B', 'C'], family: 'f' }])
     expect(result.dropped).toBe(2)
+    expect(result.dropped_entries.map((entry) => entry.reason)).toEqual(['duplicate', 'exclusion:B|C'])
+    expect(result.dropped_entries[1]).toMatchObject({ rule: 'B', location: '第 2 段', delta: 1 })
     expect(result.dimensions[0]!.deductions).toHaveLength(1)
     expect(result.dimensions[1]!.deductions).toHaveLength(0)
     expect(result.dimensions[2]!.deductions).toHaveLength(1)
+  })
+
+  it('describes a dropped entry even when the deduction is missing fields', () => {
+    const dimensions = [
+      {
+        id: 'R-W-01',
+        max: 15,
+        deductions: [
+          { rule: 'A', location: '第 1 段' },
+          { rule: 'A', location: '第 1 段' },
+        ],
+      },
+      // No id and a duplicate pair: the receipt still needs a dimension label.
+      {
+        max: 10,
+        deductions: [
+          { rule: 'X', location: 'L' },
+          { rule: 'X', location: 'L' },
+        ],
+      },
+      // Entries with no rule/location at all: the duplicate receipt must not leak undefined.
+      { max: 10, deductions: [{}, {}] },
+      // No id and an exclusive pair with no location/delta values.
+      { max: 10, deductions: [{ rule: 'B' }, { rule: 'C' }] },
+    ]
+    const result = applyExclusions(dimensions as never, [{ pair: ['B', 'C'], family: 'f' }])
+    expect(result.dropped_entries.map((entry) => entry.reason)).toEqual([
+      'duplicate',
+      'duplicate',
+      'duplicate',
+      'exclusion:B|C',
+    ])
+    for (const entry of result.dropped_entries) {
+      expect(typeof entry.rule).toBe('string')
+      expect(typeof entry.location).toBe('string')
+      expect(Number.isFinite(entry.delta)).toBe(true)
+      expect(typeof entry.dimension).toBe('string')
+    }
+    expect(result.dropped_entries[0]).toMatchObject({ rule: 'A', location: '第 1 段', delta: 0 })
+    expect(result.dropped_entries[1]).toMatchObject({ rule: 'X', delta: 0, dimension: '' })
+    expect(result.dropped_entries[2]).toMatchObject({ rule: '', location: '', delta: 0, dimension: '' })
+    expect(result.dropped_entries[3]).toMatchObject({ rule: 'B', location: '', delta: 0, dimension: '' })
   })
 })
 

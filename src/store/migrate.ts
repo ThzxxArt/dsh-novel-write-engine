@@ -29,6 +29,42 @@ export function assertNotTooNew(version: number): void {
   }
 }
 
+/**
+ * Read-time normalization for a 0.2.0 check: it had no `scope` and stored
+ * advisories inside `violations`. Returning a normalized copy keeps the stored
+ * audit byte-identical, lets `narrow` accept the document, and stops restore
+ * from replaying an advisory as a blocker (U16/X5).
+ */
+export function normalizeLegacyCheck(document: Record<string, unknown>): Record<string, unknown> {
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  const record = structuredClone(document)
+  let legacy = false
+  if (!Array.isArray(record.scope)) {
+    record.scope = ['content', 'integrity']
+    legacy = true
+  }
+  if (isRecord(record.machine)) {
+    const machine = record.machine
+    if (Array.isArray(machine.violations)) {
+      const advisories = Array.isArray(machine.advisories) ? [...machine.advisories] : []
+      const blockers: unknown[] = []
+      for (const entry of machine.violations) {
+        if (isRecord(entry) && entry.severity === 'advisory') {
+          advisories.push(entry)
+          legacy = true
+        } else {
+          blockers.push(entry)
+        }
+      }
+      machine.violations = blockers
+      if (advisories.length > 0) machine.advisories = advisories
+    }
+  }
+  if (legacy) record.legacy_format = true
+  return record
+}
+
 /** Apply every step from the document version up to `target`. */
 export function migrateDocument(
   document: Record<string, unknown>,

@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.13`                                                                                                 |
+| 插件版本 | `0.2.14`                                                                                                 |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -26,7 +26,7 @@
 | 门禁     | 13 条机器可判定的门控（PG-01~PG-13），任一不过即阻塞                  |
 | 规则引擎 | 字数、标点、格式、词表、节奏、跨章、一致性——约 30 条可机检规则        |
 | 事务器   | 归档是一次原子提交（暂存→校验→提交→读回），不是「写一堆文件祈祷成功」 |
-| 服务     | 32 个服务操作，同时被工具、命令、面板、任务书四条通道复用             |
+| 服务     | 34 个服务操作（28 工具 + 4 投影 + 2 工具子操作），四条通道复用         |
 
 | 不是                 | 原因                                                |
 | -------------------- | --------------------------------------------------- |
@@ -41,7 +41,7 @@
 ```
 阶段        9 个（模型执行 6 个，事务执行 3 个）
 门控        13 条（PG-01 ~ PG-13）
-服务操作    32 个（28 工具 + 3 面板投影 + 1 统计投影）
+服务操作    34 个（28 工具 + 3 面板投影 + 1 统计投影 + 2 工具子操作：reviewAmendment / doctorBaseline）
 分层        6 层（L0 类型 / L1 领域 / L2 规则 / L3 存储 / L4 引擎 / L5 适配）
 评分        15 维 / 满分 150 / 合格 120
 语义项      5 条（场景/人物状态/因果/声音/视角）
@@ -194,7 +194,7 @@ Agent 预设  1 个（「网文工坊」）
 ┌─────────────────────────────────────────────────────────────┐
 │ L5 适配层   tools(28) · commands(5) · remote(3) · skill(1)   │ 薄壳：窄化 + 渲染
 ├─────────────────────────────────────────────────────────────┤
-│ L4 引擎     EngineService：32 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
+│ L4 引擎     EngineService：34 个操作 · 门控执行 · 任务书组装  │ 唯一编排者
 ├─────────────────────────────────────────────────────────────┤
 │ L3 存储     FsStore：原子写 · 事务 · 锁 · 迁移 · 项目注册表    │ 唯一 IO
 ├─────────────────────────────────────────────────────────────┤
@@ -216,7 +216,7 @@ Agent 预设  1 个（「网文工坊」）
 | `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表        | types         | 否     | 纯单测 + 表驱动             |
 | `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度         | types, domain | 否     | 纯单测 + golden             |
 | `src/store/`    | 原子写、事务、锁、schema、迁移、注册表、会话绑定、备份 | types         | **是** | 真实 tmpdir + 故障注入      |
-| `src/engine/`   | 32 个操作、选择解析、门控、任务书、只读投影、journal | 全部下层      | 间接   | 集成（真 store + 真 rules） |
+| `src/engine/`   | 34 个操作、选择解析、门控、任务书、只读投影、journal | 全部下层      | 间接   | 集成（真 store + 真 rules） |
 | `src/tools/`    | 28 个 `defineTool`：caller → 窄化 → 调 op → render | engine        | 否     | 假 engine（spy）            |
 | `src/commands/` | 5 条斜杠命令（`/novel` 内含选择/scan/resume 子命令） | engine        | 否     | 假 engine                   |
 | `src/remote/`   | 3 个只读投影 + DTO 版本                            | engine        | 否     | 假 engine + 形状断言        |
@@ -269,7 +269,7 @@ export function apply(ctx: Context, config: Config) {
 | 清理 | `ctx.effect` 调用 `EngineService.dispose()` 清空内存缓存；文件锁在每个 `mutate` 的 `finally` 释放，引擎不持有文件句柄 |
 | 失败 | `apply` 只在**配置非法**时抛错；项目不存在是「操作错误」，不是装配错误                                                |
 
-### 2.5 服务操作契约（32 个）
+### 2.5 服务操作契约（34 个）
 
 **这是全系统的唯一入口**。工具、命令、面板、任务书都只能调这些操作。
 
@@ -308,7 +308,7 @@ export function apply(ctx: Context, config: Config) {
 |          | `report`            | 否                           | —                                | —                                         |
 |          | `guide`             | 否                           | —                                | —                                         |
 
-面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，并额外返回只读的 projects/selection/missing/resume；它不增加业务操作计数，也不引入写路径。`currentProject`、`useProject`、`unbindProject`、`scanProjects`、`resumePrompt` 是命令/面板支持方法，不属于 32 个工具/投影操作，也不新增项目正文写入口。
+面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，并额外返回只读的 projects/selection/missing/resume；它不增加业务操作计数，也不引入写路径。`currentProject`、`useProject`、`unbindProject`、`scanProjects`、`resumePrompt` 是命令/面板支持方法，不属于 34 个工具/投影/子操作，也不新增项目正文写入口。
 
 **契约形状**（所有操作统一）：
 
@@ -1385,6 +1385,8 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.14 是账本语义与诊断可达版本：资源写入分 set/add 并拒绝同章双写，`current_state.unset` 可清空标量，负余额改由 `targets.allow_negative_balances` 控制；错误统一带 `details`（field/expected/received/allowed/example/nearest），patch 失败给最近匹配；PG-01 指出具体依赖变化，brief 按阶段依赖表签名并支持批量签发，收据归档压缩到 `history/briefs/`；P1 预算保底 `open_foreshadows ≥ min(8,N)`、`recent_summaries ≥ 2` 且 `required_omitted=0`；advisory 按 code 聚合为一行、实例 id 保持可单独确认，台账级 finding 定位 `{ledger,entity}`；PG-09/PG-08/delta anchor 共用引号与跨行归一；`novel_amend` 支持路径 patch、before/after 与 7 个台账的 `novel_restore`；doctor 支持 baseline；PG-06 有章卡时降为 warning。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，新字段可选；`PANEL_VERSION` 升到 0.2.14，面板协议 `payload_version` 仍为 7。
+
 0.2.13 是台账可信度与自评校准版本：新增汉字下限、对话双口径、标点细分、数字/算式结果块、世界书锁定基线、关系 `type_code`、伏笔计划与兑现锚点、稳定时间线 `event_key`、brief 收据 current 视图、告警实例 id/理由、`novel_state` 分页，以及 P3/P4 自评锚点与题材 profile。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，所有新字段可选，不自动改写旧台账；`PANEL_VERSION` 升到 0.2.13，面板协议 `payload_version` 仍为 7。
 
 0.2.12 是工作台滚动与角色标签修复版本：宿主固定高度裁切盒内恢复整页滚动，顶栏与下一步卡随内容移动；人物、时间线、线索、设定、全书资料等长列表改为有界局部滚动，展开的设定/线索卡片跨整行；修复全书资料标题行被额外伪元素挤到最右，以及角色 `antagonist` 显示英文。`PANEL_VERSION` 升到 0.2.12，面板协议 `payload_version` 仍为 7；没有工具、阶段、门控、schema、导出或配置键变化。
@@ -2134,7 +2136,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | 2   | 规则单测   | rules：每条规则的命中/不命中/严重度/豁免            | 构造文本片段                 | ~180   |
 | 3   | 规则包单测 | 编译器六条断言、平台/类型覆盖顺序、互斥去重         | 合法/非法包 fixture          | ~40    |
 | 4   | 存储测试   | 原子写、事务七步、锁回收、journal、迁移             | 真实 tmpdir + 故障注入       | ~90    |
-| 5   | 引擎集成   | 32 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~180   |
+| 5   | 引擎集成   | 34 个操作、门控、幂等、投影                         | 真 store + 真 rules + 假时钟 | ~180   |
 | 6   | 适配器契约 | 28 工具 + 5 命令 + 3 remote 的规范值/渲染/错误映射  | 假 engine（spy）             | ~150   |
 | 7   | 架构测试   | 六条依赖规则、规则码唯一、面板只读                  | 静态扫描源码                 | ~20    |
 | 8   | 端到端     | 一个 3 章样例项目跑完整流程                         | 宿主替身 harness             | ~10    |
@@ -2346,7 +2348,7 @@ CI 不伪造这个解析结果。
 | 核销       | delta 逐实体声明，不可静默跳过                                  |
 | 事务       | `archiveChapter` 的原子归档                                     |
 | 阅读证明   | 可验证引用，PG-09                                               |
-| 服务操作   | 本引擎核心抽象，32 个                                           |
+| 服务操作   | 本引擎核心抽象，34 个（含 2 个工具子操作）                      |
 
 ## 附录 B：与开发指南的对照
 

@@ -33,7 +33,9 @@ const summaryWithLedgerEntities = (): ChapterSummary =>
       advanced: [],
       resolved: [],
     },
-    resource_changes: [{ character: '他', resource: '铜钱', delta: -200, reason: '买信封' }],
+    // One channel only: the absolute balance after the purchase. Declaring both
+    // the absolute value and a delta for the same resource is refused (0.2.14).
+    resource_changes: [],
   })
 
 /** A complete declaration for every entity the summary claims. */
@@ -44,7 +46,7 @@ const fullDelta = (summary: ChapterSummary): Record<string, Record<string, unkno
       {
         action: 'created',
         role: name === '他' ? 'protagonist' : 'supporting',
-        ...(name === '他' ? { current_state: { resources: { 铜钱: 1000 } } } : {}),
+        ...(name === '他' ? { current_state: { resources: { 铜钱: 800 } } } : {}),
       },
     ]),
   )

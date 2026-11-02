@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { SCHEMA_VERSION, ERROR_CODES, EngineFaultError } from '../types.js'
 import { resolveInside } from './path.js'
-import { MIGRATIONS, migrateDocument } from './migrate.js'
+import { MIGRATIONS, migrateDocument, normalizeLegacyCheck } from './migrate.js'
 import { narrow, type DocKind } from './schema.js'
 
 /** Hash used by journals, dedupe keys and content bindings. */
@@ -218,10 +218,28 @@ export class FsStore {
       typeof (parsed as Record<string, unknown>).schema_version === 'number'
         ? ((parsed as Record<string, unknown>).schema_version as number)
         : 1
-    const document =
+    const document: unknown =
       version < SCHEMA_VERSION
         ? migrateDocument(parsed as Record<string, unknown>, MIGRATIONS, SCHEMA_VERSION)
         : parsed
+    // A hand-written legacy document may omit `schema_version`. Either fill it
+    // or reject it; filling it here keeps readDoc and narrow consistent instead
+    // of defaulting to 1 for the migration decision and then refusing the same
+    // document as "missing schema_version" (X4).
+    if (typeof document === 'object' && document !== null && !Array.isArray(document)) {
+      const record = document as Record<string, unknown>
+      if (record.schema_version === undefined) record.schema_version = SCHEMA_VERSION
+    }
+    // A 0.2.0 check has no `scope` and mixes advisories into `violations`.
+    // Normalize the in-memory view so the audit file stays untouched and the
+    // document remains readable instead of failing `narrow` (U16). This runs
+    // after the version fill: a legacy check that omits schema_version must not
+    // be rejected by the branch that exists to accept legacy checks.
+    if (kind === 'check' && typeof document === 'object' && document !== null && !Array.isArray(document)) {
+      return narrow(kind, normalizeLegacyCheck(document as Record<string, unknown>)) as ReturnType<
+        typeof narrow<K>
+      >
+    }
     return narrow(kind, document) as ReturnType<typeof narrow<K>>
   }
 

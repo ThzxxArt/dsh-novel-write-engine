@@ -1,3 +1,14 @@
+## 0.2.14 字段与恢复
+
+- **资源**：`characters[].current_state.resources` 是绝对值（set）；`summary.resource_changes[].delta` 是增量（add）。同一章同一角色同一资源同时出现会被拒绝（`ENGINE_RESOURCE_DOUBLE_COUNT`），错误回显 `original / delta / result`。负余额默认拒绝，`novel.yaml targets.allow_negative_balances: true` 时才允许债务。
+- **标量清空**：`CharacterDelta.unset: string[]` 删除 `current_state` 顶层键；`null` 仍按值写入。`no_change` 只接受 `role`，带 `current_state/profile/growth/unset` 会被拒绝。
+- **delta 键**：每个 section 只接受固定键（characters: action/reason/role/profile/current_state/unset/growth；foreshadows: action/reason/title/anchor/description/note/new_info/planned_resolve/resolved_anchor/kind；world: action/reason/kind/description/layout/capacity/detail；timeline: action/reason/story_time/description/location/characters；relationships: action/reason/a/b/type/type_code/description/note）。未知键拒绝并给 `allowed`，不再静默丢弃；`characters`/`world` 允许 `name` 与键一致的回显。
+- **strict 伏笔**：`strict: true` 时新 `plot` 伏笔必须有 `planned_resolve`，否则 `ENGINE_FORESHADOW_UNPLANNED`；非 strict 只给 `FORESHADOW_UNPLANNED` advisory。
+- **brief 收据**：`BriefReceipt.dependencies` 记录各依赖块摘要；归档把该章 superseded 收据移入 `history/briefs/chNNN.yaml`，`state/briefs.yaml` 每章每阶段只留 current + 最近 2 条（合计 ≤3）。`novel_state {kind:"briefs", view:"all"}` 合并两处读取。
+- **doctor baseline**：`state/doctor-baseline.yaml` 保存 `{id, detail}` 列表；同 id 同 detail 的 warning 不再报告，计数或文案变化会恢复。`novel_doctor {reset:true}` 清空。
+- **实体锚点**：`summary.new_element_anchors` 的每个锚点是正文逐字短语，长度 8–120 字（0.2.14 从 2 字收紧；旧 world 文档里更短的既有锚点仍可读）。实体名本身仍可走 name fallback。
+- **amend 删除**：`novel_amend` 服务端比对行数/主键，缺行拒绝；`allow_delete:true` 表示有意删除。`before/after/changes` 是回执，不写入文档。
+
 ## 0.2.13 可选字段与分页
 
 - `outline/worldbook.yaml` 的 `characters[].appearance` 是可选外貌基准；`description` 继续放人物传记，不再被 `LOCKED_DETAIL_DRIFT` 当作外貌标准。worldbook 有该角色但没有 `appearance` 时不回退首现段落；只有 worldbook 完全没有该角色才使用 `locks` 短句。
@@ -8,6 +19,7 @@
 - `state/briefs.yaml` 的 `BriefReceipt` 可带 `id/current/superseded_at/superseded_by`；旧文件读取时按章节/阶段取最新为 current，不删除历史。
 - `checks/*.check.yaml` 的 `machine.numeric` 与 `machine.acknowledged_findings` 是 0.2.13 字段；旧 check 文档仍可读。旧 0.2.13 顶层 `acknowledged_findings` 也继续读取，但新写入放在 `machine` 下，避免 0.2.12 拒绝整个文档。
 - `novel_state` 的 `page` 是读取包装，不是持久化字段；不要把 `page` 写回 ledger。
+- `novel_state {kind:"pipeline"}` 除 pipeline 外返回 `briefs`/`briefs_source`/`previous_chapter_effort`/`effort:{lifetime,basis}`，与 `novel_report`、`novel_status` 同源。
 
 ## 0.2.9 archive_card
 
@@ -28,6 +40,8 @@ archive_card_digest: "v1:..."
 ```
 
 它们由归档事务写入，`novel_amend` 只能比较、不能新增或改写。缺字段的旧记录走只读回退：outline 可读时用当前卡，outline 不可读且有备份时用备份卡；两者都没有时 fail closed。
+
+`ChapterRecord` 的三个可选字段里，只有 `cjk_words`（汉字数，归档时写入；PG-03 的汉字下限用它核对）是 0.2.14 新增；`final_check` 与 `archived_at` 自 0.2.1 起就有。0.2.14 之前归档的行没有 `cjk_words`，`novel_state {kind:"chapters"}` 的紧凑行给 `cjk_words: null` 明示"没记录过"，而不是 0；归档章卡同样带 `cjk_words`，且与记录不一致时 `novel_amend` 拒绝——否则这个数字可以被改写成任意值，等于没有审计意义。
 
 # 状态机
 

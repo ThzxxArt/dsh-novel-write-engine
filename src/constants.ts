@@ -7,7 +7,7 @@ export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 6
 /** User-visible panel/tutorial version; keep in sync with package.json. */
-export const PANEL_VERSION = '0.2.13'
+export const PANEL_VERSION = '0.2.14'
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -27,6 +27,9 @@ export const BACKUP_DIR = 'backups'
 export const HISTORY_DIR = 'history'
 /** Brief receipts are append-only evidence, separate from content transactions. */
 export const BRIEF_RECEIPTS_FILE = 'state/briefs.yaml'
+
+/** Accepted doctor warnings; suppresses the same id+detail until it changes. */
+export const DOCTOR_BASELINE_FILE = 'state/doctor-baseline.yaml'
 export const OUTLINE_DIR = 'outline'
 export const LOCK_FILE = '.engine.lock'
 export const STAGING_DIR = '.staging'

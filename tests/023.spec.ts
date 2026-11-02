@@ -528,9 +528,12 @@ describe('0.2.3 trusted ledgers', () => {
         reason: 'test legacy role',
         root,
       })
-      await engine.amend({
-        path: 'state/foreshadows.yaml',
-        content: {
+      // A pre-0.2.13 ledger on disk: a resolved row without an anchor. Amend is
+      // not allowed to create that shape any more (0.2.14 X6), so the fixture
+      // is written as legacy data instead of through the writer.
+      await writeFile(
+        join(root, 'state/foreshadows.yaml'),
+        stringify({
           schema_version: 1,
           next_seq: 3,
           items: [
@@ -555,10 +558,9 @@ describe('0.2.3 trusted ledgers', () => {
               advance_log: [],
             },
           ],
-        },
-        reason: 'test legacy anchor',
-        root,
-      })
+        }),
+        'utf8',
+      )
       const doctor = await engine.doctor({ root })
       const legacy = doctor.data.checks.find((check) => check.id === 'legacy-data')
       expect(legacy?.detail).toContain('LEGACY_CAST_ROLE')

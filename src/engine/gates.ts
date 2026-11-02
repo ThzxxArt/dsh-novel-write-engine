@@ -4,7 +4,13 @@ import { stripChapterPrefix } from './book.js'
 import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
 import { isNarratorAlias } from '../domain/narrator.js'
-import { openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
+import {
+  matchEvidence,
+  normalizeEvidenceText,
+  openingInFirstTwoParagraphs,
+  quoteMeetsFloor,
+  splitParagraphs,
+} from '../domain/text.js'
 import {
   anchorsForGroup,
   anchorsFromSummary,
@@ -17,7 +23,15 @@ import { countWordMetrics } from '../domain/wordcount.js'
 import { runRules } from '../rules/pipeline.js'
 import { sha256 } from '../store/fs.js'
 import type { Rulepack } from '../rules/types.js'
-import type { BlockingItem, GateInput, GateResult, ReadingProofReference, Stage } from '../types.js'
+import type {
+  BlockingItem,
+  ErrorDetails,
+  GateInput,
+  GateResult,
+  ReadingProofReference,
+  Stage,
+  Warning,
+} from '../types.js'
 
 /** Everything gate evaluation needs beyond the input: taste comes from the pack. */
 export interface GateOptions {
@@ -25,12 +39,57 @@ export interface GateOptions {
   minScore: number
 }
 
-const block = (code: string, detail: string, hint?: string, scope?: string): BlockingItem => ({
+const block = (
+  code: string,
+  detail: string,
+  hint?: string,
+  scope?: string,
+  details?: ErrorDetails,
+): BlockingItem => ({
   code,
   detail,
   ...(hint === undefined ? {} : { hint }),
   ...(scope === undefined ? {} : { scope }),
+  ...(details === undefined ? {} : { details }),
 })
+
+/**
+ * The order a model should repair a stale brief in. "text" first: a prose
+ * revision invalidates everything downstream, and reporting an incidental
+ * `check` hash before the manuscript sends the model back to the wrong stage.
+ */
+const BRIEF_BLOCK_PRIORITY = [
+  'text',
+  'review',
+  'check',
+  'plan',
+  'outline',
+  'world_plan',
+  'characters',
+  'world',
+  'foreshadows',
+  'chapters',
+  'handoff',
+  'project',
+  'rulepack',
+  'brief',
+]
+
+/** First dependency block that differs from the signed receipt. */
+export function changedBriefBlocks(
+  signed: Record<string, string> | undefined,
+  current: Record<string, string> | undefined,
+): string[] {
+  if (signed === undefined || current === undefined) return []
+  const keys = new Set([...Object.keys(signed), ...Object.keys(current)])
+  const rank = (key: string): number => {
+    const index = BRIEF_BLOCK_PRIORITY.indexOf(key)
+    return index === -1 ? BRIEF_BLOCK_PRIORITY.length : index
+  }
+  return [...keys]
+    .filter((key) => signed[key] !== current[key])
+    .sort((left, right) => rank(left) - rank(right) || left.localeCompare(right))
+}
 
 type Gate = (input: GateInput, options: GateOptions) => BlockingItem[]
 
@@ -50,15 +109,32 @@ const briefRequired: Gate = (input) => {
         'PG-01',
         `brief ${input.briefStage} has not been issued`,
         `call novel_brief with stage ${input.briefStage} first`,
+        undefined,
+        {
+          stale_stage: input.briefStage,
+          required_tool: 'novel_brief',
+          changed: [],
+        },
       ),
     ]
   }
   if (input.briefDigest !== null && record.digest !== input.briefDigest) {
+    // Name the dependency that changed. A bare "stale" makes the model reissue
+    // every stage and still fail; the receipt carries per-block digests.
+    const changed = changedBriefBlocks(record.dependencies, input.briefDependencies ?? undefined)
+    const reason = changed[0] ?? 'state'
     return [
       block(
         'PG-01',
-        `brief ${input.briefStage} is stale (state changed since it was issued)`,
-        'call novel_brief again to refresh it',
+        `brief ${input.briefStage} is stale: ${reason} changed since it was issued`,
+        `call novel_brief {"stage":"${input.briefStage}"} again to refresh it; only that stage's dependencies invalidate it`,
+        undefined,
+        {
+          stale_reason: reason,
+          stale_stage: input.briefStage,
+          required_tool: 'novel_brief',
+          changed,
+        },
       ),
     ]
   }
@@ -132,15 +208,51 @@ const format: Gate = (input, options) => {
       },
     },
   ).filter((violation) => violation.severity === 'blocker')
-  return violations.length === 0
-    ? []
-    : [
-        block(
-          'PG-04',
-          `${violations.length} format blocker(s) remain`,
-          `dialogue must use ASCII double quotes (U+0022), never curly quotes; split paragraphs over ${options.rulepack.format.paragraph_max_words} chars; remove full-width semicolons. ${violations.map((violation) => `${violation.code}@${violation.location.paragraph}`).join(', ')}`,
-        ),
-      ]
+  if (violations.length === 0) return []
+  // A 57-quote chapter must not dump 57 identical lines into the context. The
+  // gate reports one blocking item, grouped by code with a few concrete
+  // samples; machine.violations still carries every row for the panel.
+  const groups = new Map<string, typeof violations>()
+  for (const violation of violations) {
+    const rows = groups.get(violation.code)
+    if (rows === undefined) groups.set(violation.code, [violation])
+    else rows.push(violation)
+  }
+  const summary = [...groups.entries()].map(([code, rows]) => `${code} ×${rows.length}`).join(', ')
+  // One sample per code, in rule order: taking the first three rows meant a
+  // single repeated rule (57 curly quotes) filled every slot and the other
+  // rules never appeared, so the model fixed one thing at a time (R5). Each
+  // sample also names its code, since the detail line alone does not say which
+  // rule it broke.
+  const samples = [...groups.entries()].slice(0, 3).map(([code, rows]) => {
+    const violation = rows[0]!
+    const paragraph = violation.location.paragraph
+    return {
+      code,
+      index: paragraph ?? 0,
+      // A document-level rule has no paragraph; rendering "第 0 段" pointed at
+      // a place that cannot exist (R5). The `@第N段` label below must follow the
+      // same rule, or the summary still says "第0段" for TITLE_FORMAT.
+      text: `${violation.detail}${paragraph === undefined || paragraph <= 0 ? '' : ` (第 ${paragraph} 段)`}`,
+      count: rows.length,
+    }
+  })
+  return [
+    block(
+      'PG-04',
+      `${violations.length} format blocker(s) remain: ${summary}`,
+      `dialogue must use ASCII double quotes (U+0022), never curly quotes; split paragraphs over ${options.rulepack.format.paragraph_max_words} chars; remove full-width semicolons. samples: ${samples
+        .map((sample) => `${sample.code}${sample.index > 0 ? ` @第${sample.index}段` : ''} ${sample.text}`)
+        .join(' | ')}`,
+      undefined,
+      {
+        expected: 'zero format blockers',
+        received: violations.length,
+        candidates: samples,
+        allowed: [...groups.keys()],
+      },
+    ),
+  ]
 }
 
 const SUMMARY_FIELDS = [
@@ -357,7 +469,32 @@ const sceneType: Gate = (input) => {
   if (input.sceneType === '战斗/动作章' && recent[recent.length - 1] === '战斗/动作章') {
     problems.push('action chapters cannot run two in a row')
   }
-  return problems.length === 0 ? [] : [block('PG-06', problems.join('; '), 'pick a different scene type')]
+  if (problems.length === 0) return []
+  // 0.2.14: the outline card is the author's constraint. When it pins this
+  // chapter's scene_type, monotony is a report/doctor signal, not a blocker —
+  // otherwise the card and the gate lock each other and the only escape is a
+  // rollback (M13). A card that pins a different type does not excuse the
+  // monotony the submission actually creates.
+  const card = input.outline?.chapters.find((candidate) => candidate.num === input.chapter)
+  if (card !== undefined && card.scene_type === input.sceneType) return []
+  return [block('PG-06', problems.join('; '), 'pick a different scene type')]
+}
+
+/** PG-06 warnings: what a card-pinned scene type costs in rhythm diversity. */
+function sceneTypeWarnings(input: GateInput): Warning[] {
+  if (input.sceneType === null) return []
+  const card = input.outline?.chapters.find((candidate) => candidate.num === input.chapter)
+  if (card === undefined || card.scene_type !== input.sceneType) return []
+  const recent = input.priorSceneTypes.slice(-2)
+  const repeated = recent.length === 2 && recent.every((type) => type === input.sceneType)
+  const actionPair = input.sceneType === '战斗/动作章' && recent[recent.length - 1] === '战斗/动作章'
+  if (!repeated && !actionPair) return []
+  return [
+    {
+      code: 'PG-06_CARD_WINS',
+      message: `scene_type "${input.sceneType}" is pinned by the outline card and repeats the recent rhythm; the card is the author constraint, so this is reported instead of blocked. Change the card with novel_outline if the rhythm matters more.`,
+    },
+  ]
 }
 
 /**
@@ -478,6 +615,7 @@ const issuesCleared: Gate = (input) => {
   }
   const blockers = input.review.issues.filter((issue) => issue.severity === 'blocker')
   const problems: string[] = []
+  const details: ErrorDetails = {}
   for (const issue of blockers) {
     if (issue.status === 'waived') {
       problems.push(`${issue.id} is a blocker and cannot be waived`)
@@ -491,60 +629,135 @@ const issuesCleared: Gate = (input) => {
       problems.push(`${issue.id} is fixed but has no evidence quote`)
       continue
     }
-    if (Array.from(issue.evidence.trim()).length < 8) {
+    if (quoteMeetsFloor(issue.evidence, 8) === false) {
       problems.push(`${issue.id} evidence is shorter than 8 characters`)
       continue
     }
-    if (!input.text.includes(issue.evidence)) {
-      problems.push(`${issue.id} cites evidence that is not in the text`)
+    const match = matchEvidence(input.text, issue.evidence)
+    if (!match.found) {
+      problems.push(
+        `${issue.id} cites evidence that is not in the text${
+          match.nearest === undefined
+            ? ''
+            : ` (nearest paragraph ${match.nearest.paragraph}: "${match.nearest.text}")`
+        }`,
+      )
+      details.field = `${issue.id}.evidence`
+      details.expected = 'a verbatim quote from the current manuscript'
+      details.received = issue.evidence.slice(0, 200)
+      if (match.nearest !== undefined) {
+        details.nearest = {
+          paragraph: match.nearest.paragraph,
+          text: match.nearest.text,
+          offset: match.nearest.offset,
+        }
+      }
     }
   }
   return problems.length === 0
     ? []
-    : [block('PG-08', problems.join('; '), 'mark every blocker fixed and quote the revised text as evidence')]
+    : [
+        block(
+          'PG-08',
+          problems.join('; '),
+          'mark every blocker fixed and quote the revised text as evidence',
+          undefined,
+          Object.keys(details).length === 0 ? undefined : details,
+        ),
+      ]
+}
+
+/** Outcome of checking one reading-proof reference against the manuscript. */
+export interface ReferenceCheck {
+  problem: string | null
+  actual: number | null
+  quote: string
+  paragraph: number
+  hint?: string
 }
 
 /** Paragraph index (1-based) nearest the reference when the quote repeats, or -1. */
 function actualParagraph(text: string, reference: ReadingProofReference): number {
   if (typeof reference !== 'object' || reference === null || typeof reference.quote !== 'string') return -1
   const quote = reference.quote.trim()
-  if (Array.from(quote).length < LIMITS.minQuoteChars) return -1
-  const matches = splitParagraphs(text)
-    .map((paragraph, index) => ({ paragraph, index }))
-    .filter(({ paragraph }) => paragraph.includes(quote))
-  if (matches.length === 0) return -1
+  if (quote === '') return -1
+  const match = matchEvidence(text, quote)
+  if (!match.found || match.paragraph === null) return -1
+  const paragraphs = splitParagraphs(text)
+  const matches: number[] = []
+  for (const [index, paragraph] of paragraphs.entries()) {
+    if (normalizeEvidenceText(paragraph).includes(normalizeEvidenceText(quote))) matches.push(index + 1)
+  }
+  if (matches.length === 0) return match.paragraph
   const target = Number.isInteger(reference.paragraph) && reference.paragraph > 0 ? reference.paragraph : 1
-  const nearest = matches.reduce((best, match) =>
-    Math.abs(match.index + 1 - target) < Math.abs(best.index + 1 - target) ? match : best,
+  return matches.reduce((best, candidate) =>
+    Math.abs(candidate - target) < Math.abs(best - target) ? candidate : best,
   )
-  return nearest.index + 1
+}
+
+/** Verify one reading-proof reference and report the real paragraph on failure. */
+export function checkReference(text: string, reference: ReadingProofReference): ReferenceCheck {
+  const base = {
+    quote: typeof reference?.quote === 'string' ? reference.quote : '',
+    paragraph: typeof reference?.paragraph === 'number' ? reference.paragraph : 0,
+  }
+  if (typeof reference !== 'object' || reference === null) {
+    return { ...base, problem: 'reading proof reference is not an object', actual: null }
+  }
+  if (typeof reference.quote !== 'string') {
+    return { ...base, problem: 'reading proof quote is not text', actual: null }
+  }
+  if (!Number.isInteger(reference.paragraph) || reference.paragraph < 1) {
+    return {
+      ...base,
+      problem: 'reading proof paragraph must be a positive integer',
+      actual: null,
+    }
+  }
+  const quote = reference.quote.trim()
+  if (!quoteMeetsFloor(quote, 8)) {
+    return {
+      ...base,
+      problem: `quote "${reference.quote}" is shorter than 8 CJK characters (or 12 characters overall)`,
+      actual: null,
+    }
+  }
+  const match = matchEvidence(text, quote)
+  if (!match.found || match.paragraph === null) {
+    return {
+      ...base,
+      problem: `quote "${quote}" does not appear in the text${
+        match.nearest === undefined
+          ? ''
+          : `; nearest paragraph ${match.nearest.paragraph} starts "${match.nearest.text}"`
+      }`,
+      actual: null,
+      ...(match.nearest === undefined ? {} : { hint: match.nearest.text }),
+    }
+  }
+  const actual = actualParagraph(text, reference)
+  if (actual > 0 && Math.abs(actual - reference.paragraph) > 1) {
+    // "at paragraph 7, not 3" is only half a correction: the model cannot see
+    // which paragraph it actually quoted, so it re-guesses instead of aligning
+    // its locator (R4).
+    const opening = Array.from(splitParagraphs(text)[actual - 1] ?? '')
+      .slice(0, 20)
+      .join('')
+    return {
+      ...base,
+      problem: `quote "${quote}" is at paragraph ${actual}, not ${reference.paragraph}${
+        opening === '' ? '' : `; paragraph ${actual} starts "${opening}"`
+      }`,
+      actual,
+      ...(opening === '' ? {} : { hint: opening }),
+    }
+  }
+  return { ...base, problem: null, actual: actual > 0 ? actual : match.paragraph }
 }
 
 /** Verify one reading-proof reference against the manuscript. */
 export function verifyReference(text: string, reference: ReadingProofReference): string | null {
-  if (typeof reference !== 'object' || reference === null) return 'reading proof reference is not an object'
-  if (typeof reference.quote !== 'string') return 'reading proof quote is not text'
-  if (!Number.isInteger(reference.paragraph) || reference.paragraph < 1) {
-    return 'reading proof paragraph must be a positive integer'
-  }
-  const quote = reference.quote.trim()
-  if (Array.from(quote).length < LIMITS.minQuoteChars) {
-    return `quote "${reference.quote}" is shorter than ${LIMITS.minQuoteChars} characters`
-  }
-  const paragraphs = splitParagraphs(text)
-  const matches = paragraphs
-    .map((paragraph, index) => ({ paragraph, index }))
-    .filter(({ paragraph }) => paragraph.includes(quote))
-  if (matches.length === 0) return `quote "${quote}" does not appear in the text`
-  const nearest = matches.reduce((best, match) =>
-    Math.abs(match.index + 1 - reference.paragraph) < Math.abs(best.index + 1 - reference.paragraph)
-      ? match
-      : best,
-  )
-  if (Math.abs(nearest.index + 1 - reference.paragraph) > 1) {
-    return `quote "${quote}" is at paragraph ${nearest.index + 1}, not ${reference.paragraph}`
-  }
-  return null
+  return checkReference(text, reference).problem
 }
 
 /** PG-09: three verifiable quotes from three distinct paragraphs. */
@@ -564,13 +777,12 @@ const readingProof: Gate = (input) => {
     return [block('PG-09', 'reading proof must contain opening/middle/ending quote references')]
   }
   const problems: string[] = []
-  const opening = verifyReference(input.text, input.proof.opening)
-  const middle = verifyReference(input.text, input.proof.middle)
-  const ending = verifyReference(input.text, input.proof.ending)
-  for (const problem of [opening, middle, ending]) if (problem !== null) problems.push(problem)
+  const references = [input.proof.opening, input.proof.middle, input.proof.ending]
+  const checks = references.map((reference) => checkReference(input.text, reference))
+  for (const check of checks) if (check.problem !== null) problems.push(check.problem)
   const paragraphs = splitParagraphs(input.text).length
-  const actuals = [input.proof.opening, input.proof.middle, input.proof.ending].map((reference) =>
-    actualParagraph(input.text, reference),
+  const actuals = checks.map((check, index) =>
+    check.actual === null ? actualParagraph(input.text, references[index]!) : check.actual,
   )
   // The submitted paragraph is a locator hint with ±1 tolerance. The boundary
   // claim itself must use where the quote actually is, or three paragraphs can
@@ -592,7 +804,27 @@ const readingProof: Gate = (input) => {
   }
   return problems.length === 0
     ? []
-    : [block('PG-09', problems.join('; '), 'quote at least 12 characters from the real paragraph you read')]
+    : [
+        block(
+          'PG-09',
+          problems.join('; '),
+          'quote at least 8 Chinese characters (12 characters overall) from the real paragraph you read; paragraphs are separated by blank lines and exclude the title',
+          undefined,
+          {
+            expected: 'three quotes from the first two / body / last two paragraphs',
+            received: checks.map((check, index) => ({
+              slot: ['opening', 'middle', 'ending'][index],
+              submitted_paragraph: check.paragraph,
+              actual_paragraph: actuals[index] ?? null,
+              paragraph_first_20: check.hint ?? '',
+              reason: check.problem ?? null,
+            })),
+            candidates: checks
+              .filter((check) => check.hint !== undefined)
+              .map((check, index) => ({ index: index + 1, text: check.hint! })),
+          },
+        ),
+      ]
 }
 
 /** PG-10: cross-chapter reconciliation must be clean. */
@@ -704,7 +936,7 @@ const GATE_FUNCTIONS: Readonly<Record<GateId, Gate>> = {
   'PG-13': outlineAlignment,
 }
 
-/** Evaluate all thirteen gates and return every blocking item, in canonical order. */
+/** Evaluate all thirteen gates; blocking items are ordered, warnings are evidence. */
 export function evaluateGates(input: GateInput, options: GateOptions): GateResult {
   const applicable = new Set(applicableGates(input))
   const blocking: BlockingItem[] = []
@@ -713,7 +945,9 @@ export function evaluateGates(input: GateInput, options: GateOptions): GateResul
     const gate = GATE_FUNCTIONS[id]
     for (const item of gate(input, options)) blocking.push({ ...item, scope: item.scope ?? GATES[id] })
   }
-  return { passed: blocking.length === 0, blocking }
+  const warnings: Warning[] = []
+  if (applicable.has('PG-06')) warnings.push(...sceneTypeWarnings(input))
+  return { passed: blocking.length === 0, blocking, warnings }
 }
 
 /**

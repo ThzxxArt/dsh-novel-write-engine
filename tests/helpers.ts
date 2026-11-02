@@ -262,12 +262,18 @@ export async function readyToArchive(input: {
   text?: string
   summary?: ChapterSummary
   narrator?: string
+  /** Review findings the flow should record; the default review has none. */
+  issues?: ReviewDocument['issues']
 }): Promise<string> {
   const text = input.text ?? cleanText()
   await bootstrapToDraft(input)
   await writeDraft({ ...input, text, summary: input.summary })
   await input.engine.getBrief({ stage: 'P4', root: input.root })
-  await input.engine.submitReview({ chapter: 1, ...sampleReview(1, text), root: input.root })
+  await input.engine.submitReview({
+    chapter: 1,
+    ...sampleReview(1, text, input.issues === undefined ? {} : { issues: input.issues }),
+    root: input.root,
+  })
   await input.engine.getBrief({ stage: 'P6', root: input.root })
   await input.engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root: input.root })
   await input.engine.getBrief({ stage: 'P8', root: input.root })

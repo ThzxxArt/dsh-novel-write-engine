@@ -4,7 +4,13 @@ import { ERROR_CODES, EngineInputError } from '../types.js'
 export const NEW_ELEMENT_GROUPS = ['locations', 'abilities', 'artifacts'] as const
 export type NewElementGroup = (typeof NEW_ELEMENT_GROUPS)[number]
 
-export const ANCHOR_MIN_CHARS = 2
+/**
+ * Entity anchors are verbatim evidence, not just locators: a two-character
+ * anchor such as 门口 matches half the book. The floor is the same 8 characters
+ * used by foreshadow and resolved anchors; a short entity name still matches
+ * through the name fallback in `matchEntityText`.
+ */
+export const ANCHOR_MIN_CHARS = 8
 export const ANCHOR_MAX_CHARS = 120
 export const ANCHOR_MAX_COUNT = 8
 
@@ -17,7 +23,7 @@ const invalid = (detail: string): never => {
   throw new EngineInputError(
     ERROR_CODES.SCHEMA_INVALID,
     detail,
-    'new_element_anchors maps each new entity name to 1..8 verbatim anchors of 2..120 characters',
+    'new_element_anchors maps each new entity name to 1..8 verbatim anchors of 8..120 characters',
   )
 }
 

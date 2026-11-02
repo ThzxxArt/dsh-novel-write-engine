@@ -10,6 +10,8 @@ profile:
   foreshadow_dormant_after: 20
 ```
 
+0.2.14 新增 `NUMERIC_FACTS_UNUSED`（声明了数字事实但正文从未命中）与 `DIALOGUE_RATIO_SKEWED`（行/字口径只有一侧越界）；两者都只是 advisory。`PERIOD_DENSITY` 只判 ≥80 字段落；`WATER_WORDS` 按最长词优先、不重复计数，密度以配置窗口为分母；`DUPLICATE_PARAGRAPH` 没有 8 字连续重合时不再升级为 blocker；`LOCKED_DETAIL_DRIFT` 报告最差段落，并允许「关键词 ≥2 且顺序一致」的自然改写。
+
 `pleasure_keywords` 优先于全局词表；`foreshadow_dormant_after` 优先于全局休眠阈值；`motif_min_dormancy` 只作用于 `kind='motif'`。缺省回退全局值，所有 profile 仍只影响 advisory，不改变 blocker/门控/评分。`pleasure_keywords` 必须是字符串数组；空数组与缺省一样回退全局词表；三个 profile 休眠阈值必须是正整数；否则 `RULEPACK_INVALID`，不会让一次 `novel_check` 在运行时崩溃。默认包不得写入具体书稿的专有词。
 
 ## 0.2.9 genre profile

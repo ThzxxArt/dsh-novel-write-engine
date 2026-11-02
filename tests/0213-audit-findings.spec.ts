@@ -1060,13 +1060,17 @@ describe('0.2.13 post-implementation audit findings', () => {
       await engine.getBrief({ stage: 'P4', root })
       await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
       await engine.getBrief({ stage: 'P6', root })
-      await engine.runCheck({ chapter: 1, scope: ['content'], semantic: sampleSemantic(text), root })
+      const firstCheck = await engine.runCheck({
+        chapter: 1,
+        scope: ['content'],
+        semantic: sampleSemantic(text),
+        root,
+      })
       const check = (await engine.queryState({ kind: 'check', root })).data as {
         machine: { advisories: Array<{ id: string; code: string }> }
       }
       const numeric = check.machine.advisories.filter((advisory) => advisory.code === 'NUMERIC_CONTRADICTION')
       expect(numeric.length).toBeGreaterThanOrEqual(2)
-      const total = check.machine.advisories.length
       await engine.getBrief({ stage: 'P6', root })
       const result = await engine.runCheck({
         chapter: 1,
@@ -1077,7 +1081,11 @@ describe('0.2.13 post-implementation audit findings', () => {
         root,
       })
       expect(result.data.acknowledged_findings).toHaveLength(1)
-      expect(result.data.advisories).toBe(total - 1)
+      // The display row is per code; acknowledging one instance still leaves
+      // the other instance of the same code visible (0.2.14 aggregation), but
+      // exactly one instance disappears.
+      expect(result.data.advisories).toBe(firstCheck.data.advisories)
+      expect(result.data.advisory_instances).toHaveLength(firstCheck.data.advisory_instances.length - 1)
       const saved = (await engine.queryState({ kind: 'check', root })).data as {
         acknowledged_findings?: unknown
         machine: { acknowledged_findings?: unknown[] }

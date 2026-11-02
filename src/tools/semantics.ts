@@ -47,10 +47,17 @@ export const ARRAY_PARAMETER_CONTRACT: Record<string, Record<string, ArrayParame
     dimensions: { semantics: 'replace' },
     issues: { semantics: 'replace' },
     proof: { semantics: 'replace' },
+    amend_issues: { semantics: 'replace' },
   },
   novel_revise: {
     issues: { semantics: 'replace' },
     proof: { semantics: 'replace' },
+  },
+  novel_brief: {
+    stages: { semantics: 'replace' },
+  },
+  novel_amend: {
+    patch: { semantics: 'replace' },
   },
   novel_check: {
     scope: { semantics: 'replace' },

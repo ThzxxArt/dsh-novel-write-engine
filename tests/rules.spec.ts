@@ -390,7 +390,7 @@ describe('rule pack compiler', () => {
 describe('machine pipeline', () => {
   it('runs the five steps in order and never emits the lexicon first', () => {
     expect(PIPELINE_STEPS).toEqual(['segment', 'density', 'quote', 'exemption', 'lexicon'])
-    expect(Object.keys(BUILTIN_RULES)).toHaveLength(36)
+    expect(Object.keys(BUILTIN_RULES)).toHaveLength(38)
   })
 
   it('detects format, punctuation and lexicon violations', () => {

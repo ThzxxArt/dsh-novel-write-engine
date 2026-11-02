@@ -1,3 +1,133 @@
+## 0.2.14
+
+0.2.14 是账本语义、诊断可达与长跑收敛版本：把两份实测清单的 36 条收口到 19 个根因、12 个工作包，并连带修掉 12 个同根因缺陷。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，新字段可选，旧文档不迁移。
+
+### Added
+
+- **诊断契约**：`EngineError.details` 与 `BlockingItem.details`（field/expected/received/received_type/allowed/example/nearest/candidates）；工具输出追加 `details: {...}`。`state_delta` 的字段错误、未知键、`no_change` 非法字段都带结构化上下文；`patch.edits[i]` 失败给 `old_text` 片段、匹配数与最近 3 段。
+- **格式门控可读化**：PG-04 仍是 1 条 blocking，但摘要按 `CODE ×N` 分组并给 3 个样本；`machine.violations` 仍逐条。
+- **PG-01 可解释**：brief 收据保存各依赖块摘要；stale 时返回 `details.stale_reason/stale_stage/required_tool/changed`，不再只说「state changed」。journal 中止行带 `intended_revision`。
+- **per-stage brief 依赖**：`BRIEF_DEPENDENCIES` 取代整本文档摘要；`rounds`、无关台账不再使 P4/P6/P8 失效；`novel_brief` 新增 `stages[]`，一次事务签发多阶段。
+- **收据压缩**：归档把该章 superseded 收据移到 `history/briefs/chNNN.yaml`，热文件每章每阶段只留 current + 最近 2 条（合计 ≤3）；`novel_state {kind:"briefs", view:"current"|"all"}` 合并读取。
+- **资源语义**：`current_state.resources` 是绝对值（set），`summary.resource_changes[].delta` 是增量（add）；同章同角色同资源双写拒绝（`ENGINE_RESOURCE_DOUBLE_COUNT`）；负余额错误统一回显「原值 / Δ / 结果」，`targets.allow_negative_balances` 可开启债务（`novel_amend` 可写），`novel_report.debt` 列出负数余额。
+- **标量可写**：`CharacterDelta.unset` 清空顶层键；`null` 仍是值；doctor 新增 `scalar-state` info，列出日期/期限类字段（如 `deadline`）供作者 unset，不自行判断故事时间。
+- **amend 局部修改**：`novel_amend {patch:[{op,path,value}]}`（JSON Pointer 子集），与 `content` 二选一；返回 `before/after/changes`；服务端行数/主键比对拒绝截断，`allow_delete:true` 才允许有意删除。
+- **台账恢复**：`novel_restore.paths` 接受 `state/characters|world|locks|timeline|foreshadows|relationships|handoff.yaml`，恢复后校验 `next_seq` 不降。
+- **P1 预算保底**：P1 只保护 worldbook 的 premise/setting/rules 与 book_plan 的 premise/logline/strict；`open_foreshadows ≥ min(8,N)`、`recent_summaries ≥ 2`、`active_cast` 全量；`context_meta` 新增 `floor_kept/required_omitted/over_budget_reason`。
+- **advisory 生命周期**：同章同 code 聚合为一行，`instances[]` 保留每条实例 id；`novel_check` 返回 `advisory_instances`；台账级 finding 定位 `{ledger, entity}`；`acknowledge_until_chapter` 支持到期复核；面板与 `novel_check` 使用同一 ack 过滤（code + 实例 id）。
+- **数字三态**：`facts_unused` 与 `NUMERIC_FACTS_UNUSED` advisory；算式校验量纲（`2 元 × 3 斤 = 7 个` 不再当 2×3）；`一米八五` 作为身高、不参与距离/速度；速度矛盾要求同句且有主语线索。
+- **证据归一**：`matchEvidence` 统一 PG-08 evidence、PG-09 引文、delta anchor；引号/空白/跨行归一，失败给最近段；PG-09 中文引文下限降到 8 字。
+- **对话/字数口径**：`check.machine.dialogue` 与 `novel_status.dialogue` 给出双口径、目标与 `verdict`（pass/line_out/char_out/both_out/skewed）；`novel_status.target_words` 明示「含标点 + 汉字下限」。
+- **doctor baseline**：`novel_doctor {baseline:true}` 写 `state/doctor-baseline.yaml`，同 id+detail 不再 warning；`reset:true` 清空；未到目标章数的 coverage 只 info（归档章缺卡仍 warning）。
+- **关系/伏笔质量**：report 的 `relationships` 增加 `classified/uncategorized/coverage`，`uncategorized` 不再当分类；strict 模式下新 plot 伏笔缺 `planned_resolve` 拒绝（`ENGINE_FORESHADOW_UNPLANNED`），非 strict 给 advisory。
+- **评审修正**：`novel_review {amend_issues}` 就地改 location/problem/fix/severity/status，不消耗评审轮次；`total` 可省略，由引擎实算。
+- **PG-06 卡优先**：章卡存在时，连续同类型只给 `PG-06_CARD_WINS` warning；无卡仍 block；P2 提交计划时预检并提示。
+- **PG-07 透明**：分数不一致时 `details` 回显 `engine_total/raw_total/exclusions_applied`（逐条 rule/location/delta/dimension/reason）。
+- **计数同源**：新增 `EffortProjection`；`report.effort`、`status.previous_chapter_effort`（journal 回填 + `basis`）、面板共用；`quality.attempts === effort.reviews`。
+- **读模型安全**：`novel_state` 输出经 `jsonSafeValue`（去 undefined、断环、失败回退摘要）；损坏台账 raw 上限 64KB 并标 `raw_truncated`，并给出 `summary`（字节/行/`next_seq`/样本 id 与名称/是否缺尾换行），损坏时不再只剩一条错误。
+- **台账恢复护栏**：`novel_restore` 恢复台账后校验跨台账引用（locks/timeline/relationships 指向的人物必须在 characters 中）与 handoff 卷号/章序；只拒绝本次恢复**新引入**的悬空引用，已坏的旧项目仍可逐文件修复。
+- **章卡与紧凑行带汉字数**：`ChapterRecord.cjk_words` 与归档章卡的 `cjk_words`，紧凑 `chapters` 行给 `cjk_words`（0.2.14 之前归档的行是 `null`）。
+- **pipeline 视图补齐 effort**：`novel_state {kind:"pipeline"}` 增加 `previous_chapter_effort` 与 `effort: {lifetime, basis}`，与 `novel_report` / `novel_status` 同源。
+
+### Fixed
+
+- 旧 check 的 advisory 在 restore 时不再回放成 blocking；`legacyIssues` 以「缺 scope / advisory 混在 violations」判旧格式，不再把干净的新 check 误标。
+- `readDoc` 对缺失 `schema_version` 的旧文档统一补 1 再窄化，不再「先按 1 迁移、再以缺字段拒绝」。
+- `novel_amend` 对新增/状态变更的 resolved 伏笔强制 `resolved_anchor`（无 anchor 的既有 resolved 行仍可迁移）。
+- `RESOURCE_MISMATCH` 只在前一从句没有金额时借资源名；detail 改为中文并回显被判定的小句。
+- `WATER_WORDS` 按最长词优先、不重复计数；密度以配置窗口为分母，短章不再虚高。
+- `DUPLICATE_PARAGRAPH` 章号取真实前文章号；没有 8 字连续重合时不再伪造 overlap，也不升级为 blocker。
+- `LOCKED_DETAIL_DRIFT` 报告最差段落而非最佳段落；自然改写用「关键词 ≥2 且顺序一致」放行；实体名本身不再被当作保留细节。
+- `PERIOD_DENSITY` 只判 ≥80 字段落；`PLEASURE_DENSITY` 窗口取 `min(600, 文本长度)`；motif dormancy 允许 0。
+- 提交成功后宿主监听器抛错不再把已提交的归档变成失败（`EVENT_LISTENER_FAILED` warning）。
+- 归档预检优先暴露内容门控（PG-07 等），不再先要求刷新 P8 brief。
+- brief 收据读模型重建时保留 `dependencies`：此前 PG-01 永远只能说 "state changed"、`changed` 为空；`stale_reason` 现按 `text → review → check → …` 的修复顺序取名，正文改动先报 `text`。
+- `novel_amend {patch}` 的 `changes[]` 精确到操作路径（`items.1.title`），不再只报父键 `items`。
+- `current_state`/`profile`/`growth` 类型错误带 `field/expected/received_type/example`，与 U4/M16 的验收一致。
+- 0.2.0 旧 check（无 `scope`、advisory 混在 `violations`）读时归一：advisory 移到 `machine.advisories` 并标 `legacy_format`，`doctor` 逐章列出行号，restore 不再把 advisory 当 blocker。
+- `LOCKED_DETAIL_DRIFT` 只把「有外貌/陈设线索」或「已重合一半以上」的段落当描写；单纯提及（「他推开旧办公室的门，里面没有人」）不再误报，真实改写的段落仍然报。
+- `novel_amend {path:"novel.yaml", patch:[…]}` 现在可用：补丁只提交真正变化的键，不再因为文档里存在 `genre/platform/created_at` 就判定为"要改不可变字段"。
+- `patch.edits[i]` 的「0 匹配」先于唯一性/occurrence 判定，提示带最近段落与相似度；`occurrence: 0` 在服务层即拒绝。
+- `novel_review {amend_issues}` 写回的评审可被再次读取（`amendments` 进入 review schema）。
+- doctor 的 `scalar-state` 按当前章把章号型期限分成「已过期 / 仍待办 / 无法判断」，有已过期时升为 warning；`doctor-baseline` 另报已不再复现的过期条目，`{baseline:true}` 重写基线时清除它们。
+
+### Audit follow-up
+
+按 `docs/0.2.14-plan.md` §9 逐条回放实现时，发现 8 处「写了但没生效」「验收点没有任何断言覆盖」或「同一概念两个数」，同版修完，不另开迭代（详见方案 §10）：
+
+| 编号 | 缺口 | 修法 | 回归 |
+|---|---|---|---|
+| A1 | PG-01 永远报 `stale_reason="state"`、`changed=[]` | 收据重建保留 `dependencies` | `tests/0214-audit.spec.ts`「names the changed dependency…」 |
+| A2 | 依赖变化按字母序取名，`check` 先于 `text` | 固定优先级 `text → review → check → plan → …` | 同上 |
+| A3 | `amend {patch}` 的 `changes[]` 只报父键 | 有 `patch` 时按操作路径生成 | 「edits one field by path…」 |
+| A4 | `allow_negative_balances` 无法写入、report 无 `debt` | amend 白名单 + schema 校验 + `report.debt` | 「debt is opt-in and visible」 |
+| A5 | 评分不一致没有 `exclusions_applied` | `applyExclusions` 返回 `dropped_entries`，错误回显 `engine_total/raw_total` | 「review total is explained」 |
+| A6 | 0.2.0 旧 check（无 `scope`）实际读不出来 | `readDoc` 读时归一 + doctor 逐章列号 | 「legacy check documents」 |
+| A7 | 真实 23 章仍有 2 条 `LOCKED_DETAIL_DRIFT` 结构性误报 | 有描写线索或重合 ≥50% 才算描写 | 真实项目脚本 + `rules-extra` 三分支 |
+| A8 | `report` 报 50 次评审，`status`/`pipeline` 报 48（`effortProjection` 少传评审历史计数） | 三处统一传 `attemptCounts`；归档快照同规则；`readableCurrent` 改惰性解析 | 「counts a history-only review copy…」 |
+
+第二轮四路独立证伪审计（探针 + 真实项目副本）又确认 13 处，已同版修完：无 `dependencies` 的旧收据不再被 replay（PG-01 能说清变了什么）；`state_delta` 的形状错误补齐 `details`，工具层不再丢弃 `error.details`；`cast[].knowledge` 的错误带 `received_type`，`knowledge` 放宽为数组由引擎校验元素；restore 旧 check 先做 legacy 归一（此前直接失败）；`acknowledge_until_chapter` 从前一章结转、跨章生效（此前完全不生效）；`一米八五` 能匹配 `身高=1.85 米`（此前报 unused）；`quality.sample_chapters` 输出参与均值的章号；归档压缩严格 ≤3 条并暴露失败；`readDoc` 先补 `schema_version` 再走 legacy check 分支；`getBrief` 的 `previous_chapter_effort` 传 projection；台账级 advisory 不再显示 `paragraph undefined`；`pipeline.briefs_source` 按实际来源标注；资源 set 通道回显真实旧值与结果。
+
+### Audit follow-up II（§10.1 的 R1–R10）
+
+第二轮遗留的 10 项已全部收口（编号与 §4 的根因 R1–R19 不是同一套，见方案 §10.1）：
+
+| 编号 | 缺口 | 修法 | 回归 |
+|---|---|---|---|
+| R1 | `novel.yaml` 的 patch 模式必失败（整份文档过 `mergeProjectAmendment`） | patch 后只把真正变化的键（含 `targets` 子键）交给合并 | `tests/0214-followup.spec.ts` R1 三条 |
+| R2 | restore 只守 `next_seq`，不守 handoff/跨台账一致性 | `ledgerReferenceProblems`：新引入的 locks/timeline/relationships 悬空引用拒绝；handoff 卷号与章序校验 | R2 两条 |
+| R3 | 损坏台账只回 `{error,message,raw}` | `damagedLedgerSummary`：字节/行/`next_seq`/样本 id 与名称/缺尾换行 | R3 + 单元用例 |
+| R4 | PG-09 段号漂移不回传该段首 20 字 | 失败信息与 `hint` 带该段前 20 字 | R4 |
+| R5 | PG-04 的 samples 不含命中字符与规则名，且是全局前 3 | 格式违规 detail 带命中字符与前后文；样本按 code 各取一条并标 `code`/`count` | R5 三条 + 首尾边界 |
+| R6 | 「0 匹配」提示不可达；nearest 丢 similarity | 0 匹配先判（含最近段与相似度），再判唯一性与 occurrence | R6 |
+| R7 | `chapters` 紧凑行与章卡行无汉字数 | `ChapterRecord.cjk_words` 归档写入；紧凑行给值（旧行 `null`）；归档章卡带 `cjk_words` | R7 |
+| R8 | doctor 不区分期限「已过期/仍待办」 | 章号型标量按当前章三档；有已过期升 warning；baseline 另报「已过期条目」 | R8 三条 |
+| R9 | `novel_pipeline` 不返回 effort | 增加 `previous_chapter_effort` 与 `effort: {lifetime, basis}` | R9 |
+| R10 | 六处假绿断言 + PG-06 预检/面板实例确认/三入口证据归一缺用例 | 全部改成可失败断言（压缩前后集合相等、review 必有 issue、覆盖率 0.5、受保护 plan 造超预算、两章同类型后第三章计划告警、面板豁免前后差分、同一引文过 PG-08/PG-09） | R10 四条 |
+
+同时修掉一个被 R10 暴露的真缺陷：`novel_review {amend_issues}` 写出的评审文档带 `amendments`，而 review schema 未声明，导致**引擎读不回自己刚改过的评审**（`REVIEW_UNREADABLE`）；已在 `store/schema.ts` 声明该字段。
+
+### Compatibility
+
+- 破坏性行为变化（升级前请逐条核对，全部是「以前静默接受、现在拒绝或降级」）：
+  1. 资源双写（`current_state.resources` 与 `summary.resource_changes` 同章同资源）从静默累加改为拒绝 `ENGINE_RESOURCE_DOUBLE_COUNT`；
+  2. 有章卡且卡上 `scene_type` 与提交一致时，PG-06 从 block 改为 `PG-06_CARD_WINS` warning；卡上是别的类型时仍然 block；
+  3. 新实体锚点下限从 2 字收紧到 8 字（输入侧；旧 world 文档里的既有短锚点仍可读）；
+  4. `state_delta` 的未知键从静默忽略改为拒绝并列出 `allowed`；
+  5. `no_change` 条目再带 `current_state`/`profile`/`growth`/`unset` 从静默忽略改为拒绝；
+  6. 台账 `novel_amend` 删行现在一律要求 `allow_delete:true`（以前只有超过 200 行才判）；
+  7. `DUPLICATE_PARAGRAPH` 在没有 8 字连续重合时从 blocker 降为 advisory（误报治理，不是放松门控）；
+  8. `novel_restore` 恢复台账时 `next_seq` 不允许回退，并拒绝本次恢复新引入的悬空引用；含 ID 分配的事务前像因此不可 restore（`character/lock` 这类不自增 ID 的台账不受影响）。
+- `novel_amend {content}` 仍是完整文档路径；新增 `patch` 与 `allow_delete` 为可选。
+- `SCHEMA_VERSION` 仍为 1；旧 `briefs.yaml`、旧 check、旧 timeline 下标、旧关系/伏笔均可读。
+- `PANEL_VERSION` 升到 0.2.14。
+
+### Tests
+
+- 新增 `tests/0214.spec.ts`：资源双通道/负余额/`unset`、未知键 details、strict 伏笔、引文归一与真段号、advisory 聚合与实例、台账定位、预算保底、P8 依赖、收据压缩、amend patch/截断守卫/台账恢复、评审修正、doctor baseline、PG-06 卡优先、effort 同源、facts_unused、对话 verdict。
+- 全量测试与覆盖率门禁见发布说明。
+
+### Build
+
+- **`prepack` 硬闸**：`npm pack` / `npm publish` 前由 `scripts/check-build-fresh.mjs` 校验 `lib/` 不旧于任何源码或构建配置（`src/**/*.ts`、`tsdown*.config.ts`、`tsconfig*.json`），陈旧则 `exit 1` 并报出「哪个源文件比哪个产物新」。此前 `check:pack` 只能证明「文件在、没泄漏」，分辨不出 `lib/` 是新是旧，打 tag 前忘记 build 会把旧产物发出去。校验成功时不输出任何内容，避免污染 `check:pack` 解析的 `npm pack --json`。
+
+### Audit follow-up III（实施后逐项 review）
+
+四路只读审计各自写探针证伪，又确认 21 处，全部在本版修完：
+
+- **门禁自身的漏洞**：`pnpm typecheck` 在上一轮收尾时是**红的**（两处内联 `ReviewDocument` 缺 `schema_version`），而 `vitest` 不做类型检查，所以「1181 项全绿」把它盖住了；已补字段并把 typecheck 纳入收尾必跑项。
+- **两条假绿断言**：收据压缩用例只种了比 current 更旧的行，旧实现「current + 最近 3」同样得到 3 条；PG-08 的断言跑在 `submitReview` 上，而该操作从不执行 PG-08，断言恒真。前者改成「被提升的旧 current + 3 条更新行」并断言恰好 3 条，后者改到 `submitRevision` 上并加「捏造引文必红」的对照。
+- **可伪造的审计证据**：归档章卡与 outline 卡都没有 `cjk_words`（`narrow` 还会把该字段丢掉），而它正是核对 PG-03 汉字下限的数字；现在归档写入、读回保留，且 `novel_amend` 改它与 `word_count` 一样被拒绝。
+- **诊断仍然是散的**：`state_delta` 约 30 处 `fail()` 不带 `details`，实测 5/5 错误只有散文；`fail()` 现在兜底派生 `field`/`expected` 并标 `derived: true`。
+- **契约不可发现**：`novel_restore` 的工具 description 与 README/`docs/tools.md` 仍只写「章节/大纲/损坏 pipeline」，7 台账能力只有实现知道；`novel_review {amend_issues}` 在工具面还要先传一个空的 15 维数组。
+- **读模型说谎**：纯 legacy 项目的 `briefs_source` 点了不存在的文件；`report.effort.review_basis` 恒报 `committed_review_submissions`；`over_budget_reason` 把「floor 自己撑爆预算」报成 `protected_block`；聚合 advisory 被确认一条后，定位仍指向已确认的那条。
+- **误判与漏判**：`身高1米85` 不匹配（小数尾只认汉字数字，报成 facts 未使用）；PG-06 对任意章卡让路（卡上写着别的场景类型也静默放行）；损坏的 `locks.yaml` 摘要报 0 行（7 个台账里唯一的 map 形状）。
+- **失败面**：压缩的 fail-open 只覆盖读，`history` 是普通文件时整个归档中止；PG-04 的文档级规则缺上下文并显示「第 0 段」；省略 `total` 时排除项只报条数。
+- **补齐 B4、B5、B6、B10、B13–B20 的可失败回归**：新增 `tests/0214-audit-iii.spec.ts` 十一条（B5、B6、B10、B13–B20），并在既有 restore 用例上补 `hint` 断言（B4）。十二条都先按旧实现逐处回退验证变红，恢复后全绿，不再有「代码改了但没人能证明它会退回去」的项。补齐过程中 B17 暴露出上一轮**没修干净**：`(第 0 段)` 后缀去掉了，PG-04 的 `@第0段` 标签仍在，`TITLE_FORMAT` 依旧指向一个不存在的段；本轮改为段号 >0 才渲染。B6 的 `paths` 描述同期从 `state/characters|world|…|handoff.yaml` 的简写改为逐条列出七个完整路径，模型不必再猜扩展名。
+- 文档同步 11 处：`total` 可省略、`acknowledge` 收实例 id、损坏体字段分档、服务操作 34（含 2 个工具子操作）、压缩「current + 最近 2」、破坏性变更 8 条、P4/P6 段落口径、重放语义、`cjk_words` 措辞等。
+
+证据：`docs/0.2.14-plan.md` §10.2；回归分布在 `tests/0214*.spec.ts`（B5、B6、B10、B13–B20 在 `tests/0214-audit-iii.spec.ts`，B4 的 `hint` 断言在 `tests/0214-followup.spec.ts`；十二条均先经旧实现回退验证变红）。本轮收尾实测：103 个测试文件 / 1193 项测试、覆盖率 93.99/89.08/96.89/93.99（逐文件门禁通过）、`tsc`（host+client）、`eslint`、`prettier`、`build`、`check:pack`（27 files）、`check:artifacts`、`check:hygiene`（171 files）、`check:real-project`（23 章，源目录 md5 不变）全部通过。
+
 ## 0.2.13
 
 0.2.13 是台账可信度与自评校准版本。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，所有新字段可选，旧文档不迁移。

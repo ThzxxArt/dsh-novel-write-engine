@@ -1,5 +1,5 @@
 import { ALL_RULE_CODES, CROSS_RULES } from '../codes.js'
-import type { Violation, WordMetrics } from '../types.js'
+import type { AdvisoryInstance, Violation, ViolationLocation, WordMetrics } from '../types.js'
 import { sha256Hex } from '../domain/hash.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { sentenceRhythm, splitParagraphs, type SentenceRhythm } from '../domain/text.js'
@@ -20,8 +20,17 @@ export interface MachineResult {
   numeric: {
     facts_declared: number
     facts_checked: number
+    facts_unused: number
     equations_checked: number
     findings: number
+  }
+  /** 0.2.14: both dialogue measures plus the configured metric and verdict. */
+  dialogue?: {
+    target: [number, number] | null
+    metric: 'lines' | 'chars' | 'both'
+    line_ratio: number
+    char_ratio: number
+    verdict: 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured'
   }
 }
 
@@ -48,8 +57,15 @@ const lexiconCodes = new Set([
 
 const integrityCodes = new Set<string>(Object.values(CROSS_RULES))
 
-const advisoryId = (code: string, paragraph: number, detail: string): string =>
-  `${code}:${paragraph}:${sha256Hex(detail).slice(0, 12)}`
+/** Stable string for a location: paragraph first, then ledger/entity. */
+export function locationKey(location: ViolationLocation): string {
+  if (location.paragraph !== undefined) return `p${location.paragraph}`
+  return `${location.ledger ?? 'ledger'}:${location.entity ?? ''}`
+}
+
+/** Stable per-instance id: same code at the same place with the same detail. */
+export const advisoryId = (code: string, location: ViolationLocation, detail: string): string =>
+  `${code}:${locationKey(location)}:${sha256Hex(detail).slice(0, 12)}`
 
 /** Which runCheck scope owns one machine finding. */
 export function scopeOfRule(code: string): 'content' | 'integrity' {
@@ -95,24 +111,55 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
 
   const violations = dedupe([...kept, ...finalLexicon]).map((violation) => ({
     ...violation,
-    id: violation.id ?? advisoryId(violation.code, violation.location.paragraph, violation.detail),
+    id: violation.id ?? advisoryId(violation.code, violation.location, violation.detail),
   }))
   const numericFindings = violations.filter((violation) =>
-    ['NUMERIC_CONTRADICTION', 'NUMERIC_FACT_MISMATCH', 'NUMERIC_FACTS_EMPTY'].includes(violation.code),
+    [
+      'NUMERIC_CONTRADICTION',
+      'NUMERIC_FACT_MISMATCH',
+      'NUMERIC_FACTS_EMPTY',
+      'NUMERIC_FACTS_UNUSED',
+    ].includes(violation.code),
   ).length
+  const facts = options.facts ?? []
+  const checked = facts.filter(
+    (fact) => Number.isFinite(fact.value) && fact.alias.trim() !== '' && hasNumericFactMatch(text, fact),
+  ).length
+  const target = options.targets?.dialogue_ratio ?? null
+  const metric = options.targets?.dialogue_ratio_metric ?? 'both'
+  const lineRatio = metrics.dialogue_ratio
+  const charRatio = metrics.dialogue_char_ratio ?? 0
+  let dialogueVerdict: NonNullable<MachineResult['dialogue']>['verdict'] = 'unconfigured'
+  if (target !== null) {
+    const lower = Math.max(0, target[0] - 0.005)
+    const upper = Math.min(1, target[1] + 0.005)
+    const lineOut = lineRatio < lower || lineRatio > upper
+    const charOut = charRatio < lower || charRatio > upper
+    // The verdict must describe the configured metric, not the raw pair: with
+    // metric 'chars' a line-only overflow is a pass.
+    if (metric === 'lines') dialogueVerdict = lineOut ? 'line_out' : 'pass'
+    else if (metric === 'chars') dialogueVerdict = charOut ? 'char_out' : 'pass'
+    else if (!lineOut && !charOut) dialogueVerdict = 'pass'
+    else if (lineOut && charOut) dialogueVerdict = 'both_out'
+    else dialogueVerdict = 'skewed'
+  }
   return {
     violations,
     metrics,
     rhythm,
     quoteRatio,
     paragraphCount: paragraphs.length,
+    dialogue: {
+      target,
+      metric,
+      line_ratio: lineRatio,
+      char_ratio: charRatio,
+      verdict: dialogueVerdict,
+    },
     numeric: {
-      facts_declared: options.facts?.length ?? 0,
-      facts_checked:
-        options.facts?.filter(
-          (fact) =>
-            Number.isFinite(fact.value) && fact.alias.trim() !== '' && hasNumericFactMatch(text, fact),
-        ).length ?? 0,
+      facts_declared: facts.length,
+      facts_checked: checked,
+      facts_unused: Math.max(0, facts.length - checked),
       equations_checked: countArithmeticEquations(text),
       findings: numericFindings,
     },
@@ -120,26 +167,45 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
 }
 
 /**
- * Advisories are hints, not a second gate list. Keep one row per code for the
- * chapter, preserving the first location and merging every distinct detail.
- * Blockers are intentionally not passed through this function.
+ * Advisories are hints, not a second gate list. One display row per code for
+ * the chapter keeps the panel readable; `instances[]` preserves every distinct
+ * finding so an acknowledgement still covers exactly one instance.
  */
 export function dedupeAdvisories(violations: readonly Violation[]): Violation[] {
-  const groups = new Map<string, { first: Violation; details: string[] }>()
+  const groups = new Map<string, Violation[]>()
   for (const violation of violations) {
-    const key = violation.id ?? violation.code
-    const current = groups.get(key)
-    if (current === undefined) {
-      groups.set(key, { first: violation, details: [violation.detail] })
-    } else if (!current.details.includes(violation.detail)) {
-      current.details.push(violation.detail)
-    }
+    const rows = groups.get(violation.code)
+    if (rows === undefined) groups.set(violation.code, [violation])
+    else rows.push(violation)
   }
-  return [...groups.values()].map(({ first, details }) => ({
-    ...first,
-    id: first.id ?? advisoryId(first.code, first.location.paragraph, first.detail),
-    detail: details.join('；'),
-  }))
+  return [...groups.entries()].map(([code, rows]) => {
+    const instances: AdvisoryInstance[] = []
+    const seen = new Set<string>()
+    const locations: ViolationLocation[] = []
+    const locationKeys = new Set<string>()
+    const details: string[] = []
+    for (const row of rows) {
+      const id = row.id ?? advisoryId(row.code, row.location, row.detail)
+      if (seen.has(id)) continue
+      seen.add(id)
+      instances.push({ id, location: row.location, detail: row.detail })
+      const key = locationKey(row.location)
+      if (!locationKeys.has(key)) {
+        locationKeys.add(key)
+        locations.push(row.location)
+      }
+      if (!details.includes(row.detail)) details.push(row.detail)
+    }
+    const first = rows[0]!
+    return {
+      ...first,
+      // The display row is addressed by its code; instances carry their own ids.
+      id: code,
+      detail: details.join('；'),
+      instances,
+      locations,
+    }
+  })
 }
 
 /** Run only an explicit subset, used by PG-04 (format) and PG-10 (consistency). */
@@ -163,19 +229,21 @@ export function measureQuoteRatio(text: string): number {
   return total === 0 ? 1 : legal / total
 }
 
-/** One violation per (code, paragraph, detail); order follows the canonical code list. */
+/** One violation per (code, location, detail); order follows the canonical code list. */
 function dedupe(violations: Violation[]): Violation[] {
   const seen = new Set<string>()
   const order = new Map(ALL_RULE_CODES.map((code, index) => [code, index]))
   return violations
     .filter((violation) => {
-      const key = `${violation.code}|${violation.location.paragraph}|${violation.detail}`
+      const key = `${violation.code}|${locationKey(violation.location)}|${violation.detail}`
       if (seen.has(key)) return false
       seen.add(key)
       return true
     })
     .sort((a, b) => {
-      if (a.location.paragraph !== b.location.paragraph) return a.location.paragraph - b.location.paragraph
+      const left = a.location.paragraph ?? 0
+      const right = b.location.paragraph ?? 0
+      if (left !== right) return left - right
       return (order.get(a.code) ?? 99) - (order.get(b.code) ?? 99)
     })
 }
