@@ -23,8 +23,6 @@
 > 当前版本 **0.2.15**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
 > 0.2.15 只做一件事：把面板「删行代替分页」这一个病根从所有栏目拔掉。原本按数组顺序 `pop` 行来迁就 64KB 上限、迁就完再把 `next_cursor` 置空的预算函数已删除；分页改为在发页之前缩短页面并改写游标，五个可翻页台账共用一处；人物栏补上翻页控件；设定栏 14 组列表改为按组预览并把每次收缩写进 `counts`（`total`/`shown`），面板显示「显示 X / 共 Y」。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7，新字段可选。
->
-> 0.2.14 是账本语义与诊断可达版本：资源写入区分绝对值与增量并拒绝同章双写，`current_state.unset` 可清空标量，负余额改为项目开关；诊断统一带 `details`（field/expected/received/allowed/example），patch 失败给最近匹配；PG-01 指出具体哪个依赖变了；brief 按阶段依赖表签名、收据归档压缩、支持一次签发多阶段；P1 预算保底不再把 48 条伏笔截成 0；同码 advisory 聚合为一行、实例仍可单独确认并支持到期；PG-09 引号/跨行归一，8 字中文引文可用；`novel_amend` 支持路径 patch、before/after 与台账恢复；doctor 支持 baseline；PG-06 有章卡时改为 warning。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，旧文档可读，不自动改写历史。
 
 ---
 
@@ -641,11 +639,9 @@ dsh plugin --profile web remove dsh-novel-write-engine
 dsh plugin --profile web add dsh-novel-write-engine@0.2.15
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.14 升到 0.2.15；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本升到 0.2.15；旧标签页显示“需要刷新”时刷新即可。
 
-`0.2.14` 的 8 处破坏性行为变化（资源双写拒绝、PG-06 降级、实体锚点 8 字、`state_delta` 未知键拒绝等）见 [CHANGELOG](CHANGELOG.md) 的 0.2.14 段。
-
-历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
+历史版本（0.2.14 含 8 处破坏性行为变化：资源双写拒绝、PG-06 降级、实体锚点 8 字、`state_delta` 未知键拒绝等）的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
 ### 从源码目录升级
 
