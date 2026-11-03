@@ -168,6 +168,7 @@ export interface PanelPayloadDto {
   returned?: number
   truncated?: boolean
   next_cursor?: string | null
+  counts?: Record<string, { total: number; shown: number }>
   updated_at?: string
   etag?: string
 }

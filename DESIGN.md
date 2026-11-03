@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.14`                                                                                                 |
+| 插件版本 | `0.2.15`                                                                                                 |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1384,6 +1384,8 @@ const TRANSITIONS: readonly Transition[] = [
 0.2.4 起，`novel_outline` 的 chapters 按 `num`、volumes 按 `title` upsert：省略不删，删除只走 `remove`/`remove_volumes`，活动章/归档章/不存在章/已完成卷拒绝删除。写入支持 `dry_run`、`added/updated/removed` 回显和 `outline.deprecated.yaml`；`novel_restore` 可用 `paths:["outline/outline.yaml"]` 从备份恢复。`novel_blueprint.volumes` 仍整体 replace，但删卷必须 `confirm_remove:true`。
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
+
+0.2.15 只修面板「删行代替分页」一个病根：删除 `panelSectionBudget`（按数组顺序 `pop` 行迁就 64KB 上限、迁就完把 `next_cursor` 置空），分页改由 `panelSectionPage` 在发页前缩短页面并把游标改写到第一条未放下的行，`chapters`、`characters`、`foreshadows`、`timeline`、`relationships` 共用；客户端 `sectionPager` 成为分页文案与控件的唯一 owner，人物栏补上翻页；`worldbook` 十四组列表改用 `panelPreviewGroups` 按组预览（每组 50，按字节预算收缩最大组），每次收缩写进 `counts` 的 `total`/`shown`。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`payload_version` 仍为 7；`PANEL_VERSION` 升到 0.2.15。
 
 0.2.14 是账本语义与诊断可达版本：资源写入分 set/add 并拒绝同章双写，`current_state.unset` 可清空标量，负余额改由 `targets.allow_negative_balances` 控制；错误统一带 `details`（field/expected/received/allowed/example/nearest），patch 失败给最近匹配；PG-01 指出具体依赖变化，brief 按阶段依赖表签名并支持批量签发，收据归档压缩到 `history/briefs/`；P1 预算保底 `open_foreshadows ≥ min(8,N)`、`recent_summaries ≥ 2` 且 `required_omitted=0`；advisory 按 code 聚合为一行、实例 id 保持可单独确认，台账级 finding 定位 `{ledger,entity}`；PG-09/PG-08/delta anchor 共用引号与跨行归一；`novel_amend` 支持路径 patch、before/after 与 7 个台账的 `novel_restore`；doctor 支持 baseline；PG-06 有章卡时降为 warning。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，新字段可选；`PANEL_VERSION` 升到 0.2.14，面板协议 `payload_version` 仍为 7。
 

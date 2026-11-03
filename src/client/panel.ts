@@ -4487,10 +4487,20 @@ const sectionList = (title: string, items: unknown, kind: SectionGlyph = 'spark'
   )
 }
 
-const sectionBlock = (title: string, items: unknown, key: string): ReactElement | null => {
+const sectionBlock = (
+  title: string,
+  items: unknown,
+  key: string,
+  count?: { total: number; shown: number },
+): ReactElement | null => {
   const list = Array.isArray(items) ? items : []
   if (list.length === 0) return null
   const glyph = SECTION_GLYPHS[key] ?? 'spark'
+  const shown = count?.shown ?? list.length
+  const total = count?.total ?? list.length
+  // A preview must say how much of the ledger it is showing; otherwise a fused
+  // section looks complete while most rows are on another page.
+  const heading = total > shown ? `${title}（${shown} / 共 ${total}）` : `${title}（${total}）`
   return createElement(
     'section',
     { className: 'nwe-subsection', key },
@@ -4502,7 +4512,7 @@ const sectionBlock = (title: string, items: unknown, key: string): ReactElement 
         { className: `nwe-group-icon is-${glyph}`, 'aria-hidden': 'true' },
         sectionGlyph(glyph, 16),
       ),
-      createElement('h3', null, `${title}（${list.length}）`),
+      createElement('h3', null, heading),
     ),
     sectionList(title, list, glyph),
   )
@@ -5110,65 +5120,100 @@ const chapterTable = (
           ),
         ),
     mobileCards,
-    createElement(
-      'div',
-      { className: 'nwe-pager' },
-      createElement(
-        'span',
-        null,
-        payload?.next_cursor !== null && payload?.next_cursor !== undefined
-          ? '已截断，可继续翻页'
-          : payload?.truncated === true
-            ? '部分文本已截断'
-            : '已显示全部',
-      ),
-      createElement(
-        'span',
-        null,
-        cursor === ''
-          ? null
-          : createElement(
-              'button',
-              {
-                type: 'button',
-                className: 'nwe-refresh',
-                onClick: () => onQuery({ cursor: '' }),
-              },
-              '回到第一页',
-            ),
-        payload?.next_cursor === null || payload?.next_cursor === undefined
-          ? null
-          : createElement(
-              'button',
-              {
-                type: 'button',
-                className: 'nwe-refresh',
-                onClick: () => onQuery({ cursor: String(payload.next_cursor) }),
-              },
-              '下一页',
-            ),
-      ),
-    ),
+    sectionPager(payload, cursor, (next) => onQuery({ cursor: next })),
     chapterDetailPanel(detail, onDetail),
   )
 }
 
-const leadsSection = (items: unknown): ReactElement => {
+interface LeadsCount {
+  total: number
+  shown: number
+}
+
+/**
+ * The single owner of paging wording and controls. Every pageable list renders
+ * this, so "there is another page" can never be shown as "that was all" again.
+ */
+const sectionPager = (
+  payload: { truncated?: boolean; next_cursor?: string | null } | null | undefined,
+  cursor: string,
+  onCursor: ((cursor: string) => void) | undefined,
+  previewTrimmed = false,
+): ReactElement => {
+  const nextCursor = payload?.next_cursor ?? null
+  return createElement(
+    'div',
+    { className: 'nwe-pager' },
+    createElement(
+      'span',
+      null,
+      nextCursor !== null
+        ? '已截断，可继续翻页'
+        : previewTrimmed
+          ? '预览已截断，完整数据见 novel_state'
+          : payload?.truncated === true
+            ? '部分文本已截断'
+            : '已显示全部',
+    ),
+    createElement(
+      'span',
+      null,
+      cursor === ''
+        ? null
+        : createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'nwe-refresh',
+              onClick: () => onCursor?.(''),
+            },
+            '回到第一页',
+          ),
+      nextCursor === null
+        ? null
+        : createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'nwe-refresh',
+              onClick: () => onCursor?.(nextCursor),
+            },
+            '下一页',
+          ),
+    ),
+  )
+}
+
+const leadsSection = (
+  items: unknown,
+  counts: Record<string, LeadsCount> | undefined,
+  cursor: string,
+  onCursor: ((cursor: string) => void) | undefined,
+  payload: PanelSectionState['payload'],
+): ReactElement => {
   const row = asRow(items)
   if (row === null) return sectionList('线索', items)
   const blocks = [
-    sectionBlock('伏笔', row.foreshadows, 'foreshadows'),
-    sectionBlock('时间线', row.timeline, 'timeline'),
-    sectionBlock('关系', row.relationships, 'relationships'),
+    sectionBlock('伏笔', row.foreshadows, 'foreshadows', counts?.foreshadows),
+    sectionBlock('时间线', row.timeline, 'timeline', counts?.timeline),
+    sectionBlock('关系', row.relationships, 'relationships', counts?.relationships),
   ].filter((block): block is ReactElement => block !== null)
+  const previewTrimmed =
+    counts === undefined ? false : Object.values(counts).some((entry) => entry.shown < entry.total)
   return blocks.length === 0
     ? createElement('div', { className: 'nwe-empty' }, '线索：暂无数据')
-    : createElement('div', { className: 'nwe-leads-layout' }, ...blocks)
+    : createElement(
+        'div',
+        { className: 'nwe-leads-layout' },
+        ...blocks,
+        sectionPager(payload, cursor, onCursor, previewTrimmed),
+      )
 }
 
 const sectionMeta = (section: PanelSectionState): ReactElement | null => {
   const payload = section.payload
-  if (payload === null || payload.total === undefined) return null
+  // A page of an empty ledger has nothing to count; the block itself says so.
+  if (payload === null || payload.total === undefined || payload.total === 0) return null
   const returned = payload.returned ?? 0
   const text =
     payload.truncated !== true
@@ -5187,6 +5232,8 @@ const sectionPanel = (
   chapter = 0,
   qualityDetail: ChapterDetailState | null = null,
   onQualityDetail: (chapter: number | null) => void = () => undefined,
+  sectionCursor = '',
+  onSectionCursor?: (cursor: string) => void,
 ): ReactElement => {
   if (section === null || (section.loading && section.payload === null)) {
     return createElement('div', { className: 'nwe-section-note' }, '正在读取栏目…')
@@ -5228,8 +5275,25 @@ const sectionPanel = (
       content,
     )
   }
-  if (tab === 'characters') return withSearch(sectionList('人物', items, 'person'))
-  if (tab === 'foreshadows') return withSearch(leadsSection(items))
+  if (tab === 'characters') {
+    const rows = Array.isArray(items) ? items.length : 0
+    return withSearch(
+      createElement(
+        Fragment,
+        null,
+        sectionList('人物', items, 'person'),
+        // Characters pages on the same cursor as the other ledgers; without a
+        // control here, rows past the first page had no route into the UI.
+        rows === 0 && sectionCursor === ''
+          ? null
+          : sectionPager(section.payload, sectionCursor, onSectionCursor),
+      ),
+    )
+  }
+  if (tab === 'foreshadows')
+    return withSearch(
+      leadsSection(items, section.payload?.counts, sectionCursor, onSectionCursor, section.payload),
+    )
   if (tab === 'worldbook') return withSearch(worldbookSection(items))
   if (tab === 'quality') return qualitySection(items, chapter, qualityDetail, onQualityDetail)
   if (tab === 'health') return healthSection(items)
@@ -5256,6 +5320,8 @@ export function panelElement(
   onChapterDetail: (chapter: number | null) => void = () => undefined,
   qualityDetail: ChapterDetailState | null = null,
   onQualityDetail: (chapter: number | null) => void = () => undefined,
+  sectionCursor = '',
+  onSectionCursor?: (cursor: string) => void,
 ): ReactElement {
   const ready = view.state === 'ready'
   const selectable =
@@ -5445,6 +5511,8 @@ export function panelElement(
               view.chapter,
               qualityDetail,
               onQualityDetail,
+              sectionCursor,
+              onSectionCursor,
             ),
           )
         : null,
@@ -5501,6 +5569,7 @@ export function NovelPanel(): ReactElement {
   const [section, setSection] = useState<PanelSectionState | null>(null)
   const [chapterQuery, setChapterQuery] = useState<ChapterQuery>(EMPTY_CHAPTER_QUERY)
   const [sectionSearch, setSectionSearch] = useState('')
+  const [sectionCursor, setSectionCursor] = useState('')
   const [chapterDetail, setChapterDetail] = useState<ChapterDetailState | null>(null)
   const [qualityDetail, setQualityDetail] = useState<ChapterDetailState | null>(null)
   const detailController = useRef<AbortController | null>(null)
@@ -5628,9 +5697,10 @@ export function NovelPanel(): ReactElement {
       if (chapterQuery.cursor !== '') params.set('cursor', chapterQuery.cursor)
     } else if (tab === 'characters' || tab === 'foreshadows' || tab === 'worldbook') {
       if (sectionSearch.trim() !== '') params.set('search', sectionSearch.trim())
+      if (tab !== 'worldbook' && sectionCursor !== '') params.set('cursor', sectionCursor)
     }
     const path = `${base}${base.includes('?') ? '&' : '?'}${params.toString()}`
-    const queryKey = `${tab}|${root ?? ''}|${JSON.stringify(chapterQuery)}|${sectionSearch}`
+    const queryKey = `${tab}|${root ?? ''}|${JSON.stringify(chapterQuery)}|${sectionSearch}|${sectionCursor}`
     const cachedEtag = sectionEtagRef.current?.key === queryKey ? sectionEtagRef.current.etag : undefined
     const controller = new AbortController()
     setSection((previous) =>
@@ -5654,7 +5724,7 @@ export function NovelPanel(): ReactElement {
       setSection({ loading: false, error: result.error, payload: result.payload as PanelPayloadDto | null })
     })
     return () => controller.abort()
-  }, [tab, view.state, selectedRoot, chapterQuery, revisionTick, sectionSearch])
+  }, [tab, view.state, selectedRoot, chapterQuery, revisionTick, sectionSearch, sectionCursor])
 
   const selectProject = useCallback(
     (root: string | null): void => {
@@ -5666,6 +5736,7 @@ export function NovelPanel(): ReactElement {
       detailController.current?.abort()
       setSwitching(true)
       setChapterQuery((previous) => ({ ...previous, cursor: '' }))
+      setSectionCursor('')
       // Do not keep A's ready data under B's selector while the request is in
       // flight. Preserve the project list so the selector stays usable.
       setView((previous) => ({
@@ -5751,16 +5822,26 @@ export function NovelPanel(): ReactElement {
     },
     selectProject,
     tab,
-    setTab,
+    (next: PanelTab) => {
+      // A cursor belongs to one tab and one filter; carrying it over would show
+      // page three of a list the user just left.
+      setSectionCursor('')
+      setTab(next)
+    },
     section,
     chapterQuery,
     (patch) => setChapterQuery((previous) => ({ ...previous, ...patch })),
     sectionSearch,
-    setSectionSearch,
+    (value: string) => {
+      setSectionCursor('')
+      setSectionSearch(value)
+    },
     chapterDetail,
     openChapterDetail,
     qualityDetail,
     openQualityDetail,
+    sectionCursor,
+    setSectionCursor,
   )
 }
 

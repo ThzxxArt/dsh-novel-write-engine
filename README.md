@@ -10,7 +10,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-novel-write-engine?style=flat-square&logo=npm&label=downloads)](https://www.npmjs.com/package/dsh-novel-write-engine)
 [![CI](https://img.shields.io/github/actions/workflow/status/ThzxxArt/dsh-novel-write-engine/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/ThzxxArt/dsh-novel-write-engine/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ThzxxArt/dsh-novel-write-engine?style=flat-square&logo=github&label=release)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases)
-[![version](https://img.shields.io/badge/version-0.2.14-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.14)
+[![version](https://img.shields.io/badge/version-0.2.15-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.15)
 [![Node](https://img.shields.io/badge/Node-%3E%3D24.9.0-339933?style=flat-square&logo=node.js&logoColor=white)](#1-兼容性)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%20~%200.3-6f42c1?style=flat-square)](#1-兼容性)
 [![License](https://img.shields.io/github/license/ThzxxArt/dsh-novel-write-engine?style=flat-square)](LICENSE)
@@ -20,7 +20,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.14**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前版本 **0.2.15**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+>
+> 0.2.15 只做一件事：把面板「删行代替分页」这一个病根从所有栏目拔掉。原本按数组顺序 `pop` 行来迁就 64KB 上限、迁就完再把 `next_cursor` 置空的预算函数已删除；分页改为在发页之前缩短页面并改写游标，五个可翻页台账共用一处；人物栏补上翻页控件；设定栏 14 组列表改为按组预览并把每次收缩写进 `counts`（`total`/`shown`），面板显示「显示 X / 共 Y」。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7，新字段可选。
 >
 > 0.2.14 是账本语义与诊断可达版本：资源写入区分绝对值与增量并拒绝同章双写，`current_state.unset` 可清空标量，负余额改为项目开关；诊断统一带 `details`（field/expected/received/allowed/example），patch 失败给最近匹配；PG-01 指出具体哪个依赖变了；brief 按阶段依赖表签名、收据归档压缩、支持一次签发多阶段；P1 预算保底不再把 48 条伏笔截成 0；同码 advisory 聚合为一行、实例仍可单独确认并支持到期；PG-09 引号/跨行归一，8 字中文引文可用；`novel_amend` 支持路径 patch、before/after 与台账恢复；doctor 支持 baseline；PG-06 有章卡时改为 warning。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，旧文档可读，不自动改写历史。
 
@@ -204,7 +206,7 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.14
+dsh plugin --profile web add dsh-novel-write-engine@0.2.15
 ```
 
 安装后重启 DSH，或刷新 Web 页面。
@@ -252,10 +254,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.14.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-0.2.15.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.14.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.15.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -267,7 +269,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.14`）；
+3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.15`）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -342,6 +344,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 - 概览：四项统计条 + 最近 10 章评分趋势折线 + 最近 8 章字数柱状图；下方是阶段轨、门控与全书/活动双栏，“全书资料”可展开蓝图、卷、世界观与质量摘要；
 - 人物、线索、设定、质量、健康：带图标的卡片墙，卡片可展开详情并占满整行；线索与设定按分组两栏排列；章节在桌面是可筛选、排序、翻页的台账，窄屏切换为章节卡；
 - 超过 30 章只渲染最近 30 条，并显示总记录数。
+- 线索栏按伏笔分页（每页 50 条，可翻页）；时间线与关系各显示前 50 条预览，标题写明「显示 X / 共 Y」，不会把预览当成全部。
 
 面板按概览/章节/人物/线索/设定/质量/健康七栏读取；每栏有独立 section、窗口元数据和 64KB 字节上限，失败时显式显示同步错误。它**只读**，所有写操作仍在对话/工具里。
 
@@ -627,18 +630,20 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.14
+### 升级到 0.2.15
 
-0.2.14 是账本语义与诊断可达更新：资源写入区分绝对值/增量并拒绝同章双写，负余额需 `allow_negative_balances`，`current_state.unset` 可清空标量；错误统一带 `details`；PG-01 指出具体依赖变化，brief 按阶段签名并支持批量签发与收据归档压缩；P1 预算保底不再把伏笔截成 0；advisory 按 code 聚合但实例仍可单独确认；PG-09/PG-08/delta anchor 共用引号与跨行归一；`novel_amend` 支持路径 patch 与台账恢复，doctor 支持 baseline；PG-06 有章卡时降为 warning。`SCHEMA_VERSION` 仍为 1，旧文档可读，不自动改写历史。面板协议 `payload_version` 保持 7，`PANEL_VERSION` 升到 0.2.14。
+0.2.15 只修面板分页，不动 schema 与门控：删除了「按数组顺序删行来迁就 64KB 上限、迁就完再清空 `next_cursor`」的预算函数；分页改为在发页之前缩短页面并改写游标，`chapters`、`characters`、`foreshadows`、`timeline`、`relationships` 五个台账共用一处；人物栏补上翻页控件；设定栏 14 组列表改为按组预览，每次收缩都写进 `counts` 的 `total`/`shown`，面板显示「显示 X / 共 Y」。`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7，`PANEL_VERSION` 升到 0.2.15。
 
-破坏性行为变化共 8 处（完整清单与逐条说明见 [CHANGELOG](CHANGELOG.md) 的 0.2.14 段）：资源双写改为拒绝；有章卡且卡片 `scene_type` 与提交一致时 PG-06 改为 warning（不一致仍 block）；新实体锚点从 2 字收紧到 8 字（旧文档中的短锚点仍可读）；`state_delta` 未知键改为拒绝；`no_change` 条目再带状态字段改为拒绝；台账删行一律要求 `allow_delete`；`DUPLICATE_PARAGRAPH` 无连续重合时降为 advisory；`novel_restore` 恢复台账禁止 `next_seq` 回退。
+没有破坏性行为变化，也不需要迁移数据：面板契约只增可选字段。若你的项目伏笔、时间线或人物超过一页，升级后会在栏目标题看到「显示 X / 共 Y」和「下一页」。
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.14
+dsh plugin --profile web add dsh-novel-write-engine@0.2.15
 ```
 
-升级后刷新页面、新开会话。面板教程版本从 0.2.13 升到 0.2.14；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话。面板教程版本从 0.2.14 升到 0.2.15；旧标签页显示“需要刷新”时刷新即可。
+
+`0.2.14` 的 8 处破坏性行为变化（资源双写拒绝、PG-06 降级、实体锚点 8 字、`state_delta` 未知键拒绝等）见 [CHANGELOG](CHANGELOG.md) 的 0.2.14 段。
 
 历史版本的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
@@ -798,16 +803,16 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 当前工作树验证（0.2.14 基线）
+### 当前工作树验证（0.2.15 基线）
 
 以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**103 个测试文件 / 1193 项全部通过**；
-- 覆盖率：**语句 93.99% / 分支 89.08% / 函数 96.89% / 行 93.99%**；逐文件与 `src/rules` 分支门禁通过；client 函数覆盖 87.02%；client bundle 239.97 KB（react-dom 外置）；
-- `typecheck`、`lint`、`build`、`check:pack`（27 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（171 文件）、`test:isolated`（65 文件）、`validate:rulepack`：通过；
+- `corepack pnpm test`：**104 个测试文件 / 1202 项全部通过**；
+- 覆盖率：**语句 94.17% / 分支 89.05% / 函数 97.18% / 行 94.17%**；逐文件与 `src/rules` 分支门禁通过；client bundle 241.55 KB（react-dom 外置）；
+- `typecheck`、`lint`、`build`、`check:pack`（27 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（172 文件）、`test:isolated`、`validate:rulepack`：通过；
 - `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通，13 个包全部解析；
 - 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行”；未做触屏真机与屏幕阅读器验收；
-- 0.2.14 已改引擎规则、门控、归档校验、读模型、任务书与工具契约；真实 23 章项目在临时副本上只读验收：`samples=23`、`attempts=50`、`foreshadows=8`、`debt=0`，源目录 `pipeline.yaml`、`briefs.yaml` 与第 23 章正文 md5 未变；本轮没有重新跑真实模型。
+- 0.2.15 改了面板读模型（分页与设定预览计数）与客户端分页控件；新用例先在旧实现上跑红：回退 `src/engine/service.ts` 时 3/3 失败，回退 `src/client/panel.ts` 时 2/2 失败。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
 

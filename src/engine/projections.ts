@@ -236,6 +236,12 @@ export interface PanelSectionMeta {
   returned: number
   truncated: boolean
   next_cursor: string | null
+  /**
+   * Per-list windows for fused sections (only the leads tab today). A fused
+   * section can page one ledger and preview the others; without this a preview
+   * is indistinguishable from a complete list.
+   */
+  counts?: Record<string, { total: number; shown: number }>
   updated_at: string
   etag: string
 }

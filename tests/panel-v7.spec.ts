@@ -215,9 +215,139 @@ describe('0.2.9 panel v7 sections', () => {
       })
       const section = await engine.panelSection({ root, section: 'foreshadows' })
       const items = section.items as { timeline: unknown[] }
-      expect(items.timeline).toHaveLength(200)
-      expect(section.total).toBe(260)
+      // The timeline is a preview; the pageable ledger is the foreshadow list,
+      // so `total`/`returned` describe that ledger and `counts` carries the rest.
+      expect(items.timeline).toHaveLength(50)
+      expect(section.total).toBe(0)
       expect(section.truncated).toBe(true)
+      const counts = section.counts as Record<string, { total: number; shown: number }>
+      expect(counts.timeline).toEqual({ total: 260, shown: 50 })
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('pages the foreshadow ledger instead of letting the byte cap eat it', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '九十伏笔', genre: '都市现代', platform: 'fanqie', root })
+      await engine.amend({
+        path: 'state/foreshadows.yaml',
+        content: {
+          schema_version: 1,
+          next_seq: 91,
+          items: Array.from({ length: 90 }, (_, index) => ({
+            id: `FS-${String(index + 1).padStart(3, '0')}`,
+            title: `伏笔${index + 1}`,
+            planted: 1,
+            last_touched: index + 1,
+            status: 'planted',
+            resolved_at: null,
+            description: `第${index + 1}条伏笔的描述`.repeat(8),
+            advance_log: [
+              { chapter: 1, note: `第一次推进${index}`, new_info: true },
+              { chapter: 2, note: `第二次推进${index}`, new_info: false },
+            ],
+          })),
+        },
+        reason: 'ninety foreshadows',
+        root,
+      })
+      await engine.amend({
+        path: 'state/timeline.yaml',
+        content: {
+          schema_version: 1,
+          next_seq: 353,
+          items: Array.from({ length: 352 }, (_, index) => ({
+            id: `TE-${String(index + 1).padStart(3, '0')}`,
+            chapter: 1,
+            story_time: `第${index + 1}天`,
+            description: `事件${index + 1}`,
+            location: '旧城',
+            characters: [],
+          })),
+        },
+        reason: 'timeline pressure fixture',
+        root,
+      })
+      const first = await engine.panelSection({ root, section: 'foreshadows' })
+      const page = first.items as { foreshadows: Array<Record<string, unknown>> }
+      expect(first.total).toBe(90)
+      expect(first.returned).toBe(50)
+      expect(page.foreshadows).toHaveLength(50)
+      expect(first.next_cursor).toBe('50')
+      // The ledger keeps the full log; the panel is the compact read model.
+      expect(page.foreshadows[0]?.advance_log).toBeUndefined()
+      expect(page.foreshadows[0]?.advance_count).toBe(2)
+      expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThanOrEqual(64 * 1024)
+      const second = await engine.panelSection({
+        root,
+        section: 'foreshadows',
+        query: { cursor: '50' },
+      })
+      const rest = second.items as { foreshadows: Array<Record<string, unknown>> }
+      expect(rest.foreshadows).toHaveLength(40)
+      expect(second.next_cursor).toBeNull()
+      const counts = second.counts as Record<string, { total: number; shown: number }>
+      expect(counts.foreshadows).toEqual({ total: 90, shown: 40 })
+      expect(counts.timeline?.total).toBe(352)
+      expect(counts.timeline?.shown).toBeLessThanOrEqual(50)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('shrinks the preview lists before the pageable foreshadow rows', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({ title: '预览超帽', genre: '都市现代', platform: 'fanqie', root })
+      await engine.amend({
+        path: 'state/foreshadows.yaml',
+        content: {
+          schema_version: 1,
+          next_seq: 31,
+          items: Array.from({ length: 30 }, (_, index) => ({
+            id: `FS-${String(index + 1).padStart(3, '0')}`,
+            title: `伏笔${index + 1}`,
+            planted: 1,
+            last_touched: 1,
+            status: 'planted',
+            resolved_at: null,
+            description: `第${index + 1}条`,
+            advance_log: [],
+          })),
+        },
+        reason: 'foreshadow floor',
+        root,
+      })
+      await engine.amend({
+        path: 'state/timeline.yaml',
+        content: {
+          schema_version: 1,
+          next_seq: 201,
+          items: Array.from({ length: 200 }, (_, index) => ({
+            id: `TE-${String(index + 1).padStart(3, '0')}`,
+            chapter: 1,
+            story_time: `第${index + 1}天`,
+            description: '事'.repeat(400),
+            location: '旧城',
+            characters: [],
+          })),
+        },
+        reason: 'oversized timeline preview',
+        root,
+      })
+      const section = await engine.panelSection({ root, section: 'foreshadows' })
+      const items = section.items as { foreshadows: unknown[]; timeline: unknown[] }
+      // The timeline preview pays for the byte cap; the pageable ledger keeps
+      // every row of its page and its cursor.
+      expect(items.foreshadows).toHaveLength(30)
+      expect(items.timeline.length).toBeLessThan(50)
+      expect(Buffer.byteLength(JSON.stringify(section.items))).toBeLessThanOrEqual(64 * 1024)
+      expect(section.truncated).toBe(true)
+      const counts = section.counts as Record<string, { total: number; shown: number }>
+      expect(counts.foreshadows).toEqual({ total: 30, shown: 30 })
+      expect(counts.timeline).toEqual({ total: 200, shown: items.timeline.length })
     } finally {
       await cleanup()
     }

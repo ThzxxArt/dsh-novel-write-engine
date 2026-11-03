@@ -681,6 +681,26 @@ const decodeStateCursor = (cursor: string, section: string, filtersHash: string)
   }
 }
 
+/**
+ * Hard byte cap for one panel section. The read model must bound its own page
+ * before this limit applies: pageable lists shrink their page and rewrite the
+ * cursor, structured lists drop rows only through `panelPreviewGroups`, which
+ * reports every drop in `counts`. No pass may delete a row silently.
+ */
+const PANEL_SECTION_BYTES = 64 * 1024
+/** Room for the section envelope (`total`, `etag`, cursors) inside the cap. */
+const PANEL_SECTION_SLACK = 2048
+/** Row cap per structured worldbook group; every cap is reported as shown/total. */
+const PANEL_GROUP_PREVIEW = 50
+
+/**
+ * The leads tab fuses three ledgers. Only the foreshadow ledger is paginated;
+ * the timeline and relationship lists are bounded previews so the primary list
+ * never pays for them.
+ */
+const PANEL_LEADS_AUX_LIMIT = 50
+const PANEL_LEADS_PAGE_SIZE = 50
+
 export class EngineService {
   private readonly stores = new Map<string, FsStore>()
   private readonly mutex = new KeyedMutex()
@@ -7841,6 +7861,8 @@ export class EngineService {
     let total = 0
     let truncated = false
     let nextCursor: string | null = null
+    let counts: Record<string, { total: number; shown: number }> | null = null
+    let returnedOverride: number | null = null
     if (section === 'overview') {
       const panel = await this.panelSnapshot(undefined, { snapshot, includeQuality: false })
       items = {
@@ -7942,9 +7964,10 @@ export class EngineService {
         return query.sort === 'num_asc' ? byNum : -byNum
       })
       total = sorted.length
-      const page = this.panelSectionPage(sorted, query)
+      const clippedRows = this.panelSectionClip(sorted, section)
+      const page = this.panelSectionPage(clippedRows.items as Array<Record<string, unknown>>, query)
       items = page.items
-      truncated = page.truncated
+      truncated = page.truncated || clippedRows.truncated
       nextCursor = page.nextCursor
     } else if (section === 'characters') {
       const seen = new Map<string, { first: number; last: number; appearances: number }>()
@@ -7967,9 +7990,10 @@ export class EngineService {
           : row.name.includes(query.search) || row.role.includes(query.search),
       )
       total = filtered.length
-      const page = this.panelSectionPage(filtered, query, 200)
+      const clippedRows = this.panelSectionClip(filtered, section)
+      const page = this.panelSectionPage(clippedRows.items as Array<Record<string, unknown>>, query, 200)
       items = page.items
-      truncated = page.truncated
+      truncated = page.truncated || clippedRows.truncated
       nextCursor = page.nextCursor
     } else if (section === 'foreshadows') {
       const rows = snapshot.foreshadows.items
@@ -7977,16 +8001,47 @@ export class EngineService {
         if (query.status !== undefined && query.status !== '' && row.status !== query.status) return false
         return query.search === undefined || query.search === '' ? true : row.title.includes(query.search)
       })
-      const page = this.panelSectionPage(filtered, query, 200)
-      total = filtered.length + snapshot.timeline.items.length + snapshot.relationships.items.length
-      truncated =
-        page.truncated || snapshot.timeline.items.length > 200 || snapshot.relationships.items.length > 200
-      items = {
-        foreshadows: page.items,
-        timeline: snapshot.timeline.items.slice(0, 200),
-        relationships: snapshot.relationships.items.slice(0, 200),
+      // The panel is the compact read model; `novel_state` still serves the full
+      // advance_log on demand. Shipping every log here is what pushed ninety
+      // foreshadows past the section cap, and the cap then deleted the primary
+      // list rather than paging it.
+      const compact = filtered.map((item) => {
+        const { advance_log, ...rest } = item
+        return { ...rest, advance_count: advance_log.length }
+      })
+      const clip = this.panelSectionClip(compact, section)
+      let timeline = snapshot.timeline.items.slice(0, PANEL_LEADS_AUX_LIMIT)
+      let relationships = snapshot.relationships.items.slice(0, PANEL_LEADS_AUX_LIMIT)
+      const auxBytes = (): number =>
+        Buffer.byteLength(JSON.stringify({ foreshadows: [], timeline, relationships }))
+      // Previews pay first: a dropped preview row still has a total behind it,
+      // while a dropped page row loses its only route back. The pageable ledger
+      // claims the rest and, if it still does not fit, shrinks the page and
+      // rewrites the cursor instead of deleting rows after the fact.
+      while (auxBytes() > PANEL_SECTION_BYTES / 2 && (timeline.length > 0 || relationships.length > 0)) {
+        if (timeline.length >= relationships.length) timeline = timeline.slice(0, -1)
+        else relationships = relationships.slice(0, -1)
       }
+      const page = this.panelSectionPage(
+        clip.items as Array<Record<string, unknown>>,
+        query,
+        PANEL_LEADS_PAGE_SIZE,
+        auxBytes(),
+      )
+      total = filtered.length
+      items = { foreshadows: page.items, timeline, relationships }
+      truncated =
+        page.truncated ||
+        clip.truncated ||
+        snapshot.timeline.items.length > timeline.length ||
+        snapshot.relationships.items.length > relationships.length
       nextCursor = page.nextCursor
+      counts = {
+        foreshadows: { total: filtered.length, shown: page.items.length },
+        timeline: { total: snapshot.timeline.items.length, shown: timeline.length },
+        relationships: { total: snapshot.relationships.items.length, shown: relationships.length },
+      }
+      returnedOverride = page.items.length
     } else if (section === 'timeline') {
       const rows = snapshot.timeline.items
       const filtered = rows.filter((row) =>
@@ -7995,9 +8050,10 @@ export class EngineService {
           : row.description.includes(query.search) || (row.location ?? '').includes(query.search),
       )
       total = filtered.length
-      const page = this.panelSectionPage(filtered, query, 200)
+      const clippedRows = this.panelSectionClip(filtered, section)
+      const page = this.panelSectionPage(clippedRows.items as Array<Record<string, unknown>>, query, 200)
       items = page.items
-      truncated = page.truncated
+      truncated = page.truncated || clippedRows.truncated
       nextCursor = page.nextCursor
     } else if (section === 'relationships') {
       const rows = snapshot.relationships.items
@@ -8007,9 +8063,10 @@ export class EngineService {
           : row.a.includes(query.search) || row.b.includes(query.search) || row.type.includes(query.search),
       )
       total = filtered.length
-      const page = this.panelSectionPage(filtered, query, 200)
+      const clippedRows = this.panelSectionClip(filtered, section)
+      const page = this.panelSectionPage(clippedRows.items as Array<Record<string, unknown>>, query, 200)
       items = page.items
-      truncated = page.truncated
+      truncated = page.truncated || clippedRows.truncated
       nextCursor = page.nextCursor
     } else if (section === 'worldbook') {
       const world = snapshot.world
@@ -8026,7 +8083,6 @@ export class EngineService {
         return false
       }
       const filterRows = <T>(rows: readonly T[]): T[] => rows.filter((row) => matches(row))
-      const capRows = <T>(rows: readonly T[]): T[] => rows.slice(0, 200)
       const groups = {
         rules: filterRows(book.rules),
         factions: filterRows(book.factions),
@@ -8045,30 +8101,53 @@ export class EngineService {
         rules: filterRows(world.rules),
       }
       const outlineCards = filterRows(snapshot.outline.chapters)
-      const all = [...Object.values(groups), ...Object.values(ledger), outlineCards]
-      total = all.reduce((count, rows) => count + rows.length, 0)
-      truncated = all.some((rows) => rows.length > 200)
+      // Structured lists have no cursor; dropping a row here is only honest if
+      // the drop is counted, so every group reports `total` next to `shown`.
+      const preview = this.panelPreviewGroups(
+        {
+          rules: groups.rules,
+          factions: groups.factions,
+          locations: groups.locations,
+          characters: groups.characters,
+          glossary: groups.glossary,
+          backstory: groups.backstory,
+          facts: groups.facts,
+          themes: groups.themes,
+          ledger_locations: ledger.locations,
+          ledger_abilities: ledger.abilities,
+          ledger_artifacts: ledger.artifacts,
+          ledger_factions: ledger.factions,
+          ledger_rules: ledger.rules,
+          outline_cards: outlineCards,
+        },
+        PANEL_GROUP_PREVIEW,
+        PANEL_SECTION_BYTES * 0.7,
+      )
+      const group = (key: string): unknown[] => preview.groups[key] ?? []
+      total = Object.values(preview.counts).reduce((count, entry) => count + entry.total, 0)
+      truncated = Object.values(preview.counts).some((entry) => entry.shown < entry.total)
+      counts = preview.counts
       items = {
         premise: book.premise,
         setting: book.setting,
         blueprint: snapshot.outline.book,
         volumes: snapshot.outline.volumes,
-        rules: capRows(groups.rules),
-        factions: capRows(groups.factions),
-        locations: capRows(groups.locations),
-        characters: capRows(groups.characters),
-        glossary: capRows(groups.glossary),
-        backstory: capRows(groups.backstory),
-        facts: capRows(groups.facts),
-        themes: capRows(groups.themes),
+        rules: group('rules'),
+        factions: group('factions'),
+        locations: group('locations'),
+        characters: group('characters'),
+        glossary: group('glossary'),
+        backstory: group('backstory'),
+        facts: group('facts'),
+        themes: group('themes'),
         ledger: {
-          locations: capRows(ledger.locations),
-          abilities: capRows(ledger.abilities),
-          artifacts: capRows(ledger.artifacts),
-          factions: capRows(ledger.factions),
-          rules: capRows(ledger.rules),
+          locations: group('ledger_locations'),
+          abilities: group('ledger_abilities'),
+          artifacts: group('ledger_artifacts'),
+          factions: group('ledger_factions'),
+          rules: group('ledger_rules'),
         },
-        outline_cards: capRows(outlineCards),
+        outline_cards: group('outline_cards'),
         drift: outlineDrift(snapshot.outline, snapshot.chapters.chapters),
       }
     } else if (section === 'quality') {
@@ -8113,10 +8192,6 @@ export class EngineService {
         : this.panelSectionClip(items, section)
     items = clipped.items
     truncated = truncated || clipped.truncated
-    const budgeted = this.panelSectionBudget(items, 64 * 1024)
-    items = budgeted.items
-    truncated = truncated || budgeted.truncated
-    if (budgeted.truncated) nextCursor = null
     const updatedAt = this.now().toISOString()
     const etag = sha256(
       stableJson({
@@ -8134,11 +8209,12 @@ export class EngineService {
       section,
       items,
       total,
-      returned: this.panelSectionReturned(items),
+      returned: returnedOverride ?? this.panelSectionReturned(items),
       truncated,
       next_cursor: nextCursor,
       updated_at: updatedAt,
       etag,
+      ...(counts === null ? {} : { counts }),
     }
     if (sectionKey !== null) {
       this.sectionCache.set(sectionKey, { key: sectionKey, value: result })
@@ -8150,18 +8226,75 @@ export class EngineService {
     return result
   }
 
+  /**
+   * One page of a ledger. Fitting the byte cap happens here, before the page is
+   * emitted: an oversized page is shortened and the cursor is rewritten to the
+   * first row that did not fit, so every row keeps a route back. Deleting rows
+   * after paging — and then nulling the cursor — is what turned ninety
+   * foreshadows into one.
+   */
   private panelSectionPage<T>(
     rows: readonly T[],
     query: PanelSectionQuery,
     defaultLimit = 50,
-  ): { items: T[]; truncated: boolean; nextCursor: string | null } {
+    reserveBytes = 0,
+  ): { items: T[]; start: number; truncated: boolean; nextCursor: string | null } {
     const requested = query.limit ?? defaultLimit
     const limit = Number.isInteger(requested) ? Math.min(200, Math.max(1, requested)) : defaultLimit
     const cursor = Number.parseInt(query.cursor ?? '0', 10)
     const start = Number.isInteger(cursor) && cursor >= 0 ? cursor : 0
-    const items = rows.slice(start, start + limit)
-    const truncated = start + items.length < rows.length
-    return { items, truncated, nextCursor: truncated ? String(start + items.length) : null }
+    const take = Math.min(limit, Math.max(0, rows.length - start))
+    const fits = (count: number): boolean =>
+      Buffer.byteLength(JSON.stringify(rows.slice(start, start + count)) ?? 'null') + reserveBytes <=
+      PANEL_SECTION_BYTES - PANEL_SECTION_SLACK
+    let size = take
+    while (size > 1 && !fits(size)) size -= 1
+    const items = rows.slice(start, start + size)
+    const end = start + items.length
+    const truncated = end < rows.length
+    return { items, start, truncated, nextCursor: truncated ? String(end) : null }
+  }
+
+  /**
+   * Bounded preview of a structured section that has no cursor. Rows are
+   * dropped only here, never silently: `counts` reports `total` beside `shown`
+   * so the panel says "showing X of Y" instead of pretending the list is whole.
+   */
+  private panelPreviewGroups(
+    groups: Record<string, readonly unknown[]>,
+    cap: number,
+    budget: number,
+  ): {
+    groups: Record<string, unknown[]>
+    counts: Record<string, { total: number; shown: number }>
+  } {
+    const totals = new Map<string, number>()
+    const shown = new Map<string, unknown[]>()
+    for (const [key, rows] of Object.entries(groups)) {
+      totals.set(key, rows.length)
+      shown.set(key, rows.slice(0, cap))
+    }
+    const bytes = (): number => Buffer.byteLength(JSON.stringify(Object.fromEntries(shown)) ?? 'null')
+    let guard = 0
+    while (bytes() > budget && guard < 100_000) {
+      guard += 1
+      let pick: string | null = null
+      let size = 1
+      for (const [key, rows] of shown) {
+        if (rows.length > size) {
+          pick = key
+          size = rows.length
+        }
+      }
+      if (pick === null) break
+      const rows = shown.get(pick) ?? []
+      shown.set(pick, rows.slice(0, -1))
+    }
+    const counts: Record<string, { total: number; shown: number }> = {}
+    for (const [key, rows] of shown) {
+      counts[key] = { total: totals.get(key) ?? rows.length, shown: rows.length }
+    }
+    return { groups: Object.fromEntries(shown), counts }
   }
 
   private panelSectionReturned(items: unknown): number {
@@ -8206,55 +8339,6 @@ export class EngineService {
       return input
     }
     return { items: walk(value, []), truncated }
-  }
-
-  private panelSectionBudget(value: unknown, limit: number): { items: unknown; truncated: boolean } {
-    const bytes = (input: unknown): number => Buffer.byteLength(JSON.stringify(input) ?? 'null')
-    if (bytes(value) <= limit) return { items: value, truncated: false }
-    const clipStrings = (input: unknown, maxChars: number): unknown => {
-      if (typeof input === 'string') {
-        const chars = Array.from(input)
-        return chars.length <= maxChars ? input : chars.slice(0, maxChars).join('')
-      }
-      if (Array.isArray(input)) return input.map((item) => clipStrings(item, maxChars))
-      if (typeof input === 'object' && input !== null) {
-        return Object.fromEntries(
-          Object.entries(input as Record<string, unknown>).map(([key, item]) => [
-            key,
-            clipStrings(item, maxChars),
-          ]),
-        )
-      }
-      return input
-    }
-    const popOne = (input: unknown): boolean => {
-      if (Array.isArray(input)) {
-        if (input.length > 1) {
-          input.pop()
-          return true
-        }
-        return input.some((item) => popOne(item))
-      }
-      if (typeof input === 'object' && input !== null) {
-        return Object.values(input as Record<string, unknown>).some((item) => popOne(item))
-      }
-      return false
-    }
-    for (const maxChars of [2000, 1000, 500, 200, 80, 20, 0]) {
-      const candidate = clipStrings(value, maxChars)
-      while (bytes(candidate) > limit) {
-        if (!popOne(candidate)) break
-      }
-      if (bytes(candidate) <= limit) return { items: candidate, truncated: true }
-    }
-    const fallback = Array.isArray(value)
-      ? []
-      : typeof value === 'object' && value !== null
-        ? {}
-        : typeof value === 'string'
-          ? ''
-          : null
-    return { items: fallback, truncated: true }
   }
 
   /**

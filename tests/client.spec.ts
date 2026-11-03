@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { buildView, fetchPanel } from '../src/client/viewmodel.js'
 import { apply as applyClient, NovelIcon, NovelPanel } from '../src/client/index.js'
 import { panelElement } from '../src/client/panel.js'
+import type { PanelSectionState } from '../src/client/panel.js'
 import { ADMIN_OPERATION_GROUPS, COMMAND_ENTRY, COMMAND_GROUPS } from '../src/command-reference.js'
 import type { PanelPayloadDto } from '../src/client/dto.js'
 
@@ -263,6 +264,222 @@ describe('panel view model', () => {
     expect(html).toContain('第一卷 雨夜来信')
     expect(html).toContain('最近活动')
     expect(html).toContain('archiveChapter')
+  })
+
+  it('shows how much of a fused ledger is on the page and offers the next page', () => {
+    const view = buildView(payload())
+    const section: PanelSectionState = {
+      loading: false,
+      error: null,
+      payload: {
+        schemaVersion: 6,
+        section: 'foreshadows',
+        total: 90,
+        returned: 50,
+        truncated: true,
+        next_cursor: '50',
+        items: {
+          foreshadows: Array.from({ length: 50 }, (_, index) => ({
+            id: `FS-${index + 1}`,
+            title: `伏笔${index + 1}`,
+            status: 'planted',
+          })),
+          timeline: [{ id: 'TE-1', chapter: 1, story_time: '夜', description: '事件' }],
+          relationships: [],
+        },
+        counts: {
+          foreshadows: { total: 90, shown: 50 },
+          timeline: { total: 352, shown: 1 },
+          relationships: { total: 0, shown: 0 },
+        },
+      } as unknown as PanelPayloadDto,
+    }
+    const html = renderToStaticMarkup(
+      panelElement(
+        view,
+        false,
+        () => undefined,
+        () => undefined,
+        'foreshadows',
+        () => undefined,
+        section,
+        undefined,
+        undefined,
+        '',
+        () => undefined,
+        null,
+        () => undefined,
+        null,
+        () => undefined,
+        '',
+        () => undefined,
+      ),
+    )
+    expect(html).toContain('伏笔（50 / 共 90）')
+    expect(html).toContain('时间线（1 / 共 352）')
+    expect(html).toContain('已截断，可继续翻页')
+    expect(html).toContain('下一页')
+    expect(html).not.toContain('线索：暂无数据')
+  })
+
+  it('offers the next page for the characters ledger', () => {
+    const view = buildView(payload())
+    const section: PanelSectionState = {
+      loading: false,
+      error: null,
+      payload: {
+        schemaVersion: 6,
+        section: 'characters',
+        total: 300,
+        returned: 50,
+        truncated: true,
+        next_cursor: '50',
+        items: [{ id: 'C-1', name: '甲', role: 'protagonist' }],
+      } as unknown as PanelPayloadDto,
+    }
+    const html = renderToStaticMarkup(
+      panelElement(
+        view,
+        false,
+        () => undefined,
+        () => undefined,
+        'characters',
+        () => undefined,
+        section,
+      ),
+    )
+    // Characters page on the server; without this control the rest of the
+    // ledger had no route into the panel.
+    expect(html).toContain('显示 50 / 共 300')
+    expect(html).toContain('已截断，可继续翻页')
+    expect(html).toContain('下一页')
+  })
+
+  it('forwards the characters cursor when the next page is requested', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const onCursor = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(payload()),
+            false,
+            () => undefined,
+            () => undefined,
+            'characters',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                schemaVersion: 6,
+                section: 'characters',
+                total: 300,
+                returned: 50,
+                truncated: true,
+                next_cursor: '50',
+                items: [{ id: 'C-1', name: '甲', role: 'protagonist' }],
+              } as unknown as PanelPayloadDto,
+            },
+            undefined,
+            undefined,
+            '',
+            () => undefined,
+            null,
+            () => undefined,
+            null,
+            () => undefined,
+            '',
+            onCursor,
+          ),
+        )
+      })
+      const button = Array.from(container.querySelectorAll('button')).find(
+        (node) => node.textContent === '下一页',
+      )
+      expect(button).toBeDefined()
+      await act(async () => {
+        button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      expect(onCursor).toHaveBeenCalledWith('50')
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it('pages the leads section and returns to the first page', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const base = payload()
+    const onCursor = vi.fn()
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          panelElement(
+            buildView(base),
+            false,
+            () => undefined,
+            () => undefined,
+            'foreshadows',
+            () => undefined,
+            {
+              loading: false,
+              error: null,
+              payload: {
+                schemaVersion: 6,
+                section: 'foreshadows',
+                total: 90,
+                returned: 50,
+                truncated: true,
+                next_cursor: '50',
+                items: {
+                  foreshadows: [{ id: 'FS-1', title: '伏笔1', status: 'planted' }],
+                  timeline: [{ id: 'TE-1', chapter: 1, story_time: '夜', description: '事件' }],
+                  relationships: [],
+                },
+                counts: {
+                  foreshadows: { total: 90, shown: 50 },
+                  timeline: { total: 1, shown: 1 },
+                  relationships: { total: 0, shown: 0 },
+                },
+              } as unknown as PanelPayloadDto,
+            },
+            undefined,
+            undefined,
+            '',
+            () => undefined,
+            null,
+            () => undefined,
+            null,
+            () => undefined,
+            '50',
+            onCursor,
+          ),
+        )
+      })
+      const buttons = Array.from(container.querySelectorAll('button'))
+      const next = buttons.find((button) => button.textContent === '下一页') as HTMLButtonElement
+      await act(async () => {
+        next.click()
+      })
+      expect(onCursor).toHaveBeenCalledWith('50')
+      const first = buttons.find((button) => button.textContent === '回到第一页') as HTMLButtonElement
+      await act(async () => {
+        first.click()
+      })
+      expect(onCursor).toHaveBeenCalledWith('')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
   })
 
   it('renders a help entry and opens the complete tutorial dialog accessibly', async () => {
