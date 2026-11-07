@@ -12,8 +12,11 @@ export default defineConfig({
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },
     globals: false,
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    // Windows CI runners occasionally stall file-heavy legacy cases behind
+    // antivirus and a single shared fork. 60s is still a real failure bound,
+    // but no longer flakes on a 20s scheduling hiccup.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'json-summary', 'json', 'html'],
