@@ -317,30 +317,29 @@ EG-08  DIFF_SAFETY         patch 不越界、不吞段、不改 canon
 
 ## 快速开始
 
-### 1) 安装
+### 1) 安装到 DSH profile
+
+先准备一个 Web profile（只需一次）：
 
 ```bash
-pnpm add dsh-novel-write-engine
+dsh --profile novel --from-default-profile web --dump-config
 ```
 
-在 DSH 中启用包自带的：
-
-- `cordis.patch.yml`
-- `presets/novel-studio.patch.yml`
-
-### 2) 用独立 profile 启动（已验证的宿主路径）
+用 DSH 插件命令安装。`dsh plugin` 会把剩余参数转发给 profile 目录里的 pnpm，并加载包内自带的 `cordis.patch.yml` 与 `presets/novel-studio.patch.yml`：
 
 ```bash
-# 打包（当前仓库）
-pnpm install
-pnpm build
-pnpm pack
+# 0.3.0 发布后，从 npm 安装
+dsh plugin --profile novel add dsh-novel-write-engine@0.3.0
 
-# 建一个独立 profile，并安装插件
-dsh --profile novel --from-default-profile web --dump-config
+# 当前仓库 / 未发布版本，先打包再安装
+pnpm install && pnpm build && pnpm pack
 dsh plugin --profile novel add ./dsh-novel-write-engine-0.3.0.tgz
+```
 
-# 启动；端口可换成自己的空闲端口
+### 2) 启动
+
+```bash
+# 端口可换成自己的空闲端口
 dsh --profile novel --host 127.0.0.1 --port 4096 --no-open
 ```
 
