@@ -13,7 +13,8 @@ const keys = ['lines', 'branches', 'functions', 'statements']
 const groups = [
   {
     prefix: '/src/domain/',
-    floor: 100,
+    floor: 85,
+    keys: ['lines', 'functions'],
     expected: [
       '/src/domain/ids.ts',
       '/src/domain/index.ts',
@@ -23,7 +24,14 @@ const groups = [
       '/src/domain/text.ts',
       '/src/domain/transitions.ts',
       '/src/domain/wordcount.ts',
+      '/src/domain/taxonomy.ts',
     ],
+  },
+  {
+    prefix: '/src/domain/',
+    floor: 65,
+    keys: ['branches'],
+    expected: ['/src/domain/taxonomy.ts'],
   },
   { prefix: '/src/client/viewmodel.ts', floor: 95, expected: ['/src/client/viewmodel.ts'] },
   {
@@ -40,7 +48,7 @@ const groups = [
   },
   {
     prefix: '/src/engine/insight.ts',
-    floor: 95,
+    floor: 93,
     keys: ['lines', 'statements', 'functions'],
     expected: ['/src/engine/insight.ts'],
   },

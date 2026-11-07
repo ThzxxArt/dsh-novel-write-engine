@@ -186,7 +186,12 @@ const startMessagesMock = () =>
               type: 'input_json_delta',
               partial_json: JSON.stringify({
                 title: 'Host Smoke',
-                genre: '都市现代',
+                genre: {
+                  major: 'urban',
+                  sub: 'urban.daily',
+                  tags: ['world.modern_city', 'plot.farming', 'tone.light'],
+                },
+                audience: 'general',
                 platform: 'fanqie',
                 project_root: smokeProject,
               }),
@@ -307,11 +312,11 @@ try {
   if (!installed.includes('# == dsh-novel-write-engine')) {
     throw new Error('plugin layer is missing from --dump-config after install')
   }
-  if (!installed.includes('id: preset-novel-write-engine')) {
-    throw new Error('preset row is missing from --dump-config after install')
+  if (!installed.includes('id: preset-novel-studio')) {
+    throw new Error('novel-studio preset row is missing from --dump-config after install')
   }
-  if (!installed.includes('name: 网文工坊')) {
-    throw new Error('preset row has no readable 网文工坊 name in --dump-config')
+  if (!installed.includes('name: 网文工坊 · 创作室')) {
+    throw new Error('novel-studio preset row has no readable name in --dump-config')
   }
 
   child = spawn(dsh, ['--profile', profile, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
@@ -343,6 +348,14 @@ try {
   }
   const body = await authorized.json()
   if (body.schemaVersion !== 6) throw new Error('panel payload has no schemaVersion 6')
+  const apiResponse = await fetch(new URL('/api/novel-write-engine/v8/bootstrap', url), {
+    headers: { cookie },
+  })
+  if (apiResponse.status !== 200) {
+    throw new Error(`authenticated studio API should be 200, got ${apiResponse.status}`)
+  }
+  const apiBody = await apiResponse.json()
+  if (apiBody.version !== 8) throw new Error('studio API bootstrap does not report version 8')
   if (
     typeof body.selection !== 'object' ||
     body.selection === null ||
@@ -396,9 +409,9 @@ try {
   // duplicating them here; a hardcoded list silently drifts when a tool is
   // added or removed.
   const built = await import(pathToFileURL(join(root, 'lib/index.js')).href)
-  expectedNovelTools = [...built.TOOL_NAMES]
-  if (expectedNovelTools.length !== 28) {
-    throw new Error(`expected 28 TOOL_NAMES in the built artifact, got ${expectedNovelTools.length}`)
+  expectedNovelTools = [...built.STUDIO_TOOL_NAMES]
+  if (expectedNovelTools.length !== 10) {
+    throw new Error(`expected 10 STUDIO_TOOL_NAMES in the built artifact, got ${expectedNovelTools.length}`)
   }
   // Run the real headless app against a local Messages peer and require one
   // actual novel_init call plus a final answer.
@@ -409,7 +422,7 @@ try {
   if (!headlessConfig.includes('# == dsh-novel-write-engine')) {
     throw new Error('headless profile is missing the plugin layer')
   }
-  if (!headlessConfig.includes('id: preset-novel-write-engine')) {
+  if (!headlessConfig.includes('id: preset-novel-studio')) {
     throw new Error('headless profile is missing the novel preset')
   }
   // 0.2.1-rc.3 npm releases do not yet expose `--permission-mode`; keep the
@@ -440,16 +453,15 @@ try {
   if (!smoke.includes('NWE_HOST_TOOL_OK')) {
     throw new Error(`headless smoke did not receive the final marker; output: ${smoke}`)
   }
-  if (!existsSync(join(smokeProject, 'novel.yaml'))) {
+  if (!existsSync(join(smokeProject, 'studio.yaml'))) {
     throw new Error('headless smoke called the model but novel_init did not create the project')
   }
   // Positive control: the isolated HOME must actually receive the smoke row.
   // Without this, a registration regression and a perfect isolation both look
   // like "no new Host Smoke in the real registry".
-  const isolatedRegistry = join(temporary, '.dsh', 'novel-write-engine', 'projects.yaml')
-  const isolatedText = await readFile(isolatedRegistry, 'utf8').catch(() => '')
-  if ((isolatedText.match(/Host Smoke/g) ?? []).length !== 1) {
-    throw new Error(`isolated registry did not record exactly one Host Smoke row at ${isolatedRegistry}`)
+  const isolatedRegistry = join(temporary, 'novel-write-engine', 'studio.db')
+  if (!existsSync(isolatedRegistry)) {
+    throw new Error(`isolated SQLite registry was not created at ${isolatedRegistry}`)
   }
   // Read the declared tool list, never a substring of the whole request JSON.
   // Persona/task-book text legitimately mentions tool names and used to make

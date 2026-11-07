@@ -8,6 +8,7 @@ it('T-10 the remote module exposes no write method', () => {
     if (typeof value !== 'function') continue
     expect(['panelHandler', 'panelPayload', 'panelRoute'], name).toContain(name)
   }
+  expect(Object.keys(remote)).not.toContain('writeChapter')
   const route = remote.panelRoute({} as never)
   expect(route.handler).toBeTypeOf('function')
   expect(Object.keys(route).sort()).toEqual(['handler', 'kind', 'path'])

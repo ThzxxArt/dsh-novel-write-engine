@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">网文工坊 · 创作室 0.3.0</title>
+  <desc id="desc">确定性小说内核、多智能体创作室与完整写作工作台</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111f"/>
+      <stop offset="0.55" stop-color="#0d1830"/>
+      <stop offset="1" stop-color="#101b2d"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="80" y1="60" x2="520" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f6e7c1"/>
+      <stop offset="1" stop-color="#d9a441"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="720" y1="80" x2="1130" y2="230" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(940 145) rotate(90) scale(210 360)">
+      <stop stop-color="#2dd4bf" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#8ba3c7" stroke-opacity="0.07"/>
+    </pattern>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="300" rx="20" fill="url(#bg)"/>
+  <rect width="1200" height="300" rx="20" fill="url(#grid)"/>
+  <rect width="1200" height="300" rx="20" fill="url(#glow)"/>
+  <path d="M0 232C180 190 320 268 520 224C720 180 900 238 1200 186V300H0V232Z" fill="#050a13" fill-opacity="0.55"/>
+
+  <!-- seal / mark -->
+  <g transform="translate(64 56)">
+    <rect width="56" height="56" rx="14" fill="#0f2138" stroke="#d9a441" stroke-opacity="0.45"/>
+    <path d="M16 17.5C16 15.6 17.6 14 19.5 14H38.5C40.4 14 42 15.6 42 17.5V38.5C42 40.4 40.4 42 38.5 42H19.5C17.6 42 16 40.4 16 38.5V17.5Z" stroke="url(#ink)" stroke-width="1.6"/>
+    <path d="M22 22H36M22 28H36M22 34H31" stroke="url(#ink)" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="40" cy="40" r="6" fill="#d9a441"/>
+    <path d="M37.5 40.2L39.3 42L42.8 38.3" stroke="#08111f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="140" y="88" fill="#f6e7c1" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC',serif" font-size="42" font-weight="700" letter-spacing="2">网文工坊 · 创作室</text>
+  <text x="141" y="118" fill="#8fa9c9" font-family="'JetBrains Mono','SFMono-Regular',Consolas,monospace" font-size="13" letter-spacing="3.2">DETERMINISTIC KERNEL × MULTI-AGENT STUDIO</text>
+  <text x="141" y="152" fill="#c7d5e8" font-family="'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="15">内核负责真相、门控与事务；十二个角色负责创作；人只做关键决策。</text>
+
+  <!-- chips -->
+  <g font-family="'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="12">
+    <g transform="translate(141 178)">
+      <rect width="94" height="28" rx="14" fill="#12253b" stroke="#5eead4" stroke-opacity="0.28"/>
+      <text x="14" y="18.5" fill="#9fe8dd">确定性内核</text>
+    </g>
+    <g transform="translate(245 178)">
+      <rect width="76" height="28" rx="14" fill="#12253b" stroke="#60a5fa" stroke-opacity="0.28"/>
+      <text x="14" y="18.5" fill="#a9c8f5">12 角色</text>
+    </g>
+    <g transform="translate(331 178)">
+      <rect width="76" height="28" rx="14" fill="#12253b" stroke="#d9a441" stroke-opacity="0.3"/>
+      <text x="14" y="18.5" fill="#f0cf8a">10 工具</text>
+    </g>
+    <g transform="translate(417 178)">
+      <rect width="86" height="28" rx="14" fill="#12253b" stroke="#a78bfa" stroke-opacity="0.3"/>
+      <text x="14" y="18.5" fill="#cbbcf7">API v8</text>
+    </g>
+  </g>
+
+  <!-- manuscript stack -->
+  <g transform="translate(700 52)">
+    <rect x="24" y="24" width="240" height="176" rx="10" fill="#0a1525" stroke="#27405f"/>
+    <rect x="12" y="12" width="240" height="176" rx="10" fill="#0d1b2f" stroke="#345173"/>
+    <rect x="0" y="0" width="240" height="176" rx="10" fill="#102238" stroke="#496991"/>
+    <path d="M22 28H218M22 46H218M22 64H196M22 82H218M22 100H176M22 118H206M22 136H218M22 154H160" stroke="#9db6d6" stroke-opacity="0.32" stroke-width="2" stroke-linecap="round"/>
+    <rect x="22" y="168" width="52" height="4" rx="2" fill="#d9a441" fill-opacity="0.8"/>
+    <circle cx="210" cy="24" r="16" fill="#d9a441" fill-opacity="0.12"/>
+    <path d="M204 24H216M210 18V30" stroke="#f0cf8a" stroke-width="1.6" stroke-linecap="round"/>
+  </g>
+
+  <!-- flow -->
+  <g transform="translate(700 40)">
+    <path d="M240 100C254 100 254 54 270 54M240 136C254 136 254 146 270 146M240 172C254 172 254 208 270 208" stroke="url(#flow)" stroke-width="1.6" stroke-opacity="0.65" fill="none"/>
+    <g font-family="'Noto Sans SC','PingFang SC',sans-serif" font-size="11">
+      <g transform="translate(270 40)">
+        <rect width="66" height="28" rx="14" fill="#0b2a2a" stroke="#5eead4" stroke-opacity="0.55"/>
+        <text x="15" y="18" fill="#b7f5eb">Plan</text>
+      </g>
+      <g transform="translate(270 132)">
+        <rect width="74" height="28" rx="14" fill="#0b1f38" stroke="#60a5fa" stroke-opacity="0.55"/>
+        <text x="13" y="18" fill="#bcd7fb">Review ×3</text>
+      </g>
+      <g transform="translate(270 194)">
+        <rect width="78" height="28" rx="14" fill="#2a1c0c" stroke="#d9a441" stroke-opacity="0.6"/>
+        <text x="14" y="18" fill="#f5d99b">Human Gate</text>
+      </g>
+      <g transform="translate(352 106)">
+        <rect width="74" height="28" rx="14" fill="#102238" stroke="#8b9cff" stroke-opacity="0.55"/>
+        <text x="16" y="18" fill="#c6cffd">Archive</text>
+      </g>
+      <path d="M303 68V132M303 160V194M348 208C380 208 380 120 352 120" stroke="url(#flow)" stroke-width="1.4" stroke-opacity="0.45" fill="none"/>
+    </g>
+  </g>
+
+  <g transform="translate(1128 284)">
+    <text x="0" y="0" fill="#6d86a6" font-family="'JetBrains Mono','SFMono-Regular',monospace" font-size="11" text-anchor="end" letter-spacing="1.6">v0.3.0 · MIT</text>
+  </g>
+</svg>

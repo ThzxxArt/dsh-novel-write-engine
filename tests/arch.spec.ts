@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ALL_RULE_CODES } from '../src/codes.js'
 import { ruleRegistry } from '../src/rules/pipeline.js'
-import { TOOL_NAMES } from '../src/constants.js'
+import { HOST_TOOL_NAMES, STUDIO_TOOL_NAMES } from '../src/constants.js'
 import * as remote from '../src/remote/index.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -112,9 +112,15 @@ describe('architecture rules', () => {
   })
 
   it('R6: tools all live in the novel_ namespace and the names are unique', () => {
-    expect(new Set(TOOL_NAMES).size).toBe(TOOL_NAMES.length)
-    for (const name of TOOL_NAMES) expect(name.startsWith('novel_')).toBe(true)
-    expect(TOOL_NAMES).toHaveLength(28)
+    expect(new Set(STUDIO_TOOL_NAMES).size).toBe(STUDIO_TOOL_NAMES.length)
+    expect(new Set(HOST_TOOL_NAMES).size).toBe(HOST_TOOL_NAMES.length)
+    for (const name of [...STUDIO_TOOL_NAMES, ...HOST_TOOL_NAMES])
+      expect(name.startsWith('novel_')).toBe(true)
+    expect(STUDIO_TOOL_NAMES).toHaveLength(10)
+    expect(HOST_TOOL_NAMES).toHaveLength(2)
+    expect([...STUDIO_TOOL_NAMES].some((name) => (HOST_TOOL_NAMES as readonly string[]).includes(name))).toBe(
+      false,
+    )
   })
 
   it('R7: no test is skipped, focused, or marked todo', async () => {

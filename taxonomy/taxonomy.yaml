@@ -1,0 +1,304 @@
+taxonomy_version: 1
+majors:
+  - id: fantasy
+    label: 幻想
+    aliases: [奇幻, 幻想类]
+    audience_default: general
+    platform_fit: { fanqie: high, qidian: high, qimao: medium, jinjiang: low }
+    subs:
+      - { id: fantasy.xuanhuan, label: 玄幻, audience_default: male, legacy_genre: 玄幻修仙, recommended_tags: [world.eastern_cultivation, plot.progression, tone.hot_blooded] }
+      - { id: fantasy.xianxia, label: 仙侠, aliases: [修真, 修仙, 仙侠修真], audience_default: male, legacy_genre: 玄幻修仙, recommended_tags: [world.eastern_cultivation, plot.progression, set.leveling], profile: { foreshadow_min_dormancy: 2 } }
+      - { id: fantasy.western, label: 西方奇幻, audience_default: general, legacy_genre: 西方奇幻, recommended_tags: [world.western_magic, plot.conquest, tone.hot_blooded] }
+      - { id: fantasy.wuxia, label: 武侠, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, plot.revenge, tone.cold] }
+      - { id: fantasy.myth, label: 神话, audience_default: general, legacy_genre: 玄幻修仙, recommended_tags: [world.ancient_dynasty, theme.homeland, tone.literary] }
+      - { id: fantasy.weird, label: 诡异奇幻, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.cthulhu, world.rule_horror, tone.oppressive] }
+      - { id: fantasy.steampunk, label: 蒸汽朋克, audience_default: general, legacy_genre: 西方奇幻, recommended_tags: [world.steampunk, set.golden_finger, theme.order] }
+      - { id: fantasy.sword_sorcery, label: 剑与魔法, audience_default: general, legacy_genre: 西方奇幻, recommended_tags: [world.western_magic, plot.progression, tone.hot_blooded] }
+  - id: urban
+    label: 都市
+    aliases: [现代都市]
+    audience_default: general
+    platform_fit: { fanqie: high, qidian: high, qimao: high, jinjiang: medium }
+    subs:
+      - { id: urban.ability, label: 都市异能, audience_default: male, legacy_genre: 都市现代, recommended_tags: [world.modern_city, set.golden_finger, plot.progression] }
+      - { id: urban.daily, label: 都市日常, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.farming, tone.light] }
+      - { id: urban.workplace, label: 职场商战, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.business, theme.power] }
+      - { id: urban.entertainment, label: 娱乐圈, audience_default: female, legacy_genre: 言情, recommended_tags: [world.modern_city, plot.ensemble_plot, market.short_drama] }
+      - { id: urban.campus, label: 校园, audience_default: teen, legacy_genre: 言情, recommended_tags: [world.modern_city, theme.growth, emo.sweet] }
+      - { id: urban.rural, label: 乡村, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.farming, tone.healing] }
+      - { id: urban.cultivation, label: 都市修真, audience_default: male, legacy_genre: 都市现代, recommended_tags: [world.aura_revival, plot.progression, set.leveling] }
+      - { id: urban.rebirth, label: 都市重生, audience_default: male, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.rebirth, plot.revenge] }
+      - { id: urban.supernatural, label: 都市灵异, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.rule_horror, tone.suspenseful, theme.mystery] }
+  - id: history
+    label: 历史
+    audience_default: male
+    platform_fit: { fanqie: medium, qidian: high, qimao: high, jinjiang: medium }
+    subs:
+      - { id: history.alternate, label: 历史架空, audience_default: male, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, plot.conquest, theme.homeland] }
+      - { id: history.dynasty, label: 王朝争霸, audience_default: male, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, plot.conquest, theme.power] }
+      - { id: history.palace, label: 宫廷权谋, audience_default: female, legacy_genre: 言情, recommended_tags: [world.ancient_dynasty, plot.palace_intrigue, theme.power] }
+      - { id: history.farming, label: 历史种田, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, plot.farming, tone.healing] }
+      - { id: history.military, label: 军事历史, audience_default: male, legacy_genre: 军事, recommended_tags: [world.ancient_dynasty, theme.homeland, tone.hot_blooded] }
+      - { id: history.republican, label: 民国, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.republic_era, theme.family, tone.literary] }
+      - { id: history.three_kingdoms, label: 三国, audience_default: male, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, plot.conquest, plot.ensemble_plot] }
+      - { id: history.officialdom, label: 官场, audience_default: male, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, theme.power, tone.cold] }
+  - id: scifi
+    label: 科幻
+    audience_default: general
+    platform_fit: { fanqie: high, qidian: high, qimao: medium, jinjiang: medium }
+    subs:
+      - { id: scifi.hard, label: 硬科幻, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.interstellar, theme.order, tone.cold] }
+      - { id: scifi.space_opera, label: 太空歌剧, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.interstellar, plot.conquest, theme.freedom] }
+      - { id: scifi.cyberpunk, label: 赛博朋克, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.cyber, theme.order, tone.dark] }
+      - { id: scifi.apocalypse, label: 末世废土, audience_default: general, legacy_genre: 末世流, recommended_tags: [world.apocalypse, plot.survival, tone.oppressive] }
+      - { id: scifi.mecha, label: 机甲, audience_default: male, legacy_genre: 科幻, recommended_tags: [world.interstellar, plot.progression, tone.hot_blooded] }
+      - { id: scifi.time_travel, label: 时间旅行, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.parallel_world, plot.rebirth, theme.freedom] }
+      - { id: scifi.ai, label: 人工智能, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.cyber, theme.order, tone.suspenseful] }
+      - { id: scifi.vr, label: 虚拟现实, audience_default: general, legacy_genre: 游戏系统, recommended_tags: [world.virtual_world, plot.system_flow, theme.freedom] }
+      - { id: scifi.biopunk, label: 生物朋克, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.cyber, theme.growth, tone.dark] }
+      - { id: scifi.interstellar, label: 星际, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.interstellar, plot.conquest, plot.ensemble_plot] }
+  - id: mystery
+    label: 悬疑
+    audience_default: general
+    platform_fit: { fanqie: high, qidian: high, qimao: high, jinjiang: medium }
+    subs:
+      - { id: mystery.detective, label: 推理, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [theme.mystery, plot.investigation, tone.cold] }
+      - { id: mystery.crime, label: 犯罪, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.modern_city, theme.order, tone.dark] }
+      - { id: mystery.horror, label: 惊悚, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [tone.oppressive, theme.survival, pace.fast] }
+      - { id: mystery.paranormal, label: 灵异, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.rule_horror, theme.mystery, tone.suspenseful] }
+      - { id: mystery.rules, label: 规则怪谈, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.rule_horror, set.weird, theme.survival] }
+      - { id: mystery.infinite, label: 无限流, audience_default: general, legacy_genre: 无限流, recommended_tags: [world.infinite_world, plot.dungeon, struct.infinite], profile: { foreshadow_dormant_after: 10 } }
+      - { id: mystery.social, label: 社会派悬疑, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.modern_city, theme.order, tone.literary] }
+      - { id: mystery.espionage, label: 谍战, audience_default: general, legacy_genre: 军事, recommended_tags: [world.republic_era, theme.homeland, tone.cold] }
+      - { id: mystery.forensic, label: 法医刑侦, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.modern_city, plot.investigation, theme.order] }
+      - { id: mystery.urban_legend, label: 都市怪谈, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [world.modern_city, world.rule_horror, tone.suspenseful] }
+  - id: game
+    label: 游戏竞技
+    aliases: [游戏]
+    audience_default: male
+    platform_fit: { fanqie: high, qidian: high, qimao: low, jinjiang: low }
+    subs:
+      - { id: game.game_world, label: 游戏异界, audience_default: male, legacy_genre: 游戏系统, recommended_tags: [world.game_world, plot.progression, set.leveling] }
+      - { id: game.esports, label: 电竞, audience_default: teen, legacy_genre: 游戏系统, recommended_tags: [world.modern_city, plot.progression, theme.friendship] }
+      - { id: game.sports, label: 体育, audience_default: teen, legacy_genre: 都市现代, recommended_tags: [world.modern_city, theme.growth, tone.hot_blooded] }
+      - { id: game.virtual_mmo, label: 虚拟网游, audience_default: male, legacy_genre: 游戏系统, recommended_tags: [world.virtual_world, plot.progression, struct.unit] }
+      - { id: game.system, label: 游戏系统, audience_default: male, legacy_genre: 游戏系统, recommended_tags: [set.system_panel, plot.system_flow, set.leveling] }
+      - { id: game.survival, label: 生存游戏, audience_default: general, legacy_genre: 游戏系统, recommended_tags: [plot.survival, plot.dungeon, tone.oppressive] }
+  - id: romance
+    label: 言情
+    audience_default: female
+    platform_fit: { fanqie: high, qidian: medium, qimao: high, jinjiang: high }
+    subs:
+      - { id: romance.ancient, label: 古代言情, audience_default: female, legacy_genre: 言情, recommended_tags: [world.ancient_dynasty, emo.one_v_one, tone.warm] }
+      - { id: romance.modern, label: 现代言情, audience_default: female, legacy_genre: 言情, recommended_tags: [world.modern_city, emo.one_v_one, emo.sweet] }
+      - { id: romance.fantasy_romance, label: 幻想言情, audience_default: female, legacy_genre: 言情, recommended_tags: [world.eastern_cultivation, emo.one_v_one, plot.progression] }
+      - { id: romance.palace_romance, label: 宫斗宅斗, audience_default: female, legacy_genre: 言情, recommended_tags: [world.ancient_dynasty, plot.palace_intrigue, theme.power] }
+      - { id: romance.sweet, label: 甜宠, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.sweet, emo.pet, tone.light] }
+      - { id: romance.angst, label: 虐恋, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.angst, plot.chase_wife, tone.oppressive] }
+      - { id: romance.marriage, label: 婚恋, audience_default: female, legacy_genre: 言情, recommended_tags: [world.modern_city, plot.marriage_first, theme.family] }
+      - { id: romance.youth, label: 青春, audience_default: teen, legacy_genre: 言情, recommended_tags: [world.modern_city, theme.growth, emo.sweet] }
+      - { id: romance.strong_female, label: 大女主, audience_default: female, legacy_genre: 言情, recommended_tags: [prot.strong_female, theme.growth, plot.conquest] }
+      - { id: romance.bl, label: 纯爱, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.one_v_one, emo.slow_burn, theme.love] }
+      - { id: romance.gl, label: 百合, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.one_v_one, emo.slow_burn, theme.love] }
+  - id: realistic
+    label: 现实
+    aliases: [现实题材]
+    audience_default: general
+    platform_fit: { fanqie: medium, qidian: medium, qimao: high, jinjiang: high }
+    subs:
+      - { id: realistic.contemporary, label: 现实题材, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, theme.growth, tone.literary] }
+      - { id: realistic.era, label: 年代文, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.republic_era, theme.family, tone.warm] }
+      - { id: realistic.family, label: 家庭伦理, audience_default: general, legacy_genre: 都市现代, recommended_tags: [theme.family, theme.order, tone.warm] }
+      - { id: realistic.growth, label: 成长, audience_default: general, legacy_genre: 都市现代, recommended_tags: [theme.growth, tone.healing, market.realism] }
+      - { id: realistic.industry, label: 行业, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.business, theme.order] }
+      - { id: realistic.social, label: 社会议题, audience_default: general, legacy_genre: 都市现代, recommended_tags: [theme.order, theme.freedom, tone.literary] }
+      - { id: realistic.rural_life, label: 乡土, audience_default: general, legacy_genre: 都市现代, recommended_tags: [world.modern_city, plot.farming, tone.warm] }
+      - { id: realistic.documentary, label: 纪实, audience_default: general, legacy_genre: 都市现代, recommended_tags: [theme.growth, tone.cold, market.realism] }
+  - id: light
+    label: 轻小说
+    audience_default: teen
+    platform_fit: { fanqie: high, qidian: medium, qimao: low, jinjiang: medium }
+    subs:
+      - { id: light.isekai, label: 异世界, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [world.parallel_world, plot.transmigration, tone.light] }
+      - { id: light.school, label: 校园轻小说, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [world.modern_city, theme.growth, tone.light] }
+      - { id: light.slice, label: 日常, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [world.modern_city, plot.farming, tone.healing] }
+      - { id: light.zongman, label: 综漫, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [world.multiverse, plot.quick_transmigration, market.anime] }
+      - { id: light.moe, label: 萌系, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [tone.light, emo.sweet, market.anime] }
+      - { id: light.otome, label: 乙女向, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.one_v_one, emo.sweet, market.anime] }
+      - { id: light.healing, label: 治愈, audience_default: general, legacy_genre: 轻小说, recommended_tags: [tone.healing, theme.growth, emo.found_family] }
+      - { id: light.youth_light, label: 青春轻小说, audience_default: teen, legacy_genre: 轻小说, recommended_tags: [theme.growth, theme.friendship, tone.warm] }
+  - id: fanfic
+    label: 同人
+    audience_default: general
+    platform_fit: { fanqie: medium, qidian: low, qimao: low, jinjiang: high }
+    subs:
+      - { id: fanfic.anime, label: 动漫同人, audience_default: general, legacy_genre: 轻小说, recommended_tags: [world.parallel_world, market.fanfic, market.anime] }
+      - { id: fanfic.film, label: 影视同人, audience_default: general, legacy_genre: 言情, recommended_tags: [world.parallel_world, market.fanfic, market.film] }
+      - { id: fanfic.game_fanfic, label: 游戏同人, audience_default: general, legacy_genre: 游戏系统, recommended_tags: [world.game_world, market.fanfic, market.game] }
+      - { id: fanfic.history_fanfic, label: 历史同人, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, market.fanfic, theme.homeland] }
+      - { id: fanfic.zongman_fanfic, label: 综漫同人, audience_default: general, legacy_genre: 无限流, recommended_tags: [world.multiverse, plot.quick_transmigration, market.fanfic] }
+      - { id: fanfic.crossover, label: 跨作品, audience_default: general, legacy_genre: 无限流, recommended_tags: [world.multiverse, market.fanfic, plot.ensemble_plot] }
+      - { id: fanfic.au, label: AU, audience_default: general, legacy_genre: 轻小说, recommended_tags: [world.parallel_world, market.fanfic, theme.freedom] }
+      - { id: fanfic.otome_fanfic, label: 乙女同人, audience_default: female, legacy_genre: 言情, recommended_tags: [emo.one_v_one, emo.sweet, market.fanfic] }
+  - id: interactive
+    label: 互动叙事
+    audience_default: general
+    platform_fit: { fanqie: medium, qidian: low, qimao: medium, jinjiang: medium }
+    subs:
+      - { id: interactive.branching, label: 分支互动, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [struct.dual_line, pov.multi, market.high_concept] }
+      - { id: interactive.murder_mystery, label: 剧本杀, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [theme.mystery, plot.investigation, market.short_drama] }
+      - { id: interactive.trpg, label: 跑团, audience_default: general, legacy_genre: 西方奇幻, recommended_tags: [plot.dungeon, struct.linear, tone.hot_blooded] }
+      - { id: interactive.text_adventure, label: 文字冒险, audience_default: general, legacy_genre: 悬疑推理, recommended_tags: [plot.investigation, theme.freedom, market.game] }
+      - { id: interactive.ai_interactive, label: AI互动, audience_default: general, legacy_genre: 科幻, recommended_tags: [world.virtual_world, market.high_concept, market.game] }
+      - { id: interactive.visual_novel, label: 视觉小说, audience_default: general, legacy_genre: 言情, recommended_tags: [emo.one_v_one, market.anime, struct.dual_line] }
+  - id: short
+    label: 短篇实验
+    audience_default: general
+    platform_fit: { fanqie: medium, qidian: low, qimao: medium, jinjiang: high }
+    subs:
+      - { id: short.flash, label: 微小说, audience_default: general, legacy_genre: 都市现代, recommended_tags: [pace.short, struct.linear, tone.literary] }
+      - { id: short.twist, label: 脑洞, audience_default: general, legacy_genre: 科幻, recommended_tags: [market.high_concept, pace.fast, tone.silly] }
+      - { id: short.script, label: 剧本, audience_default: general, legacy_genre: 都市现代, recommended_tags: [market.short_drama, struct.dual_line, tone.cold] }
+      - { id: short.prose, label: 散文体, audience_default: general, legacy_genre: 言情, recommended_tags: [tone.literary, pace.slow, theme.growth] }
+      - { id: short.anthology, label: 单元剧, audience_default: general, legacy_genre: 都市现代, recommended_tags: [struct.unit, plot.unit_story, pace.unit] }
+      - { id: short.experimental, label: 实验, audience_default: general, legacy_genre: 科幻, recommended_tags: [struct.circular, pov.multi, market.high_concept] }
+      - { id: short.folklore, label: 民间故事, audience_default: general, legacy_genre: 历史架空, recommended_tags: [world.ancient_dynasty, theme.order, tone.warm] }
+      - { id: short.fable, label: 寓言, audience_default: general, legacy_genre: 都市现代, recommended_tags: [theme.growth, tone.literary, market.realism] }
+tags:
+  - { id: world.eastern_cultivation, label: 东方修真, facet: world, aliases: [修真世界, 修仙世界], conflicts: [world.western_magic], profile: { lexicon_add: [灵气, 丹田, 筑基] } }
+  - { id: world.western_magic, label: 西方魔法, facet: world, aliases: [魔法世界], conflicts: [world.eastern_cultivation] }
+  - { id: world.aura_revival, label: 灵气复苏, facet: world }
+  - { id: world.interstellar, label: 星际, facet: world, aliases: [太空] }
+  - { id: world.cyber, label: 赛博, facet: world, aliases: [赛博朋克] }
+  - { id: world.steampunk, label: 蒸汽朋克, facet: world }
+  - { id: world.cthulhu, label: 克苏鲁, facet: world }
+  - { id: world.wasteland, label: 废土, facet: world }
+  - { id: world.parallel_world, label: 平行世界, facet: world, aliases: [异世界] }
+  - { id: world.multiverse, label: 诸天, facet: world, aliases: [多世界] }
+  - { id: world.infinite_world, label: 无限世界, facet: world, aliases: [主神空间] }
+  - { id: world.rule_horror, label: 规则怪谈, facet: world, aliases: [怪谈] }
+  - { id: world.modern_city, label: 现代都市, facet: world, aliases: [都市] }
+  - { id: world.ancient_dynasty, label: 古代王朝, facet: world, aliases: [古代] }
+  - { id: world.republic_era, label: 民国, facet: world }
+  - { id: world.apocalypse, label: 末世, facet: world, aliases: [灾变] }
+  - { id: world.game_world, label: 游戏世界, facet: world }
+  - { id: world.virtual_world, label: 虚拟世界, facet: world }
+  - { id: prot.invincible, label: 无敌流, facet: prot, conflicts: [prot.weak_to_strong] }
+  - { id: prot.weak_to_strong, label: 废柴逆袭, facet: prot, aliases: [逆袭], conflicts: [prot.invincible] }
+  - { id: prot.genius, label: 天才流, facet: prot }
+  - { id: prot.cautious, label: 苟道, facet: prot }
+  - { id: prot.steady, label: 稳健, facet: prot }
+  - { id: prot.scheming, label: 腹黑, facet: prot }
+  - { id: prot.hot_blooded, label: 热血, facet: prot }
+  - { id: prot.calm, label: 冷静, facet: prot }
+  - { id: prot.ensemble, label: 群像, facet: prot }
+  - { id: prot.double_strong, label: 双强, facet: prot }
+  - { id: prot.strong_female, label: 大女主, facet: prot }
+  - { id: prot.strong_male, label: 大男主, facet: prot }
+  - { id: prot.no_cp, label: 无CP, facet: prot, conflicts: [prot.one_v_one, emo.one_v_one, emo.sweet, emo.angst] }
+  - { id: prot.one_v_one, label: 1v1, facet: prot, conflicts: [prot.no_cp] }
+  - { id: plot.progression, label: 升级流, facet: plot, aliases: [升级] }
+  - { id: plot.system_flow, label: 系统流, facet: plot }
+  - { id: plot.sign_in, label: 签到流, facet: plot }
+  - { id: plot.simulator, label: 模拟器, facet: plot }
+  - { id: plot.rebirth, label: 重生, facet: plot }
+  - { id: plot.transmigration, label: 穿越, facet: plot }
+  - { id: plot.quick_transmigration, label: 快穿, facet: plot }
+  - { id: plot.dungeon, label: 副本, facet: plot }
+  - { id: plot.farming, label: 种田, facet: plot, aliases: [经营生活] }
+  - { id: plot.business, label: 经营, facet: plot, aliases: [商战] }
+  - { id: plot.conquest, label: 争霸, facet: plot }
+  - { id: plot.revenge, label: 复仇, facet: plot }
+  - { id: plot.investigation, label: 探案, facet: plot, aliases: [破案] }
+  - { id: plot.palace_intrigue, label: 宫斗, facet: plot }
+  - { id: plot.family_intrigue, label: 宅斗, facet: plot }
+  - { id: plot.sweet_pet, label: 甜宠, facet: plot }
+  - { id: plot.angst, label: 虐恋, facet: plot }
+  - { id: plot.second_chance, label: 破镜重圆, facet: plot }
+  - { id: plot.marriage_first, label: 先婚后爱, facet: plot }
+  - { id: plot.chase_wife, label: 追妻火葬场, facet: plot, aliases: [追妻] }
+  - { id: plot.ensemble_plot, label: 群像叙事, facet: plot }
+  - { id: plot.unit_story, label: 单元剧, facet: plot }
+  - { id: plot.road_trip, label: 公路, facet: plot }
+  - { id: plot.survival, label: 生存, facet: plot }
+  - { id: plot.escape, label: 逃亡, facet: plot }
+  - { id: plot.raising, label: 养成, facet: plot }
+  - { id: tone.light, label: 轻松, facet: tone }
+  - { id: tone.hot_blooded, label: 热血, facet: tone }
+  - { id: tone.dark, label: 暗黑, facet: tone }
+  - { id: tone.healing, label: 治愈, facet: tone }
+  - { id: tone.silly, label: 沙雕, facet: tone }
+  - { id: tone.suspenseful, label: 悬疑, facet: tone }
+  - { id: tone.oppressive, label: 压抑, facet: tone }
+  - { id: tone.power_fantasy, label: 爽文, facet: tone }
+  - { id: tone.literary, label: 文艺, facet: tone }
+  - { id: tone.cold, label: 冷峻, facet: tone }
+  - { id: tone.warm, label: 温情, facet: tone }
+  - { id: tone.black_humor, label: 黑色幽默, facet: tone }
+  - { id: theme.growth, label: 成长, facet: theme }
+  - { id: theme.revenge, label: 复仇, facet: theme }
+  - { id: theme.redemption, label: 救赎, facet: theme }
+  - { id: theme.power, label: 权谋, facet: theme }
+  - { id: theme.homeland, label: 家国, facet: theme }
+  - { id: theme.family, label: 亲情, facet: theme }
+  - { id: theme.friendship, label: 友情, facet: theme }
+  - { id: theme.love, label: 爱情, facet: theme }
+  - { id: theme.mystery, label: 悬疑, facet: theme }
+  - { id: theme.survival, label: 生存, facet: theme }
+  - { id: theme.freedom, label: 自由, facet: theme }
+  - { id: theme.order, label: 秩序, facet: theme }
+  - { id: set.system_panel, label: 系统面板, facet: set, requires: [plot.system_flow] }
+  - { id: set.live_stream, label: 直播, facet: set }
+  - { id: set.chat_group, label: 聊天群, facet: set }
+  - { id: set.global_job, label: 全民转职, facet: set }
+  - { id: set.cthulhu, label: 克苏鲁, facet: set }
+  - { id: set.weird, label: 诡异, facet: set }
+  - { id: set.dungeon, label: 副本, facet: set }
+  - { id: set.infinite, label: 无限流, facet: set, requires: [world.infinite_world] }
+  - { id: set.multiverse, label: 诸天, facet: set }
+  - { id: set.simulator, label: 模拟器, facet: set }
+  - { id: set.sign_in, label: 签到, facet: set }
+  - { id: set.golden_finger, label: 金手指, facet: set }
+  - { id: set.leveling, label: 等级, facet: set, requires: [plot.progression] }
+  - { id: set.talent, label: 天赋, facet: set }
+  - { id: struct.linear, label: 线性, facet: struct }
+  - { id: struct.unit, label: 单元剧, facet: struct }
+  - { id: struct.dual_line, label: 双线, facet: struct }
+  - { id: struct.ensemble, label: 群像, facet: struct }
+  - { id: struct.infinite, label: 无限流, facet: struct, requires: [world.infinite_world] }
+  - { id: struct.multiverse, label: 诸天, facet: struct }
+  - { id: struct.quick_transmigration, label: 快穿, facet: struct }
+  - { id: struct.circular, label: 环形叙事, facet: struct }
+  - { id: pov.first, label: 第一人称, facet: pov, conflicts: [pov.third, pov.ensemble] }
+  - { id: pov.third, label: 第三人称, facet: pov, conflicts: [pov.first] }
+  - { id: pov.dual, label: 双视角, facet: pov }
+  - { id: pov.ensemble, label: 群像视角, facet: pov, conflicts: [pov.first] }
+  - { id: pov.multi, label: 多视角, facet: pov }
+  - { id: emo.no_cp, label: 无CP, facet: emo, conflicts: [emo.one_v_one, emo.sweet, emo.angst] }
+  - { id: emo.one_v_one, label: 1v1, facet: emo, conflicts: [emo.no_cp, prot.no_cp] }
+  - { id: emo.sweet, label: 甜, facet: emo, conflicts: [emo.no_cp, prot.no_cp] }
+  - { id: emo.angst, label: 虐, facet: emo, conflicts: [emo.no_cp, prot.no_cp] }
+  - { id: emo.pet, label: 宠, facet: emo }
+  - { id: emo.chase, label: 追妻, facet: emo }
+  - { id: emo.slow_burn, label: 慢热, facet: emo }
+  - { id: emo.found_family, label: 非血缘亲情, facet: emo }
+  - { id: pace.fast, label: 快节奏, facet: pace, profile: { paragraph_max_words: 90 } }
+  - { id: pace.slow, label: 慢热, facet: pace, profile: { paragraph_max_words: 120 } }
+  - { id: pace.unit, label: 单元剧, facet: pace }
+  - { id: pace.long, label: 长篇, facet: pace }
+  - { id: pace.short, label: 短篇, facet: pace }
+  - { id: pace.daily, label: 日常, facet: pace }
+  - { id: pace.dense, label: 高潮密集, facet: pace }
+  - { id: pace.episodic, label: 章回体, facet: pace }
+  - { id: market.male_frequency, label: 男频, facet: market }
+  - { id: market.female_frequency, label: 女频, facet: market }
+  - { id: market.short_drama, label: 短剧感, facet: market }
+  - { id: market.audio, label: 有声向, facet: market }
+  - { id: market.ip, label: 改编向, facet: market }
+  - { id: market.fanfic, label: 同人向, facet: market }
+  - { id: market.game, label: 游戏向, facet: market }
+  - { id: market.film, label: 影视化, facet: market }
+  - { id: market.anime, label: 动漫感, facet: market }
+  - { id: market.realism, label: 现实向, facet: market }
+  - { id: market.healing, label: 治愈向, facet: market }
+  - { id: market.high_concept, label: 高概念, facet: market }

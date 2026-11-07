@@ -29,7 +29,7 @@ describe('entity anchors', () => {
     ).toThrow(/limit is 8/)
   })
 
-  it('validates the chapter anchor map shape and entity names', () => {
+  it('rejects malformed chapter anchor maps and invalid entity names', () => {
     const names = { locations: ['屋'], abilities: [], artifacts: [] }
     expect(normalizeNewElementAnchors(undefined, names)).toEqual(emptyAnchorMap())
     expect(normalizeNewElementAnchors({ locations: { 屋: ['他站在门口的那个人'] } }, names)).toEqual({

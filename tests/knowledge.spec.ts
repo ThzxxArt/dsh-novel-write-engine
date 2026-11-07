@@ -73,10 +73,10 @@ describe('entry skill', () => {
     expect(skill.content).toContain('六条铁律')
     for (const tool of [
       'novel_status',
-      'novel_brief',
-      'novel_write_draft',
-      'novel_revise',
-      'novel_archive',
+      'novel_bible',
+      'novel_outline',
+      'novel_run',
+      'novel_artifact',
       'novel_state',
     ]) {
       expect(skill.content).toContain(tool)

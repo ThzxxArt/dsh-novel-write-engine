@@ -1,7 +1,8 @@
 import { SCORE_DIMENSIONS, FULL_SCORE, type Exclusion } from '../domain/scoring.js'
-import { ALL_RULE_CODES } from '../codes.js'
+import { AI_TONE_RULES, ALL_RULE_CODES } from '../codes.js'
 import { ERROR_CODES, GENRES, PLATFORMS, SCENE_TYPES, SCHEMA_VERSION, EngineFaultError } from '../types.js'
-import type { Rulepack } from './types.js'
+import type { AiToneCategory, AiToneEntry, AiToneLexicon, Rulepack } from './types.js'
+import { assertAiToneTemplate, CANONICAL_AI_TONE_PHRASES, scanAiTone } from './ai-tone.js'
 
 const platformDefaults = (words: [number, number], dialogue: [number, number]) => ({
   words_per_chapter: words,
@@ -79,7 +80,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
 
 type Unknown = Record<string, unknown>
 
-const invalid = (message: string): never => {
+function invalid(message: string): never {
   throw new EngineFaultError(ERROR_CODES.RULEPACK_INVALID, `rule pack rejected: ${message}`)
 }
 
@@ -115,6 +116,336 @@ const knownKeys = (value: Unknown, allowed: readonly string[], path: string): vo
   }
 }
 
+const PROFILE_KEYS = [
+  'period_density',
+  'water_words',
+  'pleasure_density',
+  'pleasure_keywords',
+  'foreshadow_min_dormancy',
+  'motif_min_dormancy',
+  'foreshadow_dormant_after',
+  'dialogue_ratio',
+  'paragraph_max_words',
+  'lexicon_add',
+  'lexicon_remove',
+] as const
+
+const stringArray = (value: unknown, path: string): string[] => {
+  const rows = array(value, path)
+  for (const [index, item] of rows.entries()) {
+    if (typeof item !== 'string' || item.trim() === '')
+      invalid(`${path}[${index}] must be a non-empty string`)
+  }
+  return rows as string[]
+}
+
+/** Shared profile validation for legacy genres, taxonomy subs, majors and tags. */
+const validateGenreProfile = (value: unknown, path: string, id: string): void => {
+  const profile = object(value, path)
+  knownKeys(profile, PROFILE_KEYS, path)
+  if (profile.period_density !== undefined) {
+    const density = object(profile.period_density, `${path}.period_density`)
+    knownKeys(density, ['min', 'max'], `${path}.period_density`)
+    const min = num(density.min, `${path}.period_density.min`)
+    const max = num(density.max, `${path}.period_density.max`)
+    if (min < 0 || max < 0) invalid(`${path}.period_density must be non-negative`)
+    if (max > 100) invalid(`${path}.period_density.max must not exceed 100 per 100 chars`)
+    if (min > max) invalid(`${path}.period_density.min must not exceed max`)
+  }
+  for (const key of ['foreshadow_min_dormancy', 'motif_min_dormancy', 'foreshadow_dormant_after'] as const) {
+    const current = profile[key]
+    if (current !== undefined && (!Number.isInteger(current) || (current as number) <= 0)) {
+      invalid(`${path}.${key} must be a positive integer`)
+    }
+  }
+  if (profile.water_words !== undefined) {
+    const current = num(profile.water_words, `${path}.water_words`)
+    if (current < 0 || current > 1) invalid(`${path}.water_words must be 0..1`)
+  }
+  if (profile.pleasure_density !== undefined) {
+    const current = num(profile.pleasure_density, `${path}.pleasure_density`)
+    if (current <= 0) invalid(`${path}.pleasure_density must be > 0`)
+  }
+  if (profile.pleasure_keywords !== undefined)
+    stringArray(profile.pleasure_keywords, `${path}.pleasure_keywords`)
+  for (const key of ['lexicon_add', 'lexicon_remove'] as const) {
+    if (profile[key] !== undefined) stringArray(profile[key], `${path}.${key}`)
+  }
+  if (profile.dialogue_ratio !== undefined) {
+    const pair = array(profile.dialogue_ratio, `${path}.dialogue_ratio`)
+    if (pair.length !== 2) invalid(`${path}.dialogue_ratio must contain two numbers`)
+    const low = num(pair[0], `${path}.dialogue_ratio[0]`)
+    const high = num(pair[1], `${path}.dialogue_ratio[1]`)
+    if (low < 0 || high > 1 || low > high) invalid(`${path}.dialogue_ratio must be 0<=low<=high<=1`)
+  }
+  if (profile.paragraph_max_words !== undefined) {
+    const current = num(profile.paragraph_max_words, `${path}.paragraph_max_words`)
+    if (!Number.isInteger(current) || current < 20 || current > 500) {
+      invalid(`${path}.paragraph_max_words must be an integer within 20..500`)
+    }
+  }
+  void id
+}
+
+const AI_TONE_CATEGORY_CODES: Record<string, string> = {
+  meta_commentary: AI_TONE_RULES.META,
+  ack_loop: AI_TONE_RULES.ACK,
+  empty_comparative: AI_TONE_RULES.COMPARATIVE,
+  protective_cliche: AI_TONE_RULES.PROTECTIVE,
+  socratic_trope: AI_TONE_RULES.SOCRATIC,
+  template_phrase: AI_TONE_RULES.TEMPLATE,
+  short_judgment: AI_TONE_RULES.JUDGMENT,
+}
+
+const AI_TONE_CANONICAL_SAMPLES: Record<string, string> = {
+  '行，xxx': '行，认了。',
+  什么心思都写着xx上: '什么心思都写在脸上。',
+  xx比xx沉: '这句比那句沉。',
+  xx比xx重: '这句比那句重。',
+  xx比xx稳: '这句比那句稳。',
+  xx比xx轻: '这句比那句轻。',
+  没接你的xxx: '没接你的话。',
+  没接你那句xx: '没接你那句话。',
+  '这话是ta告诉你的，还是你自己想明白的': '这话是他告诉你的，还是你自己想明白的。',
+  xx就是认了: '他就是认了。',
+}
+
+const regexSafety = (pattern: string): void => {
+  try {
+    void new RegExp(pattern, 'u')
+  } catch {
+    invalid(`ai_tone regex does not compile: ${pattern}`)
+  }
+  if (pattern.length > 200) invalid(`ai_tone regex is longer than 200 characters: ${pattern}`)
+  // Reject the common catastrophic-backtracking shape `(x+)+` and similar.
+  if (/\((?:[^()]*[+*][^()]*)\)[+*{]/.test(pattern) || /(?:\.\*){2,}/.test(pattern)) {
+    invalid(`ai_tone regex has a nested quantifier: ${pattern}`)
+  }
+}
+
+const parseAiTone = (value: unknown, path: string): AiToneLexicon => {
+  const root = object(value, path)
+  knownKeys(root, ['version', 'categories', 'entries'], path)
+  const version = root.version === undefined ? 1 : root.version
+  if (!Number.isInteger(version) || (version as number) < 1)
+    invalid(`${path}.version must be a positive integer`)
+
+  const categoriesRaw = object(root.categories, `${path}.categories`)
+  const expected = Object.keys(AI_TONE_CATEGORY_CODES)
+  for (const key of Object.keys(categoriesRaw)) {
+    if (!expected.includes(key)) invalid(`${path}.categories.${key} is not a recognised category`)
+  }
+  const categories: Record<string, AiToneCategory> = {}
+  const seenCodes = new Set<string>()
+  for (const id of expected) {
+    const rawCategory = categoriesRaw[id]
+    if (rawCategory === undefined) invalid(`${path}.categories.${id} is missing`)
+    const row = object(rawCategory, `${path}.categories.${id}`)
+    knownKeys(
+      row,
+      [
+        'code',
+        'default_severity',
+        'defaultSeverity',
+        'default_scope',
+        'defaultScope',
+        'limit',
+        'window',
+        'escalation',
+        'note',
+      ],
+      `${path}.categories.${id}`,
+    )
+    const code = string(row.code, `${path}.categories.${id}.code`)
+    if (code !== AI_TONE_CATEGORY_CODES[id]) {
+      invalid(`${path}.categories.${id}.code must be ${AI_TONE_CATEGORY_CODES[id]}, got ${code}`)
+    }
+    if (!ALL_RULE_CODES.includes(code)) invalid(`${path}.categories.${id}.code is not a registered rule`)
+    if (seenCodes.has(code)) invalid(`ai_tone code ${code} is owned by two categories`)
+    seenCodes.add(code)
+    const severity = row.default_severity ?? row.defaultSeverity
+    if (severity !== 'blocker' && severity !== 'advisory')
+      invalid(`${path}.categories.${id}.default_severity is invalid`)
+    const scope = row.default_scope ?? row.defaultScope
+    if (scope !== 'any' && scope !== 'narration' && scope !== 'dialogue') {
+      invalid(`${path}.categories.${id}.default_scope is invalid`)
+    }
+    const limit = row.limit === undefined ? 0 : num(row.limit, `${path}.categories.${id}.limit`)
+    if (!Number.isInteger(limit) || limit < 0)
+      invalid(`${path}.categories.${id}.limit must be a non-negative integer`)
+    const window = row.window === undefined ? 0 : num(row.window, `${path}.categories.${id}.window`)
+    if (!Number.isInteger(window) || window < 0)
+      invalid(`${path}.categories.${id}.window must be a non-negative integer`)
+    if (limit > 0 && window <= 0)
+      invalid(`${path}.categories.${id}.window must be positive when limit is positive`)
+    const escalation = row.escalation === undefined ? 'none' : row.escalation
+    if (escalation !== 'none' && escalation !== 'one_level' && escalation !== 'blocker') {
+      invalid(`${path}.categories.${id}.escalation is invalid`)
+    }
+    categories[id] = {
+      code,
+      defaultSeverity: severity,
+      defaultScope: scope,
+      limit,
+      window,
+      escalation,
+      note: row.note === undefined ? '' : string(row.note, `${path}.categories.${id}.note`),
+    }
+  }
+
+  const entriesRaw = array(root.entries, `${path}.entries`)
+  const entries: AiToneEntry[] = []
+  const ids = new Set<string>()
+  const terms = new Set<string>()
+  for (const [index, rawEntry] of entriesRaw.entries()) {
+    const entryPath = `${path}.entries[${index}]`
+    const row = object(rawEntry, entryPath)
+    knownKeys(
+      row,
+      [
+        'id',
+        'category',
+        'match',
+        'terms',
+        'pattern',
+        'template',
+        'severity',
+        'severity_in_dialogue',
+        'severityInDialogue',
+        'scope',
+        'limit',
+        'window',
+        'cooldown_chapters',
+        'cooldownChapters',
+        'standalone',
+        'exclude_if_matches',
+        'excludeIfMatches',
+        'note',
+        'replacement',
+        'examples',
+        'false_positives',
+        'falsePositives',
+      ],
+      entryPath,
+    )
+    const id = string(row.id, `${entryPath}.id`)
+    if (!/^AI-[A-Z]+-\d{3}$/.test(id)) invalid(`${entryPath}.id must match AI-<CAT>-NNN`)
+    if (ids.has(id)) invalid(`ai_tone repeats entry id ${id}`)
+    ids.add(id)
+    const category = string(row.category, `${entryPath}.category`)
+    if (!expected.includes(category)) invalid(`${entryPath}.category ${category} does not exist`)
+    const match = row.match
+    if (match !== 'exact' && match !== 'regex' && match !== 'template') {
+      invalid(`${entryPath}.match must be exact, regex or template`)
+    }
+    const entryTerms = row.terms === undefined ? [] : stringArray(row.terms, `${entryPath}.terms`)
+    let pattern: string | undefined
+    let template: string | undefined
+    if (match === 'exact') {
+      if (entryTerms.length === 0) invalid(`${entryPath}.terms must not be empty for exact`)
+      const local = new Set<string>()
+      for (const term of entryTerms) {
+        const normalized = term.replace(/[\s\u3000]/gu, '')
+        if (local.has(normalized)) invalid(`${entryPath}.terms repeats ${term}`)
+        local.add(normalized)
+        if (terms.has(normalized)) invalid(`ai_tone term "${term}" is owned by two entries`)
+        terms.add(normalized)
+      }
+    } else if (match === 'regex') {
+      if (row.pattern === undefined) invalid(`${entryPath}.pattern is required for regex`)
+      pattern = string(row.pattern, `${entryPath}.pattern`)
+      regexSafety(pattern)
+      if (entryTerms.length > 0) invalid(`${entryPath}.terms is only valid for exact`)
+    } else {
+      if (row.template === undefined) invalid(`${entryPath}.template is required for template`)
+      template = string(row.template, `${entryPath}.template`)
+      try {
+        assertAiToneTemplate(template)
+        void new RegExp(template.replace(/\{(?:xx|xxx|ta)\}/gu, 'x'))
+      } catch (error) {
+        invalid(`${entryPath}.template is invalid: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      if (entryTerms.length > 0) invalid(`${entryPath}.terms is only valid for exact`)
+    }
+    const severity = row.severity === undefined ? categories[category]!.defaultSeverity : row.severity
+    if (severity !== 'blocker' && severity !== 'advisory') invalid(`${entryPath}.severity is invalid`)
+    const severityInDialogue = row.severity_in_dialogue ?? row.severityInDialogue
+    if (
+      severityInDialogue !== undefined &&
+      severityInDialogue !== 'blocker' &&
+      severityInDialogue !== 'advisory'
+    ) {
+      invalid(`${entryPath}.severity_in_dialogue is invalid`)
+    }
+    const scope = row.scope
+    if (scope !== undefined && scope !== 'any' && scope !== 'narration' && scope !== 'dialogue') {
+      invalid(`${entryPath}.scope is invalid`)
+    }
+    if (severityInDialogue !== undefined && scope !== undefined && scope !== 'any') {
+      invalid(`${entryPath}.severity_in_dialogue is only valid when scope is any`)
+    }
+    let limit: number | undefined
+    if (row.limit !== undefined) {
+      limit = num(row.limit, `${entryPath}.limit`)
+      if (!Number.isInteger(limit) || limit < 0) invalid(`${entryPath}.limit must be a non-negative integer`)
+    }
+    let window: number | undefined
+    if (row.window !== undefined) {
+      window = num(row.window, `${entryPath}.window`)
+      if (!Number.isInteger(window) || window < 0)
+        invalid(`${entryPath}.window must be a non-negative integer`)
+    }
+    const cooldown =
+      (row.cooldown_chapters ?? row.cooldownChapters) === undefined
+        ? 0
+        : num(row.cooldown_chapters ?? row.cooldownChapters, `${entryPath}.cooldown_chapters`)
+    if (!Number.isInteger(cooldown) || cooldown < 0)
+      invalid(`${entryPath}.cooldown_chapters must be non-negative`)
+    const standalone = row.standalone === undefined ? false : bool(row.standalone, `${entryPath}.standalone`)
+    if (standalone && category !== 'short_judgment')
+      invalid(`${entryPath}.standalone is only valid for short_judgment`)
+    const excludes =
+      (row.exclude_if_matches ?? row.excludeIfMatches) === undefined
+        ? []
+        : stringArray(row.exclude_if_matches ?? row.excludeIfMatches, `${entryPath}.exclude_if_matches`)
+    for (const exclusion of excludes) regexSafety(exclusion)
+    const note = row.note === undefined ? '' : string(row.note, `${entryPath}.note`)
+    const replacement = string(row.replacement, `${entryPath}.replacement`)
+    const examples = row.examples === undefined ? [] : stringArray(row.examples, `${entryPath}.examples`)
+    const falsePositives =
+      (row.false_positives ?? row.falsePositives) === undefined
+        ? []
+        : stringArray(row.false_positives ?? row.falsePositives, `${entryPath}.false_positives`)
+    entries.push({
+      id,
+      category,
+      match,
+      terms: entryTerms,
+      ...(pattern === undefined ? {} : { pattern }),
+      ...(template === undefined ? {} : { template }),
+      severity,
+      ...(severityInDialogue === undefined ? {} : { severityInDialogue }),
+      ...(scope === undefined ? {} : { scope }),
+      ...(limit === undefined ? {} : { limit }),
+      ...(window === undefined ? {} : { window }),
+      cooldownChapters: cooldown,
+      standalone,
+      excludeIfMatches: excludes,
+      note,
+      replacement,
+      examples,
+      falsePositives,
+    })
+  }
+  const lexicon: AiToneLexicon = { version: version as number, categories, entries }
+  for (const phrase of CANONICAL_AI_TONE_PHRASES) {
+    const sample = AI_TONE_CANONICAL_SAMPLES[phrase] ?? `${phrase}。`
+    const result = scanAiTone(sample, lexicon)
+    if (result.entryIds.length === 0) invalid(`ai_tone does not cover canonical phrase "${phrase}"`)
+  }
+  return lexicon
+}
+
 /**
  * Six assertions, each mapping to one class of pack defect:
  * completeness, shape, duplicate ownership, dangling references, threshold
@@ -122,7 +453,9 @@ const knownKeys = (value: Unknown, allowed: readonly string[], path: string): vo
  */
 export function compileRulepack(raw: unknown): Rulepack {
   const root = object(raw, 'root')
-  if (root.schema_version !== SCHEMA_VERSION) invalid(`schema_version must be ${SCHEMA_VERSION}`)
+  if (root.schema_version !== 1 && root.schema_version !== 2) {
+    invalid('schema_version must be 1 (legacy) or 2 (0.3.0)')
+  }
   knownKeys(
     root,
     [
@@ -135,6 +468,8 @@ export function compileRulepack(raw: unknown): Rulepack {
       'semantics',
       'platform',
       'genres',
+      'genre_majors',
+      'tag_profiles',
       'crosschapter',
       'quality',
       'exclusions',
@@ -208,6 +543,7 @@ export function compileRulepack(raw: unknown): Rulepack {
     'reader_intrusion',
     'god_view',
     'conclusion_first',
+    'ai_tone',
   ])
   nested(lexicon, 'conclusion_first', ['verbs', 'causals'])
   for (const key of ['reader_intrusion', 'god_view'] as const) {
@@ -223,46 +559,25 @@ export function compileRulepack(raw: unknown): Rulepack {
     knownKeys(profile, ['words_per_chapter', 'dialogue_ratio'], `platform.${name}`)
   }
   const genres = object(root.genres, 'genres')
-  knownKeys(genres, GENRES, 'genres')
-  for (const name of GENRES) {
-    const entry = object(genres[name], `genres.${name}`)
+  const subGenrePattern = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/
+  for (const key of Object.keys(genres)) {
+    if (!(GENRES as readonly string[]).includes(key) && !subGenrePattern.test(key)) {
+      invalid(`genres.${key} is not a legacy genre or a taxonomy sub id`)
+    }
+  }
+  for (const [name, rawEntry] of Object.entries(genres)) {
+    const entry = object(rawEntry, `genres.${name}`)
     knownKeys(entry, ['note', 'profile'], `genres.${name}`)
-    if (entry.profile !== undefined) {
-      const profile = object(entry.profile, `genres.${name}.profile`)
-      knownKeys(
-        profile,
-        [
-          'period_density',
-          'water_words',
-          'pleasure_density',
-          'pleasure_keywords',
-          'foreshadow_min_dormancy',
-          'motif_min_dormancy',
-          'foreshadow_dormant_after',
-        ],
-        `genres.${name}.profile`,
-      )
-      if (profile.period_density !== undefined) {
-        const density = object(profile.period_density, `genres.${name}.profile.period_density`)
-        knownKeys(density, ['min', 'max'], `genres.${name}.profile.period_density`)
-        const min = num(density.min, `genres.${name}.profile.period_density.min`)
-        const max = num(density.max, `genres.${name}.profile.period_density.max`)
-        if (min < 0 || max < 0) invalid(`genres.${name}.profile.period_density must be non-negative`)
-        if (max > 100) {
-          invalid(`genres.${name}.profile.period_density.max must not exceed 100 per 100 chars`)
-        }
-        if (min > max) {
-          invalid(`genres.${name}.profile.period_density.min must not exceed max`)
-        }
-      }
-      if (profile.water_words !== undefined) {
-        const value = num(profile.water_words, `genres.${name}.profile.water_words`)
-        if (value < 0 || value > 1) invalid(`genres.${name}.profile.water_words must be 0..1`)
-      }
-      if (profile.pleasure_density !== undefined) {
-        const value = num(profile.pleasure_density, `genres.${name}.profile.pleasure_density`)
-        if (value <= 0) invalid(`genres.${name}.profile.pleasure_density must be > 0`)
-      }
+    if (entry.profile !== undefined) validateGenreProfile(entry.profile, `genres.${name}.profile`, name)
+  }
+  for (const key of ['genre_majors', 'tag_profiles'] as const) {
+    if (root[key] === undefined) continue
+    const rows = object(root[key], key)
+    for (const [id, rawEntry] of Object.entries(rows)) {
+      if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$/.test(id)) invalid(`${key}.${id} is not a stable ASCII id`)
+      const entry = object(rawEntry, `${key}.${id}`)
+      knownKeys(entry, ['profile'], `${key}.${id}`)
+      if (entry.profile !== undefined) validateGenreProfile(entry.profile, `${key}.${id}.profile`, id)
     }
   }
   const crosschapter = section('crosschapter', [
@@ -290,6 +605,16 @@ export function compileRulepack(raw: unknown): Rulepack {
     }
   }
   const pack = normalize(raw as Partial<Rulepack>)
+  if (pack.schema_version !== 1 && pack.schema_version !== 2) {
+    invalid('schema_version must be 1 or 2 after normalisation')
+  }
+  const rawLexicon = root.lexicon === undefined ? undefined : object(root.lexicon, 'lexicon')
+  const rawAiTone = rawLexicon?.ai_tone
+  if (rawAiTone === undefined) {
+    if (pack.schema_version === 2) invalid('lexicon.ai_tone is required for schema_version 2')
+  } else {
+    ;(pack.lexicon as { ai_tone?: AiToneLexicon }).ai_tone = parseAiTone(rawAiTone, 'lexicon.ai_tone')
+  }
   const rawPlatform = object(root.platform, 'platform')
   for (const platform of PLATFORMS) {
     if (rawPlatform[platform] === undefined) invalid(`platform.${platform} is missing`)

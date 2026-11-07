@@ -25,12 +25,14 @@ describe('domain edge cases', () => {
     )
   })
 
-  it('names the legal operations in the stage error hint', () => {
+  it('rejects an illegal stage operation and names the legal ones', () => {
     try {
       nextStage('P3', 'archiveChapter', 0)
-      throw new Error('expected a failure')
+      throw new Error('expected nextStage to reject archiveChapter at P3')
     } catch (error) {
-      expect((error as { hint?: string }).hint).toContain('allowed here: submitDraft')
+      expect((error as Error).message).toMatch(/not allowed/u)
+      expect((error as Error).message).not.toBe('')
+      expect((error as { hint?: string }).hint).toContain('submitDraft')
     }
   })
 

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ThzxxArt/dsh-novel-write-engine/taxonomy/schema.json",
+  "title": "Novel Studio Taxonomy v1",
+  "type": "object",
+  "required": ["taxonomy_version", "majors", "tags"],
+  "additionalProperties": false,
+  "properties": {
+    "taxonomy_version": { "type": "integer", "minimum": 1 },
+    "majors": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "subs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "audience_default": { "enum": ["male", "female", "general", "teen", "adult"] },
+          "platform_fit": { "type": "object" },
+          "profile": { "type": "object" },
+          "status": { "enum": ["active", "deprecated"] },
+          "replaced_by": { "type": "string" },
+          "subs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "label", "legacy_genre"],
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+                "label": { "type": "string", "minLength": 1 },
+                "aliases": { "type": "array", "items": { "type": "string" } },
+                "audience_default": { "enum": ["male", "female", "general", "teen", "adult"] },
+                "legacy_genre": { "type": "string" },
+                "recommended_tags": { "type": "array", "items": { "type": "string" } },
+                "profile": { "type": "object" },
+                "status": { "enum": ["active", "deprecated"] },
+                "replaced_by": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "minItems": 137,
+      "maxItems": 137,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "facet"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^(world|prot|plot|tone|theme|set|struct|pov|emo|pace|market)\\.[a-z][a-z0-9_]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "facet": { "enum": ["world", "prot", "plot", "tone", "theme", "set", "struct", "pov", "emo", "pace", "market"] },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "conflicts": { "type": "array", "items": { "type": "string" } },
+          "requires": { "type": "array", "items": { "type": "string" } },
+          "recommended_for": { "type": "array", "items": { "type": "string" } },
+          "profile": { "type": "object" },
+          "status": { "enum": ["active", "deprecated"] },
+          "replaced_by": { "type": "string" }
+        }
+      }
+    }
+  }
+}

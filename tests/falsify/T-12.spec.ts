@@ -22,6 +22,7 @@ it('T-12 unpacks the EPUB and finds a stored mimetype first', () => {
   const nameLength = zip.readUInt16LE(26)
   const name = zip.subarray(30, 30 + nameLength).toString('utf8')
   expect(name).toBe('mimetype')
+  expect(name).not.toBe('mimetype-extra')
   const size = zip.readUInt32LE(18)
   expect(zip.subarray(30 + nameLength, 30 + nameLength + size).toString()).toBe('application/epub+zip')
 

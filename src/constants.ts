@@ -6,8 +6,11 @@ export const PANEL_ID = 'novel-workshop'
 export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 6
+/** 0.3.0 workbench protocol; independent from the legacy panel version. */
+export const API_VERSION = 8
+export const STUDIO_API_PREFIX = '/api/novel-write-engine/v8'
 /** User-visible panel/tutorial version; keep in sync with package.json. */
-export const PANEL_VERSION = '0.2.15'
+export const PANEL_VERSION = '0.3.0'
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -121,6 +124,7 @@ export const INITIAL_STAGE: Stage = 'idle'
 export const PHASE_STRIP = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9'] as const
 
 /** Tool names, kept here so the arch test can assert one namespace. */
+/** Legacy 0.2.x tool names, kept for the importer/read compatibility module. */
 export const TOOL_NAMES = [
   'novel_init',
   'novel_status',
@@ -152,6 +156,24 @@ export const TOOL_NAMES = [
   'novel_restore',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
+
+/** 0.3.0 model-visible surface: exactly ten tools. */
+export const STUDIO_TOOL_NAMES = [
+  'novel_init',
+  'novel_status',
+  'novel_bible',
+  'novel_outline',
+  'novel_run',
+  'novel_artifact',
+  'novel_state',
+  'novel_search',
+  'novel_export',
+  'novel_agent',
+] as const
+export type StudioToolName = (typeof STUDIO_TOOL_NAMES)[number]
+
+/** Host-only actions are never registered in an Agent scope. */
+export const HOST_TOOL_NAMES = ['novel_approve', 'novel_admin'] as const
 
 /** The ten high-frequency tools kept when `tools.mode = core`. */
 export const CORE_TOOLS: readonly ToolName[] = [

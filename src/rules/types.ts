@@ -15,9 +15,48 @@ export interface LimitEntry {
   genres?: Genre[]
 }
 
+/** One AI-tone category (rulepack v2). */
+export interface AiToneCategory {
+  code: string
+  defaultSeverity: 'blocker' | 'advisory'
+  defaultScope: 'any' | 'narration' | 'dialogue'
+  limit: number
+  window: number
+  escalation: 'none' | 'one_level' | 'blocker'
+  note: string
+}
+
+/** One AI-tone entry; exact, regex or template. */
+export interface AiToneEntry {
+  id: string
+  category: string
+  match: 'exact' | 'regex' | 'template'
+  terms: string[]
+  pattern?: string
+  template?: string
+  severity: 'blocker' | 'advisory'
+  severityInDialogue?: 'blocker' | 'advisory'
+  scope?: 'any' | 'narration' | 'dialogue'
+  limit?: number
+  window?: number
+  cooldownChapters: number
+  standalone: boolean
+  excludeIfMatches: string[]
+  note: string
+  replacement: string
+  examples: string[]
+  falsePositives: string[]
+}
+
+export interface AiToneLexicon {
+  version: number
+  categories: Record<string, AiToneCategory>
+  entries: AiToneEntry[]
+}
+
 /** Structured rule pack: all taste lives here, never in code. */
 export interface Rulepack {
-  schema_version: 1
+  schema_version: 1 | 2
   name: string
   version: string
   lexicon: {
@@ -28,6 +67,8 @@ export interface Rulepack {
     reader_intrusion: Array<{ pattern: string }>
     god_view: Array<{ pattern: string }>
     conclusion_first: { verbs: string[]; causals: string[] }
+    /** 0.3.0 rulepack v2. */
+    ai_tone?: AiToneLexicon
   }
   format: {
     paragraph_max_words: number
@@ -69,7 +110,7 @@ export interface Rulepack {
   >
   /** Genre guides plus optional advisory-only threshold profiles. */
   genres: Record<
-    Genre,
+    string,
     {
       note: string
       profile?: {
@@ -83,6 +124,10 @@ export interface Rulepack {
       }
     }
   >
+  /** 0.3.0 taxonomy profiles: major ids. */
+  genre_majors?: Record<string, { profile?: Record<string, unknown> }>
+  /** 0.3.0 taxonomy profiles: tag ids. */
+  tag_profiles?: Record<string, { profile?: Record<string, unknown> }>
   crosschapter: {
     duplicate_similarity: number
     duplicate_advisory: number
@@ -136,6 +181,12 @@ export interface RuleContext {
   strict?: boolean
   /** 0.2.13: P6 no longer owns RELATION_UNKNOWN; archive runs it after delta merge. */
   disableRelationUnknown?: boolean
+  /** 0.3.0: recent AI-tone entry ids per chapter (newest first, max 10). */
+  aiToneHistory?: Array<{ chapter: number; entries: string[] }>
+  /** 0.3.0: character signature phrases allowed once per chapter. */
+  signaturePhrases?: string[]
+  /** 0.3.0: stage controls whether AI tone is advisory-only (draft/review) or blocking. */
+  aiToneStage?: 'draft' | 'review' | 'check' | 'archive'
 }
 
 /** A rule implementation. Each code has exactly one owner. */

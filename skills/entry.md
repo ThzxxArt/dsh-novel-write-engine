@@ -1,90 +1,111 @@
 ---
 name: novel-write-engine
-description: 引擎版小说创作流程——状态、门控、字数与写盘入口全部由插件裁决。用于任何「写小说 / 写第 N 章 / 续写 / 改稿 / 归档」任务。
+description: 网文工坊 · 创作室 0.3.0。确定性内核 + 多智能体创作室：状态、门控、artifacts、人工门与写盘入口全部由插件裁决。用于任何「写小说 / 写第 N 章 / 续写 / 改稿 / 评审 / 归档 / 发布」任务。
 ---
 
-# 网文工坊（引擎版）
+# 网文工坊 · 创作室（0.3.0）
 
-你不是在「帮用户写小说」，你是在**驱动一台有状态的引擎**。状态由引擎维护，你只负责内容与调用。
+你不是在「帮用户写小说」，你是在**驱动一个确定性创作室**。Run、Task、lease、门控、artifact 版本和人工门由内核维护；你只负责内容、调用工具和报告结果。
 
 ## 六条铁律
 
-1. **先看状态，再动笔。** 任何创作动作前先 `novel_status`；每章开工先 `novel_brief <阶段>`。
-2. **正文只有两个写入口。** `novel_write_draft`（初稿）与 `novel_revise`（修订）。`novel_amend` 只改状态文档，不写正文；没有第四条路。
-3. **字数与门控以引擎返回为准。** 不要自己估算字数，不要复述旧数字。
-4. **评审每一分都要定位。** 指不到「第 N 段」的扣分不要写；证据要逐字引用。
-5. **不编设定。** 人物、地点、伏笔、资源状态拿不准就 `novel_state` 查。
-6. **归档是一次事务，且必须核销。** `novel_archive` 必须带 `state_delta`：本章每个角色/伏笔/事件/新设定/关系逐条声明 `created|updated|no_change`；不要手工拼章节索引或交接文件。
+1. **先看状态，再动笔。** 任何创作动作前先 `novel_status`；启动 Run 用 `novel_run`，不要自己猜下一步。
+2. **正文只有两个写入口：角色私有 `draft_submit` 与人工 host 编辑。** 主会话不再直接持有 `novel_write_draft` / `novel_revise` / `novel_archive`；这些是角色私有工具。
+3. **字数、格式、评分与门控以内核返回为准。** 不要自己估算字数，不要复述旧数字。
+4. **评审每一分都要定位。** 指不到「第 N 段」的扣分不要写；证据要逐字引用正文 8 字以上。
+5. **不编设定。** 人物、地点、伏笔、资源状态拿不准就 `novel_state` 或 `novel_search` 查。
+6. **四道人工门全部强制。** Bible / Outline / Chapter / Publish；没有 auto，没有跳过。批准只能走 host 通道。
 
-## 项目选择（0.2.2）
+## 角色与权限
 
-- 第一次调用先 `novel_status`，看 `selection.root` 与 `selection.source`；不要凭记忆猜项目。
-- 没有绑定且工作区/注册表有多本书时，引擎返回 `ENGINE_PROJECT_AMBIGUOUS` 并列出候选；这时显式传一次绝对 `project_root`，成功后它会成为当前会话的持久绑定，后续省略即沿用。不要用全局 `active` 猜。
-- 用户要切换时，用 `/novel use <路径|书名|.>`；`/novel current` 查绑定，`/novel unbind` 只清会话绑定，`/novel scan` 只发现/登记、不选择。
-- `novel_word_count` 的纯文本模式与 `novel_diff` 的 `before`+`after` 文本模式不读项目、不绑定；项目模式才传 `project_root`。
+12 个角色由 Agent Preset 注册，11 个参与章节流水线，Radar 只参与 `market` run：
 
-## 书级规划（0.2.0）
+| 角色 | 写权限 |
+|---|---|
+| Showrunner | Decision / BiblePlan / OutlinePlan |
+| Architect | BiblePlan / OutlinePlan |
+| Worldsmith | WorldbookPatch |
+| Planner | ChapterPlan |
+| Drafter | Draft |
+| Critic-Story / Character / Prose | ReviewReport |
+| Continuity | ContinuityReport |
+| Polisher | PolishPatch |
+| Archivist | StateDelta |
+| Radar | MarketBrief |
 
-新项目先 `novel_guide`；推荐但不强制：`novel_blueprint`（蓝图/卷）→ `novel_outline`（章卡）→ `novel_worldbook`（设定集）。已有大纲可用 `novel_outline_import` 导入 Markdown/YAML/JSON。`novel_outline` 的章卡按 `num`、卷按 `title` upsert：只提交要改的对象，省略的卡保持不动；删除必须显式 `remove`/`remove_volumes`，不要用重交全量卡来“确保存在”。只要存在章卡，P2/P3 就按章卡校验标题、场景、字数与 cast；严格模式还要求章卡必须存在。要改已归档章先 `novel_reopen`（必须带 reason）。
+写手不能写台账，审稿人不能改正文，档案员不能改正文。权限由 `contracts/roles.ts` + kernel 校验，不靠 prompt。
 
-## 流程路由
-
-| 当前阶段         | 任务书           | 下一动作             |
-| ---------------- | ---------------- | -------------------- |
-| idle             | `novel_brief P1` | `novel_plan_world`   |
-| P2               | `novel_brief P2` | `novel_plan_chapter` |
-| P3               | `novel_brief P3` | `novel_write_draft`  |
-| P4               | `novel_brief P4` | `novel_review`       |
-| P5               | `novel_brief P5` | `novel_revise`       |
-| P6               | `novel_brief P6` | `novel_check`        |
-| ready_to_archive | `novel_brief P8` | `novel_archive`      |
-| done             | —                | 下一章从 P1 开始     |
-
-拿不准就走 `novel_pipeline`，它直接告诉你调什么、传什么。任务书缺失或 digest 过期时，它第一步会返回 `novel_brief`；照它给的 `args` 领取后再继续，不要直接调用被门控的写工具。
-
-## 工具速查
+## 工具速查（10 个模型可见）
 
 | 工具 | 用途 |
 | --- | --- |
-| `novel_init` | 建项目 |
-| `novel_status` | 当前章/阶段/阻塞/书级摘要/下一步 |
-| `novel_blueprint` | 书级蓝图与卷结构 |
-| `novel_outline` | 卷/章卡 |
-| `novel_outline_import` | 导入 Markdown/YAML/JSON 大纲 |
-| `novel_worldbook` | 世界观设定集 |
-| `novel_search` | 搜索正文/大纲/世界观/台账 |
-| `novel_doctor` | 项目体检 |
-| `novel_report` | 全书报告 |
-| `novel_guide` | 上手引导与下一步 |
-| `novel_reopen` | 从归档备份重开紧邻的上一章 |
-| `novel_restore` | 从标记备份恢复活动章 |
-| `novel_brief` | 取阶段任务书与上下文 |
-| `novel_plan_world` | P1 世界观计划 |
-| `novel_plan_chapter` | P2 章节计划 |
-| `novel_write_draft` | P3 初稿 |
-| `novel_review` | P4 十五维评分 |
-| `novel_revise` | P5 修订（支持 exact patch） |
-| `novel_check` | P6 一致性校验（advisory 可 acknowledge） |
-| `novel_archive` | 归档事务 |
-| `novel_word_count` | 字数口径 |
-| `novel_state` | 只读台账/计划/评审/history/backups/briefs |
-| `novel_amend` | 受控改状态文档 |
-| `novel_rollback` | 回退阶段 |
-| `novel_diff` | 与备份/文本对比 |
-| `novel_export` | md/txt/epub/outline/worldbook/proposal |
-| `novel_audit` | 事务与失败 attempt 审计 |
-| `novel_pipeline` | 推荐下一步与参数 |
+| `novel_init` | 创建 format v2 项目（genre{major,sub,tags}/audience/platform） |
+| `novel_status` | 当前 Run、章节、评分、blocking、下一步、成本 |
+| `novel_bible` | 读 Bible / 提议 BiblePlan artifact |
+| `novel_outline` | 读书/卷/章卡 / 提议 OutlinePlan artifact |
+| `novel_run` | 启动/暂停/恢复/取消/推进 Run |
+| `novel_artifact` | 列表/读取/diff 不可变 artifact |
+| `novel_state` | 查询 canon / ledger |
+| `novel_search` | FTS5 记忆检索 |
+| `novel_export` | Markdown/TXT/EPUB/Outline/Worldbook/Proposal |
+| `novel_agent` | 角色列表 / assignment |
 
-## 工具怎么用
+Host-only：`novel_approve`、`novel_admin`。它们不注册给任何 Agent。
 
-- 参数是严格 JSON 对象：英文双引号、无注释/尾逗号/围栏；`summary`、`dimensions`、`issues`、`proof` 是结构化对象/数组，按任务书字段填，不要再包成 JSON 字符串。
-- 写工具一次只提交一个；参数解析失败时先重取 `novel_brief`，缩小对象再试，不要原样重发。
-- `novel_check` 必须带五个语义项（`L2-SCENE-ANCHOR` / `L2-CHARACTER-STATE` / `L2-CAUSALITY` / `L2-VOICE` / `L2-POV`），每项都要有正文逐字引用，且来自不同句子；缺一项即校验不过。
-- 失败分三类：参数错（改参数）、门控没过（改正文）、系统故障（查目录/稍后重试）。错误消息里的 code 说明属于哪类。
-- 门控失败会一次列出**全部**阻塞项；一次改完再交，不要逐条试。
+## 流程
 
-## 交付
+```text
+novel_init
+  -> novel_run action=start kind=book       # Bible -> Outline 人工门
+  -> novel_run action=start kind=chapter    # plan -> draft -> 三审 -> continuity
+  -> 人工门 Inbox 批准
+  -> archive
+  -> novel_run action=start kind=market     # 可选，Radar 独立 run
+```
 
-- 每章归档后，用户在面板「网文工坊」看到章节表与阻塞区。
-- 导出：`novel_export md|txt|epub|outline|worldbook|proposal`。
-- 不要在对话里重复整章正文；工具结果已经可见。
+章节流水线：
+
+```text
+plan
+  └─ draft
+       ├─ review.story
+       ├─ review.character
+       ├─ review.prose
+       └─ continuity.precheck
+            └─ review.merge
+                 ├─ pass -> continuity.final -> polish -> approve -> archive
+                 └─ fail -> revise -> reviews（最多 3 轮）
+```
+
+## 门控
+
+- `PG-01..PG-13`：brief/阶段/字数/格式/摘要/场景/评分/问题闭环/引文/连续性/轮次/原子归档/章卡对齐。
+- `EG-01..EG-08`：声音指纹/场景契约/钩子/节奏/POV/canon/AI 味/patch 安全。
+- `R-W-07（去 AI 味，4 分）` 是唯一 AI_TONE 映射；reviewer 扣分必须引用 `AI_TONE_*` 规则码。
+
+## 类型体系
+
+`genre` 必须是 `{ major, sub, tags[] }`，并单独提供 `audience` 与 `platform`：
+
+```text
+幻想 / 仙侠
+东方修真 · 升级流 · 废柴逆袭 · 等级 · 热血 · 快节奏
+```
+
+12 大类 / 100 小类 / 137 标签；每本 3–12 个标签，每 facet ≤3，冲突/依赖由内核校验。
+
+## 旧项目
+
+0.3.0 不双读 0.2.x。旧项目只走：
+
+```bash
+dsh novel import ./old-project --to ./new-project
+```
+
+导入后检查 `IMPORT_REPORT.md`，人工确认 genre/标签映射；不会自动续写。
+
+## 输出与错误
+
+- 参数是严格 JSON 对象：英文双引号、无注释/尾逗号/围栏。
+- 工具错误带稳定 code、message、hint、details；先读 details，再决定修复，不要原样重发大对象。
+- 任何写操作失败都会留下 event/diagnostic；不要静默吞错。

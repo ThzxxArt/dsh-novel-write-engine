@@ -72,7 +72,7 @@ describe('panel projections', () => {
     expect(rows[1]).toMatchObject({ status: 'draft', stage: 'P3' })
   })
 
-  it('renders scope in gate explanations and keeps the status contract', () => {
+  it('renders scope in gate explanations without inventing one', () => {
     const input = snapshot({
       blocking: [
         { code: 'PG-07', scope: 'score', detail: 'low' },
@@ -83,6 +83,7 @@ describe('panel projections', () => {
     const gates = projectGates(input)
     expect(gates.explanations[0]).toContain('PG-07 (score): low')
     expect(gates.explanations[1]).toBe('PG-10: drift')
+    expect(gates.explanations[1]).not.toContain('(score)')
     const summarised = projectSummary(input)
     expect(summarised).toMatchObject({ totalChapters: 2, totalWords: 200, revision: 7 })
     expect(summarised.next).toEqual({ tool: 'novel_check', reason: 'next' })

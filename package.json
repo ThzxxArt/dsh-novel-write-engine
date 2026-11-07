@@ -1,12 +1,14 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.2.15",
-  "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
+  "version": "0.3.0",
+  "description": "Novel Studio for DeepSeek Harness: deterministic kernel, multi-agent orchestration and a full writing workbench.",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "novel",
-    "writing"
+    "writing",
+    "multi-agent",
+    "studio"
   ],
   "homepage": "https://github.com/ThzxxArt/dsh-novel-write-engine#readme",
   "repository": {
@@ -33,14 +35,16 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./presets/*.patch.yml": "./presets/*.patch.yml",
     "./rulepacks/*": "./rulepacks/*",
+    "./taxonomy/*": "./taxonomy/*",
     "./briefs/*": "./briefs/*",
     "./skill": "./skills/entry.md",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
-    "presets",
+    "presets/novel-studio.patch.yml",
     "rulepacks",
+    "taxonomy",
     "briefs",
     "skills",
     "cordis.patch.yml",
@@ -52,14 +56,17 @@
     "bundle": {
       "patch": [
         "./cordis.patch.yml",
-        "./presets/novel-write-engine.patch.yml"
+        "./presets/novel-studio.patch.yml"
       ]
     },
     "client": {
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
       ],
       "external": [
         "react",
@@ -70,17 +77,20 @@
   },
   "engines": {
     "node": ">=24.9.0",
-    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
     "prepack": "node scripts/check-build-fresh.mjs",
     "build": "tsdown && tsdown -c tsdown.client.config.ts && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "lint": "eslint . && prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.mjs\"",
+    "lint": "eslint . && prettier --check \"src/**/*.ts\" \"src/**/*.tsx\" \"tests/**/*.ts\" \"scripts/**/*.mjs\"",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage && node scripts/check-coverage.mjs",
+    "test:e2e": "playwright test",
     "test:isolated": "node scripts/check-isolated.mjs",
+    "db:generate": "drizzle-kit generate",
     "validate:rulepack": "node scripts/validate-rulepack.mjs",
+    "validate:taxonomy": "node scripts/validate-taxonomy.mjs",
     "check:preset": "node scripts/check-preset.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
@@ -88,27 +98,56 @@
     "check:host": "node scripts/check-host.mjs",
     "check:crash": "node scripts/check-crash.mjs",
     "check:hygiene": "node scripts/check-hygiene.mjs",
-    "check:real-project": "node scripts/check-real-project.mjs"
+    "check:test-pairs": "node scripts/check-test-pairs.mjs",
+    "check:real-project": "node scripts/check-real-project.mjs",
+    "test:live-model": "vitest run --config vitest.live.config.mjs"
   },
   "dependencies": {
-    "yaml": "^2.6.0"
+    "better-sqlite3": "13.0.3",
+    "diff": "9.0.0",
+    "drizzle-orm": "0.45.4",
+    "graphology": "0.26.0",
+    "graphology-dag": "0.4.1",
+    "hono": "4.13.16",
+    "p-queue": "10.0.0",
+    "p-retry": "9.0.0",
+    "ulid": "3.0.2",
+    "xstate": "5.33.3",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-ui-layout": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "@deepseek-ai/dsh-skill": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "@deepseek-ai/schemastery": "^3.18.5",
-    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1 || ^0.2.1-rc.1",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-preset": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-sidebar": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-client-ui-layout": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-renderer": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-sidebar": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-slots": {
@@ -122,24 +161,59 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
-    "@deepseek-ai/schemastery": "3.18.5",
-    "@types/node": "^22.10.0",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "18.3.0",
-    "@vitest/coverage-v8": "^3.0.0",
-    "eslint": "^9.15.0",
-    "happy-dom": "^15.11.0",
-    "prettier": "^3.3.0",
-    "react": "^18.3.1",
-    "react-dom": "18.3.1",
-    "tsdown": "^0.22.0",
-    "typescript": "^5.6.0",
-    "typescript-eslint": "^8.15.0",
-    "vitest": "^3.0.0"
+    "@axe-core/playwright": "4.14.0",
+    "@codemirror/merge": "6.12.3",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@dagrejs/dagre": "3.1.3",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-preset": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-sidebar": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@hookform/resolvers": "7.0.3",
+    "@playwright/test": "1.65.0",
+    "@radix-ui/react-dialog": "1.3.1",
+    "@radix-ui/react-tabs": "1.2.1",
+    "@tanstack/react-query": "5.106.1",
+    "@tanstack/react-table": "9.3.1",
+    "@tanstack/react-virtual": "3.14.26",
+    "@testing-library/react": "16.3.3",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitest/coverage-v8": "5.1.0",
+    "@xyflow/react": "12.12.1",
+    "cmdk": "1.1.1",
+    "date-fns": "4.4.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "10.14.0",
+    "fast-check": "4.10.2",
+    "happy-dom": "21.0.4",
+    "lucide-react": "1.69.0",
+    "msw": "3.0.4",
+    "playwright": "1.65.0",
+    "prettier": "3.9.10",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-hook-form": "7.91.0",
+    "recharts": "3.10.1",
+    "sonner": "2.0.8",
+    "tsdown": "0.23.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.6",
+    "vitest": "5.1.0",
+    "zustand": "5.0.16"
   }
 }

@@ -1266,8 +1266,8 @@ describe('0.2.14 status dialogue verdict by metric', () => {
     try {
       await bootstrapToDraft({ root, engine })
       const dialogue = [
-        '"风从窗缝里挤进来，把桌上的灯吹得发晃。"',
-        ...Array.from({ length: 17 }, () => '"好。"'),
+        '“风从窗缝里挤进来，把桌上的灯吹得发晃。”',
+        ...Array.from({ length: 17 }, () => '“好。”'),
       ].join('\n')
       const narration = Array.from({ length: 2 }, () => '他走过长街，看见灯一盏一盏亮起来。').join('\n')
       await writeDraft({ root, engine, text: `${dialogue}\n${narration}` })

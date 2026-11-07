@@ -2,5 +2,13 @@
     - id: novel-write-engine
       name: dsh-novel-write-engine
       config:
-        toolsMode: all
+        projectRoot: ./novel
+        maxActiveSubagents: 6
+        maxWritersPerProject: 1
+        maxConcurrentRuns: 2
+        reviewRounds: 3
         minScore: 120
+        backupRetention: 10
+        perChapterUsd: 0.6
+        perRunUsd: 30
+        perTaskTokens: 32000
