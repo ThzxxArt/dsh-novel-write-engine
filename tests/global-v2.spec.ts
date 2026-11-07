@@ -65,6 +65,9 @@ describe('global registry', () => {
       expect(handle.director.board().runs.find((run) => run.id === runId)?.status).toBe('awaiting_human')
     } finally {
       runtime.close()
+      // The runtime does not own an injected registry; close it so Windows can
+      // remove the temp directory.
+      registry.close()
     }
   })
 

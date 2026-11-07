@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openStudioDb } from '../src/storage/db.js'
 import { LATEST_SCHEMA_VERSION } from '../src/storage/migrations.js'
@@ -74,10 +74,10 @@ describe('storage defensive branches', () => {
     process.env.DSH_HOME = '   '
     expect(dshHome()).toContain('.dsh')
     process.env.DSH_HOME = '/tmp/novel-dsh-home'
-    expect(dshHome()).toBe('/tmp/novel-dsh-home')
+    expect(dshHome()).toBe(resolve('/tmp/novel-dsh-home'))
     expect(globalDbPath()).toContain('novel-write-engine')
     expect(globalDbPath('')).toContain('novel-write-engine')
-    expect(globalDbPath('/tmp/novel-state')).toBe('/tmp/novel-state/studio.db')
+    expect(globalDbPath('/tmp/novel-state')).toBe(resolve('/tmp/novel-state', 'studio.db'))
     const root = temp('global-bad-')
     const state = join(root, 'state')
     mkdirSync(state)

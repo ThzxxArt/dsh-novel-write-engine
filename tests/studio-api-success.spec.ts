@@ -353,6 +353,9 @@ describe('studio API success paths', () => {
       expect(chapterRewind.runId).toBeTruthy()
       const handle = await ctx.runtime.open()
       handle.director.cancel(chapterRewind.runId)
+      // Windows locks an open SQLite file; close the test's side connection
+      // before the runtime replaces the DB file.
+      ctx.db.close()
       const restored = await ctx.post({ action: 'backup.restore', name: backup.name })
       expect(restored.status).toBe(200)
 

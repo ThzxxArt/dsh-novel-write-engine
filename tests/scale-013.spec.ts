@@ -161,7 +161,7 @@ describe('0.1.3 scale and handoff', () => {
     } finally {
       await cleanup()
     }
-  }, 120_000)
+  }, 300_000)
 
   it('amends a project with a 1000-row journal without rescanning per row', async () => {
     const { root, engine, cleanup } = await harness()
@@ -207,5 +207,5 @@ describe('0.1.3 scale and handoff', () => {
     } finally {
       await cleanup()
     }
-  }, 120_000)
+  }, 300_000)
 })

@@ -87,7 +87,7 @@ const execute = async (
 
 describe('role scoped tools', () => {
   it('reads the assignment and canon, and reuses the task artifact on submit', async () => {
-    const { project, artifacts, runtime, tasks, assignments } = await setup()
+    const { db, project, artifacts, runtime, tasks, assignments } = await setup()
     try {
       const draftTask = tasks.find((task) => task.kind === 'draft')!
       const draftAssignment = assignments.find((row) => row.taskId === draftTask.id)!
@@ -155,11 +155,12 @@ describe('role scoped tools', () => {
       expect(project.config.title).toBe('角色工具')
     } finally {
       runtime.close()
+      db.close()
     }
   })
 
   it('rejects missing assignments and tools outside the role allowlist', async () => {
-    const { runtime, tasks, assignments } = await setup()
+    const { db, runtime, tasks, assignments } = await setup()
     try {
       const draftTask = tasks.find((task) => task.kind === 'draft')!
       const draftAssignment = assignments.find((row) => row.taskId === draftTask.id)!
@@ -173,6 +174,7 @@ describe('role scoped tools', () => {
       expect(draftAssignment.agentSessionId?.startsWith('fake-')).toBe(true)
     } finally {
       runtime.close()
+      db.close()
     }
   })
 
@@ -254,11 +256,12 @@ describe('role scoped tools', () => {
       ).rejects.toThrow(/base_hash|expected_hash/u)
     } finally {
       runtime.close()
+      db.close()
     }
   })
 
   it('enforces structural role boundaries and missing-agent errors', async () => {
-    const { runtime } = await setup()
+    const { db, runtime } = await setup()
     try {
       expect(() => assertRoleCanWrite('nope' as RoleId, 'Draft')).toThrow(/unknown role/u)
       expect(() => assertRoleCanWrite('critic-story', 'Draft')).toThrow(/cannot write/u)
@@ -294,6 +297,7 @@ describe('role scoped tools', () => {
       ).rejects.toThrow(/cannot resolve project/u)
     } finally {
       runtime.close()
+      db.close()
     }
   })
 
@@ -354,6 +358,7 @@ describe('role scoped tools', () => {
     } finally {
       messageRuntime.close()
       runtime.close()
+      db.close()
     }
   })
 
@@ -390,6 +395,7 @@ describe('role scoped tools', () => {
       expect(listTasks(db.orm, runId)[0]!.status).toBe('failed')
     } finally {
       runtime.close()
+      db.close()
     }
   })
 })
