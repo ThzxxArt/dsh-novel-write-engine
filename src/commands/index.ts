@@ -1,4 +1,16 @@
 import type { EngineCaller, EngineService } from '../engine/service.js'
+import type { StudioRuntime } from '../studio/runtime.js'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import {
+  usageForRun,
+  listRuns,
+  listHumanGates,
+  getRun,
+  listAssignments,
+  listTasks,
+} from '../storage/repositories/runs.js'
+import { listArtifacts } from '../storage/repositories/artifacts.js'
+import { assertExportReady, exportProject } from '../kernel/export/index.js'
 import { NEXT_DETAILS } from '../next-reasons.js'
 import { EngineBlockedError, EngineError } from '../types.js'
 import { adminHelp, runAdminOperation } from './admin.js'
@@ -15,6 +27,10 @@ export interface CommandWorkingDirectory {
 
 export interface CommandHost {
   workingDirectory?: CommandWorkingDirectory
+  /** 0.3.0 one-way legacy import, injected by the plugin assembly. */
+  importLegacy?: (from: string, to: string) => Promise<unknown>
+  studio?: StudioRuntime
+  agentFor?: (id: string) => Agent | undefined
 }
 
 export interface Invocation {
@@ -91,6 +107,16 @@ const statusText = async (engine: EngineService): Promise<string> => {
 const usage = () =>
   [
     '/novel status        当前状态',
+    '/novel board         Run / Task / 人工门看板',
+    '/novel run [book|chapter|rewrite|review|market] [N]  启动 Run',
+    '/novel pause|resume|stop [run_id]  控制 Run',
+    '/novel review <N>    启动评审 Run',
+    '/novel approve|reject [gate|id] [note]  人工门裁决',
+    '/novel agent [role] [message]  角色名册/消息',
+    '/novel artifact [list|diff <a> <b>|restore <id>]  版本操作',
+    '/novel rewind artifact <id> | chapter <N> | run <id>  恢复并生成新版本/Run',
+    '/novel cost [run_id] Run 成本',
+    '/novel repair        重建 FTS5 索引',
     '/novel next          下一步该调什么',
     '/novel stats         字数与章节统计',
     '/novel outline       大纲与世界观概览',
@@ -105,9 +131,10 @@ const usage = () =>
     '/novel use <path|title|.>  切换当前会话项目',
     '/novel unbind        清除当前会话绑定（不删项目）',
     '/novel scan [--register]   扫描工作区候选',
-    '/novel resume        输出可粘贴的续写指令',
+    '/novel resume        恢复最近 paused Run 并继续调度',
     '/novel admin         隐藏操作与参数说明',
     '/novel admin <op> <json>  执行隐藏操作',
+    '/novel import <old> --to <new>  单向导入 0.2.x 项目',
     '/novel-next          等价于 /novel next',
     '/novel-stats         等价于 /novel stats',
     '/novel-export <kind>',
@@ -200,6 +227,13 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
           )
         }
         case 'doctor': {
+          if (host.studio !== undefined) {
+            const handle = await host.studio.open()
+            const integrity = handle.db.integrity()
+            return ok(
+              `0.3.0 体检：DB ${integrity} · ${listArtifacts(handle.db.orm, handle.project.config.id, { limit: 1000 }).length} artifacts · ${listHumanGates(handle.db.orm, handle.project.config.id).length} 待批门`,
+            )
+          }
           const { data } = await engine.doctor({})
           return ok(
             [
@@ -228,8 +262,42 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
         }
         case 'export': {
           const kind = rest[0]
-          if (!['md', 'txt', 'epub', 'outline', 'worldbook', 'proposal'].includes(kind ?? ''))
-            return bad('用法：/novel export md|txt|epub|outline|worldbook|proposal')
+          if (!['md', 'txt', 'epub', 'outline', 'worldbook', 'proposal', 'publish'].includes(kind ?? ''))
+            return bad('用法：/novel export md|txt|epub|outline|worldbook|proposal|publish')
+          if (host.studio !== undefined) {
+            const handle = await host.studio.open()
+            if (kind === 'publish') {
+              const files = (await handle.project.store.list('manuscript')).filter((name) =>
+                /^ch-\d{4}\.md$/u.test(name),
+              )
+              await assertExportReady(
+                handle.project,
+                handle.db,
+                handle.artifacts,
+                files.map((name) => Number(name.slice(3, 7))),
+              )
+              const pending = listHumanGates(handle.db.orm, handle.project.config.id).find(
+                (gate) => gate.gate === 'publish',
+              )
+              const gate =
+                pending === undefined
+                  ? handle.director.gates.open({
+                      projectId: handle.project.config.id,
+                      runId: 'publish',
+                      gate: 'publish',
+                    })
+                  : { id: pending.id }
+              return ok(`Publish Gate ${gate.id} 已打开；请 /novel approve ${gate.id}`)
+            }
+            const mapped = kind === 'md' ? 'markdown' : kind
+            const result = await exportProject(
+              handle.project,
+              handle.db,
+              handle.artifacts,
+              mapped as 'markdown' | 'txt' | 'epub' | 'outline' | 'worldbook' | 'proposal',
+            )
+            return ok(`已导出 ${result.path}（${result.bytes} bytes）`)
+          }
           const { data } = await engine.export({ kind: kind as 'md' })
           return ok(`已导出 ${data.kind}：${data.files.join(', ')}`)
         }
@@ -370,6 +438,19 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
           return ok(lines.join('\n'))
         }
         case 'resume': {
+          if (host.studio !== undefined) {
+            const handle = await host.studio.open()
+            const latest = listRuns(handle.db.orm, handle.project.config.id, 1)[0]
+            if (latest === undefined) return bad('没有可恢复的 Run')
+            if (latest.status === 'awaiting_human')
+              return bad('Run 正在等待人工门；请先 /novel approve 或 /novel reject')
+            if (latest.status !== 'paused') return bad(`最新 Run 是 ${latest.status}，不是 paused`)
+            handle.director.resume(latest.id)
+            const agent =
+              invocation.agent?.id === undefined ? undefined : host.agentFor?.(invocation.agent.id)
+            if (agent !== undefined) await handle.scheduler.run(latest.id, agent, signal)
+            return ok(`已恢复 Run ${latest.id}`)
+          }
           const { data } = await engine.resumePrompt({})
           if (data.text !== null) return ok(data.text)
           const status = await engine.getStatus({})
@@ -377,6 +458,215 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
             return ok(status.data.progress.resume)
           }
           return bad('当前项目没有可续写的下一步；先用 /novel status 查看项目状态。')
+        }
+        case 'board': {
+          if (host.studio === undefined) return bad('board is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const board = handle.director.board()
+          return ok(
+            [
+              `Run ${board.runs.length} · Task ${board.tasks.length} · Gate ${board.gates.length}`,
+              ...board.runs
+                .slice(0, 10)
+                .map((run) => `  - ${run.id} ${run.kind} ${run.status} 第 ${run.targetChapter ?? '—'} 章`),
+              ...board.gates.map((gate) => `  gate ${gate.id} ${gate.gate} 第 ${gate.chapter ?? '—'} 章`),
+            ].join('\n'),
+          )
+        }
+        case 'run': {
+          if (host.studio === undefined) return bad('run is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const kind = (rest[0] ?? 'chapter') as 'book' | 'chapter' | 'review' | 'market' | 'rewrite'
+          if (!['book', 'chapter', 'review', 'market', 'rewrite'].includes(kind)) {
+            return bad('用法：/novel run [book|chapter|rewrite|review|market] [chapter N]')
+          }
+          const chapter = Number(rest[1] ?? '1')
+          if (!Number.isInteger(chapter) || chapter < 1) return bad('chapter 必须是正整数')
+          const runId =
+            kind === 'book'
+              ? handle.director.createBookRun()
+              : kind === 'market'
+                ? handle.director.createMarketRun()
+                : handle.director.createChapterRun({
+                    chapter,
+                    mode: kind === 'review' ? 'review' : kind === 'rewrite' ? 'rewrite' : 'full',
+                  })
+          const agent = invocation.agent?.id === undefined ? undefined : host.agentFor?.(invocation.agent.id)
+          if (agent !== undefined) await handle.scheduler.run(runId, agent, signal)
+          const run = getRun(handle.db.orm, runId)
+          return ok(`Run ${runId} 已创建：${run?.status ?? 'queued'}`)
+        }
+        case 'pause':
+        case 'stop': {
+          if (host.studio === undefined)
+            return bad('run controls are available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const runId = rest[0] ?? listRuns(handle.db.orm, handle.project.config.id, 1)[0]?.id
+          if (runId === undefined) return bad('没有可控制的 Run')
+          if (head === 'pause') handle.director.pause(runId)
+          else {
+            handle.scheduler.abort(runId)
+            handle.director.cancel(runId)
+          }
+          return ok(`${head === 'pause' ? '已暂停' : '已取消'} ${runId}`)
+        }
+        case 'review': {
+          if (host.studio === undefined) return bad('review run is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const chapter = Number(rest[0] ?? '1')
+          if (!Number.isInteger(chapter) || chapter < 1) return bad('chapter 必须是正整数')
+          const runId = handle.director.createChapterRun({ chapter, mode: 'review' })
+          const agent = invocation.agent?.id === undefined ? undefined : host.agentFor?.(invocation.agent.id)
+          if (agent !== undefined) await handle.scheduler.run(runId, agent, signal)
+          return ok(`ReviewRun ${runId} 已创建`)
+        }
+        case 'approve':
+        case 'reject': {
+          if (host.studio === undefined) return bad('human gates are available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const gates = listHumanGates(handle.db.orm, handle.project.config.id)
+          const target = gates.find((gate) => gate.id === rest[0] || gate.gate === rest[0]) ?? gates[0]
+          if (target === undefined) return bad('没有等待中的人工门')
+          const token = handle.director.gates.authorize(target.id)
+          const decided = await handle.director.decide({
+            gateId: target.id,
+            token,
+            decision: head === 'approve' ? 'approve' : 'reject',
+            actor: 'command',
+            reason: rest.slice(1).join(' ') || head,
+          })
+          const runToAdvance =
+            decided.nextRunId ?? (head === 'approve' && target.gate !== 'publish' ? target.runId : undefined)
+          if (runToAdvance !== undefined) {
+            const agent =
+              invocation.agent?.id === undefined ? undefined : host.agentFor?.(invocation.agent.id)
+            if (agent !== undefined) await handle.scheduler.run(runToAdvance, agent, signal)
+          }
+          return ok(`${head === 'approve' ? '已批准' : '已拒绝'} ${target.gate} 门`)
+        }
+        case 'agent': {
+          if (host.studio === undefined) return bad('agent roster is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          if (rest[0] !== undefined && rest[1] !== undefined) {
+            const runs = listRuns(handle.db.orm, handle.project.config.id, 20)
+            const tasks = runs.flatMap((run) => listTasks(handle.db.orm, run.id))
+            const assignments = listAssignments(
+              handle.db.orm,
+              tasks.map((task) => task.id),
+            )
+            const taskIds = new Set(
+              tasks
+                .filter((task) => task.role === rest[0])
+                .filter((task) => ['leased', 'running', 'validating'].includes(task.status))
+                .map((task) => task.id),
+            )
+            const assignment = assignments.find(
+              (row) =>
+                taskIds.has(row.taskId) &&
+                row.agentSessionId !== null &&
+                ['created', 'started'].includes(row.status),
+            )
+            const sender =
+              invocation.agent?.id === undefined ? undefined : host.agentFor?.(invocation.agent.id)
+            if (assignment?.agentSessionId == null || sender === undefined)
+              return bad(`角色 ${rest[0]} 当前没有可消息的子会话`)
+            await host.studio.sendRoleMessage(
+              sender,
+              assignment.agentSessionId,
+              rest.slice(1).join(' '),
+              signal,
+            )
+            return ok(`已发送给 ${rest[0]}（${assignment.agentSessionId}）`)
+          }
+          return ok(
+            Object.values((await import('../contracts/roles.js')).ROLES)
+              .map((role) => `${role.id}\t${role.preset}\t${role.canWrite.join(',')}`)
+              .join('\n'),
+          )
+        }
+        case 'artifact': {
+          if (host.studio === undefined) return bad('artifacts are available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          if (rest[0] === 'diff' && rest[1] !== undefined && rest[2] !== undefined) {
+            return ok(await handle.artifacts.diffContent(rest[1], rest[2]))
+          }
+          if (rest[0] === 'restore' && rest[1] !== undefined) {
+            const artifact = await handle.artifacts.restore(rest[1], 'command', rest.slice(2).join(' '))
+            return ok(`已恢复为新版本 ${artifact.id} v${artifact.version}`)
+          }
+          return ok(
+            listArtifacts(handle.db.orm, handle.project.config.id, { limit: 40 })
+              .map(
+                (row) =>
+                  `${row.id}\t${row.kind}\t第 ${row.chapter ?? '—'} 章\tv${row.version}\t${row.status}`,
+              )
+              .join('\n'),
+          )
+        }
+        case 'rewind': {
+          if (host.studio === undefined) return bad('rewind is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const target = rest[0]
+          const reference = rest[1]
+          if (target === 'artifact') {
+            if (reference === undefined) return bad('用法：/novel rewind artifact <id>')
+            const result = await handle.director.rewind({
+              target: 'artifact',
+              artifactId: reference,
+              actor: 'command',
+              reason: rest.slice(2).join(' ') || 'artifact rewind',
+            })
+            return ok(`已恢复为新版本 ${result.artifact?.id} v${result.artifact?.version}`)
+          }
+          if (target === 'chapter') {
+            const chapter = Number(reference)
+            if (!Number.isInteger(chapter) || chapter < 1) return bad('用法：/novel rewind chapter <N>')
+            const result = await handle.director.rewind({
+              target: 'chapter',
+              chapter,
+              actor: 'command',
+              reason: rest.slice(2).join(' ') || 'chapter rewind',
+            })
+            return ok(`已创建修订 Run ${result.runId}`)
+          }
+          if (target === 'run') {
+            if (reference === undefined) return bad('用法：/novel rewind run <run_id>')
+            const result = await handle.director.rewind({
+              target: 'run',
+              runId: reference,
+              actor: 'command',
+              reason: rest.slice(2).join(' ') || 'run rewind',
+            })
+            return ok(`已创建修订 Run ${result.runId}`)
+          }
+          return bad('用法：/novel rewind artifact <id> | chapter <N> | run <id>')
+        }
+        case 'cost': {
+          if (host.studio === undefined) return bad('cost is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const runId = rest[0] ?? listRuns(handle.db.orm, handle.project.config.id, 1)[0]?.id
+          if (runId === undefined) return ok('没有 Run 成本')
+          const usage = usageForRun(handle.db.orm, runId)
+          return ok(
+            `Run ${runId}: $${usage.costUsd.toFixed(4)} · ${usage.promptTokens}/${usage.completionTokens} tokens`,
+          )
+        }
+        case 'repair': {
+          if (host.studio === undefined) return bad('repair is available in 0.3.0 studio projects only')
+          const handle = await host.studio.open()
+          const { rebuildProjectIndex } = await import('../kernel/read/index.js')
+          const result = await rebuildProjectIndex(handle.project, handle.db)
+          handle.db.checkpoint()
+          return ok(`已重建 FTS5 并 checkpoint：${result.indexed} 条`)
+        }
+        case 'import': {
+          if (host.importLegacy === undefined) return bad('import is not available in this host')
+          const from = rest[0]
+          const toIndex = rest.indexOf('--to')
+          const to = toIndex === -1 ? undefined : rest[toIndex + 1]
+          if (from === undefined || to === undefined) return bad('usage: /novel import <old> --to <new>')
+          const result = (await host.importLegacy(from, to)) as { report?: string; chapters?: number }
+          return ok(result.report ?? `导入完成：${String(result.chapters ?? 0)} 章`)
         }
         case 'admin': {
           if (rest.length === 0) return ok(adminHelp())

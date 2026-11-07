@@ -24,4 +24,11 @@ describe('panel wire contract', () => {
     expect(versionMatches).toBe(true)
     expect(REMOTE_VERSION).toBe(6)
   })
+
+  it('rejects a bookData shape that is not the shared object', () => {
+    // @ts-expect-error bookData is a structured object, never a string
+    const badBookData: PanelBookData = 'not-a-book'
+    expect(badBookData).toBe('not-a-book')
+    expect(REMOTE_VERSION).not.toBe(0)
+  })
 })

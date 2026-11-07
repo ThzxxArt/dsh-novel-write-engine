@@ -15,10 +15,9 @@ const required = [
   'lib/index.d.ts',
   'lib/client.js',
   'lib/types/client/index.d.ts',
-  'lib/types/client/panel.d.ts',
-  'lib/types/client/dto.d.ts',
-  'lib/types/client/viewmodel.d.ts',
+  'lib/types/client/studio/App.d.ts',
   'rulepacks/default.yaml',
+  'taxonomy/taxonomy.yaml',
   'briefs/P1.md',
   'briefs/P2.md',
   'briefs/P3.md',
@@ -27,8 +26,9 @@ const required = [
   'briefs/P6.md',
   'briefs/P8.md',
   'skills/entry.md',
+  'skills/roles/drafter.md',
   'cordis.patch.yml',
-  'presets/novel-write-engine.patch.yml',
+  'presets/novel-studio.patch.yml',
 ]
 const forbidden = /^(src|tests|scripts)\/|^DESIGN\.md$|^PLAN\.md$|\.map$/
 

@@ -33,10 +33,10 @@ describe('root patch', () => {
       version: string
       engines: { node: string; dsh: string }
     }
-    expect(manifest.version).toBe('0.2.15')
+    expect(manifest.version).toBe('0.3.0')
     expect(manifest.engines).toEqual({
       node: '>=24.9.0',
-      dsh: '>=0.2.1-rc.2 <0.3.0-0',
+      dsh: '>=0.2.2-rc.1 <0.3.0-0',
     })
   })
 
@@ -45,12 +45,17 @@ describe('root patch', () => {
       dsh: { bundle: { patch: string[] }; client: { platform: string } }
       files: string[]
     }
-    expect(manifest.dsh.bundle.patch).toEqual([
-      './cordis.patch.yml',
-      './presets/novel-write-engine.patch.yml',
-    ])
+    expect(manifest.dsh.bundle.patch).toEqual(['./cordis.patch.yml', './presets/novel-studio.patch.yml'])
     expect(manifest.dsh.client.platform).toBe('web')
-    for (const required of ['lib', 'rulepacks', 'briefs', 'skills', 'presets', 'cordis.patch.yml']) {
+    for (const required of [
+      'lib',
+      'rulepacks',
+      'briefs',
+      'skills',
+      'taxonomy',
+      'presets/novel-studio.patch.yml',
+      'cordis.patch.yml',
+    ]) {
       expect(manifest.files, required).toContain(required)
     }
     expect(manifest.files).not.toContain('locale')

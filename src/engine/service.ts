@@ -45,6 +45,7 @@ import {
   type MachineResult,
 } from '../rules/pipeline.js'
 import type { Rulepack } from '../rules/types.js'
+import { scanAiTone } from '../rules/ai-tone.js'
 import { applyExclusions } from '../domain/scoring.js'
 import {
   FsStore,
@@ -551,6 +552,9 @@ interface Snapshot {
   previousTexts: string[]
   /** Chapter numbers matching `previousTexts` (newest first). */
   previousChapterNums: number[]
+  /** 0.3.0: up to ten preceding chapters for cross-chapter AI-tone repeat checks. */
+  aiToneTexts: string[]
+  aiToneChapterNums: number[]
   plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null
   /** An unreadable plan is reported to the model instead of wedging every read. */
   planError: string | null
@@ -10784,6 +10788,26 @@ export class EngineService {
       summary?: ChapterSummary | null
     },
   ): MachineResult {
+    const aiToneHistory = snapshot.aiToneChapterNums.map((chapter, index) => ({
+      chapter,
+      entries: scanAiTone(snapshot.aiToneTexts[index] ?? '', this.rulepack.lexicon.ai_tone, { chapter })
+        .repeatEntryIds,
+    }))
+    const signaturePhrases = snapshot.characters.characters.flatMap((character) => {
+      const value = character.profile.signature_phrases
+      return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+    })
+    const stage = snapshot.pipeline.stage
+    const aiToneStage =
+      stage === 'P3'
+        ? ('draft' as const)
+        : stage === 'P4' || stage === 'P5'
+          ? ('review' as const)
+          : stage === 'P6'
+            ? ('check' as const)
+            : stage === 'ready_to_archive' || stage === 'done'
+              ? ('archive' as const)
+              : undefined
     const options: MachineOptions = {
       chapter: snapshot.pipeline.chapter,
       title: composeTitle(
@@ -10799,6 +10823,9 @@ export class EngineService {
       strict: snapshot.outline.book.strict,
       summary: extra.summary ?? snapshot.plan?.summary ?? null,
       disableRelationUnknown: true,
+      aiToneHistory,
+      signaturePhrases,
+      ...(aiToneStage === undefined ? {} : { aiToneStage }),
       evidence: {
         characters: snapshot.characters.characters.length > 0 ? snapshot.characters : null,
         previousText: snapshot.previousText,
@@ -11481,6 +11508,15 @@ export class EngineService {
         previousChapterNums.push(chapter - offset)
       }
     }
+    const aiToneTexts: string[] = []
+    const aiToneChapterNums: number[] = []
+    for (let offset = 1; offset <= 10 && chapter - offset >= 1; offset += 1) {
+      const previous = await store.readText(chapterFile(chapter - offset))
+      if (previous !== null) {
+        aiToneTexts.push(previous)
+        aiToneChapterNums.push(chapter - offset)
+      }
+    }
     const planRaw = await store.readText(planChapterFile(chapter))
     let plan: (ChapterPlanInput & { summary?: ChapterSummary }) | null = null
     let planError: string | null = null
@@ -11595,6 +11631,8 @@ export class EngineService {
       previousText,
       previousTexts,
       previousChapterNums,
+      aiToneTexts,
+      aiToneChapterNums,
       plan,
       planError,
       worldPlanError,
@@ -12089,6 +12127,8 @@ export class EngineService {
       previousText: null,
       previousTexts: [],
       previousChapterNums: [],
+      aiToneTexts: [],
+      aiToneChapterNums: [],
       plan: null,
       planError: null,
       worldPlanError: null,

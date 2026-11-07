@@ -389,11 +389,13 @@ describe('R5: PG-04 samples quote the characters that broke the rule', () => {
     expect(hit.detail).toContain('near "')
   })
 
-  it('shows the curly quote marks', () => {
-    const result = check('他说“走吧”，然后把灯关了。')
-    const hit = result.violations.find((violation) => violation.code === 'ILLEGAL_QUOTE')!
-    expect(hit.detail).toContain('“')
+  it('only flags ASCII quotes and leaves Chinese quotes alone', () => {
+    const ascii = check('他说"走吧"，然后把灯关了。')
+    const hit = ascii.violations.find((violation) => violation.code === 'ILLEGAL_QUOTE')!
+    expect(hit.detail).toContain('ASCII quote')
     expect(hit.detail).toContain('near "')
+    const chinese = check('他说“走吧”，然后把灯关了。')
+    expect(chinese.violations.some((violation) => violation.code === 'ILLEGAL_QUOTE')).toBe(false)
   })
 
   it('shows the ellipsis that should be a Chinese one', () => {

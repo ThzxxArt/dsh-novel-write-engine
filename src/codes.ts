@@ -56,12 +56,26 @@ export const CROSS_RULES = {
   LOCKED_DETAIL_DRIFT: 'LOCKED_DETAIL_DRIFT',
 } as const
 
+/** AI-tone families (0.3.0 rulepack v2). One code per category plus two aggregates. */
+export const AI_TONE_RULES = {
+  META: 'AI_TONE_META',
+  ACK: 'AI_TONE_ACK',
+  COMPARATIVE: 'AI_TONE_COMPARATIVE',
+  PROTECTIVE: 'AI_TONE_PROTECTIVE',
+  SOCRATIC: 'AI_TONE_SOCRATIC',
+  TEMPLATE: 'AI_TONE_TEMPLATE',
+  JUDGMENT: 'AI_TONE_JUDGMENT',
+  DENSITY: 'AI_TONE_DENSITY',
+  REPEAT: 'AI_TONE_REPEAT',
+} as const
+
 export const ALL_RULE_CODES: readonly string[] = [
   ...Object.values(FORMAT_RULES),
   ...Object.values(LEXICON_RULES),
   ...Object.values(PUNCTUATION_RULES),
   ...Object.values(SEMANTIC_RULES),
   ...Object.values(CROSS_RULES),
+  ...Object.values(AI_TONE_RULES),
 ]
 
 /** Gate identifiers in fixed evaluation order. */

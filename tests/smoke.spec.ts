@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, Config } from '../src/index.js'
 import { fakeHost } from './harness/context.js'
-import { CORE_TOOLS, TOOL_NAMES } from '../src/constants.js'
+import { HOST_TOOL_NAMES, STUDIO_TOOL_NAMES } from '../src/constants.js'
 
 const config = (Config as unknown as (init: Record<string, unknown>) => never)({
   stateDir: join(tmpdir(), 'dsh-novel-smoke-state'),
@@ -15,10 +15,11 @@ describe('plugin assembly', () => {
     expect(resolved.projectRoot).toBe('./novel')
   })
 
-  it('registers all twenty-eight tools, five commands, the skill and the panel route', () => {
+  it('registers ten studio tools, five legacy commands, the skill and the panel route', () => {
     const host = fakeHost()
     apply(host.ctx as never, config)
-    expect(host.tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort())
+    expect(host.tools.map((tool) => tool.name).sort()).toEqual([...STUDIO_TOOL_NAMES].sort())
+    expect(host.tools.map((tool) => tool.name)).not.toContain(HOST_TOOL_NAMES[0])
     expect(host.commands.map((command) => command.name).sort()).toEqual([
       'novel',
       'novel-admin',
@@ -32,8 +33,9 @@ describe('plugin assembly', () => {
     expect(host.skills[0]!.content).toContain('name: novel-write-engine')
     expect(host.skills[0]!.content).toContain('正文只有两个写入口')
     expect(host.skills[0]!.content).not.toContain('旧技能套件')
-    expect(host.routes).toHaveLength(1)
+    expect(host.routes).toHaveLength(2)
     expect(host.routes[0]!.path).toBe('/api/novel-write-engine/panel')
+    expect(host.routes[1]!.path).toBe('/api/novel-write-engine/v8')
     expect(host.provided.novelEngine).toBeDefined()
   })
 
@@ -121,13 +123,13 @@ describe('plugin assembly', () => {
     expect(denied.statusCode).toBe(503)
   })
 
-  it('registers only ten tools in core mode', () => {
+  it('registers the same ten tools regardless of toolsMode', () => {
     const host = fakeHost()
     apply(
       host.ctx as never,
       (Config as unknown as (init: Record<string, unknown>) => never)({ toolsMode: 'core' }),
     )
-    expect(host.tools.map((tool) => tool.name).sort()).toEqual([...CORE_TOOLS].sort())
+    expect(host.tools.map((tool) => tool.name).sort()).toEqual([...STUDIO_TOOL_NAMES].sort())
   })
 
   it('disposes the engine through ctx.effect and is idempotent', () => {
@@ -144,7 +146,7 @@ describe('plugin assembly', () => {
   it('registers nothing when optional services are absent, and disposes cleanly', () => {
     const host = fakeHost(['tools'])
     apply(host.ctx as never, config)
-    expect(host.tools).toHaveLength(28)
+    expect(host.tools).toHaveLength(10)
     expect(host.commands).toHaveLength(0)
     expect(host.skills).toHaveLength(0)
     expect(host.routes).toHaveLength(0)
@@ -164,6 +166,6 @@ describe('plugin assembly', () => {
       host.ctx as never,
       (Config as unknown as (init: Record<string, unknown>) => never)({ projectRoot: '' }),
     )
-    expect(host.tools).toHaveLength(28)
+    expect(host.tools).toHaveLength(10)
   })
 })

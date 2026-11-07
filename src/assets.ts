@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ERROR_CODES, EngineFaultError } from './types.js'
@@ -29,6 +29,39 @@ export function readBundledText(relativePath: string): string {
 /** Ensure an absolute directory exists (init and overrides). */
 export function ensureDirAt(path: string): void {
   mkdirSync(path, { recursive: true })
+}
+
+/** Whether an external path exists (legacy import source). */
+export function existsAt(path: string): boolean {
+  return existsSync(path)
+}
+
+/** List an external directory (legacy import source). */
+export function listDirAt(path: string): string[] {
+  try {
+    return readdirSync(path).sort()
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return []
+    throw new EngineFaultError(
+      ERROR_CODES.CONFIG_INVALID,
+      `cannot list ${path}`,
+      'check the path and permissions',
+      {
+        cause: error,
+      },
+    )
+  }
+}
+
+/** Copy an external file or directory (legacy import preserve-only). */
+export function copyPathAt(source: string, target: string): void {
+  try {
+    cpSync(source, target, { recursive: true })
+  } catch (error) {
+    throw new EngineFaultError(ERROR_CODES.CONFIG_INVALID, `cannot copy ${source} to ${target}`, undefined, {
+      cause: error,
+    })
+  }
 }
 
 /** Read an optional file; `null` means it is absent, never an IO failure. */

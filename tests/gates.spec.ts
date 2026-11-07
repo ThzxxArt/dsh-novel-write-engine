@@ -185,7 +185,7 @@ describe('gate evaluation', () => {
   })
 
   it('runs PG-04 before PG-03 and collects every failure', () => {
-    const gateInput = input({ text: '他推开门，“你敢”。\n\n短。', summary: null, sceneType: null })
+    const gateInput = input({ text: '他推开门，"你敢"。\n\n短。', summary: null, sceneType: null })
     const blocking = evaluateGates(gateInput, options).blocking
     expect(blocking.length).toBeGreaterThanOrEqual(3)
     expect(blocking.map((item) => item.code)).toContain('PG-04')

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * T-11 release gate: every non-group plugin name in the preset must resolve
- * from a real DSH Web bundle root. Structural checks cannot catch a typo in a
- * package name; this script needs the host checkout (or an installed bundle).
+ * Release gate: every non-group plugin name in every preset row must resolve
+ * from a real DSH Web bundle root.
  *
  * Usage: DSH_BUNDLE_ROOT=/path/to/deepseek-harness/packages/bundle/web-app \
  *        pnpm check:preset
@@ -19,20 +18,36 @@ if (bundleRoot === undefined || bundleRoot.trim() === '') {
 }
 const root = resolve(bundleRoot)
 const require = createRequire(join(root, 'package.json'))
-const patch = parseYaml(
-  readFileSync(new URL('../presets/novel-write-engine.patch.yml', import.meta.url), 'utf8'),
-)
+const patch = parseYaml(readFileSync(new URL('../presets/novel-studio.patch.yml', import.meta.url), 'utf8'))
 const rows = patch.flatMap((operation) => operation.insert ?? [])
-const config = rows[0]?.config
-if (config === undefined || !Array.isArray(config.plugins)) {
-  console.error('preset patch does not contain plugins[]')
+if (rows.length !== 13) {
+  console.error(`expected 13 preset rows, got ${rows.length}`)
   process.exit(1)
+}
+const expectedIds = [
+  'novel-studio',
+  'novel-role-showrunner',
+  'novel-role-architect',
+  'novel-role-worldsmith',
+  'novel-role-planner',
+  'novel-role-drafter',
+  'novel-role-critic-story',
+  'novel-role-critic-character',
+  'novel-role-critic-prose',
+  'novel-role-continuity',
+  'novel-role-polisher',
+  'novel-role-archivist',
+  'novel-role-radar',
+]
+const ids = rows.map((row) => row?.config?.id)
+for (const id of expectedIds) {
+  if (!ids.includes(id)) {
+    console.error(`missing preset ${id}`)
+    process.exit(1)
+  }
 }
 
 const names = []
-// The outer preset row is a package too; renaming it breaks the preset mount
-// before any nested plugin is touched.
-if (typeof rows[0]?.name === 'string' && rows[0].name !== '') names.push(rows[0].name)
 const walk = (entries) => {
   for (const entry of entries) {
     if (typeof entry.name !== 'string' || entry.name === '') {
@@ -43,7 +58,15 @@ const walk = (entries) => {
     if (entry.group === true && Array.isArray(entry.config)) walk(entry.config)
   }
 }
-walk(config.plugins)
+for (const row of rows) {
+  if (typeof row.name === 'string' && row.name !== '') names.push(row.name)
+  const config = row.config
+  if (config === undefined || !Array.isArray(config.plugins)) {
+    console.error(`preset ${String(row.id)} does not contain plugins[]`)
+    process.exit(1)
+  }
+  walk(config.plugins)
+}
 
 let failures = 0
 for (const name of [...new Set(names)].sort()) {

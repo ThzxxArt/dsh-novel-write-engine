@@ -22,7 +22,7 @@ const flatten = (entries: Entry[]): Entry[] =>
   ])
 
 /** T-11 / §11.6: the preset entry list must be structurally valid and complete. */
-it('T-11 the preset patch passes the registry entry-list contract', () => {
+it('T-11 the preset patch passes the registry entry-list contract without duplicate ids or invalid entries', () => {
   const operations = parseYaml(
     readFileSync(join(repoRoot, 'presets/novel-write-engine.patch.yml'), 'utf8'),
   ) as Array<{ insert: Entry[] }>

@@ -17,6 +17,8 @@ describe('agnes real model prose through the public engine', () => {
     'takes %s prose through P3->P8 and archive',
     async (model) => {
       const text = normalize(await readFile(join(FIXTURES, `${model}.md`), 'utf8'))
+      expect(text.length).toBeGreaterThan(100)
+      expect(text).not.toContain('```')
       const opening = Array.from(text.replace(/\s+/g, '')).slice(0, 14).join('')
       const summary = sampleSummary({
         events: ['他收到无名信封', '他决定拆开'],

@@ -361,7 +361,7 @@ describe('rule pack compiler', () => {
     const missingPlatform = structuredClone(rawPack) as { platform: Record<string, unknown> }
     delete missingPlatform.platform.fanqie
     expect(() => compileRulepack(missingPlatform)).toThrow(/platform.fanqie/)
-    expect(() => compileRulepack({ ...structuredClone(rawPack), schema_version: 2 })).toThrow(
+    expect(() => compileRulepack({ ...structuredClone(rawPack), schema_version: 9 })).toThrow(
       /schema_version/,
     )
     expect(() =>
@@ -390,12 +390,12 @@ describe('rule pack compiler', () => {
 describe('machine pipeline', () => {
   it('runs the five steps in order and never emits the lexicon first', () => {
     expect(PIPELINE_STEPS).toEqual(['segment', 'density', 'quote', 'exemption', 'lexicon'])
-    expect(Object.keys(BUILTIN_RULES)).toHaveLength(38)
+    expect(Object.keys(BUILTIN_RULES)).toHaveLength(47)
   })
 
   it('detects format, punctuation and lexicon violations', () => {
     const text =
-      '# 标题\n\n他推开门，“你来了”；她说...\n\n由此可见，多年以后，时间仿佛静止——这——是——场——戏——了。\n\n' +
+      '# 标题\n\n他推开门，“你来了”，又说"走"；她说...\n\n由此可见，多年以后，时间仿佛静止——这——是——场——戏——了。\n\n' +
       '了'.repeat(5) +
       '\n\n' +
       '他感到因为风很大，所以关上门。'

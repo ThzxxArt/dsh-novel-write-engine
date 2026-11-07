@@ -195,6 +195,24 @@ describe('three-chapter end to end', () => {
       expect(oneChapter.data.files).toContain('exports/book-ch001.md')
       const markdown = await engine.diff({ chapter: 1, root })
       expect(markdown.data.before.length).toBeGreaterThan(0)
+      expect(rows.map((row) => row.num)).not.toContain(4)
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('rejects an unknown brief stage and a missing project root', async () => {
+    const { root, engine, cleanup } = await harness()
+    try {
+      await engine.initProject({
+        title: '边界之书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        root,
+        words_per_chapter: [80, 400],
+      })
+      await expect(engine.getBrief({ stage: 'P0' as never, root })).rejects.toThrow()
+      await expect(engine.getStatus({ root: `${root}-missing` })).rejects.toThrow()
     } finally {
       await cleanup()
     }

@@ -2,9 +2,17 @@ import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcou
 import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
 import { textSimilarity } from '../domain/simhash.js'
 import { resolveLockBaseline } from '../engine/entity-anchors.js'
-import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
+import {
+  AI_TONE_RULES,
+  CROSS_RULES,
+  FORMAT_RULES,
+  LEXICON_RULES,
+  PUNCTUATION_RULES,
+  SEMANTIC_RULES,
+} from '../codes.js'
 import type { Severity, Violation } from '../types.js'
 import type { Rule, RuleContext } from './types.js'
+import { aiToneViolations, scanAiToneContext, type AiToneScanResult } from './ai-tone.js'
 
 const v = (code: string, severity: Severity, paragraph: number, detail: string): Violation => ({
   code,
@@ -12,6 +20,28 @@ const v = (code: string, severity: Severity, paragraph: number, detail: string):
   location: { paragraph },
   detail,
 })
+
+/* ------------------------------------------------------------- ai tone */
+
+const aiToneCache = new WeakMap<RuleContext, AiToneScanResult>()
+
+const aiToneScan = (ctx: RuleContext): AiToneScanResult => {
+  const cached = aiToneCache.get(ctx)
+  if (cached !== undefined) return cached
+  const result = scanAiToneContext(ctx)
+  aiToneCache.set(ctx, result)
+  return result
+}
+
+const aiToneRule =
+  (code: string): Rule =>
+  (ctx) => {
+    let violations = aiToneViolations(aiToneScan(ctx)).filter((violation) => violation.code === code)
+    if (ctx.aiToneStage === 'draft' || ctx.aiToneStage === 'review') {
+      violations = violations.map((violation) => ({ ...violation, severity: 'advisory' as const }))
+    }
+    return violations
+  }
 
 /** Ledger-level finding: it names the row, not an arbitrary paragraph. */
 const lv = (
@@ -79,14 +109,17 @@ const mdContamination: Rule = (ctx) => {
 const illegalQuote: Rule = (ctx) => {
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
-    const matches = paragraph.match(/[“”「」『』]/g)
+    // 0.2.13 already reclassified curly quotes as Chinese punctuation. Only
+    // ASCII quotes are wrong in Chinese prose; banning “”, 「」 and 『』 made
+    // every dialogue-bearing chapter fail PG-04.
+    const matches = paragraph.match(/["']/g)
     if (matches !== null)
       results.push(
         v(
           FORMAT_RULES.ILLEGAL_QUOTE,
           'blocker',
           index + 1,
-          `contains ${matches.length} curly/CJK quote mark(s) ${[...new Set(matches)].join(' ')}; near "${excerptAround(
+          `contains ${matches.length} ASCII quote mark(s); near "${excerptAround(
             paragraph,
             matches[0] as string,
           )}"`,
@@ -1714,4 +1747,13 @@ export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
   [CROSS_RULES.TIME_REGRESSION]: timeRegression,
   [CROSS_RULES.RELATION_UNKNOWN]: relationUnknown,
   [CROSS_RULES.LOCKED_DETAIL_DRIFT]: lockedDetailDrift,
+  [AI_TONE_RULES.META]: aiToneRule(AI_TONE_RULES.META),
+  [AI_TONE_RULES.ACK]: aiToneRule(AI_TONE_RULES.ACK),
+  [AI_TONE_RULES.COMPARATIVE]: aiToneRule(AI_TONE_RULES.COMPARATIVE),
+  [AI_TONE_RULES.PROTECTIVE]: aiToneRule(AI_TONE_RULES.PROTECTIVE),
+  [AI_TONE_RULES.SOCRATIC]: aiToneRule(AI_TONE_RULES.SOCRATIC),
+  [AI_TONE_RULES.TEMPLATE]: aiToneRule(AI_TONE_RULES.TEMPLATE),
+  [AI_TONE_RULES.JUDGMENT]: aiToneRule(AI_TONE_RULES.JUDGMENT),
+  [AI_TONE_RULES.DENSITY]: aiToneRule(AI_TONE_RULES.DENSITY),
+  [AI_TONE_RULES.REPEAT]: aiToneRule(AI_TONE_RULES.REPEAT),
 }

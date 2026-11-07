@@ -57,6 +57,10 @@ describe('command reference', () => {
       expect(combination.steps.length, combination.title).toBeGreaterThanOrEqual(2)
       expect(combination.note.length, combination.title).toBeGreaterThan(10)
     }
+    // The reference is a closed list: an invented form or admin op must not
+    // silently appear in it.
+    expect(forms).not.toContain('/novel nope')
+    expect([...ADMIN_OPERATION_NAMES]).not.toContain('nope')
   })
 
   it('keeps the tutorial version aligned with package.json', () => {

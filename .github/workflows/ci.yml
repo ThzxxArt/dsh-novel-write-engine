@@ -34,6 +34,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm check:hygiene
+      - run: pnpm check:test-pairs
       - run: pnpm test:isolated
 
   test:
@@ -106,6 +107,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm validate:rulepack
+      - run: pnpm validate:taxonomy
       - run: pnpm check:pack
       - run: pnpm check:artifacts
       - run: pnpm check:install
@@ -134,7 +136,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Install disposable DSH runtime
-        run: npm install --prefix "$RUNNER_TEMP/dsh-runtime" --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+        run: npm install --prefix "$RUNNER_TEMP/dsh-runtime" --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.1
       - name: Resolve every preset package from the real bundle
         run: DSH_BUNDLE_ROOT="$RUNNER_TEMP/dsh-runtime/node_modules/@deepseek-ai/dsh-web-app" pnpm check:preset
       - name: Mount, execute novel_init and remove the plugin in the real host
@@ -161,5 +163,6 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm validate:rulepack
+      - run: pnpm validate:taxonomy
       - run: pnpm check:pack
       - run: pnpm check:artifacts

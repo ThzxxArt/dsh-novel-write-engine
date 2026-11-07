@@ -85,12 +85,13 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
   const paragraphs = splitParagraphs(text)
   const metrics = countWordMetrics(text)
   const rhythm = sentenceRhythm(text)
+  const context = toContext(text, options)
 
   // 2. density (everything whose verdict is per-paragraph or per-window)
   const densityViolations: Violation[] = []
   for (const code of registry.codes()) {
     if (lexiconCodes.has(code)) continue
-    densityViolations.push(...registry.get(code)!(toContext(text, options)))
+    densityViolations.push(...registry.get(code)!(context))
   }
 
   // 3. quote ratio (computed before exemptions so the report can explain itself)
@@ -103,7 +104,7 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
   const lexiconViolations: Violation[] = []
   for (const code of registry.codes()) {
     if (!lexiconCodes.has(code)) continue
-    lexiconViolations.push(...registry.get(code)!(toContext(text, options)))
+    lexiconViolations.push(...registry.get(code)!(context))
   }
   const finalLexicon = lexiconViolations.filter(
     (violation) => !options.rulepack.exemptions.includes(violation.code),

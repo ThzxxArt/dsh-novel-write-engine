@@ -763,6 +763,7 @@ describe('command adapters', () => {
         rounds: { review: 0, revise: 0, check: 0 },
         blocking: [],
         metrics: null,
+        book: undefined as never,
         next: { tool: 'novel_plan_world', args: {}, reason: 'start' },
       }),
     )
