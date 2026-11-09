@@ -204,10 +204,10 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.15
+dsh plugin --profile web add dsh-novel-write-engine@latest
 ```
 
-安装后重启 DSH，或刷新 Web 页面。
+`@latest` 会获取 npm 当前 `latest` 标签指向的版本。安装后重启 DSH，或刷新 Web 页面。
 
 **验证安装：**
 
@@ -267,7 +267,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.15`）；
+3. 填 npm 包名 `dsh-novel-write-engine@latest`（获取 npm 当前 latest 版本）；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -628,7 +628,7 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.15
+### 升级到 latest
 
 0.2.15 只修面板分页，不动 schema 与门控：删除了「按数组顺序删行来迁就 64KB 上限、迁就完再清空 `next_cursor`」的预算函数；分页改为在发页之前缩短页面并改写游标，`chapters`、`characters`、`foreshadows`、`timeline`、`relationships` 五个台账共用一处；人物栏补上翻页控件；设定栏 14 组列表改为按组预览，每次收缩都写进 `counts` 的 `total`/`shown`，面板显示「显示 X / 共 Y」。`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7，`PANEL_VERSION` 升到 0.2.15。
 
@@ -636,10 +636,10 @@ corepack pnpm test
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add dsh-novel-write-engine@0.2.15
+dsh plugin --profile web add dsh-novel-write-engine@latest
 ```
 
-升级后刷新页面、新开会话。面板教程版本升到 0.2.15；旧标签页显示“需要刷新”时刷新即可。
+`@latest` 会获取 npm 当前 latest 版本。升级后刷新页面、新开会话。面板教程版本升到 0.2.15；旧标签页显示“需要刷新”时刷新即可。
 
 历史版本（0.2.14 含 8 处破坏性行为变化：资源双写拒绝、PG-06 降级、实体锚点 8 字、`state_delta` 未知键拒绝等）的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
