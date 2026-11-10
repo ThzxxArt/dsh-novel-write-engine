@@ -736,6 +736,7 @@ export function normalizeOutlineChapters(
       status: 'planned',
       archived_at: null,
       word_count: null,
+      cjk_words: null,
       score: null,
     })
   }
@@ -859,6 +860,14 @@ export function validateOutlineDocument(
         throw new EngineInputError(
           ERROR_CODES.SCHEMA_INVALID,
           `chapter ${num} is planned but carries archived_at/word_count/score`,
+        )
+      }
+      // 0.2.17: a planned card carrying the previous draft's CJK count was
+      // read back as the plan value by P2/P3 and the panel.
+      if (planned && raw.cjk_words !== undefined && raw.cjk_words !== null) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `chapter ${num} is planned but carries cjk_words; clear it when the chapter is reopened`,
         )
       }
       if (archivedAt !== null && typeof archivedAt !== 'string') {
@@ -1218,6 +1227,9 @@ export function markOutlineReopened(
           status: 'planned' as const,
           archived_at: null,
           word_count: null,
+          // 0.2.17: a planned card must not keep the CJK count of the previous
+          // draft. P2/P3 and the panel read it as a plan value.
+          cjk_words: null,
           score: null,
         }
       : card,
@@ -1241,6 +1253,7 @@ export function markOutlineReopened(
       status: 'planned',
       archived_at: null,
       word_count: null,
+      cjk_words: null,
       score: null,
     })
     chapters.sort((left, right) => left.num - right.num)
@@ -1316,7 +1329,14 @@ const pick = <T>(values: readonly T[], mentioned: string, key: (value: T) => str
   return [...matched, ...rest].slice(0, limit)
 }
 
-/** Protect the brief budget from a legal-but-huge planning document. */
+/**
+ * Clip one free-text field of a brief projection.
+ *
+ * This is not a size budget: the stage decides which rows it shows, and each
+ * row is one line. A worldbook entry whose body is a whole chapter would make
+ * the brief unreadable, so the body is clipped and the full text stays in
+ * `novel_state` / `novel_search`.
+ */
 const clip = (value: string, limit: number): string => {
   const chars = Array.from(value)
   return chars.length <= limit ? value : `${chars.slice(0, limit).join('')}…`

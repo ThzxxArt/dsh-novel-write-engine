@@ -22,7 +22,13 @@ export interface JournalRecord {
   chapter: number
   revision: number
   files: string[]
-  status: 'pending' | 'committed' | 'aborted'
+  /**
+   * 0.2.17: `rolled_back` is the compensating terminal row for a transaction
+   * whose files were renamed but whose `committed` row could not be made
+   * durable. It voids that transaction's hashes without pretending the files
+   * were never touched, and it always carries a reason.
+   */
+  status: 'pending' | 'committed' | 'aborted' | 'rolled_back'
   reason?: string
   code?: string
   hint?: string
@@ -76,7 +82,12 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
     try {
       const raw = JSON.parse(line) as Partial<JournalRecord>
       if (typeof raw.txid !== 'string' || typeof raw.op !== 'string') throw new Error('shape')
-      if (raw.status !== 'pending' && raw.status !== 'committed' && raw.status !== 'aborted') {
+      if (
+        raw.status !== 'pending' &&
+        raw.status !== 'committed' &&
+        raw.status !== 'aborted' &&
+        raw.status !== 'rolled_back'
+      ) {
         throw new Error('status')
       }
       const record: JournalRecord = {
@@ -177,6 +188,13 @@ export async function reconcileJournal(store: FsStore): Promise<{
   // transaction. A pipeline-only brief transaction would otherwise reset the
   // external-edit detector for every ledger written earlier.
   const expected = new Map<string, { txid: string; hash: string }>()
+  /** Last terminal status per transaction; a later row supersedes an earlier one. */
+  const terminalByTxid = new Map<string, JournalRecord['status']>()
+  for (const record of records) {
+    if (record.status === 'committed' || record.status === 'aborted' || record.status === 'rolled_back') {
+      terminalByTxid.set(record.txid, record.status)
+    }
+  }
   // The authoritative ledgers and planning documents are checked here.
   // Manuscripts, plans, reviews and checks have their own content-hash gates
   // (PG-07/PG-09/PG-12); exports are derived artifacts, so an external edit
@@ -195,6 +213,10 @@ export async function reconcileJournal(store: FsStore): Promise<{
     path !== BRIEF_RECEIPTS_FILE
   for (const record of records) {
     if (record.status !== 'committed' || record.hashes === undefined) continue
+    // 0.2.17: the LAST terminal row per txid wins. A transaction that wrote a
+    // `committed` row and then had its files compensated must not keep claiming
+    // its hashes, or every later write fails TXN_ABORTED forever.
+    if (terminalByTxid.get(record.txid) === 'rolled_back') continue
     for (const [path, hash] of Object.entries(record.hashes)) {
       if (!tracked(path)) continue
       expected.set(path, { txid: record.txid, hash })

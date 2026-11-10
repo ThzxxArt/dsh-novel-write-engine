@@ -21,6 +21,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
     reader_intrusion: [],
     god_view: [],
     conclusion_first: { verbs: [], causals: [] },
+    ai_tone: { version: 1, categories: {}, entries: [] },
   },
   format: {
     paragraph_max_words: 90,
@@ -54,6 +55,11 @@ export const DEFAULT_RULEPACK: Rulepack = {
       scene_thresholds: { '战斗/动作章': 0.25, 日常过渡章: 0.35, 情感爆发章: 0.3, 纯叙事章: 0.4 },
       terms: [],
     },
+    // 0.2.17: empty by default, so a pack that predates the style layer compiles
+    // to silence rather than to a half-configured rule.
+    abstract_emotion: { terms: [] },
+    metaphor: { markers: [] },
+    emotion_cues: { terms: [] },
   },
   platform: {
     fanqie: platformDefaults([2000, 3000], [0.4, 0.6]),
@@ -78,6 +84,9 @@ export const DEFAULT_RULEPACK: Rulepack = {
 }
 
 type Unknown = Record<string, unknown>
+
+/** The match modes a lexicon term may declare (0.2.17). */
+export const TERM_MATCH_MODES: readonly string[] = ['substring', 'standalone', 'line_start']
 
 const invalid = (message: string): never => {
   throw new EngineFaultError(ERROR_CODES.RULEPACK_INVALID, `rule pack rejected: ${message}`)
@@ -112,6 +121,170 @@ const bool = (value: unknown, path: string): boolean => {
 const knownKeys = (value: Unknown, allowed: readonly string[], path: string): void => {
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) invalid(`${path}.${key} is not a recognised key`)
+  }
+}
+
+const AI_TONE_SEVERITIES = ['blocker', 'advisory'] as const
+const AI_TONE_SCOPES = ['any', 'narration', 'dialogue'] as const
+const AI_TONE_ESCALATIONS = ['none', 'one_level'] as const
+const AI_TONE_MATCHES = ['exact', 'regex', 'template'] as const
+
+/**
+ * 0.2.17: validate `lexicon.ai_tone`.
+ *
+ * A tone entry is executable, not a word list: it carries a matcher, a scope, a
+ * window and an escalation. Nine assertions cover every way one can be wrong,
+ * so a broken entry fails at load instead of silently never matching.
+ */
+function validateAiTone(raw: unknown): void {
+  if (raw === undefined) return
+  const block = object(raw, 'lexicon.ai_tone')
+  knownKeys(block, ['version', 'categories', 'entries'], 'lexicon.ai_tone')
+  if (block.version !== 1) invalid('lexicon.ai_tone.version must be 1')
+
+  const categories = object(block.categories, 'lexicon.ai_tone.categories')
+  const codes = new Set<string>()
+  for (const [name, value] of Object.entries(categories)) {
+    const path = `lexicon.ai_tone.categories.${name}`
+    const category = object(value, path)
+    knownKeys(
+      category,
+      ['code', 'default_severity', 'default_scope', 'limit', 'window', 'escalation', 'note'],
+      path,
+    )
+    const code = string(category.code, `${path}.code`)
+    // 2. the code is an engine rule code and no two categories share one.
+    if (!/^AI_TONE_[A-Z_]+$/.test(code)) invalid(`${path}.code must match ^AI_TONE_[A-Z_]+$`)
+    if (codes.has(code)) invalid(`${path}.code duplicates ${code}`)
+    codes.add(code)
+    if (
+      !(AI_TONE_SEVERITIES as readonly string[]).includes(
+        string(category.default_severity, `${path}.default_severity`),
+      )
+    ) {
+      invalid(`${path}.default_severity must be blocker or advisory`)
+    }
+    if (
+      !(AI_TONE_SCOPES as readonly string[]).includes(string(category.default_scope, `${path}.default_scope`))
+    ) {
+      invalid(`${path}.default_scope must be any, narration or dialogue`)
+    }
+    // 7. the window must be able to hold more than one hit.
+    if (num(category.limit, `${path}.limit`) < 1) invalid(`${path}.limit must be >= 1`)
+    if (num(category.window, `${path}.window`) < 100) invalid(`${path}.window must be >= 100`)
+    if (
+      !(AI_TONE_ESCALATIONS as readonly string[]).includes(string(category.escalation, `${path}.escalation`))
+    ) {
+      invalid(`${path}.escalation must be none or one_level`)
+    }
+  }
+
+  const entries = array(block.entries, 'lexicon.ai_tone.entries')
+  const ids = new Set<string>()
+  for (const [index, value] of entries.entries()) {
+    const path = `lexicon.ai_tone.entries[${index}]`
+    const entry = object(value, path)
+    knownKeys(
+      entry,
+      [
+        'id',
+        'category',
+        'match',
+        'terms',
+        'pattern',
+        'template',
+        'severity',
+        'severity_in_dialogue',
+        'scope',
+        'limit',
+        'window',
+        'escalation',
+        'exclude_if_matches',
+        'standalone',
+        'note',
+        'replacement',
+        'false_positives',
+      ],
+      path,
+    )
+    // 9. ids are unique, so a finding can name exactly one entry.
+    const id = string(entry.id, `${path}.id`)
+    if (ids.has(id)) invalid(`${path}.id duplicates ${id}`)
+    ids.add(id)
+    // 1. the category must exist.
+    const category = string(entry.category, `${path}.category`)
+    if (!Object.hasOwn(categories, category)) invalid(`${path}.category "${category}" is not declared`)
+    // 3. the matcher and its payload must agree.
+    const match = string(entry.match, `${path}.match`)
+    if (!(AI_TONE_MATCHES as readonly string[]).includes(match)) {
+      invalid(`${path}.match must be exact, regex or template`)
+    }
+    if (match === 'exact') {
+      const terms = array(entry.terms, `${path}.terms`)
+      if (terms.length === 0) invalid(`${path}.terms must not be empty`)
+      for (const [termIndex, term] of terms.entries()) string(term, `${path}.terms[${termIndex}]`)
+    } else if (match === 'regex') {
+      const pattern = string(entry.pattern, `${path}.pattern`)
+      // 4. a regex that does not compile would throw at check time.
+      try {
+        new RegExp(pattern, 'g')
+      } catch {
+        invalid(`${path}.pattern does not compile`)
+      }
+    } else {
+      const template = string(entry.template, `${path}.template`)
+      if (!/\{[a-z]+\}/.test(template)) invalid(`${path}.template must contain one {placeholder}`)
+    }
+    if (!(AI_TONE_SEVERITIES as readonly string[]).includes(string(entry.severity, `${path}.severity`))) {
+      invalid(`${path}.severity must be blocker or advisory`)
+    }
+    if (entry.severity_in_dialogue !== undefined) {
+      if (
+        !(AI_TONE_SEVERITIES as readonly string[]).includes(
+          string(entry.severity_in_dialogue, `${path}.severity_in_dialogue`),
+        )
+      ) {
+        invalid(`${path}.severity_in_dialogue must be blocker or advisory`)
+      }
+    }
+    if (!(AI_TONE_SCOPES as readonly string[]).includes(string(entry.scope, `${path}.scope`))) {
+      invalid(`${path}.scope must be any, narration or dialogue`)
+    }
+    if (entry.limit !== undefined && num(entry.limit, `${path}.limit`) < 1) {
+      invalid(`${path}.limit must be >= 1`)
+    }
+    if (entry.window !== undefined && num(entry.window, `${path}.window`) < 100) {
+      invalid(`${path}.window must be >= 100`)
+    }
+    if (entry.escalation !== undefined) {
+      if (
+        !(AI_TONE_ESCALATIONS as readonly string[]).includes(string(entry.escalation, `${path}.escalation`))
+      ) {
+        invalid(`${path}.escalation must be none or one_level`)
+      }
+    }
+    if (entry.standalone !== undefined) bool(entry.standalone, `${path}.standalone`)
+    // 8. every exemption must compile, or a real hit slips through.
+    if (entry.exclude_if_matches !== undefined) {
+      for (const [ruleIndex, rule] of array(
+        entry.exclude_if_matches,
+        `${path}.exclude_if_matches`,
+      ).entries()) {
+        const pattern = string(rule, `${path}.exclude_if_matches[${ruleIndex}]`)
+        try {
+          new RegExp(pattern)
+        } catch {
+          invalid(`${path}.exclude_if_matches[${ruleIndex}] does not compile`)
+        }
+      }
+    }
+    if (entry.false_positives !== undefined) {
+      for (const [fpIndex, line] of array(entry.false_positives, `${path}.false_positives`).entries()) {
+        string(line, `${path}.false_positives[${fpIndex}]`)
+      }
+    }
+    if (entry.replacement !== undefined) string(entry.replacement, `${path}.replacement`)
+    if (entry.note !== undefined) string(entry.note, `${path}.note`)
   }
 }
 
@@ -188,10 +361,29 @@ export function compileRulepack(raw: unknown): Rulepack {
     'pleasure_density',
     'sensory_density',
     'water_words',
+    'abstract_emotion',
+    'metaphor',
+    'emotion_cues',
   ])
   nested(semantics, 'adjective_density', ['max', 'adjectives'])
   nested(semantics, 'pleasure_density', ['min', 'keywords', 'window'])
   nested(semantics, 'sensory_density', ['min', 'senses', 'window'])
+  // 0.2.17 style vocabulary: each block is optional, and a present block must be
+  // a mapping with exactly one non-empty string array.
+  for (const [key, listKey] of [
+    ['abstract_emotion', 'terms'],
+    ['metaphor', 'markers'],
+    ['emotion_cues', 'terms'],
+  ] as const) {
+    const block = nested(semantics, key, [listKey])
+    if (block === null) continue
+    // "non-empty strings", not "non-empty array": an empty list is the documented
+    // way to switch one density rule off, and DEFAULT_RULEPACK ships empty.
+    const list = array(block[listKey], `semantics.${key}.${listKey}`)
+    for (const [index, entry] of list.entries()) {
+      string(entry, `semantics.${key}.${listKey}[${index}]`)
+    }
+  }
   const waterWords = nested(semantics, 'water_words', ['window', 'threshold', 'scene_thresholds', 'terms'])
   if (waterWords !== null && waterWords.scene_thresholds !== undefined) {
     knownKeys(
@@ -208,8 +400,10 @@ export function compileRulepack(raw: unknown): Rulepack {
     'reader_intrusion',
     'god_view',
     'conclusion_first',
+    'ai_tone',
   ])
   nested(lexicon, 'conclusion_first', ['verbs', 'causals'])
+  validateAiTone(lexicon === null ? null : lexicon.ai_tone)
   for (const key of ['reader_intrusion', 'god_view'] as const) {
     if (lexicon === null || lexicon[key] === undefined) continue
     for (const [index, raw] of array(lexicon[key], `lexicon.${key}`).entries()) {
@@ -356,7 +550,7 @@ export function compileRulepack(raw: unknown): Rulepack {
       const entry = object(raw, path)
       knownKeys(
         entry,
-        kind === 'limit' ? ['term', 'limit', 'genres'] : ['term', 'note', 'dialogueExempt'],
+        kind === 'limit' ? ['term', 'limit', 'genres'] : ['term', 'note', 'dialogueExempt', 'match'],
         path,
       )
       if (typeof entry.term !== 'string' || entry.term.trim() === '') {
@@ -376,6 +570,9 @@ export function compileRulepack(raw: unknown): Rulepack {
       } else {
         if (entry.note !== undefined) string(entry.note, `${path}.note`)
         if (entry.dialogueExempt !== undefined) bool(entry.dialogueExempt, `${path}.dialogueExempt`)
+        if (entry.match !== undefined && !TERM_MATCH_MODES.includes(entry.match as string)) {
+          invalid(`${path}.match must be one of ${TERM_MATCH_MODES.join(', ')}`)
+        }
       }
     }
   }

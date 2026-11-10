@@ -97,7 +97,7 @@ describe('0.2.13 ledger truth', () => {
       backstory: [],
       themes: [],
     } as unknown as WorldbookDocument
-    const baseline = resolveLockBaseline('甲', 'character', { worldbook })
+    const baseline = resolveLockBaseline('甲', 'character', { worldbook }).baseline
     expect(baseline?.texts[0]).toContain('左眉')
     expect(baseline?.source).toBe('worldbook')
   })
@@ -184,8 +184,8 @@ describe('0.2.13 ledger truth', () => {
       backstory: [],
       themes: [],
     } as unknown as WorldbookDocument
-    expect(resolveLockBaseline('甲', 'character', { worldbook })?.texts[0]).toContain('左眉')
-    expect(resolveLockBaseline('乙', 'character', { worldbook })).toBeNull()
+    expect(resolveLockBaseline('甲', 'character', { worldbook }).baseline?.texts[0]).toContain('左眉')
+    expect(resolveLockBaseline('乙', 'character', { worldbook }).baseline).toBeNull()
     const drift = runMachineChecks(
       '甲穿着雪白西装，头发梳得整齐，手上没有一点旧伤。',
       options({ evidence: { ...options().evidence, worldbook } }),
@@ -346,7 +346,7 @@ describe('0.2.13 branch edges', () => {
       backstory: [],
       themes: [],
     } as unknown as WorldbookDocument
-    expect(resolveLockBaseline('旧屋', 'location', { worldbook })?.texts.length).toBeGreaterThan(0)
+    expect(resolveLockBaseline('旧屋', 'location', { worldbook }).baseline?.texts.length).toBeGreaterThan(0)
   })
 })
 
@@ -535,7 +535,7 @@ describe('0.2.13 state read edges', () => {
         },
       },
     } as unknown as import('../src/types.js').LocksDocument
-    expect(resolveLockBaseline('旧屋', 'location', { locks })?.texts.length).toBeGreaterThan(0)
-    expect(resolveLockBaseline('不存在', 'location', { locks })).toBeNull()
+    expect(resolveLockBaseline('旧屋', 'location', { locks }).baseline?.texts.length).toBeGreaterThan(0)
+    expect(resolveLockBaseline('不存在', 'location', { locks }).baseline).toBeNull()
   })
 })

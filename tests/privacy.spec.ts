@@ -22,6 +22,8 @@ const productRoots = [
   { directory: new URL('../skills/', import.meta.url), extensions: ['.md'] },
   { directory: new URL('../presets/', import.meta.url), extensions: ['.yml', '.yaml'] },
   { directory: new URL('../rulepacks/', import.meta.url), extensions: ['.yml', '.yaml'] },
+  // 0.2.17: style packs ship in the tarball, so their exemplars must stay neutral.
+  { directory: new URL('../stylepacks/', import.meta.url), extensions: ['.yml', '.yaml'] },
   { directory: new URL('../docs/', import.meta.url), extensions: ['.md'] },
 ]
 

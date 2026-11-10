@@ -167,6 +167,10 @@ export const ERROR_CODES = {
   FORESHADOW_UNPLANNED: 'ENGINE_FORESHADOW_UNPLANNED',
   SCHEMA_TOO_NEW: 'ENGINE_SCHEMA_TOO_NEW',
   SCHEMA_INVALID: 'ENGINE_SCHEMA_INVALID',
+  /** 0.2.17: the user saw the permanent fields and asked for changes; nothing was written. */
+  CONFIRMATION_REJECTED: 'ENGINE_CONFIRMATION_REJECTED',
+  /** 0.2.17: the confirmation was aborted or could not be asked; nothing was written. */
+  CONFIRMATION_ABORTED: 'ENGINE_CONFIRMATION_ABORTED',
   PATH_ESCAPE: 'ENGINE_PATH_ESCAPE',
   LOCK_TIMEOUT: 'ENGINE_LOCK_TIMEOUT',
   TXN_ABORTED: 'ENGINE_TXN_ABORTED',
@@ -343,6 +347,13 @@ export interface CheckDocument {
       equations_checked: number
       findings: number
     }
+    /**
+     * 0.2.17: the measurements the `STYLE_*` findings were judged against.
+     * Persisted for the same reason `dialogue` and `numeric` are: a stored check
+     * that says "the sentence mix drifted" must carry the numbers, or the record
+     * cannot be re-read without re-running the machine pass.
+     */
+    style?: import('./domain/style.js').StyleMetrics
     /** 0.2.13 per-finding acknowledgements; kept under machine so 0.2.12 can read the document. */
     acknowledged_findings?: Array<{
       id: string
@@ -392,6 +403,8 @@ export type StateErrorCode =
   | 'HANDOFF_UNREADABLE'
   | 'OUTLINE_UNREADABLE'
   | 'WORLDBOOK_UNREADABLE'
+  /** 0.2.17: state/briefs.yaml is damaged; every PG-01 check will fail until it is repaired. */
+  | 'BRIEFS_UNREADABLE'
 
 /** A state document that exists but cannot be read safely. */
 export interface StateError {
@@ -427,6 +440,8 @@ export interface WordMetrics {
     dialogue_quotes: number
     other: number
   }
+  /** 0.2.17: full-width indent characters, counted by nothing. */
+  indent_chars?: number
 }
 
 /** Protected evidence copied from the archived outline card at archive time. */
@@ -513,6 +528,12 @@ export interface RoundCounters {
   review: number
   revise: number
   check: number
+  /**
+   * 0.2.17: content-only checks that passed. They stay at P6 (a partial pass is
+   * informational), but they still consume the check budget — otherwise a model
+   * could spin on content-only checks forever without PG-11 stopping it.
+   */
+  partial_checks?: number
   /** Lifetime rollback count on a chapter record; never stored in the live pipeline. */
   rollbacks?: number
 }
@@ -702,6 +723,8 @@ export interface WorldDocument {
     layout: string
     capacity: number
     changes: Array<{ chapter: number; change: string; reason: string }>
+    /** 0.2.17: extra fields declared in `state_delta.world.<name>.detail` survive the round trip. */
+    [extra: string]: unknown
   }>
   abilities: unknown[]
   artifacts: unknown[]
@@ -809,6 +832,24 @@ export interface NovelProject {
     /** 0.2.14: allow a ledger balance to go negative (debt). Default false. */
     allow_negative_balances?: boolean
   }
+  /**
+   * 0.2.17: the book's style pack id.
+   *
+   * Three states, all meaningful (§4.4): `undefined` is "this project predates
+   * the style layer" and may migrate once; a string is "set and immutable"; and
+   * `null` is "the user looked at the packs and chose none" — equally immutable,
+   * but no pack is ever loaded.
+   */
+  style?: string | null
+  /**
+   * 0.2.17: how the style choice was made, recorded once at creation.
+   *
+   * `confirmed` means a human saw the five permanent fields; `skipped:*` means no
+   * answerer was reachable (headless, subagent, no UI) and the book was created
+   * without one. Absence means the project predates the gate. Persisted because a
+   * downgrade that only lives in one tool response is invisible by the next call.
+   */
+  style_confirmation?: string
 }
 
 /** World plan (`plans/chNNN.world.yaml`). */
@@ -1112,6 +1153,8 @@ export interface BookReport {
       final_check: 'pass' | 'fail' | null
       archived_at: string | null
     }>
+    /** 0.2.17: present only when a lean report trimmed the row list. */
+    chapters_truncated?: { shown: number; total: number; note: string }
   }
   pacing: {
     scene_types: Record<string, number>
@@ -1159,6 +1202,19 @@ export interface BookReport {
     coverage?: number
   }
   activity: Array<{ at: string; op: string; chapter: number; status: string }>
+  /**
+   * 0.2.17: the book's style and this chapter's measurements. `null` means the
+   * book has no pack, so the whole block is absent from the payload rather than
+   * pretending to be a pass.
+   */
+  style?: {
+    id: string
+    name: string
+    /** Absent when there is no manuscript: nothing was measured, so nothing is claimed. */
+    metrics?: import('./domain/style.js').StyleMetrics
+    findings: string[]
+    verdict: 'pass' | 'attention' | 'no-draft'
+  } | null
   warnings: string[]
 }
 
@@ -1179,6 +1235,12 @@ export interface GuideReport {
   next: { tool: string; args: Record<string, unknown>; reason: string }
   commands: string[]
   tips: string[]
+  /**
+   * 0.2.17: the eight bundled style packs, one line each. Present only before a
+   * project exists — after that the choice is made and immutable, so repeating
+   * the list would invite a question that has no legal answer.
+   */
+  style_packs?: Array<{ id: string; name: string; description: string }>
 }
 
 /** Draft submission payload. */
@@ -1388,14 +1450,28 @@ export interface StatusReport {
     min_cjk_chars: number | null
     basis: 'total_word_count = cjk_chars + english_words + numbers + punctuation_chars'
   }
-  /** 0.2.14: the same dialogue verdict the check records, visible before a check. */
+  /**
+   * 0.2.14: the same dialogue verdict the check records, visible before a check.
+   *
+   * 0.2.17 (C6): `target` is the style pack's aiming point (`null` when the book
+   * has no pack) and `range` is the accepted range the user confirmed at
+   * creation. Before this split both were folded into `target`, so a reader could
+   * not tell "aim here" from "must stay inside here".
+   */
   dialogue?: {
-    target: [number, number] | null
+    target: number | null
+    range: [number, number]
     metric: 'lines' | 'chars' | 'both'
     line_ratio: number
     char_ratio: number
     verdict: 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured'
   }
+  /** 0.2.17: the book's style pack, or null when it has none. */
+  style?: { id: string; name: string } | null
+  /** 0.2.17: the raw disk value, so `undefined` (migratable) differs from `null`. */
+  style_id?: string | null
+  /** 0.2.17: `confirmed` or `skipped:*`; absent on projects older than the gate. */
+  style_confirmation?: string
   /** Inherited handoff labels; absent before the first archive. */
   volume?: number
   volume_name?: string
@@ -1456,7 +1532,8 @@ export interface AuditRow {
   chapter: number
   revision: number
   txid: string
-  status: 'committed' | 'aborted'
+  /** 0.2.17: `rolled_back` marks a compensated transaction whose files are back at the pre-image. */
+  status: 'committed' | 'aborted' | 'rolled_back'
   files: string[]
   /** Machine code and human reason for a refused attempt. */
   code?: string

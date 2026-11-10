@@ -614,7 +614,7 @@ describe('gate evaluation', () => {
     ).toContain('PG-09')
   })
 
-  it('PG-09 uses the referenced occurrence when the same sentence repeats', () => {
+  it('PG-09 rejects three references that quote the same sentence', () => {
     const repeated = '他伸手压住被风吹翻的纸角。'
     const repeatedText = [
       repeated,
@@ -627,6 +627,39 @@ describe('gate evaluation', () => {
       opening: { paragraph: 1, quote: repeated },
       middle: { paragraph: 3, quote: '第三段写的是门缝里透进来的冷风。' },
       ending: { paragraph: 5, quote: repeated },
+    }
+    const base = input({
+      operation: 'submitReview',
+      stage: 'P4',
+      text: repeatedText,
+      pipeline: {
+        ...input().pipeline,
+        stage: 'P4',
+        briefs: { P4: { issued_at: 'x', digest: 'D' } },
+      },
+      briefStage: 'P4',
+      proof: repeatedProof,
+      review: review(150, 0, { proof: repeatedProof }),
+    })
+    // One sentence quoted twice proves one read, not two (0.2.17 P1-03).
+    expect(codes(base)).toContain('PG-09')
+  })
+
+  it('PG-09 uses the referenced occurrence when the same sentence repeats', () => {
+    const repeated = '他伸手压住被风吹翻的纸角。'
+    const repeatedText = [
+      '第一段写的是风从窗缝里挤进来。',
+      '第二段写的是走廊尽头的脚步声。',
+      '第三段写的是门缝里透进来的冷风。',
+      repeated,
+      '第五段写的是桌上那枚暗红蜡印。',
+      repeated,
+    ].join('\n\n')
+    const repeatedProof = {
+      opening: { paragraph: 1, quote: '第一段写的是风从窗缝里挤进来。' },
+      middle: { paragraph: 3, quote: '第三段写的是门缝里透进来的冷风。' },
+      // The quote also appears at paragraph 4; the reference points at 6.
+      ending: { paragraph: 6, quote: repeated },
     }
     const base = input({
       operation: 'submitReview',

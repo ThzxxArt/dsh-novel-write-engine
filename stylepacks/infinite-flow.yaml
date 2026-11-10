@@ -1,0 +1,100 @@
+schema_version: 1
+id: infinite-flow
+name: 无限流
+description: 规则先行，倒计时压迫，关卡目标明确，冷幽默解压。
+audience: general
+genres: [suspense, sci-fi, game]
+pov: first
+tense: past
+register: colloquial
+narrative_distance: close
+
+sentence:
+  short_ratio: 0.5
+  medium_ratio: 0.4
+  long_ratio: 0.1
+  burstiness: high
+  max_consecutive_same_length: 3
+
+paragraph:
+  max_chars: 80
+  one_action_per_paragraph: true
+  max_sentences: 3
+  max_actions: 4
+
+dialogue:
+  ratio: 0.35
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: high
+  idiom: low
+  sensory_channels: [sound, cold, sight, touch]
+
+structure:
+  opening_moves: [rule, countdown, anomaly]
+  scene_transition: hard_cut
+  hook_moves: [new_rule, death_toll, unresolved_question]
+  cool_point_every_chars: 800
+
+emotion:
+  intensity: high
+  expression: concrete
+  required_beats: [body_reaction, cost, choice, vulnerability]
+  min_cues_per_1000: 2.5
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 系统提示
+  - 恭喜宿主
+  - 玩家您好
+  - 副本介绍
+  - 叮的一声
+
+exemplars:
+  - |
+    【规则一：天黑后不要回答门外的人。】
+    【规则二：如果门外的人叫出你的名字，说明你已经回答过了。】
+    “老周，我知道你在。”门外的人敲了三下。
+    老周捂住嘴，没出声。
+    “你中午吃了红烧肉，对吧？”门外的人又说。
+    老周低头看了一眼桌上的空饭盒。
+    “别开门。”小赵压低声音，“它在诈你。”
+  - |
+    倒计时还剩四十秒。
+    “绳子！”小赵把绳子甩过来。
+    “另一头绑哪？”
+    “绑你身上。”
+    “那谁拉我？”
+    “我拉。”小赵指了指正在塌的桥，“你快点，我脚底下也空了。”
+    “你刚才不是说你来拉？”
+    “我拉你，桥拉我，行不行？”
+
+critic_rubric:
+  - 规则：规则要能推理、能利用，也要能反噬。
+  - 倒计时：每个副本都有清晰的剩余时间和失败代价。
+  - 目标：主角每章至少完成一个可验证的小目标。
+  - 冷幽默：紧张处用一句短吐槽泄压，不破坏危机。
+  - 群像：队友要有自己的判断，不能只当工具人。
+  - 情绪：恐惧、侥幸、愧疚都要有落点，冷幽默不能掩盖代价。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 3
+  metaphor_per_1000_max: 4

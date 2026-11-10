@@ -163,6 +163,35 @@ function fail(detail: string, details?: ErrorDetails): never {
   )
 }
 
+/** Fields a location owns; `detail` may extend the row but never rewrite them. */
+const LOCATION_RESERVED_DETAIL = [
+  'name',
+  'first_appearance',
+  'description',
+  'layout',
+  'capacity',
+  'locked',
+  'changes',
+  'anchors',
+] as const
+
+/**
+ * 0.2.17: `state_delta.world.<location>.detail` was silently dropped, so a
+ * model that recorded an extra location field believed it had written it while
+ * the ledger, the report and search never saw it. The extension is merged into
+ * the row, and a reserved field is refused instead of silently winning.
+ */
+function locationDetail(name: string, detail: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (detail === undefined) return {}
+  const blocked = LOCATION_RESERVED_DETAIL.filter((key) => Object.hasOwn(detail, key))
+  if (blocked.length > 0) {
+    fail(
+      `world.${name}.detail cannot rewrite the reserved field(s) ${blocked.join(', ')}; use the dedicated layout/capacity/description fields and keep detail for extra attributes`,
+    )
+  }
+  return detail
+}
+
 /** Refuse unknown keys instead of silently dropping them (0.2.14). */
 const assertDeltaKeys = (
   value: unknown,
@@ -921,6 +950,7 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       }
       if (kind === 'location') {
         world.locations.push({
+          ...locationDetail(name, declared.detail),
           name,
           first_appearance: chapter,
           locked: true,
@@ -963,6 +993,8 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
         if (declared.description !== undefined) location.description = declared.description
         if (declared.layout !== undefined) location.layout = declared.layout
         if (declared.capacity !== undefined) location.capacity = declared.capacity
+        // 0.2.17: extra location detail used to be dropped on update too.
+        if (declared.detail !== undefined) Object.assign(location, locationDetail(name, declared.detail))
         if (entityAnchors.length > 0) location.anchors = mergeEntityAnchors(location.anchors, entityAnchors)
         location.changes.push({
           chapter,

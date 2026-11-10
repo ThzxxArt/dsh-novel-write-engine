@@ -78,13 +78,14 @@ export function availableOps(stage: Stage): Operation[] {
 
 /** Whether one retry budget (or, without a counter, any budget) is spent. */
 export function roundsExhausted(
-  rounds: { review: number; revise: number; check: number },
+  rounds: { review: number; revise: number; check: number; partial_checks?: number },
   counter?: 'review' | 'revise' | 'check',
 ): boolean {
-  if (counter !== undefined) return rounds[counter] >= LIMITS.maxRounds
-  return (
-    rounds.review >= LIMITS.maxRounds || rounds.revise >= LIMITS.maxRounds || rounds.check >= LIMITS.maxRounds
-  )
+  // A content-only check that passed still spent one attempt; counting it is
+  // what stops a model from looping partial checks instead of finishing P6.
+  const checks = rounds.check + (rounds.partial_checks ?? 0)
+  if (counter !== undefined) return (counter === 'check' ? checks : rounds[counter]) >= LIMITS.maxRounds
+  return rounds.review >= LIMITS.maxRounds || rounds.revise >= LIMITS.maxRounds || checks >= LIMITS.maxRounds
 }
 
 /** The operation a stage expects next, used by `advise` and the status `next` block. */

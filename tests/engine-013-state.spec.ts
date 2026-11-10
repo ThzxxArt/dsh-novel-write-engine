@@ -367,7 +367,11 @@ describe('0.1.3 state repair and context truth', () => {
       })
       await engine.getBrief({ stage: 'P2', root })
       const p2 = await engine.getBrief({ stage: 'P2', root })
-      expect(JSON.stringify(p2.data.context).length).toBeLessThanOrEqual(8_000)
+      // 0.2.17 removed the context budget: the brief is complete, so every one
+      // of the 120 declared candidates must reach P2 rather than being trimmed
+      // to fit a byte target.
+      expect((p2.data.context as { characters: unknown[] }).characters).toHaveLength(120)
+      expect((p2.data.context as { context_meta: { complete: boolean } }).context_meta.complete).toBe(true)
       await engine.submitChapterPlan({
         chapter: 0,
         title: '雨夜碰头',

@@ -168,8 +168,8 @@ const largeInput = (): BriefContextInput => ({
   handoff: null,
 })
 
-describe('0.1.2 context budget', () => {
-  it('adds context_meta and keeps a small project intact', () => {
+describe('0.2.17 context completeness', () => {
+  it('reports a complete pack and keeps a small project intact', () => {
     const input = largeInput()
     input.characters.characters = input.characters.characters.slice(0, 2)
     input.world.locations = input.world.locations.slice(0, 2)
@@ -179,60 +179,49 @@ describe('0.1.2 context budget', () => {
     input.locks.characters = { 角色1: input.locks.characters['角色1']! }
     input.locks.locations = { 地点1: input.locks.locations['地点1']! }
     const context = briefContext(input)
-    const meta = context.context_meta as {
-      budget: number
-      used: number
-      over_budget: boolean
-      truncated: string[]
-      omitted: Record<string, number>
-    }
-    expect(meta.budget).toBe(32_000)
-    expect(meta.used).toBeLessThanOrEqual(meta.budget)
-    expect(meta.over_budget).toBe(false)
-    expect(meta.truncated).toEqual([])
-    expect(meta.omitted).toEqual({})
+    const meta = context.context_meta as { used: number; complete: boolean; strategy: string }
+    // No budget, no truncation report: the document is what it is.
+    expect(meta.complete).toBe(true)
+    expect(meta.strategy).toBe('complete')
+    expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
     expect(context.text).toBe(input.text)
     expect(context.plan).toEqual(input.plan)
   })
 
-  it('trims optional ledgers before a 100-chapter P6 brief can overflow', () => {
-    const context = briefContext(largeInput())
-    const meta = context.context_meta as {
-      budget: number
-      used: number
-      over_budget: boolean
-      truncated: string[]
-      omitted: Record<string, number>
-    }
-    expect(meta.used).toBeLessThanOrEqual(meta.budget)
-    expect(JSON.stringify(context).length).toBeLessThanOrEqual(meta.budget)
-    expect(meta.over_budget).toBe(false)
-    expect(meta.truncated).toEqual(expect.arrayContaining(['characters', 'foreshadows']))
-    expect(meta.omitted.characters).toBeGreaterThan(0)
-    expect(meta.omitted.foreshadows).toBeGreaterThan(0)
-    expect(context.text).toBe(largeInput().text)
-    expect(context.plan).toEqual(largeInput().plan)
+  it('delivers every ledger row of a 100-chapter P6 brief, however large', () => {
+    const input = largeInput()
+    const context = briefContext(input)
+    const meta = context.context_meta as { used: number; complete: boolean }
+    expect(meta.complete).toBe(true)
+    expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
+    // Every row survives; nothing is trimmed to fit a target.
+    expect((context.characters as unknown[]).length).toBe(input.characters.characters.length)
+    const openForeshadows = input.foreshadows.items.filter((item) => item.status !== 'resolved')
+    expect((context.foreshadows as { items: unknown[] }).items).toHaveLength(openForeshadows.length)
+    expect(context.text).toBe(input.text)
+    expect(context.plan).toEqual(input.plan)
     expect(context.review).toEqual(review)
     expect(context.check).toEqual(check)
   })
 
-  it('keeps every stage inside its own budget', () => {
+  it('returns the same complete pack for every stage', () => {
     for (const stage of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8']) {
       const context = briefContext({ ...largeInput(), stage })
-      const meta = context.context_meta as { stage: string; budget: number }
+      const meta = context.context_meta as { stage: string; complete: boolean; used: number }
       expect(meta.stage).toBe(stage)
-      expect(JSON.stringify(context).length).toBeLessThanOrEqual(meta.budget)
+      expect(meta.complete).toBe(true)
+      expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
     }
   })
 
-  it('reports over_budget instead of truncating protected manuscript text', () => {
+  it('never truncates the manuscript, however long', () => {
     const input = largeInput()
     input.text = `正文${'雨'.repeat(40_000)}`
     const context = briefContext(input)
-    const meta = context.context_meta as { over_budget: boolean; used: number; budget: number }
-    expect(meta.over_budget).toBe(true)
-    expect(meta.used).toBeGreaterThan(meta.budget)
+    // The old design reported an over-budget flag and kept the text; the point is
+    // that nothing else was dropped to make room for it either.
     expect(context.text).toBe(input.text)
+    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
   })
 
   it('is deterministic for equal input', () => {
@@ -299,15 +288,20 @@ describe('0.1.2 context budget', () => {
       })),
     }
     const context = briefContext(input)
-    const meta = context.context_meta as { budget: number; used: number }
-    expect(meta.used).toBeLessThanOrEqual(meta.budget)
+    // The declared cast comes first with its goals; the remaining 112 ledger
+    // rows follow instead of being trimmed away.
     const cast = context.characters as Array<{ name: string; goal?: string }>
-    expect(cast.map((character) => character.name)).toEqual([
-      ...Array.from({ length: 8 }, (_, index) => `角色${index + 1}`),
-      '角色100',
-    ])
+    expect(cast.slice(0, 8).map((character) => character.name)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `角色${index + 1}`),
+    )
     expect(cast.slice(0, 8).every((character) => character.goal !== undefined)).toBe(true)
-    expect(cast.at(-1)).toMatchObject({ name: '角色100', role: 'supporting' })
+    // The active cast is capped by design (a chapter is about a few people),
+    // but no ledger row is lost: the rest arrive as `other_characters`.
+    const others = context.other_characters as Array<{ name: string }>
+    expect(cast.length + others.length).toBe(120)
+    expect([...cast, ...others].map((character) => character.name)).toEqual(
+      expect.arrayContaining(['角色1', '角色100', '角色120']),
+    )
   })
 
   it('delivers the P1 world plan to P2 and preserves the active cast at P6', () => {
@@ -340,7 +334,7 @@ describe('0.1.2 context budget', () => {
         ],
       },
     })
-    expect((p6.context_meta as { used: number }).used).toBeLessThanOrEqual(32_000)
+    expect((p6.context_meta as { complete: boolean }).complete).toBe(true)
     // The plan cast plus the characters the summary says appeared are all active.
     expect((p6.active_cast as Array<{ name: string }>).map((row) => row.name)).toEqual([
       '角色9',
@@ -409,14 +403,14 @@ describe('0.1.2 context budget', () => {
     }
   })
 
-  it('keeps a 300-chapter index from turning the P6 brief into a full-book payload', () => {
+  it('keeps a 300-chapter history out of the P6 brief by projection, not by trimming', () => {
     const input = largeInput()
     input.chapters.chapters = Array.from({ length: 300 }, (_, index) => record(index + 1))
     const context = briefContext(input)
-    const meta = context.context_meta as { budget: number; used: number; truncated: string[] }
-    expect(meta.used).toBeLessThanOrEqual(meta.budget)
-    expect(meta.truncated).toEqual(expect.arrayContaining(['characters']))
+    // The stage emits a five-row score history; that is the stage's shape, not
+    // a budget the trimmer imposed afterwards.
     expect((context.score_history as unknown[]).length).toBeLessThanOrEqual(5)
+    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
   })
 
   it('does not activate a shorter ledger name when only a longer name is mentioned', () => {

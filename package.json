@@ -1,6 +1,6 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "keywords": [
     "dsh-plugin",
@@ -35,12 +35,14 @@
     "./rulepacks/*": "./rulepacks/*",
     "./briefs/*": "./briefs/*",
     "./skill": "./skills/entry.md",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./stylepacks/*": "./stylepacks/*"
   },
   "files": [
     "lib",
     "presets",
     "rulepacks",
+    "stylepacks",
     "briefs",
     "skills",
     "cordis.patch.yml",
@@ -81,14 +83,17 @@
     "test:coverage": "vitest run --coverage && node scripts/check-coverage.mjs",
     "test:isolated": "node scripts/check-isolated.mjs",
     "validate:rulepack": "node scripts/validate-rulepack.mjs",
+    "validate:stylepacks": "node scripts/validate-stylepacks.mjs",
     "check:preset": "node scripts/check-preset.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
     "check:install": "node scripts/check-install.mjs",
     "check:host": "node scripts/check-host.mjs",
     "check:crash": "node scripts/check-crash.mjs",
     "check:hygiene": "node scripts/check-hygiene.mjs",
-    "check:real-project": "node scripts/check-real-project.mjs"
+    "check:real-project": "node scripts/check-real-project.mjs",
+    "check:visual": "node scripts/check-visual.mjs"
   },
   "dependencies": {
     "yaml": "^2.6.0"

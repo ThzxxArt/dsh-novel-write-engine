@@ -170,12 +170,15 @@ export async function bootstrapToDraft(input: {
   title?: string
   scene?: SceneType
   narrator?: string
+  /** 0.2.17: bind a style pack at creation so downstream stages see one. */
+  style?: string
 }): Promise<void> {
   const root = input.root
   await input.engine.initProject({
     title: '测试之书',
     genre: '都市现代',
     platform: 'fanqie',
+    ...(input.style === undefined ? {} : { style: input.style }),
     root,
     words_per_chapter: [80, 400],
   })

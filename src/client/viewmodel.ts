@@ -360,6 +360,11 @@ const platformLabel = (platform: string): string => PLATFORM_LABELS[platform] ??
 const toolLabel = (tool: string): string => TOOL_LABELS[tool] ?? '继续'
 const volumeLabel = (summary: NonNullable<PanelPayloadDto['summary']>): string => {
   if (summary.volume === undefined) return ''
+  // The handoff scaffold fills `第一卷 · 第一幕 n/5` before the author has
+  // declared a single volume. Echoing it in the header claimed a division of the
+  // book that the same screen reported as "卷 0 这本书还没有蓝图", so the position
+  // is only worth showing once the outline actually defines volumes.
+  if ((summary.book?.outline.volumes.length ?? 0) === 0) return ''
   const volume = summary.volume_name === undefined ? `第${summary.volume}卷` : summary.volume_name
   const act =
     summary.act === undefined

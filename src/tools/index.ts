@@ -1,5 +1,5 @@
 import { defineTool, type ParameterPropertySpec, type ParameterSchemaSpec } from '@deepseek-ai/dsh-tools'
-import { CORE_TOOLS, TOOL_NAMES, type ToolName } from '../constants.js'
+import { CORE_TOOLS, STYLE_PACK_CHOICES, STYLE_PACK_LINES, TOOL_NAMES, type ToolName } from '../constants.js'
 import { arraySemanticsDescription, type ArraySemantics } from './semantics.js'
 import {
   ERROR_CODES,
@@ -12,7 +12,7 @@ import {
   type Genre,
   type Platform,
 } from '../types.js'
-import type { EngineCaller, EngineService } from '../engine/service.js'
+import { amendPatchTouchesKey, type EngineCaller, type EngineService } from '../engine/service.js'
 
 /**
  * Compatibility helper for already-serialized legacy payloads and dynamic
@@ -69,6 +69,124 @@ export interface WorkingDirectoryOptions {
   resolveWorkingDirectory?: () => WorkingDirectoryLike | undefined
 }
 
+/**
+ * 0.2.17: the slice of `ctx.userQuestions` the tools use.
+ *
+ * Structural typing on purpose — the plugin must not depend on the interaction
+ * package, and a host without the service is a supported configuration (the
+ * confirmation degrades to `skipped:no-provider`, it does not crash).
+ */
+export interface UserQuestionsLike {
+  ask(request: {
+    questions: Array<{
+      id: string
+      question: string
+      header?: string
+      detail?: string
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+    }>
+    agent?: unknown
+    signal?: AbortSignal
+  }): Promise<{ answers: Array<{ id: string; selected: string[]; custom?: string }> }>
+}
+
+export interface UserQuestionsOptions {
+  userQuestions?: UserQuestionsLike
+  resolveUserQuestions?: () => UserQuestionsLike | undefined
+}
+
+/** How a confirmation gate ended; persisted so a downgrade is never silent. */
+export type Confirmation =
+  'confirmed' | 'skipped:no-provider' | 'skipped:delegated' | 'skipped:not-live' | 'skipped:disabled'
+
+/** The label that means "do not write anything yet". */
+const CONFIRM_REJECT = '我要改'
+
+/** Result of a confirmation gate: either a state to record, or a refusal. */
+type ConfirmOutcome =
+  | { ok: true; confirmation: Confirmation; note: string | null }
+  | { ok: false; code: 'CONFIRMATION_REJECTED' | 'CONFIRMATION_ABORTED'; message: string }
+
+const resolveQuestions = (options: UserQuestionsOptions): UserQuestionsLike | undefined =>
+  options.resolveUserQuestions?.() ?? options.userQuestions
+
+/**
+ * Ask the human before an irreversible write.
+ *
+ * The error codes are the whole point: `NO_PROVIDER`, `DELEGATED_CALLER` and
+ * `CALLER_NOT_LIVE` mean "no human is reachable from here" and degrade, while
+ * `ASK_ABORTED`/`ASK_CANCELLED` mean "the human declined to answer" and must
+ * fail closed. Anything else also fails closed: an unexpected host error is not
+ * permission to write.
+ */
+async function confirmWrite(
+  options: UserQuestionsOptions,
+  exec: ToolExec | undefined,
+  request: { id: string; header: string; question: string },
+): Promise<ConfirmOutcome> {
+  const service = resolveQuestions(options)
+  if (service === undefined) {
+    return { ok: true, confirmation: 'skipped:no-provider', note: '宿主没有提问服务，本次未经用户确认' }
+  }
+  let answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> }
+  try {
+    answer = await service.ask({
+      questions: [
+        {
+          id: request.id,
+          header: request.header,
+          question: request.question,
+          options: [{ label: '就这个' }, { label: CONFIRM_REJECT }],
+        },
+      ],
+      agent: exec?.agent,
+      signal: exec?.signal,
+    })
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : ''
+    if (code === 'NO_PROVIDER') {
+      return { ok: true, confirmation: 'skipped:no-provider', note: '没有可用的回答方，本次未经用户确认' }
+    }
+    if (code === 'DELEGATED_CALLER') {
+      return { ok: true, confirmation: 'skipped:delegated', note: '子代理不能弹窗，本次未经用户确认' }
+    }
+    if (code === 'CALLER_NOT_LIVE') {
+      return { ok: true, confirmation: 'skipped:not-live', note: '调用方不是活动会话，本次未经用户确认' }
+    }
+    if (code === 'ASK_ABORTED' || code === 'ASK_CANCELLED') {
+      return { ok: false, code: 'CONFIRMATION_ABORTED', message: '用户没有确认，已中止；没有写入任何文件' }
+    }
+    return {
+      ok: false,
+      code: 'CONFIRMATION_ABORTED',
+      message: `提问失败（${code === '' ? 'unknown' : code}），已中止；没有写入任何文件`,
+    }
+  }
+  const answerItem = answer.answers.find((item) => item.id === request.id)
+  const selected = answerItem?.selected ?? []
+  const custom = answerItem?.custom?.trim() ?? ''
+  // A typed answer is a decision too. Treating "风格换成怪谈" as consent would
+  // create the book with the values the user just rejected, and the model would
+  // never learn why — so any free text fails closed and is quoted back.
+  if (selected.includes(CONFIRM_REJECT) || custom !== '') {
+    return {
+      ok: false,
+      code: 'CONFIRMATION_REJECTED',
+      // The message is the difference between "no" and a dead end: it tells the
+      // model exactly what to ask next.
+      message:
+        custom === ''
+          ? '用户要求修改，已中止；没有写入任何文件。请逐个询问题材（12 选 1）、平台（4 选 1）、字数区间、对白比区间、风格（8 选 1 或 none），拿到明确答复后带新参数重新调用。'
+          : `用户没有点选项，而是写了「${custom}」。已中止，没有写入任何文件。请按这句话逐项确认后带新参数重新调用。`,
+    }
+  }
+  return { ok: true, confirmation: 'confirmed', note: null }
+}
+
 const resolveService = (options: WorkingDirectoryOptions): WorkingDirectoryLike | undefined =>
   options.resolveWorkingDirectory?.() ?? options.workingDirectory
 
@@ -80,7 +198,7 @@ interface ToolExec {
 /** Wrap an execute body with caller context, cancellation and a machine-code error. */
 const makeGuarded =
   (engine: EngineService, options: WorkingDirectoryOptions = {}) =>
-  <A>(body: (args: A) => Promise<unknown>) =>
+  <A>(body: (args: A, exec?: ToolExec) => Promise<unknown>) =>
   async (args: A, exec?: ToolExec): Promise<any> => {
     const workingDirectory = resolveService(options)
     const caller: EngineCaller = {}
@@ -93,7 +211,7 @@ const makeGuarded =
       }
     }
     try {
-      const invoke = (): Promise<unknown> => engine.withSignal(exec?.signal, () => body(args))
+      const invoke = (): Promise<unknown> => engine.withSignal(exec?.signal, () => body(args, exec))
       const withCaller = (
         engine as unknown as {
           withCaller?: (value: EngineCaller, task: () => Promise<unknown>) => Promise<unknown>
@@ -408,7 +526,7 @@ const utilityRoot = {
  */
 export function createNovelTools(
   engine: EngineService,
-  options: WorkingDirectoryOptions = {},
+  options: WorkingDirectoryOptions & UserQuestionsOptions = {},
 ): ReturnType<typeof defineTool>[] {
   const guarded = makeGuarded(engine, options)
   return [
@@ -443,6 +561,25 @@ export function createNovelTools(
           enum: ['lines', 'chars', 'both'] as const,
           description: 'Which dialogue measure the advisory uses; default both.',
         },
+        style: {
+          type: 'string',
+          required: true,
+          enum: [...STYLE_PACK_CHOICES, 'none'] as const,
+          description: [
+            'PERMANENT style choice: one of the eight bundled packs, or "none" for no style.',
+            'It cannot be changed after creation — changing your mind means creating a new project.',
+            'ASK THE USER FIRST and let them pick; do not choose on their behalf. The plugin will',
+            'show them one confirmation dialog before anything is written, and `confirm: false`',
+            'skips that dialog for scripts and subagents.',
+            'Pack catalogue:',
+            ...STYLE_PACK_LINES,
+          ].join('\n'),
+        },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Default true. When true the plugin asks the user to confirm the five permanent fields before writing anything; false skips the dialog (scripts, CI, subagents).',
+        },
         premise: { type: 'string', description: 'Optional one-sentence premise for the book plan.' },
         logline: { type: 'string' },
         themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
@@ -455,8 +592,45 @@ export function createNovelTools(
         project_root: initRoot,
       },
       output: jsonOutput,
-      execute: guarded(async (args) =>
-        engine.initProject({
+      execute: guarded(async (args, exec) => {
+        // WP13: the five permanent fields go in front of the user *before*
+        // anything touches the disk. This is the gate, not a suggestion to the
+        // model — the tool itself blocks.
+        let confirmation: Confirmation = 'skipped:disabled'
+        let note: string | null = null
+        if (args.confirm !== false) {
+          const words = Array.isArray(args.words_per_chapter)
+            ? `${args.words_per_chapter[0]}–${args.words_per_chapter[1]}`
+            : '平台默认'
+          const dialogue = Array.isArray(args.dialogue_ratio)
+            ? `${args.dialogue_ratio[0]}–${args.dialogue_ratio[1]}`
+            : '平台默认'
+          const outcome = await confirmWrite(options, exec, {
+            id: 'init-confirm',
+            header: '确认开书参数',
+            question: [
+              `题材：${String(args.genre)}`,
+              `平台：${String(args.platform)}`,
+              `字数：${words}`,
+              `对白：${dialogue}`,
+              `风格：${String(args.style)}`,
+              '',
+              '这五项创建后不可更改，确认吗？',
+            ].join('\n'),
+          })
+          if (!outcome.ok) {
+            throw new EngineInputError(
+              outcome.code === 'CONFIRMATION_REJECTED'
+                ? ERROR_CODES.CONFIRMATION_REJECTED
+                : ERROR_CODES.CONFIRMATION_ABORTED,
+              outcome.message,
+              'nothing was written; ask the user again with the values they want',
+            )
+          }
+          confirmation = outcome.confirmation
+          note = outcome.note
+        }
+        const result = await engine.initProject({
           title: args.title,
           genre: args.genre as Genre,
           platform: args.platform as Platform,
@@ -467,6 +641,8 @@ export function createNovelTools(
           dialogue_ratio: args.dialogue_ratio as [number, number] | undefined,
           min_cjk_chars: args.min_cjk_chars as number | null | undefined,
           dialogue_ratio_metric: args.dialogue_ratio_metric as 'lines' | 'chars' | 'both' | undefined,
+          style: args.style as string,
+          style_confirmation: confirmation,
           premise: args.premise as string,
           logline: args.logline as string,
           themes: args.themes as string[],
@@ -477,8 +653,16 @@ export function createNovelTools(
           ending: args.ending as string,
           strict_outline: args.strict_outline as boolean,
           root: args.project_root,
-        }),
-      ),
+        })
+        return {
+          ...result,
+          data: {
+            ...(result.data as Record<string, unknown>),
+            confirmation,
+            ...(note === null ? {} : { confirmation_note: note }),
+          },
+        }
+      }),
     }),
     defineTool({
       name: 'novel_status',
@@ -499,6 +683,9 @@ export function createNovelTools(
             progress?: { label: string }
             rounds?: { review: number; revise: number; check: number }
             blocking: Array<{ code: string; detail: string }>
+            /** 0.2.17: crash-recovery advisories were invisible on this channel. */
+            warnings?: Array<{ code: string; message: string }>
+            state_errors?: Array<{ path: string; code: string; message: string }>
             next: { tool: string; reason: string }
             selection?: { source: string; root: string }
             metrics?: { total_word_count: number; cjk_chars: number; punctuation_chars: number } | null
@@ -545,6 +732,18 @@ export function createNovelTools(
                   ]),
               value.blocking.length === 0 ? '门控：全部通过' : `门控：${value.blocking.length} 条阻塞`,
               ...value.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
+              ...(value.warnings === undefined || value.warnings.length === 0
+                ? []
+                : [
+                    `恢复提示：${value.warnings.length} 条`,
+                    ...value.warnings.map((item) => `  - ${item.code}: ${item.message}`),
+                  ]),
+              ...(value.state_errors === undefined || value.state_errors.length === 0
+                ? []
+                : [
+                    `状态文档不可读：${value.state_errors.length} 条（先修复，否则门控会一直失败）`,
+                    ...value.state_errors.map((item) => `  - ${item.code} @ ${item.path}: ${item.message}`),
+                  ]),
               ...(value.metrics === null || value.metrics === undefined
                 ? []
                 : [
@@ -569,9 +768,14 @@ export function createNovelTools(
     }),
     defineTool({
       name: 'novel_brief',
-      description: 'Fetch the task book for a stage. Issuing it records the digest PG-01 checks.',
+      description:
+        'Fetch the task book for a stage. Issuing it records the digest PG-01 checks. Pass `stage` for one stage or `stages` for several in one transaction.',
       parameters: {
-        stage: { type: 'string', required: true, enum: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8'] as const },
+        stage: {
+          type: 'string',
+          enum: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8'] as const,
+          description: 'Single stage to sign. Omit it when passing `stages`.',
+        },
         stages: {
           type: 'array',
           items: { type: 'string', enum: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8'] as const },
@@ -586,22 +790,38 @@ export function createNovelTools(
       output: {
         schema: { type: 'json' as const },
         render: (_args: unknown, raw: unknown) => {
-          const value = payload(raw) as {
-            content: string
-            digest: string
+          type OneBrief = {
+            stage?: string
+            chapter?: number
+            content?: string
+            digest?: string
             fields?: Record<string, unknown>
             context?: Record<string, unknown>
           }
+          const value = payload(raw) as OneBrief & { briefs?: OneBrief[] }
+          // A batch request used to render only the first stage; the model paid
+          // for the transaction and never saw P6/P8 (0.2.17 P1-19).
+          const briefs = Array.isArray(value.briefs) && value.briefs.length > 0 ? value.briefs : [value]
           return text(
-            `${value.content}\n\n---\nbrief digest: ${value.digest}${
-              value.fields === undefined ? '' : `\nfields:\n${JSON.stringify(value.fields)}`
-            }${value.context === undefined ? '' : `\ncontext:\n${JSON.stringify(value.context)}`}`,
+            briefs
+              .map((brief) =>
+                [
+                  brief.stage === undefined ? '' : `# ${brief.stage}`,
+                  brief.content ?? '',
+                  `brief digest: ${brief.digest ?? ''}`,
+                  brief.fields === undefined ? '' : `fields:\n${JSON.stringify(brief.fields)}`,
+                  brief.context === undefined ? '' : `context:\n${JSON.stringify(brief.context)}`,
+                ]
+                  .filter((line) => line !== '')
+                  .join('\n'),
+              )
+              .join('\n\n---\n\n'),
           )
         },
       },
       execute: guarded(async (args) =>
         engine.getBrief({
-          stage: args.stage,
+          ...(args.stage === undefined ? {} : { stage: args.stage }),
           ...(args.stages === undefined ? {} : { stages: args.stages as never[] }),
           chapter: args.chapter,
           root: args.project_root,
@@ -763,10 +983,13 @@ export function createNovelTools(
             location: str,
             problem: str,
             fix: str,
+            // Required in practice when a blocker is marked fixed: PG-08 verifies
+            // the same quote, so an amendment without it would be a lie.
+            evidence: str,
           }),
           description: arraySemanticsDescription(
             'replace',
-            'P5/P6/ready_to_archive 就地修正评审元数据；不消耗评审轮次。',
+            'P5/P6/ready_to_archive 就地修正评审元数据；不消耗评审轮次。把 blocker 改为 fixed 时必须给 evidence（正文原句）。',
           ),
         },
         amend_note: str,
@@ -1085,11 +1308,60 @@ export function createNovelTools(
         },
         allow_delete: bool,
         reason: { type: 'string', required: true },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Default true. Only used by the style migration (novel.yaml setting `style` on a project that predates 0.2.17): the plugin asks once before writing. Ordinary amendments never ask.',
+        },
         project_root: root,
       },
       output: jsonOutput,
-      execute: guarded(async (args) =>
-        engine.amend({
+      execute: guarded(async (args, exec) => {
+        // C12: `style` has exactly two doors — `novel_init` and this one. Gating
+        // only the first would leave a back door wide open, because an AI could
+        // set the style on an old project through `novel_amend` without asking.
+        let confirmation: Confirmation | null = null
+        // Both halves must use the engine's own path parser: a raw prefix test
+        // let `".style"` (legal for the engine) set the style with no dialog.
+        const setsStyle =
+          args.path === 'novel.yaml' &&
+          ((typeof args.content === 'object' &&
+            args.content !== null &&
+            Object.hasOwn(args.content as Record<string, unknown>, 'style')) ||
+            amendPatchTouchesKey(args.patch as Array<{ path?: unknown }> | undefined, 'style'))
+        if (setsStyle && args.confirm !== false) {
+          const migration = await engine.styleMigration({ root: args.project_root })
+          if (migration.data.open) {
+            const project = (await engine.queryState({ kind: 'novel', root: args.project_root })).data as {
+              created_at?: string
+            }
+            const wanted =
+              typeof args.content === 'object' && args.content !== null
+                ? (args.content as Record<string, unknown>).style
+                : '(patch)'
+            const outcome = await confirmWrite(options, exec, {
+              id: 'style-migrate-confirm',
+              header: '确认启用文风',
+              question: [
+                `这本书建于 ${project.created_at ?? '（未知时间）'}，还没有文风。`,
+                `风格：${String(wanted)}`,
+                '',
+                '风格一旦设定不可更改，确认吗？',
+              ].join('\n'),
+            })
+            if (!outcome.ok) {
+              throw new EngineInputError(
+                outcome.code === 'CONFIRMATION_REJECTED'
+                  ? ERROR_CODES.CONFIRMATION_REJECTED
+                  : ERROR_CODES.CONFIRMATION_ABORTED,
+                outcome.message,
+                'nothing was written; novel.yaml is byte-identical',
+              )
+            }
+            confirmation = outcome.confirmation
+          }
+        }
+        const result = await engine.amend({
           path: args.path,
           ...(args.content === undefined
             ? {}
@@ -1098,8 +1370,11 @@ export function createNovelTools(
           ...(typeof args.allow_delete === 'boolean' ? { allow_delete: args.allow_delete } : {}),
           reason: args.reason,
           root: args.project_root,
-        }),
-      ),
+        })
+        return confirmation === null
+          ? result
+          : { ...result, data: { ...(result.data as Record<string, unknown>), confirmation } }
+      }),
     }),
     defineTool({
       name: 'novel_rollback',
@@ -1163,7 +1438,11 @@ export function createNovelTools(
       description:
         'Read the append-only journal, including refused gate attempts, with chapter/op/status/time filters and a revision cursor.',
       parameters: {
-        limit: { type: 'integer' },
+        limit: {
+          type: 'integer',
+          description:
+            'Page size 1..200 (the engine clamps to 200). Capped so the host result pruner cannot cut a self-inconsistent head/tail.',
+        },
         cursor: { type: 'integer' },
         chapter: { type: 'integer' },
         op: { type: 'string' },
@@ -1422,9 +1701,17 @@ export function createNovelTools(
       name: 'novel_report',
       description:
         'Whole-book report: progress, outline coverage/drift, worldbook counts, quality trend, pacing, cast, foreshadows, timeline, relationships and activity.',
-      parameters: { project_root: root },
+      parameters: {
+        lean: {
+          type: 'boolean',
+          description: '只返回汇总 + 最近 20 章 effort；大项目上避免宿主裁剪出不自洽的头尾。',
+        },
+        project_root: root,
+      },
       output: jsonOutput,
-      execute: guarded(async (args) => engine.report({ root: args.project_root })),
+      execute: guarded(async (args) =>
+        engine.report({ root: args.project_root, ...(args.lean === undefined ? {} : { lean: args.lean }) }),
+      ),
     }),
     defineTool({
       name: 'novel_guide',
@@ -1451,7 +1738,7 @@ export function createNovelTools(
     defineTool({
       name: 'novel_restore',
       description:
-        'Restore a pre-image from a marked backup transaction: an active chapter file, outline/outline.yaml, a damaged state/pipeline.yaml, or any of the seven state ledgers (characters/world/locks/timeline/foreshadows/relationships/handoff). A ledger restore refuses a lower next_seq and any cross-ledger reference the restore would newly dangle; restore ledger files on their own, not mixed with chapter files. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
+        'Restore a pre-image from a marked backup transaction: an active chapter file, outline/outline.yaml, a damaged state/pipeline.yaml, or any of the eight state ledgers (chapters/characters/world/locks/timeline/foreshadows/relationships/handoff). A ledger restore refuses a lower next_seq and any cross-ledger reference the restore would newly dangle; restore ledger files on their own, not mixed with chapter files. Archived chapters are refused; use novel_reopen first. Every restore is itself journaled and backed up.',
       parameters: {
         txid: { type: 'string', required: true },
         chapter: { type: 'integer' },
@@ -1460,7 +1747,7 @@ export function createNovelTools(
           items: { type: 'string' },
           description: arraySemanticsDescription(
             'replace',
-            'Project-relative chapter files, outline/outline.yaml, state/pipeline.yaml when unreadable, or the seven state ledgers (state/characters.yaml, state/world.yaml, state/locks.yaml, state/timeline.yaml, state/foreshadows.yaml, state/relationships.yaml, state/handoff.yaml); omitted restores every restorable chapter file the manifest records. Ledger paths must be given on their own.',
+            'Project-relative chapter files, outline/outline.yaml, state/pipeline.yaml when unreadable, or the eight state ledgers (state/chapters.yaml, state/characters.yaml, state/world.yaml, state/locks.yaml, state/timeline.yaml, state/foreshadows.yaml, state/relationships.yaml, state/handoff.yaml); omitted restores every restorable chapter file the manifest records. Ledger paths must be given on their own.',
           ),
         },
         project_root: root,

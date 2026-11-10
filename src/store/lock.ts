@@ -141,7 +141,44 @@ export class FileLock {
       // A failed unlink (Windows AV/EPERM) must not turn into a permanent
       // same-pid lock: the nonce is no longer live, so the next acquire can
       // reclaim the file instead of waiting forever.
-      await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
+      const removed = await fs.rm(this.absolutePath, { force: true }).then(
+        () => true,
+        () => false,
+      )
+      // 0.2.17: when the unlink fails, leave a tombstone beside the lock. The
+      // next acquirer cannot rely on the lock's own mtime — an AV scan or a
+      // sharing violation can keep refreshing it — so the tombstone carries the
+      // owner's own "I am done" statement and is reclaimed by age.
+      if (!removed) await this.writeTombstone(held)
+    }
+  }
+
+  /** Path of the release tombstone; it never exists while the lock is held. */
+  private tombstonePath(): string {
+    return `${this.absolutePath}.dead`
+  }
+
+  /**
+   * Record a release whose unlink failed. Best effort: a tombstone is an
+   * optimisation for the next writer, never a correctness requirement, because
+   * `lockRecordIsLive` already treats an untracked same-pid nonce as stale.
+   */
+  private async writeTombstone(record: LockRecord): Promise<void> {
+    const payload = { ...record, released_at: new Date().toISOString() }
+    await fs.writeFile(this.tombstonePath(), JSON.stringify(payload), 'utf8').catch(() => undefined)
+  }
+
+  /** Read the tombstone's release time, or null when absent/unreadable. */
+  private async tombstoneReleasedAt(): Promise<number | null> {
+    try {
+      const raw: unknown = JSON.parse(await fs.readFile(this.tombstonePath(), 'utf8'))
+      if (typeof raw !== 'object' || raw === null) return null
+      const releasedAt = (raw as { released_at?: unknown }).released_at
+      if (typeof releasedAt !== 'string') return null
+      const parsed = Date.parse(releasedAt)
+      return Number.isFinite(parsed) ? parsed : null
+    } catch {
+      return null
     }
   }
 
@@ -186,7 +223,13 @@ export class FileLock {
       // its nonce is in the process-local set; otherwise it is a leftover from
       // a crashed/restarted instance (pid reuse, container PID 1, or a release
       // that failed to unlink).
-      if (lockRecordIsLive(record)) return false
+      if (lockRecordIsLive(record)) {
+        // 0.2.17: the owner released but could not unlink. Its tombstone is the
+        // authority once it is older than the staleness window — the lock file's
+        // own mtime may keep being refreshed by an AV scan or a sharing window.
+        const releasedAt = await this.tombstoneReleasedAt()
+        if (releasedAt === null || Date.now() - releasedAt <= this.staleMs) return false
+      }
     }
 
     // Claim with a hard link instead of rename: the live lock is never moved
@@ -220,12 +263,29 @@ export class FileLock {
         return false
       }
       // A Windows sharing/AV window can make link fail while the owner is
-      // still releasing. Do not fail the writer; retry until the deadline.
-      if (code === 'EPERM' || code === 'EACCES') return false
-      // FAT/SMB/WSL mounts may not support hard links. Rename is the only
-      // atomic claim primitive left; verify the moved record before deleting
-      // it and restore it if another writer won the race.
-      if (['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EINVAL'].includes(code ?? '')) {
+      // still releasing. Retry with a bounded backoff (10/30/90ms) instead of
+      // waiting for the outer acquire loop, then fall through as contention.
+      if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') {
+        for (const wait of [10, 30, 90]) {
+          await delay(wait)
+          try {
+            await fs.link(this.absolutePath, claimPath)
+            break
+          } catch (retryError) {
+            if ((retryError as NodeJS.ErrnoException).code === 'ENOENT') return true
+          }
+        }
+        if (
+          !(await fs.stat(claimPath).then(
+            () => true,
+            () => false,
+          ))
+        )
+          return false
+      } else if (['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EINVAL'].includes(code ?? '')) {
+        // FAT/SMB/WSL mounts may not support hard links. Rename is the only
+        // atomic claim primitive left; verify the moved record before deleting
+        // it and restore it if another writer won the race.
         try {
           await fs.rename(this.absolutePath, claimPath)
           claimByRename = true
@@ -266,21 +326,36 @@ export class FileLock {
       }
       return false
     }
-    const current = claimByRename ? null : await this.readAt(this.absolutePath)
+    if (claimByRename) {
+      // 0.2.17: a rename freed the canonical path, so another writer may have
+      // created a fresh lock there between the move and this point. Deleting it
+      // would hand two writers the same lock; only a still-absent canonical path
+      // means the claim is really ours.
+      const recreated = await fs.access(this.absolutePath).then(
+        () => true,
+        () => false,
+      )
+      await fs.rm(claimPath, { force: true }).catch(() => undefined)
+      if (recreated) return false
+      await fs.rm(this.tombstonePath(), { force: true }).catch(() => undefined)
+      await this.onReclaim?.(record)
+      return true
+    }
+    const current = await this.readAt(this.absolutePath)
     const currentMatches =
-      claimByRename ||
-      (record === null
+      record === null
         ? current === null
         : current !== null &&
           current.pid === record.pid &&
           current.startedAt === record.startedAt &&
-          current.nonce === record.nonce)
+          current.nonce === record.nonce
     if (!currentMatches) {
       await fs.rm(claimPath, { force: true }).catch(() => undefined)
       return false
     }
     await fs.rm(this.absolutePath, { force: true }).catch(() => undefined)
     await fs.rm(claimPath, { force: true }).catch(() => undefined)
+    await fs.rm(this.tombstonePath(), { force: true }).catch(() => undefined)
     await this.onReclaim?.(record)
     return true
   }

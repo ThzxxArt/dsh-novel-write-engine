@@ -80,8 +80,12 @@ describe('0.2.13 post-implementation audit findings', () => {
       },
       locations: {},
     } as never
-    expect(resolveLockBaseline('乙', 'character', { worldbook, locks })).toBeNull()
-    expect(resolveLockBaseline('乙', 'character', { locks })).not.toBeNull()
+    // A worldbook row without an appearance is authoritative: falling back to
+    // the first-appearance paragraph re-created the false positives 0.2.13
+    // retired, so the resolution reports the gap instead.
+    expect(resolveLockBaseline('乙', 'character', { worldbook, locks }).baseline).toBeNull()
+    expect(resolveLockBaseline('乙', 'character', { worldbook, locks }).gap).toBe('no_appearance')
+    expect(resolveLockBaseline('乙', 'character', { locks }).baseline).not.toBeNull()
   })
 
   it('keeps the worldbook source when world anchors are appended to it', () => {
@@ -117,7 +121,7 @@ describe('0.2.13 post-implementation audit findings', () => {
       factions: [],
       rules: [],
     } as never
-    const baseline = resolveLockBaseline('旧屋', 'location', { worldbook, world })
+    const baseline = resolveLockBaseline('旧屋', 'location', { worldbook, world }).baseline
     expect(baseline?.source).toBe('worldbook')
     expect(baseline?.texts).toContain('榕树的树根拱起')
   })

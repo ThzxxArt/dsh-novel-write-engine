@@ -378,7 +378,7 @@ describe('rule edge cases', () => {
     ).not.toContain('RELATION_UNKNOWN')
   })
 
-  it('does not flag drift when an earlier description is correct', () => {
+  it('establishes a baseline from a short appearance instead of skipping the rule', () => {
     const locks = {
       schema_version: 1 as const,
       locked_at_chapter: 1,
@@ -387,11 +387,19 @@ describe('rule edge cases', () => {
       },
       locations: {},
     }
+    // A seven-character appearance is a real baseline (0.2.17 P1-06): the old
+    // eight-character floor dropped it, so this rule never ran and the test
+    // below passed without proving anything.
     expect(
-      codesOf('他左脸有一道刀疤。\n\n他脸上干干净净，没有任何疤痕，皮肤白得像纸，连一颗痣也没有。', {
+      codesOf('他左脸有一道刀疤，说话时那道疤会跟着动。', {
         evidence: { ...options().evidence, locks },
       }),
     ).not.toContain('LOCKED_DETAIL_DRIFT')
+    expect(
+      codesOf('他脸上干干净净，没有任何疤痕，皮肤白得像纸，连一颗痣也没有。', {
+        evidence: { ...options().evidence, locks },
+      }),
+    ).toContain('LOCKED_DETAIL_DRIFT')
   })
 
   it('flags a character whose description drifts from the locked appearance', () => {
@@ -410,7 +418,7 @@ describe('rule edge cases', () => {
     ).toContain('LOCKED_DETAIL_DRIFT')
   })
 
-  it('does not compare an empty locked appearance', () => {
+  it('reports a missing baseline instead of comparing an empty locked appearance', () => {
     const locks = {
       schema_version: 1 as const,
       locked_at_chapter: 1,
@@ -419,11 +427,11 @@ describe('rule edge cases', () => {
       },
       locations: {},
     }
-    expect(
-      codesOf('他今天穿着鲜红铠甲，骑着白马冲进广场。', {
-        evidence: { ...options().evidence, locks },
-      }),
-    ).not.toContain('LOCKED_DETAIL_DRIFT')
+    const codes = codesOf('他今天穿着鲜红铠甲，骑着白马冲进广场。', {
+      evidence: { ...options().evidence, locks },
+    })
+    expect(codes).not.toContain('LOCKED_DETAIL_DRIFT')
+    expect(codes).toContain('LOCK_BASELINE_MISSING')
   })
 
   it('detects a water-word cluster that straddles a window boundary', () => {

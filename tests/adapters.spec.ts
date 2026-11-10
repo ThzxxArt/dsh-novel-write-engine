@@ -303,8 +303,19 @@ describe('tool adapters', () => {
     expect(value.data.chapter).toBe(1)
     expect(engine.getStatus).toHaveBeenCalledWith({ chapter: 1 })
 
-    await map.get('novel_init')!.execute({ title: '书', genre: '都市现代', platform: 'fanqie' }, {})
-    expect(engine.initProject).toHaveBeenCalledWith({ title: '书', genre: '都市现代', platform: 'fanqie' })
+    await map
+      .get('novel_init')!
+      .execute({ title: '书', genre: '都市现代', platform: 'fanqie', style: 'none' }, {})
+    expect(engine.initProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '书',
+        genre: '都市现代',
+        platform: 'fanqie',
+        style: 'none',
+        // No answerer in the unit harness, so the gate degrades and says so.
+        style_confirmation: 'skipped:no-provider',
+      }),
+    )
 
     await map.get('novel_write_draft')!.execute(
       {
@@ -436,6 +447,18 @@ describe('command adapters', () => {
     expect((await novel.handler(invocation('report'))).kind).toBe('success')
     expect((await novel.handler(invocation('doctor'))).kind).toBe('success')
     expect((await novel.handler(invocation('search 信封'))).kind).toBe('success')
+    // 0.2.17: the style catalogue is readable without a project, and `show`
+    // names every pack so a typo gets the full list back.
+    const styleList = await novel.handler(invocation('style list'))
+    expect(styleList.kind).toBe('success')
+    expect(styleList.text).toContain('cold-suspense')
+    expect(styleList.text).toContain('内置风格包 8 份')
+    const styleShow = await novel.handler(invocation('style show cold-suspense'))
+    expect(styleShow.kind).toBe('success')
+    expect(styleShow.text).toContain('冷峻悬疑')
+    expect(styleShow.text).toContain('禁句')
+    expect((await novel.handler(invocation('style show nope'))).kind).toBe('error')
+    expect((await novel.handler(invocation('style'))).text).toContain('内置风格包 8 份')
     expect((await novel.handler(invocation('search'))).kind).toBe('error')
     expect((await novel.handler(invocation('export'))).kind).toBe('error')
     expect((await novel.handler(invocation('admin novel_word_count {"text":"x"}'))).kind).toBe('success')

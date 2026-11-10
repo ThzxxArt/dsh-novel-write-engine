@@ -390,7 +390,8 @@ describe('rule pack compiler', () => {
 describe('machine pipeline', () => {
   it('runs the five steps in order and never emits the lexicon first', () => {
     expect(PIPELINE_STEPS).toEqual(['segment', 'density', 'quote', 'exemption', 'lexicon'])
-    expect(Object.keys(BUILTIN_RULES)).toHaveLength(38)
+    // 0.2.17 adds ten STYLE_* and seven AI_TONE_* rules to the same registry.
+    expect(Object.keys(BUILTIN_RULES)).toHaveLength(56)
   })
 
   it('detects format, punctuation and lexicon violations', () => {

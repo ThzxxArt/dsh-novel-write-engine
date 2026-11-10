@@ -2,6 +2,7 @@ import { bookPlanPresent, outlineDrift, outlineSummary, worldbookCounts } from '
 import { normalizeRole } from './state-delta.js'
 import { compareText } from '../domain/stable.js'
 import { splitParagraphs } from '../domain/text.js'
+import { stylePackSummaries } from '../stylepack.js'
 import type {
   AuditRow,
   BookReport,
@@ -25,6 +26,8 @@ import type {
   WorldbookDocument,
 } from '../types.js'
 import type { PanelBookData, PanelCardData, PanelWorldEntry } from '../panel-contract.js'
+import type { StylePack } from '../rules/types.js'
+import type { StyleMetrics } from '../domain/style.js'
 
 export interface ReportInput {
   project: NovelProject
@@ -578,8 +581,18 @@ export function buildGuide(input: GuideInput): GuideReport {
         args: { title: '我的第一本书', genre: '都市现代', platform: 'fanqie' },
         reason: '还没有项目；先创建一本书',
       },
-      commands: ['/novel', '/novel next', '/novel guide'],
-      tips: ['先填蓝图再拆章卡，P2/P3 会自动带入当前章卡。'],
+      commands: ['/novel', '/novel next', '/novel guide', '/novel style list'],
+      tips: [
+        '先填蓝图再拆章卡，P2/P3 会自动带入当前章卡。',
+        '开书前先问用户选哪个风格包（或 none）。风格创建后不可更改，选错只能新建项目；novel_init 会自己弹一次确认。',
+      ],
+      // The AI has no other way to learn what the eight packs are, and asking
+      // "which style?" without a list is not a real question.
+      style_packs: stylePackSummaries().map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+      })),
     }
   }
   const blueprintDone = bookPlanPresent(input.outline.book)
@@ -933,6 +946,12 @@ export interface PanelBookDataInput {
   manuscriptHash: string | null
   metrics: WordMetrics | null
   stateErrors: Array<{ path: string; code: string; message: string }>
+  /** 0.2.17: the compiled style pack, resolved by the service. */
+  style?: StylePack | null
+  /** 0.2.17: this chapter's style measurements, when a pack is bound. */
+  styleMetrics?: StyleMetrics | null
+  /** 0.2.17: the same judgement `novel_report.style` makes, for the panel. */
+  styleVerdict?: { verdict: 'pass' | 'attention' | 'no-draft'; findings: string[] } | null
   pending: { state: string; txid: string; detail: string } | null
   outlineError: string | null
   worldbookError: string | null
@@ -1041,6 +1060,10 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       author: clip(input.project.author, 80),
       description: clip(input.project.description, 400),
       created_at: input.project.created_at,
+      style:
+        input.style === undefined || input.style === null
+          ? null
+          : { id: input.style.id, name: input.style.name },
       targets: {
         words_per_chapter: [
           input.project.targets.words_per_chapter[0],
@@ -1139,6 +1162,14 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       },
       pending: input.pending === null ? null : { ...input.pending },
     },
+    // 0.2.17: present only when a pack is bound, so an old project's payload
+    // keeps exactly the 0.2.16 shape.
+    ...(input.styleMetrics === undefined || input.styleMetrics === null
+      ? {}
+      : { style_metrics: input.styleMetrics }),
+    ...(input.styleVerdict === undefined || input.styleVerdict === null
+      ? {}
+      : { style_verdict: input.styleVerdict }),
   }
 }
 

@@ -1,5 +1,11 @@
 import { bigramSimilarity } from '../domain/simhash.js'
-import { splitParagraphs, splitSentenceSpans, type SentenceSpan } from '../domain/text.js'
+import {
+  evidenceOccurrences,
+  normalizeEvidenceText,
+  splitParagraphs,
+  splitSentenceSpans,
+  type SentenceSpan,
+} from '../domain/text.js'
 import { ERROR_CODES, EngineInputError, type BlockingItem, type SemanticItem } from '../types.js'
 
 /** The five checks the P6 task book requires; a subset cannot pass. */
@@ -314,7 +320,8 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       items.push({ id, state: 'invalid', detail: `${id} is not one of the required P6 semantic checks` })
       continue
     }
-    const duplicate = acceptedQuotes.get(quote)
+    const quoteKey = normalizeEvidenceText(quote)
+    const duplicate = acceptedQuotes.get(quoteKey)
     if (duplicate !== undefined) {
       const conflict: SemanticConflict = { kind: 'duplicate', other_id: duplicate }
       items.push({
@@ -328,12 +335,9 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       continue
     }
 
-    const occurrences: number[] = []
-    let found = text.indexOf(quote)
-    while (found !== -1) {
-      occurrences.push(found)
-      found = text.indexOf(quote, found + 1)
-    }
+    // The same matcher PG-08/PG-09 use: a curly quote or a quote split across a
+    // line break must be judged identically on both paths.
+    const occurrences = evidenceOccurrences(text, quote)
     if (occurrences.length === 0) {
       const nearest = nearestParagraph(text, quote)
       items.push({
@@ -341,15 +345,17 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
         state: 'not_found',
         quote,
         ...(nearest === null ? {} : { nearest }),
-        detail: `${id} cites "${Array.from(quote).slice(0, 40).join('')}", which does not appear verbatim in the manuscript`,
+        detail: `${id} cites "${Array.from(quote).slice(0, 40).join('')}", which was not found in the manuscript (quotes and whitespace are normalized before comparing)`,
       })
       continue
     }
 
     let acceptedSpan: AcceptedSpan | null = null
     const conflicts: SemanticConflict[] = []
-    for (const start of occurrences) {
-      const end = start + quote.length
+    for (const occurrence of occurrences) {
+      const start = occurrence.start
+      const end = occurrence.end
+      const length = end - start
       const sentenceIds = sentenceIdsFor(sentences, start, end)
       if (sentenceIds.length === 0) {
         continue
@@ -357,7 +363,7 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
       let rejected = false
       for (const other of accepted) {
         const overlap = intervalOverlap(start, end, other)
-        const minLength = Math.min(quote.length, other.quote.length)
+        const minLength = Math.min(length, other.quote.length)
         const threshold = Math.max(SEMANTIC_OVERLAP_MIN_CHARS, Math.ceil(SEMANTIC_OVERLAP_RATIO * minLength))
         if (overlap.chars > 0 && (overlap.contains || overlap.chars >= threshold)) {
           conflicts.push({
@@ -419,7 +425,7 @@ export function evaluateSemantic(text: string, input: unknown): SemanticEvaluati
 
     accepted.push(acceptedSpan)
     for (const sentenceId of acceptedSpan.sentenceIds) usedSentences.set(sentenceId, id)
-    acceptedQuotes.set(quote, id)
+    acceptedQuotes.set(quoteKey, id)
     items.push({
       id,
       state: item.verdict === 'fail' ? 'fail' : 'pass',

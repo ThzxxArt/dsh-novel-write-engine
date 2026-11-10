@@ -1,0 +1,96 @@
+schema_version: 1
+id: hot-blooded-fast
+name: 热血快节奏
+description: 短句推进，动作优先，信息差和章末钩子驱动追读。
+audience: male
+genres: [fantasy, urban, suspense]
+pov: third-limited
+tense: past
+register: colloquial
+narrative_distance: close
+
+sentence:
+  short_ratio: 0.45
+  medium_ratio: 0.4
+  long_ratio: 0.15
+  burstiness: high
+  max_consecutive_same_length: 3
+
+paragraph:
+  max_chars: 90
+  one_action_per_paragraph: true
+  max_sentences: 3
+  max_actions: 4
+
+dialogue:
+  ratio: 0.45
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: medium
+  idiom: low
+  sensory_channels: [sound, heat, smell, touch]
+
+structure:
+  opening_moves: [action, anomaly, countdown]
+  scene_transition: hard_cut
+  hook_moves: [new_threat, unresolved_question, cost]
+  cool_point_every_chars: 800
+
+emotion:
+  intensity: high
+  expression: concrete
+  required_beats: [body_reaction, relationship_stake, cost, choice]
+  min_cues_per_1000: 2.5
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 若有所思
+  - 意味深长
+
+exemplars:
+  - |
+    门被踹开的时候，他正蹲在地上数钱。
+    “谁啊？”他把钱往鞋底一塞。
+    “收账的。”门口的人拿刀敲了敲门框，“三张，拿出来。”
+    “三张？”他乐了，“你数错了吧，我这儿就两张。”
+    “那你鞋底鼓什么？”
+    “脚气，行不行？”
+  - |
+    “你迟到了。”老周把外套扔进垃圾桶。
+    “路上有人拦。”小赵说。
+    “几个？”
+    “三个。我跑得快。”
+    “受伤没？”
+    “没。就是鞋跑丢一只。”
+    老周低头看了一眼他的脚：“那你另一只呢？”
+    “也丢了。”
+
+critic_rubric:
+  - 口语化：对白像人说话，有停顿、抢白、省略。
+  - 信息密度：每段至少推进一个信息，不重复解释。
+  - 爽点：主角用能力或判断解决问题，而不是靠巧合。
+  - 钩子：章末留下新的威胁、问题或代价。
+  - 声口：每个主要角色有可区分的说话方式，遮住名字也能听出是谁。
+  - 情绪：爽点要有代价和身体反应，不能只报动作。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 3
+  metaphor_per_1000_max: 4

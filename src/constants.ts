@@ -7,7 +7,7 @@ export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 6
 /** User-visible panel/tutorial version; keep in sync with package.json. */
-export const PANEL_VERSION = '0.2.16'
+export const PANEL_VERSION = '0.2.17'
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -89,8 +89,13 @@ export type HistoryKind = (typeof HISTORY_KINDS)[number]
 export const LIMITS = {
   /** P4 <-> P5/P6 retries before a forced rollback. */
   maxRounds: 3,
-  /** Lock staleness in milliseconds. */
-  lockStaleMs: 90_000,
+  /**
+   * Lock staleness in milliseconds. 0.2.17: it must be shorter than
+   * `lockWaitMs`, otherwise a dead owner's lock outlives the writer's whole
+   * wait window and every writer fails instead of reclaiming it. A live pid
+   * still wins over age, so a slow disk cannot have its lock stolen.
+   */
+  lockStaleMs: 8_000,
   /** How long a writer waits for the keyed mutex before failing. */
   lockWaitMs: 10_000,
   /** Reading proofs shorter than this cannot be verified. */
@@ -152,6 +157,37 @@ export const TOOL_NAMES = [
   'novel_restore',
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
+
+/**
+ * 0.2.17: the eight bundled style packs, in `stylepacks/index.yaml` order.
+ *
+ * This list is duplicated on purpose: the tool description is a static string
+ * built at plugin load (where the codebase forbids IO), while `novel_guide`
+ * renders the live catalogue. `tests/style-catalogue.spec.ts` asserts the two
+ * agree line by line, so drift is a test failure rather than a support ticket.
+ */
+export const STYLE_PACK_CHOICES = [
+  'cold-suspense',
+  'hot-blooded-fast',
+  'ensemble-power',
+  'infinite-flow',
+  'light-daily',
+  'romance-push-pull',
+  'steady-farming',
+  'weird-horror',
+] as const
+
+/** The 8-line catalogue shown in `novel_init`'s `style` description. */
+export const STYLE_PACK_LINES: readonly string[] = [
+  'cold-suspense 冷峻悬疑：克制的感官，线索前置，低温对白，章末留下未解问题。',
+  'hot-blooded-fast 热血快节奏：短句推进，动作优先，信息差和章末钩子驱动追读。',
+  'ensemble-power 群像权谋：多视角轮转，对白机锋，信息不对称，章末翻盘或代价。',
+  'infinite-flow 无限流：规则先行，倒计时压迫，关卡目标明确，冷幽默解压。',
+  'light-daily 轻松日常：口语吐槽，生活流细节，轻喜剧节奏，低比喻密度。',
+  'romance-push-pull 女频拉扯：情绪留白，关系张力，短对白，潜台词多于解释。',
+  'steady-farming 稳健种田：具体生活细节，资源逐项积累，低冲突但有明确目标。',
+  'weird-horror 怪谈克苏鲁：规则文本，感官错位，具体细节承载不可解释的恐惧。',
+]
 
 /** The ten high-frequency tools kept when `tools.mode = core`. */
 export const CORE_TOOLS: readonly ToolName[] = [

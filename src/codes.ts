@@ -54,6 +54,37 @@ export const CROSS_RULES = {
   TIME_REGRESSION: 'TIME_REGRESSION',
   RELATION_UNKNOWN: 'RELATION_UNKNOWN',
   LOCKED_DETAIL_DRIFT: 'LOCKED_DETAIL_DRIFT',
+  /** 0.2.17: the lock drift check cannot run because no canonical baseline exists. */
+  LOCK_BASELINE_MISSING: 'LOCK_BASELINE_MISSING',
+} as const
+
+/**
+ * 0.2.17 style families. A style pack is a *project* attribute, so these codes
+ * only ever fire when a project bound a pack; a project without one produces
+ * exactly the 0.2.16 output.
+ */
+export const STYLE_RULES = {
+  BANNED_PATTERN: 'STYLE_BANNED_PATTERN',
+  SENTENCE_MIX: 'STYLE_SENTENCE_MIX',
+  BURSTINESS: 'STYLE_BURSTINESS',
+  PARAGRAPH_CHARS: 'STYLE_PARAGRAPH_CHARS',
+  PARAGRAPH_SENTENCES: 'STYLE_PARAGRAPH_SENTENCES',
+  DIALOGUE_RATIO: 'STYLE_DIALOGUE_RATIO',
+  ABSTRACT_EMOTION: 'STYLE_ABSTRACT_EMOTION',
+  METAPHOR_DENSITY: 'STYLE_METAPHOR_DENSITY',
+  COOL_POINT_GAP: 'STYLE_COOL_POINT_GAP',
+  EMOTION_CUES: 'STYLE_EMOTION_CUES',
+} as const
+
+/** 0.2.17 AI-tone families (WP9): one code per design-asset category. */
+export const AI_TONE_RULES = {
+  META: 'AI_TONE_META',
+  ACK: 'AI_TONE_ACK',
+  COMPARATIVE: 'AI_TONE_COMPARATIVE',
+  PROTECTIVE: 'AI_TONE_PROTECTIVE',
+  SOCRATIC: 'AI_TONE_SOCRATIC',
+  TEMPLATE: 'AI_TONE_TEMPLATE',
+  JUDGMENT: 'AI_TONE_JUDGMENT',
 } as const
 
 export const ALL_RULE_CODES: readonly string[] = [
@@ -62,6 +93,8 @@ export const ALL_RULE_CODES: readonly string[] = [
   ...Object.values(PUNCTUATION_RULES),
   ...Object.values(SEMANTIC_RULES),
   ...Object.values(CROSS_RULES),
+  ...Object.values(STYLE_RULES),
+  ...Object.values(AI_TONE_RULES),
 ]
 
 /** Gate identifiers in fixed evaluation order. */

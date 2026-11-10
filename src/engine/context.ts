@@ -1,5 +1,5 @@
 import { LIMITS } from '../constants.js'
-import { compareText, stableJson as stableStringify } from '../domain/stable.js'
+import { compareText } from '../domain/stable.js'
 import { bookBrief, emptyOutline, emptyWorldbook, outlineCard, worldbookBrief } from './book.js'
 import { projectHandoff } from './handoff.js'
 import type {
@@ -20,6 +20,7 @@ import type {
   WorldDocument,
   WorldPlanInput,
 } from '../types.js'
+import type { StylePack } from '../rules/types.js'
 
 /** The slice of project state the task-book context pack may read. */
 export interface BriefContextInput {
@@ -49,6 +50,8 @@ export interface BriefContextInput {
   check_error?: string | null
   /** The active chapter manuscript; P4/P5 need it to judge and revise the real text. */
   text: string | null
+  /** 0.2.17: the compiled style pack; P2–P6 receive it, P1/P8 do not. */
+  style?: StylePack | null
   /** Fresh machine findings, so P4 is not asked to rediscover format defects. */
   machine?: unknown
   previousText: string | null
@@ -155,7 +158,7 @@ const activeCastNames = (
     // Explicit cast is a declaration, but the manuscript may introduce a known
     // actor during revision without rewriting the stored summary. Keep the
     // declaration first, then add independently mentioned known actors; cap
-    // the protected block so one pathological summary cannot wedge the budget.
+    // the declared cast so one pathological summary cannot name 200 people.
     return unique([...explicit, ...orderedMentioned]).slice(0, LIMITS.maxActiveCast)
   }
   return unique([...(narratorKnown ? [narrator] : []), ...orderedMentioned]).slice(0, 8)
@@ -239,7 +242,7 @@ const filterLocks = (
  * pack is the minimum project state the model needs to apply them without
  * guessing who exists, what was locked, or what the previous chapter ended on.
  */
-function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknown> {
+function stageBriefContext(input: BriefContextInput): Record<string, unknown> {
   const previousEnding = input.previousText === null ? '' : input.previousText.trim().slice(-400)
   const appearances = appearancesByChapter(input.chapters)
   const activeNames = activeCastNames(input.plan, input.characters, input.text, appearances)
@@ -285,6 +288,13 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
       platform: input.project.platform,
       targets: input.project.targets,
     },
+    // 0.2.17: the style block reaches P2–P6 only. P1 declares the world and P8
+    // closes the chapter; neither needs to be told how the prose should read.
+    ...(input.style === undefined ||
+    input.style === null ||
+    !['P2', 'P3', 'P4', 'P5', 'P6'].includes(input.stage)
+      ? {}
+      : { style: styleBlock(input.style, input.project) }),
     chapter: input.chapter,
     stage: input.pipeline.stage,
     scene_distribution: sceneDistribution(input.chapters),
@@ -331,8 +341,8 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
         world_plan: worldPlan,
         // Before the chapter plan exists, the P1 character declarations are the
         // cast candidates. The ledger index lets the model avoid duplicate names.
-        // Copy the array: the budget may trim the world-plan copy, and sharing
-        // one array would silently empty this protected candidate list too.
+        // Copy the array: this candidate list is a separate view of the world
+        // plan, so mutating one must not empty the other.
         characters: [...(input.worldPlan?.characters ?? [])],
         other_characters: otherCharacters,
         plan: input.plan,
@@ -385,7 +395,13 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
         plan: input.plan,
         machine: input.machine ?? null,
         world_plan: worldPlan,
-        characters: input.characters.characters,
+        // Sorted, not storage order: the same ledger written in a different row
+        // order must produce the same brief, or the signed digest changes for a
+        // reason the author cannot see. Trimming used to hide this by dropping
+        // most rows; a complete brief has to be order-independent on its own.
+        characters: [...input.characters.characters].sort((left, right) =>
+          compareText(left.name, right.name),
+        ),
         active_cast: activeCast,
         other_characters: otherCharacters,
         world: input.world,
@@ -413,520 +429,89 @@ function unbudgetedBriefContext(input: BriefContextInput): Record<string, unknow
   }
 }
 
-/** Per-stage context budgets, measured in JSON characters (metadata excluded). */
-export const CONTEXT_BUDGETS: Readonly<Record<string, number>> = {
-  P1: 6_000,
-  P2: 8_000,
-  P3: 16_000,
-  P4: 24_000,
-  P5: 24_000,
-  P6: 32_000,
-  P8: 12_000,
+/**
+ * The style block a P2–P6 brief carries.
+ *
+ * C6: `dialogue` carries *both* the aiming point and the accepted range. Giving
+ * only the target hides the acceptance line; giving only the range hides where
+ * to aim. A pack range may only tighten the project range (C5 / 附录 C-29).
+ */
+function styleBlock(pack: StylePack, project: NovelProject): Record<string, unknown> {
+  const base = project.targets.dialogue_ratio
+  const min = Math.max(base[0], pack.thresholds.dialogue_ratio_min ?? base[0])
+  const max = Math.min(base[1], pack.thresholds.dialogue_ratio_max ?? base[1])
+  // A pack whose range cannot intersect the confirmed range is a contradiction
+  // for `novel_doctor` to report; the brief keeps the range the user confirmed.
+  const range: [number, number] = min <= max ? [min, max] : base
+  return {
+    id: pack.id,
+    name: pack.name,
+    description: pack.description,
+    register: pack.register,
+    pov: pack.pov,
+    tense: pack.tense,
+    targets: {
+      sentence: pack.sentence,
+      paragraph: pack.paragraph,
+      dialogue: {
+        target: pack.dialogue.ratio,
+        range,
+        metric: project.targets.dialogue_ratio_metric ?? 'both',
+      },
+      structure: pack.structure,
+      emotion: pack.emotion,
+    },
+    banned_patterns: pack.banned_patterns.slice(0, 12),
+    exemplars: pack.exemplars.slice(0, 1),
+    critic_rubric: pack.critic_rubric,
+    thresholds: pack.thresholds,
+  }
 }
 
+/**
+ * 0.2.17: the brief carries the **complete** context.
+ *
+ * There used to be a per-stage byte budget here that deleted ledgers, trimmed
+ * lists and reported what it had thrown away. It was justified as "the host
+ * prunes oversized results anyway", but the effect was that the model received
+ * a task book that was missing rows it was being judged on — and a style block
+ * it could not see. Trimming is not a feature the author can reason about, so
+ * it is gone: the only thing left is an honest size report.
+ */
 interface ContextMeta {
   version: 1
   stage: string
-  budget: number
+  /** UTF-8 bytes of the assembled brief, metadata included. */
   used: number
-  over_budget: boolean
-  protected: string[]
-  truncated: string[]
-  omitted: Record<string, number>
-  /** 0.2.14: required blocks that survived the trim. */
-  floor_kept?: Record<string, number>
-  /** Must stay 0: a required floor is never sacrificed for the budget. */
-  required_omitted?: number
-  over_budget_reason?: 'protected_block' | 'required_floor' | null
-  strategy: 'stage-v3'
+  complete: true
+  strategy: 'complete'
 }
 
-type MutableRecord = Record<string, unknown>
-
-const asRecord = (value: unknown): MutableRecord | null =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as MutableRecord) : null
-
-const asArray = (value: unknown): unknown[] | null => (Array.isArray(value) ? value : null)
-
-const jsonSize = (value: unknown): number => JSON.stringify(value).length
-
-const mentionScore = (mentioned: string, value: string): number =>
-  value !== '' && mentioned.includes(value) ? 1 : 0
+const jsonSize = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8')
 
 /**
- * Apply the stage budget after the stage-specific pack exists. Protected keys
- * are never candidates; optional ledgers are trimmed round-robin so one large
- * list cannot starve every other kind of context.
- */
-function withContextBudget(stage: string, raw: Record<string, unknown>): Record<string, unknown> {
-  const context = structuredClone(raw)
-  const budget = CONTEXT_BUDGETS[stage] ?? 8_000
-  // P2 normally has a small candidate list from the P1 plan. Keep it visible
-  // when it is ordinary-sized, but do not let a pathological 120-name plan
-  // buy an unbounded protected block; the larger list is trimmed like every
-  // other optional candidate.
-  const smallP2Candidates =
-    stage === 'P2' && Array.isArray(context.characters) && context.characters.length <= 32
-  const protectedKeys = [
-    'project',
-    'chapter',
-    'stage',
-    'previous_ending',
-    'text',
-    'plan',
-    'precheck',
-    'review',
-    'check',
-    'machine',
-    'summary',
-    'world_plan',
-    // P1 reads the world bible for premise/setting/rules. Its cast, place,
-    // faction, glossary and backstory lists are candidates: protecting all of
-    // worldbook is what emptied the foreshadow/summary floors.
-    ...(stage === 'P1' ? [] : ['worldbook']),
-    ...(stage === 'P1' ? [] : ['book_plan']),
-    ...(stage === 'P1' ? [] : ['outline_card']),
-    'outline_error',
-    'worldbook_error',
-    'active_cast',
-    // P3–P5 are about this chapter's cast; trimming it first is the bug this
-    // version exists to fix. P6 has active_cast as the protected subset and
-    // may trim the full character ledger. P2's ordinary candidate list is
-    // protected only while it is small enough to be a useful brief.
-    ...(stage === 'P3' || stage === 'P4' || stage === 'P5' || smallP2Candidates ? ['characters'] : []),
-  ]
-  const mentioned = [
-    typeof context.text === 'string' ? context.text : '',
-    stableStringify(context.plan ?? ''),
-    stableStringify(context.review ?? ''),
-    stableStringify(context.check ?? ''),
-    stableStringify(context.summary ?? ''),
-    stableStringify(context.world_plan ?? ''),
-  ].join('\n')
-  const omitted: Record<string, number> = {}
-  const truncated = new Set<string>()
-
-  interface Candidate {
-    key: string
-    count: () => number
-    /** Minimum rows that must survive; a required floor is never trimmed. */
-    floor: () => number
-    trim: () => boolean
-    prepare: () => void
-    /** Trim order: lower tiers are cut before higher ones. */
-    tier: number
-  }
-
-  const candidates: Candidate[] = []
-  const stableKey = (value: unknown): string => {
-    const row = asRecord(value)
-    if (row === null) return stableStringify(value)
-    for (const key of ['id', 'name', 'title'] as const) {
-      const item = row[key]
-      if (typeof item === 'string' && item !== '') return item
-    }
-    return stableStringify(row)
-  }
-  const addArray = (
-    key: string,
-    array: () => unknown[] | null,
-    rank: (value: unknown) => number,
-    tie: (value: unknown) => string = stableKey,
-    options: { tier?: number; floor?: number } = {},
-  ): void => {
-    if (protectedKeys.includes(key)) return
-    let prepared = false
-    const sort = (): void => {
-      if (prepared) return
-      prepared = true
-      array()?.sort((left, right) => {
-        const byRank = rank(right) - rank(left)
-        return byRank !== 0 ? byRank : compareText(tie(left), tie(right))
-      })
-    }
-    const floor = options.floor ?? 0
-    candidates.push({
-      key,
-      count: () => array()?.length ?? 0,
-      floor: () => floor,
-      trim: () => {
-        sort()
-        const list = array()
-        if (list === null || list.length <= floor) return false
-        list.pop()
-        return true
-      },
-      prepare: sort,
-      tier: options.tier ?? 0,
-    })
-  }
-  const addObject = (
-    key: string,
-    map: () => MutableRecord | null,
-    rank: (key: string, value: unknown) => number,
-    options: { tier?: number; floor?: number } = {},
-  ): void => {
-    if (protectedKeys.includes(key)) return
-    let keys: string[] | null = null
-    const ensure = (): string[] => {
-      const target = map()
-      keys ??= target === null ? [] : Object.keys(target)
-      keys.sort((left, right) => {
-        const byRank = rank(right, map()?.[right]) - rank(left, map()?.[left])
-        return byRank !== 0 ? byRank : compareText(left, right)
-      })
-      return keys
-    }
-    const floor = options.floor ?? 0
-    candidates.push({
-      key,
-      count: () => Object.keys(map() ?? {}).length,
-      floor: () => floor,
-      trim: () => {
-        const target = map()
-        if (target === null) return false
-        const ordered = ensure()
-        if (ordered.length <= floor) return false
-        const keyToDelete = ordered.pop()
-        if (keyToDelete === undefined || !Object.hasOwn(target, keyToDelete)) return false
-        delete target[keyToDelete]
-        return true
-      },
-      prepare: ensure,
-      tier: options.tier ?? 0,
-    })
-  }
-
-  // Relevance is expressed as a number; recency and stable keys break ties.
-  const chapter = (value: unknown): number => (asRecord(value)?.num as number | undefined) ?? 0
-  const activeNames = new Set(
-    Array.isArray(context.active_cast)
-      ? context.active_cast
-          .map((value) => (asRecord(value)?.name as string | undefined) ?? '')
-          .filter((name) => name !== '')
-      : [],
-  )
-  const recency = (row: MutableRecord): number =>
-    Math.max(Number(row.updated_at ?? 0), Number(row.last_seen ?? 0))
-  addArray(
-    'characters',
-    () => asArray(context.characters),
-    (value) => {
-      const row = asRecord(value)
-      const name = typeof row?.name === 'string' ? row.name : ''
-      const active = activeNames.has(name) ? 1_000_000 : 0
-      return active + mentionScore(mentioned, name) * 100_000 + recency(row ?? {})
-    },
-    (value) => {
-      const row = asRecord(value)
-      return typeof row?.name === 'string' ? row.name : stableKey(value)
-    },
-  )
-  addArray(
-    'other_characters',
-    () => asArray(context.other_characters),
-    (value) => {
-      const row = asRecord(value)
-      return Number(row?.last_seen ?? 0)
-    },
-    (value) => {
-      const row = asRecord(value)
-      return typeof row?.name === 'string' ? row.name : stableKey(value)
-    },
-  )
-  // The P1 plan's narrative constraints are protected, but its roster and
-  // location list are candidates that can be large. Trim those arrays rather
-  // than letting a 120-character plan push every consumer over budget.
-  const worldPlan = asRecord(context.world_plan)
-  addArray(
-    'world_plan.characters',
-    () => asArray(worldPlan?.characters),
-    (value) => {
-      const row = asRecord(value)
-      const name = typeof row?.name === 'string' ? row.name : ''
-      return (activeNames.has(name) ? 1_000_000 : 0) + mentionScore(mentioned, name) * 100_000
-    },
-    (value) => {
-      const row = asRecord(value)
-      return typeof row?.name === 'string' ? row.name : stableKey(value)
-    },
-  )
-  addArray(
-    'world_plan.locations',
-    () => asArray(worldPlan?.locations),
-    (value) => {
-      const row = asRecord(value)
-      const name = typeof row?.name === 'string' ? row.name : ''
-      return mentionScore(mentioned, name) * 1_000
-    },
-    (value) => {
-      const row = asRecord(value)
-      return typeof row?.name === 'string' ? row.name : stableKey(value)
-    },
-  )
-  const world = asRecord(context.world)
-  for (const key of ['locations', 'abilities', 'artifacts', 'factions', 'rules'] as const) {
-    addArray(
-      `world.${key}`,
-      () => asArray(world?.[key]),
-      (value) => {
-        const row = asRecord(value)
-        const name = typeof row?.name === 'string' ? row.name : ''
-        return mentionScore(mentioned, name) * 1_000 + Number(row?.first_appearance ?? 0)
-      },
-      (value) => {
-        const row = asRecord(value)
-        return typeof row?.name === 'string' ? row.name : stableKey(value)
-      },
-    )
-  }
-  const locks = asRecord(context.locks)
-  for (const key of ['characters', 'locations'] as const) {
-    addObject(
-      `locks.${key}`,
-      () => asRecord(locks?.[key]),
-      (name) => (activeNames.has(name) ? 1_000_000 : 0) + mentionScore(mentioned, name) * 1_000,
-    )
-  }
-  addArray(
-    'open_foreshadows',
-    () => asArray(context.open_foreshadows),
-    (value) => {
-      const row = asRecord(value)
-      const title = typeof row?.title === 'string' ? row.title : ''
-      return mentionScore(mentioned, title) * 1_000 - Number(row?.last_touched ?? 0)
-    },
-    (value) => {
-      const row = asRecord(value)
-      return `${typeof row?.title === 'string' ? row.title : ''}\u0000${
-        typeof row?.id === 'string' ? row.id : ''
-      }`
-    },
-    { floor: Math.min(8, asArray(context.open_foreshadows)?.length ?? 0) },
-  )
-  const foreshadows = asRecord(context.foreshadows)
-  addArray(
-    'foreshadows',
-    () => asArray(foreshadows?.items),
-    (value) => {
-      const row = asRecord(value)
-      const title = typeof row?.title === 'string' ? row.title : ''
-      const id = typeof row?.id === 'string' ? row.id : ''
-      return (
-        Math.max(mentionScore(mentioned, title), mentionScore(mentioned, id)) * 1_000 -
-        Number(row?.last_touched ?? 0)
-      )
-    },
-    (value) => {
-      const row = asRecord(value)
-      return `${typeof row?.id === 'string' ? row.id : ''}\u0000${
-        typeof row?.title === 'string' ? row.title : ''
-      }`
-    },
-  )
-  addArray(
-    'timeline',
-    () => asArray(context.timeline),
-    (value) => {
-      const row = asRecord(value)
-      const text = `${String(row?.description ?? '')}${String(row?.location ?? '')}`
-      return mentionScore(mentioned, text) * 1_000 + Number(row?.chapter ?? 0)
-    },
-    (value) => {
-      const row = asRecord(value)
-      return `${typeof row?.id === 'string' ? row.id : ''}\u0000${String(row?.chapter ?? '')}`
-    },
-  )
-  const relationships = asRecord(context.relationships)
-  addArray(
-    'relationships',
-    () => asArray(relationships?.items),
-    (value) => {
-      const row = asRecord(value)
-      const text = `${String(row?.a ?? '')}${String(row?.b ?? '')}`
-      return mentionScore(mentioned, text) * 1_000 + Number(row?.since ?? 0)
-    },
-    (value) => {
-      const row = asRecord(value)
-      return `${typeof row?.id === 'string' ? row.id : ''}\u0000${String(row?.a ?? '')}\u0000${String(
-        row?.b ?? '',
-      )}`
-    },
-  )
-  // P1: the world bible's lists are optional context. Its premise/setting/rules
-  // stay untouched because they have no candidate here.
-  const worldbook = asRecord(context.worldbook)
-  for (const key of ['characters', 'locations', 'factions', 'glossary', 'backstory'] as const) {
-    addArray(
-      `worldbook.${key}`,
-      () => asArray(worldbook?.[key]),
-      (value) => {
-        const row = asRecord(value)
-        const name =
-          typeof row?.name === 'string'
-            ? row.name
-            : typeof row?.term === 'string'
-              ? row.term
-              : typeof row?.event === 'string'
-                ? row.event
-                : ''
-        return mentionScore(mentioned, name) * 1_000
-      },
-      (value) => {
-        const row = asRecord(value)
-        return typeof row?.name === 'string'
-          ? row.name
-          : typeof row?.term === 'string'
-            ? row.term
-            : stableKey(value)
-      },
-      { tier: 1 },
-    )
-  }
-  const bookPlan = asRecord(context.book_plan)
-  // P1 protects premise/logline/strict; every other book-plan field is optional
-  // colour and can be trimmed before a required foreshadow or summary floor.
-  addObject(
-    'book_plan',
-    () => bookPlan,
-    (key) => (['premise', 'logline', 'strict'].includes(key) ? 1_000_000 : 0),
-    { tier: 2, floor: Math.min(3, Object.keys(bookPlan ?? {}).length) },
-  )
-  for (const key of ['themes', 'selling_points'] as const) {
-    addArray(
-      `book_plan.${key}`,
-      () => asArray(bookPlan?.[key]),
-      (value) => mentionScore(mentioned, String(value)) * 100,
-      (value) => String(value),
-      { tier: 2 },
-    )
-  }
-  // P1 does not act on the chapter card; it is the first thing to drop when the
-  // protected world-bible block alone is over budget.
-  addObject(
-    'outline_card',
-    () => asRecord(context.outline_card),
-    () => 0,
-    { tier: 1 },
-  )
-  addArray(
-    'recent_summaries',
-    () => asArray(context.recent_summaries),
-    (value) => chapter(value),
-    (value) => String(chapter(value)).padStart(8, '0'),
-    { tier: 3, floor: Math.min(2, asArray(context.recent_summaries)?.length ?? 0) },
-  )
-  addArray(
-    'score_history',
-    () => asArray(context.score_history),
-    (value) => Number(asRecord(value)?.num ?? 0),
-    (value) => String(Number(asRecord(value)?.num ?? 0)).padStart(8, '0'),
-  )
-
-  // Sort every candidate even when the pack already fits, so a ledger's input
-  // order cannot leak into the brief digest. The budget pass then works on a
-  // deterministic order and equal-priority items have a stable tie-break.
-  for (const candidate of candidates) candidate.prepare()
-
-  // `context` does not carry context_meta yet; measuring it directly avoids a
-  // full clone and a second stringify on every trim decision.
-  const used = (): number => jsonSize(context)
-  /** Required-floor status, recomputed while measuring so the metadata is honest. */
-  const floorState = (): { floorKept: Record<string, number>; requiredOmitted: number } => {
-    const floorKept: Record<string, number> = {}
-    let requiredOmitted = 0
-    for (const candidate of candidates) {
-      const floor = candidate.floor()
-      if (floor <= 0) continue
-      const remaining = candidate.count()
-      floorKept[candidate.key] = Math.min(floor, remaining)
-      if (remaining < floor) requiredOmitted += floor - remaining
-    }
-    return { floorKept, requiredOmitted }
-  }
-  const buildMeta = (finalUsed: number): ContextMeta => {
-    const floors = floorState()
-    return {
-      version: 1,
-      stage,
-      budget,
-      used: finalUsed,
-      over_budget: false,
-      protected: protectedKeys,
-      truncated: [...truncated].sort(compareText),
-      omitted: Object.fromEntries(
-        Object.entries(omitted).sort(([left], [right]) => compareText(left, right)),
-      ),
-      floor_kept: floors.floorKept,
-      required_omitted: floors.requiredOmitted,
-      // Measured with the worst-case reason so the final value cannot push the
-      // document past the budget it was trimmed to.
-      over_budget_reason: 'protected_block',
-      strategy: 'stage-v3',
-    }
-  }
-  // Trim by tier: optional ledgers first, then worldbook lists, then book-plan
-  // fields, and only then the two-summary floor. Round-robin inside a tier.
-  // Size is measured on the real document (including metadata) so the final
-  // `over_budget_reason` cannot push it past the budget it was trimmed to.
-  const exactSize = (): number => jsonSize({ ...context, context_meta: buildMeta(used()) })
-  const tiers = [...new Set(candidates.map((candidate) => candidate.tier))].sort((a, b) => a - b)
-  for (const tier of tiers) {
-    const tierCandidates = candidates.filter((candidate) => candidate.tier === tier)
-    while (exactSize() > budget) {
-      let changed = false
-      for (const candidate of tierCandidates) {
-        if (exactSize() <= budget) break
-        if (candidate.count() === 0) continue
-        candidate.prepare()
-        if (candidate.trim()) {
-          omitted[candidate.key] = (omitted[candidate.key] ?? 0) + 1
-          truncated.add(candidate.key)
-          changed = true
-        }
-      }
-      if (!changed) break
-    }
-  }
-
-  const overBudget = exactSize() > budget
-  const floors = floorState()
-  // Floors are never trimmed, so an over-budget document with every floor met
-  // is limited by its protected content — unless the floors themselves are what
-  // blew the budget. Reporting "protected_block" for a pack whose protected
-  // list does not even contain the floor blocks (eight long foreshadows at 25k
-  // of a 6k budget) is a label the author cannot act on.
-  const floorBytes = Object.keys(floors.floorKept).reduce(
-    (total, key) => total + jsonSize({ [key]: (context as Record<string, unknown>)[key] }),
-    0,
-  )
-  const reason: ContextMeta['over_budget_reason'] = !overBudget
-    ? null
-    : floors.requiredOmitted > 0 || floorBytes > budget
-      ? 'required_floor'
-      : 'protected_block'
-  const finalMeta: ContextMeta = {
-    version: 1,
-    stage,
-    budget,
-    used: used(),
-    over_budget: overBudget,
-    protected: protectedKeys,
-    truncated: [...truncated].sort(compareText),
-    omitted: Object.fromEntries(Object.entries(omitted).sort(([left], [right]) => compareText(left, right))),
-    floor_kept: floors.floorKept,
-    required_omitted: floors.requiredOmitted,
-    over_budget_reason: reason,
-    strategy: 'stage-v3',
-  }
-  return { ...context, context_meta: finalMeta }
-}
-
-/**
- * Build the stage-specific context pack plus the deterministic budget report.
- * The budget report is part of the brief digest; a truncated pack cannot be
- * silently mistaken for the full ledger set.
+ * Build the complete stage-specific context pack.
+ *
+ * `context_meta.used` is measured on the exact document that is returned, so
+ * the size the model sees reported is the size it receives. Nothing is
+ * removed: what the stage needs is what the stage gets.
  */
 export function briefContext(input: BriefContextInput): Record<string, unknown> {
-  return withContextBudget(input.stage, unbudgetedBriefContext(input))
+  const context = stageBriefContext(input)
+  const meta: ContextMeta = {
+    version: 1,
+    stage: input.stage,
+    used: 0,
+    complete: true,
+    strategy: 'complete',
+  }
+  // `used` is part of the document it measures, so measure to a fixpoint rather
+  // than reporting a number one metadata edit out of date.
+  let used = 0
+  for (let pass = 0; pass < 4; pass += 1) {
+    const size = jsonSize({ ...context, context_meta: { ...meta, used } })
+    if (size === used) break
+    used = size
+  }
+  return { ...context, context_meta: { ...meta, used } }
 }

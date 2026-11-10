@@ -1,0 +1,96 @@
+schema_version: 1
+id: cold-suspense
+name: 冷峻悬疑
+description: 克制的感官，线索前置，低温对白，章末留下未解问题。
+audience: general
+genres: [mystery, suspense, urban]
+pov: third-limited
+tense: past
+register: restrained
+narrative_distance: close
+
+sentence:
+  short_ratio: 0.3
+  medium_ratio: 0.45
+  long_ratio: 0.25
+  burstiness: high
+  max_consecutive_same_length: 4
+
+paragraph:
+  max_chars: 110
+  one_action_per_paragraph: true
+  max_sentences: 4
+  max_actions: 3
+
+dialogue:
+  ratio: 0.25
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: low
+  idiom: low
+  sensory_channels: [sound, cold, smell, sight]
+
+structure:
+  opening_moves: [anomaly, object, silence]
+  scene_transition: hard_cut
+  hook_moves: [unresolved_question, new_clue, cost]
+  cool_point_every_chars: 1000
+
+emotion:
+  intensity: medium
+  expression: restrained
+  required_beats: [body_reaction, relationship_stake, cost, vulnerability]
+  min_cues_per_1000: 2
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 不寒而栗
+  - 脊背发凉
+  - 恐惧如潮水
+
+exemplars:
+  - |
+    “你一个人住？”警察问。
+    “嗯。”女人把门开了一条缝，“有事？”
+    “昨晚谁开的窗？”
+    “我自己。”
+    “窗户从里面锁着，你怎么开的？”
+    女人沉默了两秒：“可能我记错了。”
+  - |
+    “这栋楼晚上几点关门？”
+    “十一点。”保安打了个哈欠，“不过昨晚没关。”
+    “为什么？”
+    “有人把锁撬了，报修单还在我桌上。”
+    “报修单上写的几点？”
+    “凌晨两点。”保安看了他一眼，“你问这么细，警察？”
+    “不是。”他把证件收回去，“查水表的。”
+
+critic_rubric:
+  - 克制：少解释情绪，用身体反应和环境变化代替。
+  - 线索：关键物件、时间差和证词矛盾要前置。
+  - 不可靠：允许人物说错、记错、故意隐瞒。
+  - 对白：短、冷、留白，不把潜台词说透。
+  - 钩子：章末留下一个可追查的问题，而不是总结。
+  - 情绪：恐惧落在呼吸、手指、温度上，不写抽象心情。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 3
+  metaphor_per_1000_max: 4

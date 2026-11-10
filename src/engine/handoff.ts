@@ -1,3 +1,4 @@
+import { ERROR_CODES, EngineInputError } from '../types.js'
 import type { ArchiveHandoff, HandoffDocument } from '../types.js'
 
 /** The visible volume/act position for one chapter. */
@@ -92,6 +93,11 @@ const volumeNameOf = (previous: HandoffDocument | null, volume: number): string 
  * Advance from the stored handoff of the previous chapter to the next chapter.
  * The archive override is applied as a starting point: changing volume resets
  * the act, while changing only the act starts its first beat.
+ *
+ * 0.2.17: the step count is `chapter - previous.current_chapter`, not one. A
+ * project that skipped chapters (a re-opened gap, an imported index) used to
+ * persist a position one beat ahead while `projectHandoff` walked the whole
+ * gap, so the stored handoff and the projected one disagreed forever.
  */
 export const advanceHandoff = (
   previous: HandoffDocument | null,
@@ -109,17 +115,47 @@ export const advanceHandoff = (
       act_progress: override?.act_progress ?? (volume === position.volume ? position.act_progress : '1/5'),
     }
   }
-  const previousVolume = volumeOf(previous)
-  const volume = override?.volume ?? previousVolume
-  const volumeChanged = volume !== previousVolume
-  const base = volumeChanged ? { act: '第一幕', act_progress: '1/5' } : advanceProgress(previous)
+  const previousChapter = Number.isInteger(previous.current_chapter)
+    ? (previous.current_chapter as number)
+    : chapter - 1
+  if (chapter <= previousChapter) {
+    throw new EngineInputError(
+      ERROR_CODES.SCHEMA_INVALID,
+      `handoff cannot move backwards: stored chapter ${previousChapter}, next chapter ${chapter}`,
+      'archive chapters in ascending order; use novel_reopen to revise an archived chapter',
+    )
+  }
+  let position: HandoffPosition = {
+    volume: volumeOf(previous),
+    volume_name: volumeNameOf(previous, volumeOf(previous)),
+    act: typeof previous.act === 'string' && previous.act.trim() !== '' ? previous.act : '第一幕',
+    act_progress:
+      typeof previous.act_progress === 'string' && previous.act_progress.trim() !== ''
+        ? previous.act_progress
+        : '1/5',
+  }
+  for (let step = previousChapter; step < chapter; step += 1) {
+    const advanced = advanceProgress({
+      ...previous,
+      volume: position.volume,
+      volume_name: position.volume_name,
+      act: position.act,
+      act_progress: position.act_progress,
+    } as HandoffDocument)
+    position = { ...position, ...advanced }
+  }
+  const volume = override?.volume ?? position.volume
+  const volumeChanged = volume !== position.volume
+  const base = volumeChanged
+    ? { act: '第一幕', act_progress: '1/5' }
+    : { act: position.act, act_progress: position.act_progress }
   const act = override?.act ?? base.act
   const actProgress =
     override?.act_progress ??
     (override?.act !== undefined && override.act !== previous.act ? '1/5' : base.act_progress)
   return {
     volume,
-    volume_name: override?.volume_name ?? (volumeChanged ? `第${volume}卷` : volumeNameOf(previous, volume)),
+    volume_name: override?.volume_name ?? (volumeChanged ? `第${volume}卷` : position.volume_name),
     act,
     act_progress: actProgress,
   }

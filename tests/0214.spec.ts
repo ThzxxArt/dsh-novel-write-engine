@@ -343,7 +343,7 @@ describe('0.2.14 diagnostics and evidence', () => {
 })
 
 describe('0.2.14 brief lifecycle and budget floors', () => {
-  it('keeps the required foreshadow floor when the context is over budget', () => {
+  it('keeps every open foreshadow, not a floor of eight', () => {
     const items = Array.from({ length: 60 }, (_, index) => ({
       id: `FS-${String(index + 1).padStart(3, '0')}`,
       title: `伏笔${index + 1}`,
@@ -354,10 +354,6 @@ describe('0.2.14 brief lifecycle and budget floors', () => {
       description: `伏笔描述 ${index + 1}`,
       advance_log: [],
     }))
-    // P2 keeps `plan` protected, and a plan beat list is unbounded, so this
-    // pack cannot be trimmed under the 8k budget. That makes
-    // `over_budget_reason` deterministic instead of a branch the assertion
-    // could skip (R10).
     const context = briefContext({
       stage: 'P2',
       chapter: 60,
@@ -398,18 +394,10 @@ describe('0.2.14 brief lifecycle and budget floors', () => {
       previousText: null,
       handoff: null,
     })
-    const meta = context.context_meta as {
-      over_budget: boolean
-      over_budget_reason: string | null
-      required_omitted: number
-      floor_kept: Record<string, number>
-    }
-    expect((context.open_foreshadows as unknown[]).length).toBeGreaterThanOrEqual(8)
-    expect(meta.required_omitted).toBe(0)
-    expect(meta.floor_kept.open_foreshadows).toBe(8)
-    expect(meta.over_budget).toBe(true)
-    // Every floor is met, so the budget is blocked by protected content only.
-    expect(meta.over_budget_reason).toBe('protected_block')
+    // 0.2.17 removed the budget: all sixty open foreshadows arrive, not the
+    // eight the old floor guaranteed.
+    expect((context.open_foreshadows as unknown[]).length).toBe(60)
+    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
   })
 
   it('signs P8 against its own dependencies, not the whole world ledger', async () => {

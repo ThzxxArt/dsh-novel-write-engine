@@ -79,6 +79,14 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
         form: '/novel search <关键词>',
         summary: '搜索正文、摘要、大纲、世界观与台账；空关键词会报用法。',
       },
+      {
+        form: '/novel style list',
+        summary: '8 份内置风格包的 id、名称、适用题材与一句话说明；开书前先看这个。',
+      },
+      {
+        form: '/novel style show <id>',
+        summary: '一份风格包的完整参数与规则清单；风格创建后不可更改，选之前先看全。',
+      },
     ],
   },
   {

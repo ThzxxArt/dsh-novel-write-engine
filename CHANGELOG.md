@@ -1,3 +1,92 @@
+## 0.2.17
+
+0.2.17 做两件事：给书一个**文风层**，并把 20 处「门看起来在、其实没在」的证据洞补上。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，`payload_version` 保持 7。
+
+### Added
+
+- **8 份内置风格包**（`stylepacks/*.yaml` + `index.yaml`）：冷峻悬疑、热血快节奏、群像权谋、无限流、轻松日常、女频拉扯、稳健种田、怪谈克苏鲁。每份含句长分布、段长/句数、对白目标、禁句、示例、评审要点与阈值；`pnpm validate:stylepacks` 编译即验证。
+- **风格包编译器**（`src/rules/style.ts`）：14 条断言，坏包在启动前被拒；英文题材标签经 `STYLE_GENRE_ALIASES` 归一成 12 个中文枚举；`不是……而是……` 按模板 `A[\s\S]{0,12}B` 匹配而不是子串。
+- **十条 `STYLE_*` 规则**与**九项风格指标**（句长分档、变异系数、段宽、段句数、对白双口径、抽象情绪密度、比喻密度、爽点空窗、情绪线索密度）。九条 advisory，只有 `STYLE_BANNED_PATTERN` 超过包内 `banned_patterns_max` 才升 blocker。
+- **七类 `AI_TONE_*` 规则**：39 条 entry，带 `scope`/`window`/`escalation`/`exclude_if_matches`/`replacement`；同一 span 与零容忍重叠时 AI 腔胜出（一个词一个 owner）。
+- **创建期与迁移确认门控**：`novel_init` 在写盘前把五个不可变字段摆给用户确认一次；旧项目设 `style` 走 `novel_amend` 时同样确认。`confirm: false` 跳过；无回答方/子代理/非活动会话降级为 `skipped:*` 并在返回里标注，用户取消则中止且不写任何文件。
+- `/novel style list`、`/novel style show <id>`；`novel_status.style`、`novel_report.style`、面板文风行与质量栏风格指标。
+- `pnpm check:docs`：断言工具数、门控数、操作数、内置风格包数与两处 8 行清单逐行一致。
+
+### Fixed
+
+- **字数口径**：全角缩进 `U+3000` 不再计词（此前每段凭空 +2 词，1,900 字章可过 2,000 字门）。
+- **证据连续性**：引文只允许跨相邻两段拼接，不再 `join('')` 后匹配；跨段时返回 `span`。
+- **PG-09 短章**：1–2 段章节不再数学上不可满足；三处引文归一化后必须互异。
+- **语义匹配器统一**：`semantic.ts` 与 PG-08/09 共用 `matchEvidence`，全角引号与跨段判定一致。
+- **词表误杀**：`话说`/`读者`/`书友` 改 `line_start`，`似乎`/`仿佛`/`不禁` 改 `standalone`；「他话说了一半」「杂志的读者」不再被拒。
+- **锁定基线**：外貌锚点下限 8→2 字；无基线时报 `LOCK_BASELINE_MISSING` 而不是静默不跑。
+- **handoff 跨章**：按章差循环推进并拒绝倒退；`reopen` 清 `cjk_words`；location `detail` 落盘。
+- **briefs 死锁**：`state/briefs.yaml` 损坏后 `status` 指向 `novel_amend`，doctor 报 `briefs-unreadable`。
+- **amend_issues 证据化**：blocker 改 `fixed` 必须带正文原句。
+- **restore 护栏**：`next_seq` 不得低于已分配 id 的最大序号；`locks.locations` 悬挂报错。
+- **锁回收**：`rename` 回退路径不再删别人新建的锁；`EPERM/EACCES` 三次有界退避；`staleMs` 90s→8s。
+- **事务终态**：`committed` 落盘后不再回滚；新增 `rolled_back` 终态，`reconcileJournal` 按 txid 取最后终态。
+- **面板可见性**：切栏目回来不再显示「暂无数据」（304 无缓存载荷时重取）；设定页显示 `shown/total`；刷新失败保留项目列表与选择器。
+- **批量任务书**：`stages:['P6','P8']` 逐段渲染，不再只输出第一阶段。
+- **status 警告**：`PENDING_RECOVERABLE/ABORTABLE` 与 `state_errors` 在工具与命令两条通道都可见。
+- **check 计数**：部分 scope 的 pass 计入 `partial_checks`，PG-11 能终止 content-only 空转。
+
+### Removed
+
+- **上下文预算裁剪整体删除。** 任务书不再按阶段字节上限删台账、裁列表。原设计（`CONTEXT_BUDGETS`、分层裁剪、`truncated`/`omitted`/`floor_kept`/`required_omitted`/`over_budget`/`style_omitted`）会让模型拿到一份「缺了它正在被评判的那些行」的任务书，而作者无法从 `omitted` 计数里还原缺了什么。现在 `context` 是完整 pack，`context_meta` 只保留 `{version, stage, used, complete: true, strategy}`，`used` 是返回文档自身的 UTF-8 字节数，不设上限。
+- 随之删除 `STYLE_CONTEXT_BUDGETS` 与风格块裁剪（`fitStyleBlock`）；P2–P6 的风格块每次都是完整的。
+
+### Changed（破坏性）
+
+1. `novel_init` 新增**必填** `style`（8 个包 id 或 `none`）与 `confirm`（默认 `true`）。省略 `style` 会被拒绝并列出可选值。
+2. `novel_status.dialogue` 的 `target` 从区间改为风格瞄准点（`number | null`），新增 `range` 承接原区间语义。
+3. `amend_issues` 把 blocker 改为 `fixed` 时必须提供 `evidence`。
+4. 全角缩进不再计词，历史章记录不回写；`doctor` 报 `WORD_COUNT_BASIS_CHANGED` info。
+5. `context.context_meta` 不再是 `{budget, over_budget, protected, truncated, omitted, ...}`，改为 `{version, stage, used, complete, strategy}`；读取旧字段的调用方会拿到 `undefined`。
+6. P6 的 `context.characters` 改为按名字排序（此前按存储顺序），以便同一台账的不同行序产生同一份任务书。
+
+### Verified
+
+- 全量 113 个测试文件 / 1382 项通过；`tests/0217-*.spec.ts` 七个文件覆盖 20 条 P1、风格编译、十条风格规则、七类 AI 腔、确认门控七种结果与端到端集成。
+- 每条 P1 回归先在旧实现上跑红再转绿；确认门控的「拒绝」「中止」两条路径都断言目标目录**不存在**。
+- 真实 DSH 宿主门（`pnpm check:host`）在临时 HOME + 真实端口上装包、挂载、面板鉴权、headless 模型调用、`style` 落盘、降级上报、卸载全通过。
+
+### 收口 review（同版本内修复）
+
+- **迁移窗口双 owner**：确认门（`styleMigration`）只看章节索引行，语义闸（`amendProblems`）却要求索引为空且无归档正文；索引丢行时会出现「问了用户、用户同意、写入被拒」。现在两处共用 `styleWindowOpen`，并同时计入「非当前章的正文章」。
+- **禁句匹配器两份实现**：`rules/style.ts` 与 `domain/style.ts` 各写一遍同一正则，改一处就会让指标和规则对不上。现在只有 `domain/style.ts` 一份，编译器复用它。
+- **C8 只按整串相等去重**：零容忍词只是 AI 腔短语的子串时两边都会报。改成包含判定。
+- **面板文风状态是死数据**：`overview` section 里算出的 verdict 客户端从不请求（概览页读 bundle）。现在 verdict 进 `bookData.style_verdict` 并真的渲染。
+- **空章节自称「贴合」**：没有正文时 verdict 为 `pass`，面板显示「本章贴合」。新增 `no-draft`，面板显示「尚无正文」；`novel_report.style.verdict` 与面板共用同一个 `styleOverview`。
+- **宿主门用的是旧契约**：`check:host` 的 mock 模型不传必填的 `style`，项目建不出来；这条门禁此前被 `| tail` 吞掉退出码而未被发现。现在按当前契约调用并断言 `style` 落盘与 `skipped:no-provider` 降级上报。
+- **契约文档缺口**：`docs/tools.md`、`docs/states.md` 完全没有 0.2.17 段，新增必填参数与三态字段无处可查。已补两节。
+- **C3 在运行时没生效**：引擎解析风格包时没传零容忍表，于是 `仿佛`/`不禁`/`空气仿佛凝固`/`命运的齿轮` 既留在 `banned_patterns` 里、又由 `LEX_ZERO_TOLERANCE` 报一次，同一个词被两个 owner 计分。`validate:stylepacks` 折叠过、引擎没折叠，命令行与运行时对不上。现在引擎把自己的零容忍表传进去，`cold-suspense` 的禁句是 8 条（此前运行时是 12 条）。
+- **风格包缓存键忽略零容忍表**：`stylePackMap` 用单一全局缓存，谁先调用谁决定全进程看到哪一版。改为按零容忍集合签名分桶，两种顺序都返回正确结果。
+- **确认门把「用户打字」当成同意**：用户没点选项而是写了「风格换成怪谈」，`selected` 为空即被当作确认，项目会用他刚否掉的值建出来。现在任何自由文本都 fail-closed，并把原话回显给模型。
+- **`stylePackIds()` 的文档与行为不符**：注释说「按 index 顺序」，实际返回编译期按 id 排序后的字母顺序。改为按 index 顺序，与 `/novel style list` 和 `novel_guide` 一致。
+- **`src/stylepack.ts` 覆盖率 66%，逐文件门禁没覆盖它**：加载器的价值在拒绝行为，缺文件、坏 YAML、空清单、重复 id、非法包名、坏包体六条包装故障此前都没测。补 `tests/0217-stylepack.spec.ts` 十一条，并把 `src/stylepack.ts` 纳入逐文件门禁（95/95/95/95）。
+- **面板契约缺 `style_targets` 声明**：服务端下发、客户端读取，但 `panel-contract.ts` 里没有这个字段，类型层看不见它。已补声明（含 `cool_point_every_chars`）。
+
+### 第二轮收口 review（真浏览器）
+
+前两轮的面板验证都停在「把 React 渲染成静态字符串」。这一轮装了真 Chromium、在临时 `DSH_HOME` 里打开真面板逐页签截图，才发现下面四处只在像素上暴露的问题，并补上一道只能靠像素验证的门禁。
+
+- **千字指标显示原始浮点**：`情绪线索` 渲染成 `10.204 / 千字`，同一张卡的其他行是 `12.5%`、`0.0%`。改为统一一位小数（`rate()`），`抽象情绪`/`比喻标记` 同样受影响。
+- **无卷的书显示「第一卷 · 第一幕 2/5」**：handoff 的默认脚手架会被当成作者设定投影到书脊，而同一屏的档案卡写着「卷 0 · 这本书还没有蓝图」。`volumeLabel` 现在只在书纲真的定义了卷时才显示位置。
+- **章节页签徽标与它下面的表不一致**：徽标读 `stats.chapters`（已归档 1），表格写「共 2 章」。改为与表格同一投影。
+- **文风卡只有 8 项，方案要求 9 项**：`burstiness_min` 是规则真的在判的指标，却不在卡上。补「句长变异 `cv / 下限`」并与其余指标一样在低于下限时标警告色。
+- **新增 `pnpm check:visual` 门禁**：临时 profile 装包 → 真端口启动 → Chromium 打开面板 → 逐页签截图 → 断言书脊标题、九项指标与目标值、警告色、390px 无横向溢出、控制台无报错。缺 Playwright 时 `exit 2`，不静默跳过。
+
+真实模型链路（临时目录，同一引擎）：
+
+| 模型 | 正文 | 被引擎真实拒绝 | 结果 |
+|---|---|---|---|
+| `agnes-2.5-flash` | 1,089 字 / 27 段 | P1×1、P4×4 | 归档 1,034 词、评分 150、P6 `verdict=pass`（模型语义证据）、导出 3 文件、`doctor.ok=true` |
+| `agnes-3.0-flash` | 1,056 字 / 32 段 | P4×1、P6×1，另有 4 个弯引号被驱动规范化 | 归档 989 词、评分 142、P4 与 P6 各有一次**模型输出被接受**、导出 3 文件 |
+
+两条链路都经过 `P1 → P8 → 归档 → 导出`。P4 评分表与 P6 语义证据由模型生成；模型写不成立（总分与 Σdelta 不闭合、引文非逐字原文、引文同句/重叠、引文段落号错位）时被 `PG-09`/`PG-10` 当场拒绝，未写入、未消耗轮次。
+
+
 ## 0.2.16
 
 0.2.16 只修 `/novel scan` 的取目录链路：在项目工作区里执行却回答「请在项目工作区中执行」。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，`payload_version` 仍为 7。
@@ -109,16 +198,16 @@
 
 按 `docs/0.2.14-plan.md` §9 逐条回放实现时，发现 8 处「写了但没生效」「验收点没有任何断言覆盖」或「同一概念两个数」，同版修完，不另开迭代（详见方案 §10）：
 
-| 编号 | 缺口 | 修法 | 回归 |
-|---|---|---|---|
-| A1 | PG-01 永远报 `stale_reason="state"`、`changed=[]` | 收据重建保留 `dependencies` | `tests/0214-audit.spec.ts`「names the changed dependency…」 |
-| A2 | 依赖变化按字母序取名，`check` 先于 `text` | 固定优先级 `text → review → check → plan → …` | 同上 |
-| A3 | `amend {patch}` 的 `changes[]` 只报父键 | 有 `patch` 时按操作路径生成 | 「edits one field by path…」 |
-| A4 | `allow_negative_balances` 无法写入、report 无 `debt` | amend 白名单 + schema 校验 + `report.debt` | 「debt is opt-in and visible」 |
-| A5 | 评分不一致没有 `exclusions_applied` | `applyExclusions` 返回 `dropped_entries`，错误回显 `engine_total/raw_total` | 「review total is explained」 |
-| A6 | 0.2.0 旧 check（无 `scope`）实际读不出来 | `readDoc` 读时归一 + doctor 逐章列号 | 「legacy check documents」 |
-| A7 | 真实 23 章仍有 2 条 `LOCKED_DETAIL_DRIFT` 结构性误报 | 有描写线索或重合 ≥50% 才算描写 | 真实项目脚本 + `rules-extra` 三分支 |
-| A8 | `report` 报 50 次评审，`status`/`pipeline` 报 48（`effortProjection` 少传评审历史计数） | 三处统一传 `attemptCounts`；归档快照同规则；`readableCurrent` 改惰性解析 | 「counts a history-only review copy…」 |
+| 编号 | 缺口                                                                                    | 修法                                                                        | 回归                                                        |
+| ---- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| A1   | PG-01 永远报 `stale_reason="state"`、`changed=[]`                                       | 收据重建保留 `dependencies`                                                 | `tests/0214-audit.spec.ts`「names the changed dependency…」 |
+| A2   | 依赖变化按字母序取名，`check` 先于 `text`                                               | 固定优先级 `text → review → check → plan → …`                               | 同上                                                        |
+| A3   | `amend {patch}` 的 `changes[]` 只报父键                                                 | 有 `patch` 时按操作路径生成                                                 | 「edits one field by path…」                                |
+| A4   | `allow_negative_balances` 无法写入、report 无 `debt`                                    | amend 白名单 + schema 校验 + `report.debt`                                  | 「debt is opt-in and visible」                              |
+| A5   | 评分不一致没有 `exclusions_applied`                                                     | `applyExclusions` 返回 `dropped_entries`，错误回显 `engine_total/raw_total` | 「review total is explained」                               |
+| A6   | 0.2.0 旧 check（无 `scope`）实际读不出来                                                | `readDoc` 读时归一 + doctor 逐章列号                                        | 「legacy check documents」                                  |
+| A7   | 真实 23 章仍有 2 条 `LOCKED_DETAIL_DRIFT` 结构性误报                                    | 有描写线索或重合 ≥50% 才算描写                                              | 真实项目脚本 + `rules-extra` 三分支                         |
+| A8   | `report` 报 50 次评审，`status`/`pipeline` 报 48（`effortProjection` 少传评审历史计数） | 三处统一传 `attemptCounts`；归档快照同规则；`readableCurrent` 改惰性解析    | 「counts a history-only review copy…」                      |
 
 第二轮四路独立证伪审计（探针 + 真实项目副本）又确认 13 处，已同版修完：无 `dependencies` 的旧收据不再被 replay（PG-01 能说清变了什么）；`state_delta` 的形状错误补齐 `details`，工具层不再丢弃 `error.details`；`cast[].knowledge` 的错误带 `received_type`，`knowledge` 放宽为数组由引擎校验元素；restore 旧 check 先做 legacy 归一（此前直接失败）；`acknowledge_until_chapter` 从前一章结转、跨章生效（此前完全不生效）；`一米八五` 能匹配 `身高=1.85 米`（此前报 unused）；`quality.sample_chapters` 输出参与均值的章号；归档压缩严格 ≤3 条并暴露失败；`readDoc` 先补 `schema_version` 再走 legacy check 分支；`getBrief` 的 `previous_chapter_effort` 传 projection；台账级 advisory 不再显示 `paragraph undefined`；`pipeline.briefs_source` 按实际来源标注；资源 set 通道回显真实旧值与结果。
 
@@ -126,18 +215,18 @@
 
 第二轮遗留的 10 项已全部收口（编号与 §4 的根因 R1–R19 不是同一套，见方案 §10.1）：
 
-| 编号 | 缺口 | 修法 | 回归 |
-|---|---|---|---|
-| R1 | `novel.yaml` 的 patch 模式必失败（整份文档过 `mergeProjectAmendment`） | patch 后只把真正变化的键（含 `targets` 子键）交给合并 | `tests/0214-followup.spec.ts` R1 三条 |
-| R2 | restore 只守 `next_seq`，不守 handoff/跨台账一致性 | `ledgerReferenceProblems`：新引入的 locks/timeline/relationships 悬空引用拒绝；handoff 卷号与章序校验 | R2 两条 |
-| R3 | 损坏台账只回 `{error,message,raw}` | `damagedLedgerSummary`：字节/行/`next_seq`/样本 id 与名称/缺尾换行 | R3 + 单元用例 |
-| R4 | PG-09 段号漂移不回传该段首 20 字 | 失败信息与 `hint` 带该段前 20 字 | R4 |
-| R5 | PG-04 的 samples 不含命中字符与规则名，且是全局前 3 | 格式违规 detail 带命中字符与前后文；样本按 code 各取一条并标 `code`/`count` | R5 三条 + 首尾边界 |
-| R6 | 「0 匹配」提示不可达；nearest 丢 similarity | 0 匹配先判（含最近段与相似度），再判唯一性与 occurrence | R6 |
-| R7 | `chapters` 紧凑行与章卡行无汉字数 | `ChapterRecord.cjk_words` 归档写入；紧凑行给值（旧行 `null`）；归档章卡带 `cjk_words` | R7 |
-| R8 | doctor 不区分期限「已过期/仍待办」 | 章号型标量按当前章三档；有已过期升 warning；baseline 另报「已过期条目」 | R8 三条 |
-| R9 | `novel_pipeline` 不返回 effort | 增加 `previous_chapter_effort` 与 `effort: {lifetime, basis}` | R9 |
-| R10 | 六处假绿断言 + PG-06 预检/面板实例确认/三入口证据归一缺用例 | 全部改成可失败断言（压缩前后集合相等、review 必有 issue、覆盖率 0.5、受保护 plan 造超预算、两章同类型后第三章计划告警、面板豁免前后差分、同一引文过 PG-08/PG-09） | R10 四条 |
+| 编号 | 缺口                                                                   | 修法                                                                                                                                                              | 回归                                  |
+| ---- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| R1   | `novel.yaml` 的 patch 模式必失败（整份文档过 `mergeProjectAmendment`） | patch 后只把真正变化的键（含 `targets` 子键）交给合并                                                                                                             | `tests/0214-followup.spec.ts` R1 三条 |
+| R2   | restore 只守 `next_seq`，不守 handoff/跨台账一致性                     | `ledgerReferenceProblems`：新引入的 locks/timeline/relationships 悬空引用拒绝；handoff 卷号与章序校验                                                             | R2 两条                               |
+| R3   | 损坏台账只回 `{error,message,raw}`                                     | `damagedLedgerSummary`：字节/行/`next_seq`/样本 id 与名称/缺尾换行                                                                                                | R3 + 单元用例                         |
+| R4   | PG-09 段号漂移不回传该段首 20 字                                       | 失败信息与 `hint` 带该段前 20 字                                                                                                                                  | R4                                    |
+| R5   | PG-04 的 samples 不含命中字符与规则名，且是全局前 3                    | 格式违规 detail 带命中字符与前后文；样本按 code 各取一条并标 `code`/`count`                                                                                       | R5 三条 + 首尾边界                    |
+| R6   | 「0 匹配」提示不可达；nearest 丢 similarity                            | 0 匹配先判（含最近段与相似度），再判唯一性与 occurrence                                                                                                           | R6                                    |
+| R7   | `chapters` 紧凑行与章卡行无汉字数                                      | `ChapterRecord.cjk_words` 归档写入；紧凑行给值（旧行 `null`）；归档章卡带 `cjk_words`                                                                             | R7                                    |
+| R8   | doctor 不区分期限「已过期/仍待办」                                     | 章号型标量按当前章三档；有已过期升 warning；baseline 另报「已过期条目」                                                                                           | R8 三条                               |
+| R9   | `novel_pipeline` 不返回 effort                                         | 增加 `previous_chapter_effort` 与 `effort: {lifetime, basis}`                                                                                                     | R9                                    |
+| R10  | 六处假绿断言 + PG-06 预检/面板实例确认/三入口证据归一缺用例            | 全部改成可失败断言（压缩前后集合相等、review 必有 issue、覆盖率 0.5、受保护 plan 造超预算、两章同类型后第三章计划告警、面板豁免前后差分、同一引文过 PG-08/PG-09） | R10 四条                              |
 
 同时修掉一个被 R10 暴露的真缺陷：`novel_review {amend_issues}` 写出的评审文档带 `amendments`，而 review schema 未声明，导致**引擎读不回自己刚改过的评审**（`REVIEW_UNREADABLE`）；已在 `store/schema.ts` 声明该字段。
 

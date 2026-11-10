@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { CORE_TOOLS, PANEL_ID, type ToolName } from './constants.js'
 import { EngineService } from './engine/service.js'
 import type { EngineConfig, EngineEvent } from './engine/state.js'
-import { createNovelTools, type WorkingDirectoryLike } from './tools/index.js'
+import { createNovelTools, type UserQuestionsLike, type WorkingDirectoryLike } from './tools/index.js'
 import { createCommands } from './commands/index.js'
 import { createSkill } from './skills/index.js'
 import { panelRoute, type PanelGuard } from './remote/index.js'
@@ -99,7 +99,25 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  for (const tool of createNovelTools(engine, { resolveWorkingDirectory })) {
+  /**
+   * 0.2.17: resolve `ctx.userQuestions` per call, exactly like the cwd service.
+   *
+   * Deliberately NOT `optional.inject(['userQuestions'])`: injection skips the
+   * callback entirely when the service is absent, which would make `novel_init`
+   * silently vanish from the tool list in a host without a question UI. A
+   * missing service must degrade the confirmation, not the tool.
+   */
+  const resolveUserQuestions = (): UserQuestionsLike | undefined => {
+    const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+    if (typeof get !== 'function') return undefined
+    try {
+      return get.call(ctx, 'userQuestions') as UserQuestionsLike | undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  for (const tool of createNovelTools(engine, { resolveWorkingDirectory, resolveUserQuestions })) {
     if (toolsMode === 'core' && !CORE_TOOLS.includes(tool.name as ToolName)) continue
     ctx.tools.register(tool)
   }
@@ -173,3 +191,16 @@ export * from './engine/projections.js'
 export * from './engine/gates.js'
 export * from './engine/brief.js'
 export * from './export/render.js'
+export * from './codes.js'
+export * from './rules/style.js'
+export {
+  bundledStyleIndexPath,
+  loadStyleCatalogue,
+  loadStyleIndex,
+  readBundledStylepackText,
+  resetStylePackCache,
+  stylePackById,
+  stylePackIds,
+  stylePackMap,
+  stylePackSummaries,
+} from './stylepack.js'

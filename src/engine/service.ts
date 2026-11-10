@@ -34,17 +34,26 @@ import {
 import { canRun, roundsExhausted, STAGE_NEXT, nextStage as computeNextStage } from '../domain/index.js'
 import { textSimilarity } from '../domain/simhash.js'
 import { compareText, stableJson } from '../domain/stable.js'
-import { matchEvidence, openingInFirstTwoParagraphs, splitParagraphs } from '../domain/text.js'
+import {
+  matchEvidence,
+  openingInFirstTwoParagraphs,
+  quoteMeetsFloor,
+  splitParagraphs,
+} from '../domain/text.js'
 import { countWordMetrics } from '../domain/wordcount.js'
+import { measureStyle, styleVocabulary } from '../domain/style.js'
+import { STYLE_RULES } from '../codes.js'
 import { reviewArithmeticProblems, totalScore } from '../domain/scoring.js'
 import {
   dedupeAdvisories,
   runMachineChecks,
+  runRules,
   scopeOfRule,
   type MachineOptions,
   type MachineResult,
 } from '../rules/pipeline.js'
-import type { Rulepack } from '../rules/types.js'
+import type { Rulepack, StylePack } from '../rules/types.js'
+import { stylePackMap } from '../stylepack.js'
 import { applyExclusions } from '../domain/scoring.js'
 import {
   FsStore,
@@ -233,6 +242,14 @@ export interface InitProjectInput {
   dialogue_ratio?: [number, number]
   min_cjk_chars?: number | null
   dialogue_ratio_metric?: 'lines' | 'chars' | 'both'
+  /**
+   * 0.2.17: a bundled style pack id, or `'none'` for "deliberately no style".
+   * Required at the *input* contract (the tool layer enforces it) while the disk
+   * field stays optional, so pre-0.2.17 projects remain readable.
+   */
+  style?: string | 'none' | null
+  /** 0.2.17: how the style choice was made; the tool layer supplies it. */
+  style_confirmation?: string
   /** 0.2.0 book-planning seed; every field is optional. */
   premise?: string
   logline?: string
@@ -253,7 +270,8 @@ export interface StatusInput {
 }
 
 export interface BriefInput {
-  stage: import('../types.js').BriefStage
+  /** Single stage to sign; omit when passing `stages`. */
+  stage?: import('../types.js').BriefStage
   /** 0.2.14: sign several stages in one transaction. */
   stages?: import('../types.js').BriefStage[]
   chapter?: number
@@ -310,6 +328,12 @@ export interface ReviewAmendment {
   location?: string
   problem?: string
   fix?: string
+  /**
+   * 0.2.17: a blocker may only be marked fixed with a verbatim quote from the
+   * current manuscript. Without this an amendment could report "no blocking
+   * items" while PG-08 still refused the archive — two answers for one fact.
+   */
+  evidence?: string
 }
 
 export interface ReviewSubmission extends Partial<Omit<ReviewInput, 'chapter'>> {
@@ -505,7 +529,12 @@ export interface DoctorInput {
 
 export interface ReportSubmission {
   root?: string
+  /** 0.2.17: return the summary plus the most recent effort rows only. */
+  lean?: boolean
 }
+
+/** How many per-chapter effort rows a lean report keeps. */
+export const REPORT_LEAN_CHAPTERS = 20
 
 export interface GuideInput {
   root?: string
@@ -529,6 +558,13 @@ interface Snapshot {
   pipeline: PipelineState
   /** Latest receipt per brief stage, loaded from state/briefs.yaml or legacy pipeline.briefs. */
   briefs: PipelineState['briefs']
+  /**
+   * 0.2.17: set when state/briefs.yaml exists but cannot be parsed. The receipt
+   * file is the authority for signed briefs, so a damaged one means every
+   * PG-01 check fails until the file is repaired — status must say so instead of
+   * recommending `novel_brief`, which `getBrief` would reject forever.
+   */
+  briefsError: string | null
   chapters: ChaptersDocument
   characters: import('../types.js').CharactersDocument
   world: import('../types.js').WorldDocument
@@ -609,6 +645,9 @@ const MUTABLE_STATE: Record<string, DocKind> = {
   [joinRel(STATE_DIR, STATE_FILES.handoff)]: 'handoff',
   [OUTLINE_FILE]: 'outline',
   [WORLDBOOK_FILE]: 'worldbook',
+  // 0.2.17: a damaged receipt file is repaired by an explicit amend, not by
+  // pointing the author at `novel_brief`, which refuses to overwrite it.
+  [BRIEF_RECEIPTS_FILE]: 'briefs',
 }
 
 /** Refused attempts a model can fix by changing its submission. */
@@ -688,6 +727,8 @@ const decodeStateCursor = (cursor: string, section: string, filtersHash: string)
  * reports every drop in `counts`. No pass may delete a row silently.
  */
 const PANEL_SECTION_BYTES = 64 * 1024
+/** 0.2.17: the audit page ceiling the tool description promises. */
+const AUDIT_LIMIT_MAX = 200
 /** Room for the section envelope (`total`, `etag`, cursors) inside the cap. */
 const PANEL_SECTION_SLACK = 2048
 /** Row cap per structured worldbook group; every cap is reported as shown/total. */
@@ -730,18 +771,36 @@ export class EngineService {
   constructor(
     private readonly config: EngineConfig,
     rulepack: Rulepack | (() => Rulepack),
-    options: { briefs?: BriefLibrary; now?: () => Date; onEvent?: (event: EngineEvent) => void } = {},
+    options: {
+      briefs?: BriefLibrary
+      now?: () => Date
+      onEvent?: (event: EngineEvent) => void
+      /** 0.2.17: the compiled style catalogue; injectable so tests can pin one. */
+      stylepacks?: () => Map<string, StylePack>
+    } = {},
   ) {
     this.rulepackSource = typeof rulepack === 'function' ? rulepack : () => rulepack
     this.briefs =
       options.briefs ?? new BriefLibrary(config.briefs.overrides === '' ? undefined : config.briefs.overrides)
     this.now = options.now ?? (() => new Date())
     this.onEvent = options.onEvent
+    // The rulepack's zero-tolerance list must reach the catalogue: C3 gives a
+    // word exactly one owner, so `仿佛`/`不禁` stay blockers and never become a
+    // second, duplicated style finding. Passing no list here silently disabled
+    // that collapse — the CLI collapsed, the engine did not.
+    this.stylepackSource =
+      options.stylepacks ??
+      (() =>
+        stylePackMap({
+          zeroTolerance: this.rulepack.lexicon.zero_tolerance.map((entry) => entry.term),
+        }))
   }
 
   /** Compiled on first use so `apply()` performs no IO. */
   private readonly rulepackSource: () => Rulepack
+  private readonly stylepackSource: () => Map<string, StylePack>
   private compiled: Rulepack | null = null
+  private compiledStyles: Map<string, StylePack> | null = null
   private disposed = false
 
   /**
@@ -755,12 +814,37 @@ export class EngineService {
     this.stores.clear()
     this.replay.clear()
     this.exportArtifactEpoch.clear()
+    // 0.2.17: the panel and section caches are keyed by root, so a disposed
+    // engine would otherwise keep every project's last payload alive.
+    this.panelCache.clear()
+    this.sectionCache.clear()
     this.compiled = null
+    this.compiledStyles = null
   }
 
   private get rulepack(): Rulepack {
     this.compiled ??= this.rulepackSource()
     return this.compiled
+  }
+
+  /** The bundled catalogue, compiled once. Empty when the host ships none. */
+  private get stylepacks(): Map<string, StylePack> {
+    this.compiledStyles ??= this.stylepackSource()
+    return this.compiledStyles
+  }
+
+  /**
+   * 0.2.17: the pack this book is bound to, or `null`.
+   *
+   * `null` covers three cases that must behave identically — no `style` key, an
+   * explicit `null`, and an id that no longer exists (hand-edited file). The
+   * last one is reported by `novel_doctor`, never thrown: a book must stay
+   * readable even if its pack vanished.
+   */
+  stylepackFor(project: Pick<NovelProject, 'style'> | null | undefined): StylePack | null {
+    const id = project?.style
+    if (typeof id !== 'string' || id === '') return null
+    return this.stylepacks.get(id) ?? null
   }
 
   private readonly onEvent: ((event: EngineEvent) => void) | undefined
@@ -1224,6 +1308,28 @@ export class EngineService {
         'dialogue_ratio_metric must be lines, chars or both',
       )
     }
+    // 0.2.17: the style is a permanent choice, so the id is checked here rather
+    // than silently falling back to "no style" on a typo.
+    //
+    // Three states, not two (§4.4): an omitted `style` leaves the key off the
+    // file, which is what makes the migration window possible; `'none'` writes an
+    // explicit `null`, which is a decision and therefore permanent.
+    let styleField: { style?: string | null } = {}
+    if (input.style === null || input.style === 'none') {
+      styleField = { style: null }
+    } else if (input.style !== undefined) {
+      if (typeof input.style !== 'string') {
+        throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'style must be a style pack id or "none"')
+      }
+      if (!this.stylepacks.has(input.style)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `unknown style pack "${input.style}"`,
+          `allowed: ${[...this.stylepacks.keys()].join(', ')}, none`,
+        )
+      }
+      styleField = { style: input.style }
+    }
     const selection: Selection = {
       root: input.root === undefined ? this.defaultRoot() : this.resolveProjectPath(input.root),
       source: input.root === undefined ? 'config' : 'explicit',
@@ -1260,6 +1366,8 @@ export class EngineService {
               ? {}
               : { dialogue_ratio_metric: input.dialogue_ratio_metric }),
           },
+          ...styleField,
+          ...(input.style_confirmation === undefined ? {} : { style_confirmation: input.style_confirmation }),
         }
         const pipeline = emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' })
         const documents = emptyDocuments()
@@ -2361,6 +2469,11 @@ export class EngineService {
           [joinRel(STATE_DIR, STATE_FILES.foreshadows)]: 'foreshadows',
           [joinRel(STATE_DIR, STATE_FILES.relationships)]: 'relationships',
           [joinRel(STATE_DIR, STATE_FILES.handoff)]: 'handoff',
+          // 0.2.17: the chapter index is archive evidence. It is no longer in
+          // the amend repair window, so restoring its pre-image is the only
+          // sanctioned repair — which keeps a damaged index from being rewritten
+          // in place by a caller that never had to prove the old rows.
+          [joinRel(STATE_DIR, STATE_FILES.chapters)]: 'chapters',
         }
         // Named once so the dangling-reference hint can point at the ledger
         // that would have to be restored alongside.
@@ -2436,6 +2549,23 @@ export class EngineService {
                 `backup ${input.txid} would move ${kind}.next_seq back from ${before.next_seq} to ${after.next_seq}`,
                 'ids already issued must never be reissued; edit the restored next_seq forward, or restore a newer backup',
               )
+            }
+            // 0.2.17: comparing only against the current ledger missed a backup
+            // older than an archive — its allocator re-issued FS-0xx ids that
+            // state/chapters.yaml already recorded.
+            if (
+              (kind === 'foreshadows' || kind === 'timeline' || kind === 'relationships') &&
+              after !== null &&
+              typeof after.next_seq === 'number'
+            ) {
+              const floor = ledgerIdFloor(kind, snapshot.chapters, snapshot.handoff)
+              if (after.next_seq <= floor) {
+                throw new EngineInputError(
+                  ERROR_CODES.SCHEMA_INVALID,
+                  `backup ${input.txid} would set ${kind}.next_seq to ${after.next_seq}, but chapter archives already issued ids up to ${floor}`,
+                  'ids already issued must never be reissued; edit the restored next_seq forward, or restore a newer backup',
+                )
+              }
             }
             files.push({ path, text })
             restored.push(path)
@@ -3018,8 +3148,72 @@ export class EngineService {
    * has no selection side effect: read-only callers such as /novel resume must
    * not register or bind the project just by reading it.
    */
+  /**
+   * 0.2.17: a hand-edited `novel.yaml` can name a pack that does not exist. That
+   * must not block reading or writing the book, so it becomes a warning on the
+   * read models instead of an error.
+   */
+  private styleWarnings(snapshot: Snapshot): Warning[] {
+    const raw = snapshot.project.style
+    if (typeof raw !== 'string' || raw === '' || this.stylepacks.has(raw)) return []
+    return [
+      {
+        code: 'STYLE_UNKNOWN',
+        message: `novel.yaml.style names an unknown pack "${raw}"; style rules are dormant until it is fixed`,
+      },
+    ]
+  }
+
+  /**
+   * 0.2.17: the one-line style verdict the panel's overview shows.
+   *
+   * `unset` and `not-migrated` are different states: `unset` is a deliberate
+   * "no style", `not-migrated` is an old project that could still choose one.
+   */
+  private styleOverview(snapshot: Snapshot): {
+    id: string | null
+    name: string | null
+    verdict: 'pass' | 'attention' | 'unset' | 'not-migrated' | 'no-draft'
+    findings: string[]
+  } {
+    const pack = this.stylepackFor(snapshot.project)
+    if (pack === null) {
+      return {
+        id: null,
+        name: null,
+        verdict: snapshot.project.style === undefined ? 'not-migrated' : 'unset',
+        findings: [],
+      }
+    }
+    const text = snapshot.text ?? ''
+    // An empty chapter has no style to judge. Reporting "pass" for it would be
+    // the same class of lie the 0.2.17 evidence work exists to remove.
+    if (text.trim() === '') {
+      return { id: pack.id, name: pack.name, verdict: 'no-draft', findings: [] }
+    }
+    // Only the style rules: the overview needs their findings, not the format
+    // and lexicon passes, which every gate already ran on this text.
+    const findings = runRules(
+      Object.values(STYLE_RULES),
+      text,
+      this.machineOptions(snapshot, {
+        title: snapshot.plan?.title ?? null,
+        sceneType: snapshot.plan?.scene_type,
+        summary: snapshot.plan?.summary ?? null,
+      }),
+    ).map((violation) => violation.detail)
+    return {
+      id: pack.id,
+      name: pack.name,
+      verdict: findings.length === 0 ? 'pass' : 'attention',
+      findings: findings.slice(0, 6),
+    }
+  }
+
   private async statusFor(snapshot: Snapshot, chapter: number): Promise<OpResult<StatusReport>> {
     const metrics = await this.metricsFor(snapshot, chapter)
+    const stylepack = this.stylepackFor(snapshot.project)
+    const styleWarnings = this.styleWarnings(snapshot)
     let projection: ReturnType<EngineService['effortProjection']> | undefined
     try {
       const rows = (await readJournal(this.storeFor(snapshot.root))).rows
@@ -3076,7 +3270,9 @@ export class EngineService {
       rounds: { ...snapshot.pipeline.rounds },
       previous_chapter_effort: this.previousChapterEffort(snapshot, effortTotals, projection),
       blocking: [...this.effectiveBlocking(snapshot), ...journal],
-      ...(pendingWarnings.length === 0 ? {} : { warnings: pendingWarnings }),
+      ...(pendingWarnings.length === 0 && styleWarnings.length === 0
+        ? {}
+        : { warnings: [...pendingWarnings, ...styleWarnings] }),
       state_errors: this.stateErrors(snapshot),
       selection: { source: snapshot.selection.source, root: snapshot.selection.root },
       metrics,
@@ -3091,13 +3287,26 @@ export class EngineService {
         ? {}
         : {
             dialogue: {
-              target: snapshot.project.targets.dialogue_ratio,
+              // C6: `target` is the style aiming point (null without a pack) and
+              // `range` is the range the user confirmed at creation. The old
+              // shape reused `target` for the range, which made the two
+              // impossible to tell apart once a pack existed.
+              target: stylepack === null ? null : stylepack.dialogue.ratio,
+              range: snapshot.project.targets.dialogue_ratio,
               metric: snapshot.project.targets.dialogue_ratio_metric ?? 'both',
               line_ratio: metrics.dialogue_ratio,
               char_ratio: metrics.dialogue_char_ratio ?? 0,
               verdict: this.dialogueVerdict(snapshot.project.targets, metrics),
             },
           }),
+      // 0.2.17: the book's style, plus the downgrade note when the confirmation
+      // dialog could not be shown. A silent downgrade would look like a
+      // confirmed choice, which is exactly what WP13 exists to prevent.
+      style: stylepack === null ? null : { id: stylepack.id, name: stylepack.name },
+      ...(snapshot.project.style === undefined ? {} : { style_id: snapshot.project.style }),
+      ...(snapshot.project.style_confirmation === undefined
+        ? {}
+        : { style_confirmation: snapshot.project.style_confirmation }),
       ...(snapshot.handoff === null
         ? {}
         : (() => {
@@ -3113,6 +3322,36 @@ export class EngineService {
       next,
     }
     return { data: report, revision: snapshot.pipeline.revision, warnings: [] }
+  }
+
+  /**
+   * 0.2.17: is the one-shot style migration still available for this project?
+   *
+   * The tool layer asks the user only when this is open; `amendProblems` remains
+   * the authority on whether a write is legal. Exposing the question here keeps
+   * the tool from re-deriving the three-part condition (§4.4) and drifting.
+   */
+  async styleMigration(
+    input: { root?: string } = {},
+  ): Promise<OpResult<{ open: boolean; current: string | null | undefined; archived: number }>> {
+    const snapshot = await this.load(input.root)
+    const archived = snapshot.chapters.chapters.filter((row) => row.archived_at != null).length
+    // Chapter FILES count too: an index that lost a row must not look like "no
+    // chapters archived". The active chapter's manuscript is not an archive.
+    const archivedFiles = (await this.storeFor(snapshot.root).list(CHAPTERS_DIR))
+      .map((name) => /^chapter-(\d+)\.md$/.exec(name))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => Number(match[1]))
+      .filter((num) => num !== snapshot.pipeline.chapter).length
+    return {
+      data: {
+        open: snapshot.project.style === undefined && styleWindowOpen(snapshot.chapters, archivedFiles),
+        current: snapshot.project.style,
+        archived,
+      },
+      revision: snapshot.pipeline.revision,
+      warnings: [],
+    }
   }
 
   async countWords(input: WordCountInput = {}): Promise<OpResult<WordMetrics>> {
@@ -4260,6 +4499,55 @@ export class EngineService {
         reviewProblems.push(`chapter ${record.num}: ${errorMessage(error)}`)
       }
     }
+    // 0.2.17: the style pack is a book attribute, so a wrong or missing pack is a
+    // doctor finding, not a runtime surprise. An unknown id is a warning (the
+    // book stays readable), and a target outside the confirmed range is info
+    // (the two numbers are both legitimate; the engine only points at the gap).
+    const doctorStyle = this.stylepackFor(snapshot.project)
+    if (snapshot.project.style === undefined) {
+      add({
+        id: 'style-pack',
+        severity: 'info',
+        title: '文风',
+        detail:
+          snapshot.chapters.chapters.length === 0
+            ? '这本书建于 0.2.17 之前，还没有文风；零归档章时可以用 novel_amend 设置一次'
+            : '这本书建于 0.2.17 之前，已有归档章，文风窗口已关闭；规则与任务书按无风格运行',
+        hint: 'novel_amend {path:"novel.yaml", content:{style:"<id>"}}，只能设置一次',
+      })
+    } else if (doctorStyle === null) {
+      add({
+        id: 'style-pack',
+        severity: 'warning',
+        title: '文风',
+        detail: `novel.yaml 指向未知风格包 "${String(snapshot.project.style)}"；规则与任务书按无风格运行`,
+        hint: `可选：${[...this.stylepacks.keys()].join(', ')}；用 novel_amend 修复`,
+      })
+    } else {
+      const conflicts = doctorStyle.genres.filter((genre) => genre !== snapshot.project.genre)
+      add({
+        id: 'style-pack',
+        severity: 'ok',
+        title: '文风',
+        detail: `${doctorStyle.id} ${doctorStyle.name} · 适用 ${doctorStyle.genres.join('/')} · 本书 ${snapshot.project.genre}`,
+        ...(conflicts.length > 0
+          ? {
+              hint: `风格包的适用题材不含本书题材（${conflicts.join('/')}）；这是选择不是错误，题材说明与风格冲突时以风格为准`,
+            }
+          : {}),
+      })
+      const target = doctorStyle.dialogue.ratio
+      const [low, high] = snapshot.project.targets.dialogue_ratio
+      if (target < low || target > high) {
+        add({
+          id: 'style-dialogue-target',
+          severity: 'info',
+          title: '对白目标与验收区间',
+          detail: `风格目标 ${target} 落在项目区间 ${low}–${high} 之外`,
+          hint: '区间是用户确认的验收线，目标是风格给的瞄准点；两者不一致时引擎只指出，不裁决',
+        })
+      }
+    }
     add({
       id: 'reviews',
       severity: reviewProblems.length === 0 ? 'ok' : 'error',
@@ -4841,7 +5129,48 @@ export class EngineService {
       report.warnings.push(`${error.code} @ ${error.path}：${error.message}`)
     }
     for (const issue of reviewIssues) report.warnings.push(`评审文档不可读：${issue}`)
+    for (const warning of this.styleWarnings(snapshot)) report.warnings.push(warning.message)
     report.warnings = [...new Set(report.warnings)]
+    // 0.2.17: a whole-book report on a 300-chapter project is larger than the
+    // host result pruner keeps, so `lean` returns the summary plus the twenty
+    // most recent per-chapter effort rows instead of an unreadable head/tail.
+    if (input.lean === true) {
+      const all = report.effort.chapters
+      if (all.length > REPORT_LEAN_CHAPTERS) {
+        report.effort.chapters = all.slice(-REPORT_LEAN_CHAPTERS)
+        report.effort.chapters_truncated = {
+          shown: REPORT_LEAN_CHAPTERS,
+          total: all.length,
+          note: 'lean report: only the most recent chapters are listed; call novel_report without lean for every row',
+        }
+      }
+    }
+    // 0.2.17: the report carries the style block so "is this chapter still
+    // written like this book?" is answerable from one call, not three. The
+    // verdict is `styleOverview`'s, not a second opinion computed here.
+    const reportStyle = this.stylepackFor(snapshot.project)
+    if (reportStyle !== null) {
+      const overview = this.styleOverview(snapshot)
+      const metrics =
+        snapshot.text === null
+          ? null
+          : measureStyle(snapshot.text, reportStyle, styleVocabulary(this.rulepack))
+      report.style =
+        metrics === null
+          ? {
+              id: reportStyle.id,
+              name: reportStyle.name,
+              verdict: 'no-draft',
+              findings: [],
+            }
+          : {
+              id: reportStyle.id,
+              name: reportStyle.name,
+              metrics,
+              findings: overview.findings,
+              verdict: overview.verdict === 'pass' ? 'pass' : 'attention',
+            }
+    }
     return { data: report, revision: snapshot.pipeline.revision, warnings: [] }
   }
 
@@ -4964,9 +5293,15 @@ export class EngineService {
         const chapter = input.chapter ?? snapshot.pipeline.chapter
         // 0.2.14: one transaction may sign several stages. A caller that needs
         // P4/P6/P8 currently pays three journal rows and three lock round-trips.
-        const stages = [...new Set(input.stages ?? [input.stage])]
+        const stages = [
+          ...new Set([...(input.stage === undefined ? [] : [input.stage]), ...(input.stages ?? [])]),
+        ]
         if (stages.length === 0) {
-          throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'stages must not be empty')
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            'stages must not be empty',
+            'pass stage for one task book, or stages for several in one transaction',
+          )
         }
         for (const stage of stages) this.assertBriefChapter(stage, snapshot.pipeline.chapter, chapter)
         await this.assertBriefReceiptsWritable(context.store)
@@ -5259,7 +5594,7 @@ export class EngineService {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         `world plan objective is ${objectiveChars} characters; limit is ${LIMITS.maxWorldPlanObjectiveChars}`,
-        'keep the protected objective within the P2 context budget',
+        'keep the objective to one sentence; it is the heading of the P2 plan',
       )
     }
     for (const [field, values] of [
@@ -5278,7 +5613,7 @@ export class EngineService {
         throw new EngineInputError(
           ERROR_CODES.SCHEMA_INVALID,
           `world plan ${field} has ${chars} characters; limit is ${LIMITS.maxWorldPlanTextChars}`,
-          'keep constraints/continuity notes concise; the protected context has a fixed budget',
+          'keep constraints/continuity notes concise; each is a single line in the brief',
         )
       }
     }
@@ -5887,6 +6222,54 @@ export class EngineService {
           if (patch.fix !== undefined) issue.fix = patch.fix
           if (patch.severity !== undefined) issue.severity = patch.severity
           if (patch.status !== undefined) issue.status = patch.status
+          if (patch.evidence !== undefined) issue.evidence = patch.evidence
+          // 0.2.17: PG-08 requires a verbatim quote for every fixed blocker. An
+          // amendment that skipped it produced a read model saying "no blocking
+          // items" while the archive gate still refused, costing a round trip
+          // and hiding which field was missing.
+          if (issue.status === 'fixed' && issue.severity === 'blocker') {
+            const evidence = typeof issue.evidence === 'string' ? issue.evidence.trim() : ''
+            if (evidence === '') {
+              throw new EngineInputError(
+                ERROR_CODES.ISSUE_IMMUTABLE,
+                `issue ${patch.id} is a blocker and cannot be marked fixed without evidence`,
+                'quote the revised sentence that fixes it; PG-08 verifies the same quote at archive time',
+                { details: { field: `${patch.id}.evidence`, required: 'evidence', received: null } },
+              )
+            }
+            if (!quoteMeetsFloor(evidence, 8)) {
+              throw new EngineInputError(
+                ERROR_CODES.ISSUE_IMMUTABLE,
+                `issue ${patch.id} evidence is shorter than 8 characters`,
+                'quote at least 8 Chinese characters (12 characters overall) from the current manuscript',
+                { details: { field: `${patch.id}.evidence`, required: 'evidence', received: evidence } },
+              )
+            }
+            const match = matchEvidence(snapshot.text ?? '', evidence)
+            if (!match.found) {
+              throw new EngineInputError(
+                ERROR_CODES.ISSUE_IMMUTABLE,
+                `issue ${patch.id} evidence is not in the current manuscript`,
+                'quote the revised sentence verbatim; novel_diff shows what the revision changed',
+                {
+                  details: {
+                    field: `${patch.id}.evidence`,
+                    required: 'evidence',
+                    received: evidence,
+                    ...(match.nearest === undefined
+                      ? {}
+                      : {
+                          nearest: {
+                            paragraph: match.nearest.paragraph,
+                            text: match.nearest.text,
+                            offset: match.nearest.offset,
+                          },
+                        }),
+                  },
+                },
+              )
+            }
+          }
           amended.push(issue.id)
         }
         const updated: ReviewDocument = {
@@ -6468,6 +6851,8 @@ export class EngineService {
             advisories: advisoryRows,
             metrics: scopedMachine.metrics,
             ...(scopedMachine.dialogue === undefined ? {} : { dialogue: scopedMachine.dialogue }),
+            // 0.2.17: keep the measurements behind any STYLE_* row in the record.
+            ...(scopedMachine.style === undefined ? {} : { style: scopedMachine.style }),
             numeric: scopedMachine.numeric,
             ...(acknowledgedFindings.length === 0 ? {} : { acknowledged_findings: acknowledgedFindings }),
           },
@@ -6516,6 +6901,10 @@ export class EngineService {
           rounds: {
             ...snapshot.pipeline.rounds,
             check: snapshot.pipeline.rounds.check + (verdict === 'fail' ? 1 : 0),
+            // A content-only pass is still one attempt at P6 (0.2.17): without
+            // this counter a model could loop partial checks and PG-11 would
+            // never stop it.
+            partial_checks: (snapshot.pipeline.rounds.partial_checks ?? 0) + (verdict === 'fail' ? 0 : 1),
           },
           blocking: blockingItems,
           last_action: action('novel_check', this.now(), sha256(text)),
@@ -6562,6 +6951,8 @@ export class EngineService {
             acknowledged_findings: acknowledgedFindings,
             metrics: scopedMachine.metrics,
             ...(scopedMachine.dialogue === undefined ? {} : { dialogue: scopedMachine.dialogue }),
+            // 0.2.17: keep the measurements behind any STYLE_* row in the record.
+            ...(scopedMachine.style === undefined ? {} : { style: scopedMachine.style }),
             numeric: scopedMachine.numeric,
             stage: nextStage,
             semantic: { items: semanticResult.items, findings: semanticResult.findings },
@@ -7038,9 +7429,19 @@ export class EngineService {
     // Repairing one damaged ledger must not be blocked by a second damaged
     // ledger: every currently unreadable state document is an allowed journal
     // mismatch, while a valid-but-edited document still fails closed.
+    // 0.2.17: chapters.yaml is archive evidence, but it must stay amendable —
+    // removing it from the repair window made a hand-damaged index unrecoverable
+    // (there was no restore path either). Instead `amendProblems` refuses to
+    // drop archived rows, refuses a row count below the archived manuscripts,
+    // and pins every immutable field; `novel_restore` can also bring back its
+    // pre-image now that the chapter index is a restorable ledger.
     const repairPaths: string[] = []
     for (const [path, docKind] of Object.entries(MUTABLE_STATE)) {
       if (docKind === 'pipeline') continue
+      // The chapter index stays in the tolerated set so repairing another
+      // damaged ledger is still possible; it can never be the amend TARGET
+      // while unreadable — the explicit check above refuses that, because a
+      // damaged index must not be rewritten in place.
       if (await this.stateDocIsUnreadable(store, path, docKind)) repairPaths.push(path)
     }
     return this.mutate({
@@ -7563,7 +7964,13 @@ export class EngineService {
       })
     }
     const requested = input.limit ?? 50
-    const limit = Number.isFinite(requested) ? Math.max(0, Math.min(1000, Math.floor(requested))) : 50
+    // 0.2.17: the tool advertises 1..200 and the host result pruner cannot keep a
+    // larger page self-consistent, so the engine enforces the same ceiling. The
+    // DSH parameter schema has no `maximum` annotation, which is why this clamp
+    // is the machine-readable half of the contract.
+    const limit = Number.isFinite(requested)
+      ? Math.max(0, Math.min(AUDIT_LIMIT_MAX, Math.floor(requested)))
+      : 50
     if (input.chapter !== undefined) this.assertChapterParameter(input.chapter)
     if (input.cursor !== undefined && (!Number.isInteger(input.cursor) || input.cursor < 0)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'audit cursor must be a non-negative integer')
@@ -8152,6 +8559,7 @@ export class EngineService {
       }
     } else if (section === 'quality') {
       const panel = await this.panelSnapshot(undefined, { snapshot, includeQuality: true })
+      const panelStylepack = this.stylepackFor(snapshot.project)
       const maxById = new Map(
         this.rulepack.quality.dimensions.map((dimension) => [dimension.id, dimension.max]),
       )
@@ -8163,6 +8571,25 @@ export class EngineService {
         })),
         pacing: panel.bookData?.pacing ?? null,
         effort: panel.bookData?.effort ?? null,
+        // 0.2.17: the nine style measurements next to the score dimensions, so
+        // "this chapter drifted" and "this chapter scored low" sit together.
+        style_metrics: panel.bookData?.style_metrics ?? null,
+        // The targets travel with the measurements: the client cannot colour a
+        // deviation without knowing what the pack asked for.
+        style_targets:
+          panelStylepack === null
+            ? null
+            : {
+                id: panelStylepack.id,
+                name: panelStylepack.name,
+                sentence: panelStylepack.sentence,
+                dialogue: panelStylepack.dialogue.ratio,
+                // The card must judge the same reading the rule judged, so the
+                // metric travels with the target instead of being re-guessed.
+                dialogue_metric: snapshot.project.targets.dialogue_ratio_metric ?? 'both',
+                thresholds: panelStylepack.thresholds,
+                cool_point_every_chars: panelStylepack.structure.cool_point_every_chars,
+              },
       }
       total = items === null ? 0 : 1
     } else {
@@ -8186,9 +8613,12 @@ export class EngineService {
       }
       total = 1
     }
+    // 0.2.17: detail sections carry the whole manuscript, so they need the byte
+    // budget rather than the per-string clip (which would cut the body to 400
+    // characters and call it complete).
     const clipped =
       section === 'chapter_detail' || section === 'quality_detail'
-        ? { items, truncated: false }
+        ? this.panelDetailClip(items, section)
         : this.panelSectionClip(items, section)
     items = clipped.items
     truncated = truncated || clipped.truncated
@@ -8339,6 +8769,41 @@ export class EngineService {
       return input
     }
     return { items: walk(value, []), truncated }
+  }
+
+  /**
+   * 0.2.17: clip a detail section to the same 64KB budget as every other one.
+   *
+   * The per-string clip cannot be used here: it would cut the manuscript to 400
+   * characters and report the section as complete. Instead the body is the one
+   * field that gets shortened, the rest of the metadata survives, and the
+   * payload says where the full text lives.
+   */
+  private panelDetailClip(items: unknown, section: string): { items: unknown; truncated: boolean } {
+    const record =
+      typeof items === 'object' && items !== null && !Array.isArray(items)
+        ? (items as Record<string, unknown>)
+        : null
+    if (record === null) return { items, truncated: false }
+    if (Buffer.byteLength(JSON.stringify(items), 'utf8') <= PANEL_SECTION_BYTES) {
+      return { items, truncated: false }
+    }
+    // Drop the biggest text field first, keeping a readable head so the panel
+    // still shows what chapter it is looking at.
+    for (const key of ['manuscript', 'review', 'check', 'plan', 'world_plan'] as const) {
+      const value = record[key]
+      if (typeof value !== 'string' || value === '') continue
+      const chars = Array.from(value)
+      if (chars.length <= 2_000) continue
+      record[key] = chars.slice(0, 2_000).join('')
+      record.truncated_field = key
+      record.truncated_note =
+        section === 'quality_detail'
+          ? '完整评审/校验用 novel_state {kind:"review"|"check"}'
+          : '完整正文用 novel_state 或直接读章节文件'
+      return { items: record, truncated: true }
+    }
+    return { items: record, truncated: true }
   }
 
   /**
@@ -9675,6 +10140,10 @@ export class EngineService {
         dimensions: [],
       }
     }
+    const panelStylepack = this.stylepackFor(snapshot.project)
+    // Computed once and carried by the bundle: the overview tab renders from
+    // `bookData`, so a copy in the overview *section* was data nobody fetched.
+    const panelStyleOverview = this.styleOverview(snapshot)
     const bookData = buildPanelBookData({
       report: panelReport,
       project: snapshot.project,
@@ -9703,6 +10172,27 @@ export class EngineService {
           : { state: pending.state, txid: pending.txid ?? '', detail: pending.detail ?? '' },
       outlineError: snapshot.outlineError,
       worldbookError: snapshot.worldbookError,
+      // 0.2.17: one pack resolution per panel snapshot, reused by identity and
+      // the overview card so the two cannot name different styles. Metrics are
+      // measured directly — re-running the whole machine pass here would be a
+      // second, possibly different, evaluation.
+      style: panelStylepack,
+      styleMetrics:
+        panelStylepack === null || snapshot.text === null
+          ? null
+          : measureStyle(snapshot.text, panelStylepack, styleVocabulary(this.rulepack)),
+      styleVerdict:
+        panelStylepack === null
+          ? null
+          : {
+              verdict:
+                panelStyleOverview.verdict === 'pass'
+                  ? 'pass'
+                  : panelStyleOverview.verdict === 'attention'
+                    ? 'attention'
+                    : 'no-draft',
+              findings: panelStyleOverview.findings,
+            },
     })
     const draft =
       archivedCurrent || snapshot.pipeline.stage === 'done'
@@ -10272,6 +10762,9 @@ export class EngineService {
     if (snapshot.worldbookError !== null) {
       errors.push({ path: WORLDBOOK_FILE, code: 'WORLDBOOK_UNREADABLE', message: snapshot.worldbookError })
     }
+    if (snapshot.briefsError !== null) {
+      errors.push({ path: BRIEF_RECEIPTS_FILE, code: 'BRIEFS_UNREADABLE', message: snapshot.briefsError })
+    }
     return errors
   }
 
@@ -10312,6 +10805,19 @@ export class EngineService {
         tool: 'novel_amend',
         args: { path: WORLDBOOK_FILE, reason: `repair WORLDBOOK_UNREADABLE: ${snapshot.worldbookError}` },
         reason: `${WORLDBOOK_FILE} is unreadable; read the raw file, then amend it with a complete worldbook document`,
+      }
+    }
+    // 0.2.17: a damaged receipt file makes every PG-01 check fail, and
+    // `getBrief` refuses to overwrite it. Recommending `novel_brief` was a loop;
+    // the only way out is an explicit amend of the receipt file.
+    if (snapshot.briefsError !== null) {
+      return {
+        tool: 'novel_amend',
+        args: {
+          path: BRIEF_RECEIPTS_FILE,
+          reason: `repair BRIEFS_UNREADABLE: ${snapshot.briefsError}`,
+        },
+        reason: `${BRIEF_RECEIPTS_FILE} is unreadable, so no brief can be signed; read the raw file and amend it with { schema_version: 1, receipts: [...] } (an empty receipts array is valid and only loses the old signatures)`,
       }
     }
     if (snapshot.ledgerErrors.length > 0) {
@@ -10382,6 +10888,16 @@ export class EngineService {
     // context for P1/P2, so a corrupt one blocks those two writers only.
     const outlineSensitive: Operation[] = ['submitChapterPlan', 'submitDraft', 'archiveChapter']
     const worldbookSensitive: Operation[] = ['submitWorldPlan', 'submitChapterPlan']
+    /** Every operation whose gate needs a signed brief receipt. */
+    const briefSensitive: Operation[] = [
+      'submitWorldPlan',
+      'submitChapterPlan',
+      'submitDraft',
+      'submitReview',
+      'submitRevision',
+      'runCheck',
+      'archiveChapter',
+    ]
     const relevant: StateError[] = [...snapshot.ledgerErrors]
     if (snapshot.projectError !== null) {
       relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'PROJECT_UNREADABLE'))
@@ -10403,6 +10919,12 @@ export class EngineService {
     }
     if (snapshot.worldbookError !== null && worldbookSensitive.includes(operation)) {
       relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'WORLDBOOK_UNREADABLE'))
+    }
+    // 0.2.17: a damaged receipt file makes PG-01 unsatisfiable for every
+    // operation that needs a brief; refuse early with the repair path instead
+    // of letting the model call novel_brief, which must not overwrite it.
+    if (snapshot.briefsError !== null && briefSensitive.includes(operation)) {
+      relevant.push(...this.stateErrors(snapshot).filter((error) => error.code === 'BRIEFS_UNREADABLE'))
     }
     return relevant.map((error) => ({
       code: 'STATE_UNREADABLE',
@@ -10775,16 +11297,17 @@ export class EngineService {
     return chapters
   }
 
-  private machine(
+  /** The machine-pass options for one chapter; shared with the style overview. */
+  private machineOptions(
     snapshot: Snapshot,
-    text: string,
     extra: {
       title?: string | null
       sceneType?: import('../types.js').SceneType
       summary?: ChapterSummary | null
     },
-  ): MachineResult {
-    const options: MachineOptions = {
+  ): MachineOptions {
+    const stylepack = this.stylepackFor(snapshot.project)
+    return {
       chapter: snapshot.pipeline.chapter,
       title: composeTitle(
         snapshot.pipeline.chapter,
@@ -10811,8 +11334,22 @@ export class EngineService {
         locks: snapshot.locks,
         worldbook: snapshot.worldbook,
       },
+      // 0.2.17: present only when the book bound a pack, which is what keeps a
+      // pre-0.2.17 project's findings exactly as they were.
+      ...(stylepack === null ? {} : { style: stylepack }),
     }
-    return runMachineChecks(text, options)
+  }
+
+  private machine(
+    snapshot: Snapshot,
+    text: string,
+    extra: {
+      title?: string | null
+      sceneType?: import('../types.js').SceneType
+      summary?: ChapterSummary | null
+    },
+  ): MachineResult {
+    return runMachineChecks(text, this.machineOptions(snapshot, extra))
   }
 
   private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
@@ -10858,6 +11395,9 @@ export class EngineService {
       worldbook: snapshot.worldbook,
       worldbookPresent: snapshot.worldbookPresent,
       worldbook_error: snapshot.worldbookError,
+      // 0.2.17: resolved once per brief; a book with no pack gets `null`, which
+      // keeps the context byte-identical to 0.2.16.
+      style: this.stylepackFor(snapshot.project),
     })
     cache.set(cacheKey, context)
     return context
@@ -11308,6 +11848,7 @@ export class EngineService {
       }
     }
     let briefs: PipelineState['briefs'] = pipeline.briefs
+    let briefsError: string | null = null
     const briefsRaw = await store.readText(BRIEF_RECEIPTS_FILE)
     if (briefsRaw !== null) {
       // Once a receipt file exists, it is the authority for signed briefs. A
@@ -11317,6 +11858,9 @@ export class EngineService {
       briefs = {}
       try {
         const parsed = parseYaml(briefsRaw) as Partial<BriefReceiptsDocument> | null
+        if (parsed !== null && !Array.isArray(parsed.receipts)) {
+          briefsError = 'state/briefs.yaml has no receipts array'
+        }
         if (parsed !== null && Array.isArray(parsed.receipts)) {
           const valid: BriefReceiptsDocument['receipts'] = []
           for (const receipt of parsed.receipts) {
@@ -11352,10 +11896,12 @@ export class EngineService {
           }
           briefs = next
         }
-      } catch {
+      } catch (error) {
         // Receipts are evidence, not content. A damaged receipt file is treated
         // as missing so the model is asked for a fresh brief; the journal and
-        // content gates remain fail-closed.
+        // content gates remain fail-closed. 0.2.17 records the reason so status
+        // and doctor can say why every PG-01 check fails.
+        briefsError = errorMessage(error)
       }
     }
     const ledgerErrors: StateError[] = []
@@ -11575,6 +12121,7 @@ export class EngineService {
       pipelineError,
       pipeline: pipeline as unknown as PipelineState,
       briefs,
+      briefsError,
       chapters: chapters as unknown as ChaptersDocument,
       characters: characters as unknown as Snapshot['characters'],
       world: world as unknown as Snapshot['world'],
@@ -12069,6 +12616,7 @@ export class EngineService {
       pipelineError: null,
       pipeline: emptyPipeline({ revision: 1, chapter: 1, stage: 'idle' }),
       briefs: {},
+      briefsError: null,
       chapters: emptyChapters(),
       characters: emptyCharacters(),
       world: emptyWorld(),
@@ -12133,6 +12681,30 @@ function amendPathParts(path: string): string[] {
     throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, 'amend patch path must not be empty')
   }
   return parts
+}
+
+/**
+ * 0.2.17: does this patch touch a top-level key?
+ *
+ * The confirmation gate must ask for exactly the writes the engine will apply.
+ * Comparing raw strings (`.path === 'style'`) let `".style"` — the same field
+ * after the engine's own normalisation — set the style without a dialog. Both
+ * sides now parse the path with `amendPathParts`, so the gate cannot be walked
+ * around by a spelling the engine accepts.
+ */
+export function amendPatchTouchesKey(patch: readonly { path?: unknown }[] | undefined, key: string): boolean {
+  if (patch === undefined) return false
+  return patch.some((edit) => {
+    if (typeof edit?.path !== 'string') return false
+    let parts: string[]
+    try {
+      parts = amendPathParts(edit.path)
+    } catch {
+      // An empty path is rejected by `applyAmendPatch` anyway; it changes nothing.
+      return false
+    }
+    return parts[0] === key
+  })
 }
 
 /**
@@ -12304,6 +12876,35 @@ function missingLedgerRows(kind: DocKind, before: unknown, after: Record<string,
 }
 
 /**
+ * The highest id suffix the archive has already handed out for a ledger, or 0.
+ * The next allocator value must be strictly greater, otherwise a restore or an
+ * amend reissues an id the chapter index still references (P1-13).
+ */
+export function ledgerIdFloor(
+  kind: 'foreshadows' | 'timeline' | 'relationships',
+  chapters: Snapshot['chapters'],
+  handoff: Snapshot['handoff'],
+): number {
+  const prefix = kind === 'foreshadows' ? 'FS-' : kind === 'timeline' ? 'TE-' : 'RL-'
+  let floor = 0
+  for (const chapter of chapters.chapters) {
+    for (const value of Object.values(chapter.assigned_ids ?? {})) {
+      if (typeof value !== 'string' || !value.startsWith(prefix)) continue
+      const match = /-(\d+)$/.exec(value)
+      if (match !== null) floor = Math.max(floor, Number(match[1]))
+    }
+  }
+  if (kind === 'foreshadows' && handoff !== null) {
+    for (const hook of handoff.open_hooks) {
+      if (!hook.id.startsWith(prefix)) continue
+      const match = /-(\d+)$/.exec(hook.id)
+      if (match !== null) floor = Math.max(floor, Number(match[1]))
+    }
+  }
+  return floor
+}
+
+/**
  * Cross-ledger references a restore can dangle.
  *
  * Restoring one ledger from an older pre-image while leaving the others at HEAD
@@ -12321,6 +12922,8 @@ export function ledgerReferenceProblems(
     timeline: Snapshot['timeline']
     relationships: Snapshot['relationships']
     handoff: Snapshot['handoff']
+    /** 0.2.17: locks.locations must name a location world.yaml declares. */
+    world?: Snapshot['world']
   },
   totalChapters: number | null,
 ): string[] {
@@ -12329,6 +12932,14 @@ export function ledgerReferenceProblems(
   for (const name of Object.keys(documents.locks.characters)) {
     if (!known.has(name)) {
       problems.push(`locks.characters["${name}"] locks a character characters.yaml does not declare`)
+    }
+  }
+  if (documents.world !== undefined) {
+    const knownLocations = new Set(documents.world.locations.map((location) => location.name))
+    for (const name of Object.keys(documents.locks.locations)) {
+      if (!knownLocations.has(name)) {
+        problems.push(`locks.locations["${name}"] locks a location world.yaml does not declare`)
+      }
     }
   }
   for (const item of documents.timeline.items) {
@@ -12910,13 +13521,24 @@ const mergeProjectAmendment = (
   content: Record<string, unknown>,
   old: NovelProject,
 ): Record<string, unknown> => {
-  const allowed = new Set(['schema_version', 'title', 'author', 'description', 'targets', 'total_chapters'])
+  // 0.2.17: `style` is allowed through so the migration window can reach the
+  // semantic gate. `amendProblems` remains the single place that decides whether
+  // a change is legal — two owners would drift.
+  const allowed = new Set([
+    'schema_version',
+    'title',
+    'author',
+    'description',
+    'targets',
+    'total_chapters',
+    'style',
+  ])
   for (const key of Object.keys(content)) {
     if (!allowed.has(key)) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,
         `novel.yaml amend cannot change "${key}"`,
-        'only title, author, description and targets.total_chapters are mutable',
+        'only title, author, description, targets and style are mutable (style only while the migration window is open)',
       )
     }
   }
@@ -12953,6 +13575,23 @@ const mergeProjectAmendment = (
   return narrow('project', merged)
 }
 
+/**
+ * 0.2.17: the one definition of "the style migration window is still open".
+ *
+ * Both the confirmation gate (`styleMigration`, asked before the dialog is put
+ * in front of the user) and the semantic gate (`amendProblems`, the authority on
+ * whether the write is legal) read this. They used to disagree — the gate
+ * counted archived rows while the gate required an empty chapter list — so a
+ * project with a draft row could be asked to confirm and then be refused.
+ *
+ * The rule is "nothing archived", not "nothing written": a project nobody has
+ * finished a chapter in is exactly the case §4.4 wants migratable.
+ */
+const styleWindowOpen = (
+  chapters: { chapters: ReadonlyArray<{ archived_at?: string | null }> },
+  archivedFiles: number,
+): boolean => chapters.chapters.every((row) => row.archived_at == null) && archivedFiles === 0
+
 const amendProblems = (
   kind: DocKind,
   oldDocument: unknown,
@@ -12976,6 +13615,17 @@ const amendProblems = (
       if (next.genre !== projectBaseline.genre) problems.push('genre is immutable')
       if (next.platform !== projectBaseline.platform) problems.push('platform is immutable')
       if (next.created_at !== projectBaseline.created_at) problems.push('created_at is immutable')
+      // 0.2.17 (§4.4): the style is immutable once decided, with exactly one
+      // exception — a project created before the style layer may set it once,
+      // while nothing is archived. `undefined` means "predates the feature";
+      // `null` means "the user chose none", which is a decision, not a gap.
+      if (next.style !== projectBaseline.style) {
+        const migrating =
+          projectBaseline.style === undefined && styleWindowOpen(snapshot.chapters, archivedFiles)
+        if (!migrating) {
+          problems.push('style is immutable; it may only be set once, before the first archived chapter')
+        }
+      }
     }
     const oldTargets = projectBaseline.targets
     if (targets === null) {
@@ -13186,21 +13836,7 @@ const amendProblems = (
     }
     const nextSeq = nextDocument.next_seq
     const prefix = kind === 'foreshadows' ? 'FS-' : kind === 'timeline' ? 'TE-' : 'RL-'
-    let engineFloor = 0
-    for (const chapter of snapshot.chapters.chapters) {
-      for (const value of Object.values(chapter.assigned_ids ?? {})) {
-        if (typeof value !== 'string' || !value.startsWith(prefix)) continue
-        const match = /-(\d+)$/.exec(value)
-        if (match !== null) engineFloor = Math.max(engineFloor, Number(match[1]))
-      }
-    }
-    if (kind === 'foreshadows' && snapshot.handoff !== null) {
-      for (const hook of snapshot.handoff.open_hooks) {
-        if (!hook.id.startsWith(prefix)) continue
-        const match = /-(\d+)$/.exec(hook.id)
-        if (match !== null) engineFloor = Math.max(engineFloor, Number(match[1]))
-      }
-    }
+    const engineFloor = ledgerIdFloor(kind, snapshot.chapters, snapshot.handoff)
     if (!Number.isInteger(nextSeq) || (nextSeq as number) < 1) {
       problems.push('next_seq must be a positive integer')
     } else {

@@ -2,6 +2,7 @@ import type { EngineCaller, EngineService } from '../engine/service.js'
 import { NEXT_DETAILS } from '../next-reasons.js'
 import { EngineBlockedError, EngineError } from '../types.js'
 import { adminHelp, runAdminOperation } from './admin.js'
+import { stylePackMap, stylePackSummaries } from '../stylepack.js'
 
 /** Result shape accepted by `ctx.commands.register`. */
 export interface CommandResultShape {
@@ -77,6 +78,20 @@ const statusText = async (engine: EngineService): Promise<string> => {
       : `字数 ${data.metrics.total_word_count}（汉字 ${data.metrics.cjk_chars} + 标点 ${data.metrics.punctuation_chars}，含标点）`,
     data.blocking.length === 0 ? '门控 全部通过' : `门控 ${data.blocking.length} 条阻塞：`,
     ...data.blocking.map((item) => `  - ${item.code}: ${item.detail}`),
+    // 0.2.17: crash-recovery advisories and unreadable documents were invisible
+    // on this channel, so `/novel status` looked healthy while every write failed.
+    ...(data.warnings === undefined || data.warnings.length === 0
+      ? []
+      : [
+          `恢复提示 ${data.warnings.length} 条：`,
+          ...data.warnings.map((item) => `  - ${item.code}: ${item.message}`),
+        ]),
+    ...(data.state_errors === undefined || data.state_errors.length === 0
+      ? []
+      : [
+          `状态文档不可读 ${data.state_errors.length} 条（先修复，否则门控会一直失败）：`,
+          ...data.state_errors.map((item) => `  - ${item.code} @ ${item.path}: ${item.message}`),
+        ]),
     ...(data.book === undefined
       ? []
       : [
@@ -229,6 +244,42 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
                   ),
                 ].join('\n'),
           )
+        }
+        case 'style': {
+          const sub = rest[0]
+          const catalogue = stylePackMap()
+          if (sub === undefined || sub === 'list') {
+            const summaries = stylePackSummaries()
+            return ok(
+              [
+                `内置风格包 ${summaries.length} 份（风格是书的属性，创建后不可更改）：`,
+                ...summaries.map(
+                  (entry) => `- ${entry.id} ${entry.name}（${entry.genres}）：${entry.description}`,
+                ),
+                '用法：/novel style show <id>',
+              ].join('\n'),
+            )
+          }
+          if (sub === 'show') {
+            const id = rest[1]
+            const pack = id === undefined ? undefined : catalogue.get(id)
+            if (pack === undefined) {
+              return bad(`用法：/novel style show <id>；可选：${[...catalogue.keys()].join(', ')}`)
+            }
+            return ok(
+              [
+                `${pack.id} ${pack.name}（${pack.genres.join('/')}）`,
+                `读者：${pack.audience} · 视角：${pack.pov} · 时态：${pack.tense} · 语域：${pack.register}`,
+                `句长目标：短 ${pack.sentence.short_ratio} / 中 ${pack.sentence.medium_ratio} / 长 ${pack.sentence.long_ratio}`,
+                `段落：≤${pack.paragraph.max_chars} 字 / ≤${pack.paragraph.max_sentences} 句`,
+                `对白目标：${pack.dialogue.ratio}`,
+                `爽点间隔：每 ${pack.structure.cool_point_every_chars} 字`,
+                `禁句（${pack.banned_patterns.length}）：${pack.banned_patterns.join('、')}`,
+                ...pack.critic_rubric.map((line) => `· ${line}`),
+              ].join('\n'),
+            )
+          }
+          return bad('用法：/novel style list | /novel style show <id>')
         }
         case 'export': {
           const kind = rest[0]

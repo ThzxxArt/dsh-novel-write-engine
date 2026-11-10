@@ -1,0 +1,103 @@
+schema_version: 1
+id: romance-push-pull
+name: 女频拉扯
+description: 情绪留白，关系张力，短对白，潜台词多于解释。
+audience: female
+genres: [romance, urban, ancient-romance]
+pov: third-limited
+tense: past
+register: restrained
+narrative_distance: close
+
+sentence:
+  short_ratio: 0.35
+  medium_ratio: 0.45
+  long_ratio: 0.2
+  burstiness: high
+  max_consecutive_same_length: 3
+
+paragraph:
+  max_chars: 90
+  one_action_per_paragraph: true
+  max_sentences: 3
+  max_actions: 3
+
+dialogue:
+  ratio: 0.5
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: medium
+  idiom: low
+  sensory_channels: [touch, smell, sound, sight]
+
+structure:
+  opening_moves: [dialogue, object, silence]
+  scene_transition: hard_cut
+  hook_moves: [relationship_shift, misunderstanding, cost]
+  cool_point_every_chars: 1000
+
+emotion:
+  intensity: high
+  expression: restrained
+  required_beats: [body_reaction, relationship_stake, vulnerability]
+  min_cues_per_1000: 3
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 心头小鹿乱撞
+  - 眼底闪过
+  - 邪魅一笑
+  - 宠溺
+  - 薄唇
+  - 喉结滚动
+  - 气息喷洒
+
+exemplars:
+  - |
+    “你先把伞收起来。”
+    “外面在下雨。”
+    “我知道。”她把门又开了一点，“进来坐会儿？”
+    “不了，我一会儿还有事。”
+    “那你来干什么？”
+    “路过。”
+    “我家在巷子最里面，你路过三次了。”
+  - |
+    他替她挡了一次酒。
+    “你手上有伤。”
+    “没事。”
+    “我说的是你端杯子的那只手。”
+    “哦。”他把手插回口袋，“你观察得挺仔细。”
+    “你躲什么？”
+    “怕你问我为什么挡。”
+    “那我不问。”
+    “你已经在问了。”
+
+critic_rubric:
+  - 情绪留白：不解释“她很难过”，写她做了什么、没做什么。
+  - 关系张力：每场戏都要改变一次距离，靠近或退开都算。
+  - 短对白：允许答非所问，允许一句话只说一半。
+  - 潜台词：角色说出口的话和真正想要的东西不能完全一致。
+  - 边界：拉扯不是控制，不写强迫、羞辱和失去主体性。
+  - 情绪：拉扯要有疼感和舍不得，不能只写机锋。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 4
+  metaphor_per_1000_max: 3

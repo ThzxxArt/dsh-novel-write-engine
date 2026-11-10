@@ -167,17 +167,37 @@ export interface LockBaseline {
   texts: string[]
 }
 
+/** Why a baseline could not be resolved; `none` means it was. */
+export type LockBaselineGap = 'none' | 'no_appearance' | 'too_short'
+
+export interface LockBaselineResolution {
+  baseline: LockBaseline | null
+  gap: LockBaselineGap
+}
+
+/**
+ * 0.2.17: the floor is 2, not 8. A seven-character appearance such as
+ * 「左边眉骨一道疤」 is a complete visual baseline; the old 8-character floor
+ * discarded it, so `LOCKED_DETAIL_DRIFT` never ran for that character and the
+ * rule silently stopped protecting them. The 8-character floor still applies
+ * to reading proofs, which need a real quote, not a descriptor.
+ */
+export const LOCK_BASELINE_MIN_CHARS = 2
+
 const shortAnchors = (text: string): string[] =>
   text
     .split(/[。！？；;\n]/)
     .map((part) => part.trim())
-    .filter((part) => Array.from(part).length >= 8 && Array.from(part).length <= 60)
+    .filter((part) => Array.from(part).length >= LOCK_BASELINE_MIN_CHARS && Array.from(part).length <= 60)
     .slice(0, 3)
 
 /**
  * 0.2.13 canonical lock baseline: the worldbook description first, then
  * readable short anchors. A raw first-appearance paragraph is evidence, not
  * the standard every later chapter must repeat verbatim.
+ *
+ * 0.2.17 reports *why* a baseline is missing instead of returning a bare null:
+ * a rule that cannot run must say so, otherwise "no finding" reads as "no drift".
  */
 export function resolveLockBaseline(
   name: string,
@@ -187,7 +207,7 @@ export function resolveLockBaseline(
     world?: import('../types.js').WorldDocument | null
     locks?: import('../types.js').LocksDocument | null
   },
-): LockBaseline | null {
+): LockBaselineResolution {
   const texts: string[] = []
   let source: LockBaseline['source'] = 'locks'
   const add = (value: string | undefined): void => {
@@ -205,8 +225,8 @@ export function resolveLockBaseline(
       // that re-creates the same three false positives. Doctor reports the
       // missing baseline instead.
       add(fromBook.appearance)
-      if (texts.length > 0) source = 'worldbook'
-      return texts.length === 0 ? null : { source, texts }
+      if (texts.length > 0) return { baseline: { source: 'worldbook', texts }, gap: 'none' }
+      return { baseline: null, gap: 'no_appearance' }
     }
   } else {
     const fromBook = input.worldbook?.locations.find((entry) => entry.name === name)
@@ -222,16 +242,16 @@ export function resolveLockBaseline(
       if (!hadWorldbookText) source = 'world_anchors'
     }
   }
-  if (texts.length === 0) {
-    const lock = kind === 'character' ? input.locks?.characters[name] : input.locks?.locations[name]
-    const raw =
-      kind === 'character'
-        ? (lock as { appearance?: string } | undefined)?.appearance
-        : (lock as { layout?: string } | undefined)?.layout
-    if (raw !== undefined) {
-      for (const anchor of shortAnchors(raw)) add(anchor)
-      if (texts.length > 0) source = 'locks'
-    }
+  if (texts.length > 0) return { baseline: { source, texts }, gap: 'none' }
+  const lock = kind === 'character' ? input.locks?.characters[name] : input.locks?.locations[name]
+  const raw =
+    kind === 'character'
+      ? (lock as { appearance?: string } | undefined)?.appearance
+      : (lock as { layout?: string } | undefined)?.layout
+  if (raw !== undefined && raw.trim() !== '') {
+    for (const anchor of shortAnchors(raw)) add(anchor)
+    if (texts.length > 0) return { baseline: { source: 'locks', texts }, gap: 'none' }
+    return { baseline: null, gap: 'too_short' }
   }
-  return texts.length === 0 ? null : { source, texts }
+  return { baseline: null, gap: 'no_appearance' }
 }

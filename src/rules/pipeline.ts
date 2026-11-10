@@ -3,6 +3,8 @@ import type { AdvisoryInstance, Violation, ViolationLocation, WordMetrics } from
 import { sha256Hex } from '../domain/hash.js'
 import { countWordMetrics } from '../domain/wordcount.js'
 import { sentenceRhythm, splitParagraphs, type SentenceRhythm } from '../domain/text.js'
+import { measureStyle, styleVocabulary, type StyleMetrics } from '../domain/style.js'
+import { evaluateTone } from './ai-tone.js'
 import { BUILTIN_RULES, countArithmeticEquations, hasNumericFactMatch } from './checks.js'
 import { RuleRegistry } from './registry.js'
 import type { RuleContext, Rulepack } from './types.js'
@@ -32,6 +34,11 @@ export interface MachineResult {
     char_ratio: number
     verdict: 'pass' | 'line_out' | 'char_out' | 'both_out' | 'skewed' | 'unconfigured'
   }
+  /**
+   * 0.2.17: measured only when the project bound a style pack. Absent means the
+   * book has no style, which is why the rest of the output is unchanged.
+   */
+  style?: StyleMetrics
 }
 
 /** The five ordered steps. The order is semantic, not an implementation detail. */
@@ -86,11 +93,42 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
   const metrics = countWordMetrics(text)
   const rhythm = sentenceRhythm(text)
 
+  // 1b. style measurements. Computed once and handed to the rules, so the
+  // metrics in the report and the numbers the rules judged are the same object.
+  const styleMetrics =
+    options.style === undefined
+      ? undefined
+      : measureStyle(text, options.style, styleVocabulary(options.rulepack))
+  // 1c. AI-tone hits, likewise computed once. `toneTerms` implements C8: a
+  // phrase an AI-tone entry claimed is not counted again as zero-tolerance.
+  const toneHits = evaluateTone(text, options.rulepack.lexicon.ai_tone)
+  // C8 is span-scoped: only the *occurrences* a tone hit covers step aside, not
+  // the whole term. A chapter that says 意味深长 once as an AI-tone cliché and
+  // once as flat narration keeps its narration blocker; a term-level set would
+  // have hidden it. Counts, not a boolean.
+  const toneCoveredTerms = new Map<string, number>()
+  if (toneHits.length > 0) {
+    for (const entry of options.rulepack.lexicon.zero_tolerance) {
+      let covered = 0
+      for (const hit of toneHits) {
+        if (text.slice(hit.start, hit.end).includes(entry.term)) covered += 1
+      }
+      if (covered > 0) toneCoveredTerms.set(entry.term, covered)
+    }
+  }
+  const shared = {
+    ...options,
+    ...(styleMetrics === undefined ? {} : { styleMetrics }),
+    ...(toneHits.length === 0 ? {} : { toneHits }),
+    ...(toneCoveredTerms.size === 0 ? {} : { toneCoveredTerms }),
+  }
+  const context = toContext(text, shared)
+
   // 2. density (everything whose verdict is per-paragraph or per-window)
   const densityViolations: Violation[] = []
   for (const code of registry.codes()) {
     if (lexiconCodes.has(code)) continue
-    densityViolations.push(...registry.get(code)!(toContext(text, options)))
+    densityViolations.push(...registry.get(code)!(context))
   }
 
   // 3. quote ratio (computed before exemptions so the report can explain itself)
@@ -103,7 +141,7 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
   const lexiconViolations: Violation[] = []
   for (const code of registry.codes()) {
     if (!lexiconCodes.has(code)) continue
-    lexiconViolations.push(...registry.get(code)!(toContext(text, options)))
+    lexiconViolations.push(...registry.get(code)!(context))
   }
   const finalLexicon = lexiconViolations.filter(
     (violation) => !options.rulepack.exemptions.includes(violation.code),
@@ -163,6 +201,7 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
       equations_checked: countArithmeticEquations(text),
       findings: numericFindings,
     },
+    ...(styleMetrics === undefined ? {} : { style: styleMetrics }),
   }
 }
 
@@ -210,7 +249,11 @@ export function dedupeAdvisories(violations: readonly Violation[]): Violation[] 
 
 /** Run only an explicit subset, used by PG-04 (format) and PG-10 (consistency). */
 export function runRules(codes: readonly string[], text: string, options: MachineOptions): Violation[] {
-  const context = toContext(text, options)
+  const styleMetrics =
+    options.style === undefined
+      ? undefined
+      : measureStyle(text, options.style, styleVocabulary(options.rulepack))
+  const context = toContext(text, styleMetrics === undefined ? options : { ...options, styleMetrics })
   const violations: Violation[] = []
   for (const code of codes) {
     const rule = registry.get(code)

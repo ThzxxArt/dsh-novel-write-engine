@@ -188,6 +188,13 @@ const startMessagesMock = () =>
                 title: 'Host Smoke',
                 genre: '都市现代',
                 platform: 'fanqie',
+                // 0.2.17: `style` is a required creation field. The smoke model
+                // must speak the current contract, or this gate reports a
+                // tool-schema rejection as "the project was not created".
+                style: 'cold-suspense',
+                // Headless has no answerer, so the confirmation gate degrades to
+                // `skipped:no-provider`. It is asserted below rather than skipped
+                // silently: a gate that hangs or aborts here must fail loudly.
                 project_root: smokeProject,
               }),
             },
@@ -443,6 +450,13 @@ try {
   if (!existsSync(join(smokeProject, 'novel.yaml'))) {
     throw new Error('headless smoke called the model but novel_init did not create the project')
   }
+  // 0.2.17: the required creation field must actually reach the file, and the
+  // confirmation must have degraded rather than blocked. A headless run has no
+  // answerer; if that ever turns into a hang or a refusal, this is where it shows.
+  const createdProject = await readFile(join(smokeProject, 'novel.yaml'), 'utf8')
+  if (!/^style:\s*cold-suspense$/m.test(createdProject)) {
+    throw new Error(`headless smoke created the project without the requested style:\n${createdProject}`)
+  }
   // Positive control: the isolated HOME must actually receive the smoke row.
   // Without this, a registration regression and a perfect isolation both look
   // like "no new Host Smoke in the real registry".
@@ -487,6 +501,13 @@ try {
   }
   if (!JSON.stringify(toolResults).includes('Host Smoke')) {
     throw new Error('headless tool_result did not carry the novel_init result')
+  }
+  // 0.2.17: the downgrade is reported, not silent. Headless cannot answer, so
+  // the result must say so instead of looking like a confirmed choice.
+  if (!JSON.stringify(toolResults).includes('skipped:no-provider')) {
+    throw new Error(
+      `headless tool_result did not report the confirmation downgrade: ${JSON.stringify(toolResults)}`,
+    )
   }
   console.log('host gate passed: headless exposed novel_init and executed it through the host')
 

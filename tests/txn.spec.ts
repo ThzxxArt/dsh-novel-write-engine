@@ -48,7 +48,9 @@ describe('transaction compensation', () => {
       } as TransactionInput
       await expect(runTransaction(store, input)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
       expect(await snapshotFiles(store, FILES)).toEqual(before)
-      expect(await rowsFor(store, 'tx-rename-fail')).toEqual(['aborted'])
+      // 0.2.17: files had been renamed and were compensated, so the terminal row
+      // is `rolled_back` — it voids the transaction's hashes for reconcile.
+      expect(await rowsFor(store, 'tx-rename-fail')).toEqual(['rolled_back'])
     } finally {
       await cleanup()
     }
@@ -232,7 +234,7 @@ describe('transaction compensation', () => {
     }
   })
 
-  it('restores files and records only an abort when readback detects corruption', async () => {
+  it('restores files and records a compensating rollback when readback detects corruption', async () => {
     const { root, engine, cleanup } = await harness()
     try {
       await engine.initProject({
@@ -256,7 +258,7 @@ describe('transaction compensation', () => {
       } as TransactionInput
       await expect(runTransaction(store, input)).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
       expect(await snapshotFiles(store, FILES)).toEqual(before)
-      expect(await rowsFor(store, 'tx-readback-fail')).toEqual(['aborted'])
+      expect(await rowsFor(store, 'tx-readback-fail')).toEqual(['rolled_back'])
     } finally {
       await cleanup()
     }

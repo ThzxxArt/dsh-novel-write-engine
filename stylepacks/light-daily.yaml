@@ -1,0 +1,100 @@
+schema_version: 1
+id: light-daily
+name: 轻松日常
+description: 口语吐槽，生活流细节，轻喜剧节奏，低比喻密度。
+audience: general
+genres: [urban, daily, romance]
+pov: third-limited
+tense: past
+register: colloquial
+narrative_distance: close
+
+sentence:
+  short_ratio: 0.4
+  medium_ratio: 0.45
+  long_ratio: 0.15
+  burstiness: high
+  max_consecutive_same_length: 3
+
+paragraph:
+  max_chars: 100
+  one_action_per_paragraph: true
+  max_sentences: 4
+  max_actions: 3
+
+dialogue:
+  ratio: 0.4
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: high
+  idiom: medium
+  sensory_channels: [sound, taste, touch, sight]
+
+structure:
+  opening_moves: [dialogue, small_anomaly, routine]
+  scene_transition: hard_cut
+  hook_moves: [unresolved_question, joke, relationship]
+  cool_point_every_chars: 1200
+
+emotion:
+  intensity: medium
+  expression: concrete
+  required_beats: [body_reaction, relationship_stake, choice]
+  min_cues_per_1000: 2.5
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 忍俊不禁
+  - 哭笑不得
+  - 嘴角微微上扬
+
+exemplars:
+  - |
+    “你又把酱油当醋了。”
+    “就差一个字，能吃。”
+    “能吃你吃。”
+    老周夹了一筷子，嚼了两下，脸皱成一团。
+    小赵笑得差点把碗扣桌上：“怎么样？”
+    “再来一口。”
+    “你不是说能吃吗？”
+    “我说的是能咽。”
+  - |
+    外卖迟到四十分钟。
+    骑手站在门口，头盔歪着，手里拎着两袋汤。
+    “路上救了一只猫。”他喘着气说。
+    “猫呢？”
+    “跑了。”
+    “汤呢？”
+    “没洒。”
+    “那你跑什么？”
+    “怕你给差评。”
+
+critic_rubric:
+  - 口语：对白可以有口头禅、抢白和答非所问。
+  - 细节：用生活动作和小物件制造真实感，不堆形容词。
+  - 节奏：轻松段落也要有推进，不靠段子拖字数。
+  - 关系：每场戏至少改变一次人物距离或信息差。
+  - 克制：比喻少而具体，不把情绪写成总结。
+  - 情绪：轻松也要有人物在乎的东西，笑点后面留一点暖或尴尬。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 3
+  metaphor_per_1000_max: 4

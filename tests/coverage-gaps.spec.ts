@@ -133,7 +133,7 @@ describe('adapter optional-argument branches', () => {
         {},
       )
     }
-    await run('novel_init', { title: 't', genre: '都市现代', platform: 'fanqie' })
+    await run('novel_init', { title: 't', genre: '都市现代', platform: 'fanqie', style: 'none' })
     await run('novel_status', {})
     await run('novel_brief', { stage: 'P1' })
     await run('novel_plan_world', { objective: 'o' })

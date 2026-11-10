@@ -26,6 +26,8 @@ export type DocKind =
   | 'chapterPlan'
   | 'outline'
   | 'worldbook'
+  /** 0.2.17: the append-only brief receipt file is amendable so a damaged one can be repaired. */
+  | 'briefs'
 
 type FieldType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object' | 'any'
 
@@ -59,6 +61,12 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     description: req('string'),
     created_at: req('string'),
     targets: req('object'),
+    // 0.2.17: optional on disk so pre-0.2.17 projects stay readable; `null` is a
+    // deliberate "no style", absence is "predates the feature". `validateNested`
+    // enforces "string id or null" — the top-level table only owns presence.
+    style: f('any'),
+    // 0.2.17: how the style choice was made; written once at creation.
+    style_confirmation: f('string'),
   },
   pipeline: {
     revision: req('integer'),
@@ -163,6 +171,10 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     backstory: req('array'),
     facts: f('array'),
     themes: req('array'),
+  },
+  briefs: {
+    schema_version: req('number'),
+    receipts: req('array'),
   },
 }
 
@@ -340,6 +352,14 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
       ) {
         invalid(kind, 'targets.allow_negative_balances must be a boolean')
       }
+      // 0.2.17: `style` is optional on disk (old files must stay readable) but
+      // when present it is either a pack id or an explicit null.
+      if (record.style !== undefined && record.style !== null) {
+        const style = stringAt(kind, record.style, 'style')
+        if (!/^[a-z][a-z0-9-]{1,31}$/.test(style)) {
+          invalid(kind, 'style must be a style pack id or null')
+        }
+      }
       return
     }
     case 'pipeline': {
@@ -348,6 +368,10 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         integerAt(kind, rounds[key], `rounds.${key}`)
       }
       if (rounds.rollbacks !== undefined) integerAt(kind, rounds.rollbacks, 'rounds.rollbacks')
+      // 0.2.17: content-only check attempts share the check budget.
+      if (rounds.partial_checks !== undefined) {
+        integerAt(kind, rounds.partial_checks, 'rounds.partial_checks')
+      }
       if (record.draft !== undefined) {
         const draft = objectAt(kind, record.draft, 'draft')
         integerAt(kind, draft.chapter, 'draft.chapter')

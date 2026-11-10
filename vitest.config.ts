@@ -34,6 +34,10 @@ export default defineConfig({
         'src/remote/**': { lines: 85, branches: 85, functions: 85, statements: 85 },
         'src/client/**': { lines: 85, branches: 85, functions: 85, statements: 85 },
         'src/client/viewmodel.ts': { lines: 95, branches: 95, functions: 95, statements: 95 },
+        // 0.2.17: bundled-asset loaders sit outside every other glob, and
+        // `stylepack.ts` reached 66% before this line existed. A loader's value
+        // is its rejection behaviour, so packaging faults must stay covered.
+        'src/stylepack.ts': { lines: 95, branches: 95, functions: 95, statements: 95 },
       },
     },
   },

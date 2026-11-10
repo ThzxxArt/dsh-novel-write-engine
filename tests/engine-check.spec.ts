@@ -276,22 +276,43 @@ describe('semantic check evidence', () => {
     }
   })
 
-  it('does not spend the check budget on partial-scope passes', async () => {
+  it('counts partial-scope passes so content-only spinning terminates', async () => {
     const { root, engine, cleanup } = await atP6()
     try {
       const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
       const semantic = sampleSemantic(text)
-      for (const scope of [['content'], ['integrity'], ['content']] as string[][]) {
-        await engine.getBrief({ stage: 'P6', root })
-        const partial = await engine.runCheck({ chapter: 1, scope, semantic, root })
-        expect(partial.data.verdict).toBe('pass')
-        expect((await pipeline(root)).rounds).toMatchObject({ check: 0 })
-      }
+      await engine.getBrief({ stage: 'P6', root })
+      const partial = await engine.runCheck({ chapter: 1, scope: ['content'], semantic, root })
+      expect(partial.data.verdict).toBe('pass')
+      // 0.2.17: a partial pass stays at P6 but still spends one attempt; without
+      // this a model could loop content-only checks forever.
+      expect((await pipeline(root)).rounds).toMatchObject({ check: 0, partial_checks: 1 })
+      await engine.getBrief({ stage: 'P6', root })
+      const integrity = await engine.runCheck({ chapter: 1, scope: ['integrity'], semantic, root })
+      expect(integrity.data.verdict).toBe('pass')
       await engine.getBrief({ stage: 'P6', root })
       const full = await engine.runCheck({ chapter: 1, semantic, root })
       expect(full.data.verdict).toBe('pass')
-      expect((await pipeline(root)).rounds).toMatchObject({ check: 0 })
       expect((await pipeline(root)).stage).toBe('ready_to_archive')
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it('replays a partial pass without recording a content failure', async () => {
+    const { root, engine, cleanup } = await atP6()
+    try {
+      const text = (await readProjectFile(root, 'chapters/chapter-001.md'))!
+      const semantic = sampleSemantic(text)
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await engine.getBrief({ stage: 'P6', root })
+        await engine.runCheck({ chapter: 1, scope: ['content'], semantic, root })
+      }
+      // A partial pass never becomes a content failure; it only spends the
+      // shared check budget through `partial_checks` (0.2.17).
+      const rounds = (await pipeline(root)).rounds as { partial_checks: number }
+      expect(rounds).toMatchObject({ check: 0 })
+      expect(rounds.partial_checks).toBeGreaterThan(0)
     } finally {
       await cleanup()
     }

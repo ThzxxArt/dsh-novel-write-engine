@@ -178,6 +178,7 @@ describe('every tool executes one operation', () => {
         description: 'd',
         words_per_chapter: [1000, 2000],
         total_chapters: 10,
+        style: 'none',
         project_root: '/tmp/x',
       },
       {},

@@ -26,7 +26,7 @@
 | 门禁     | 13 条机器可判定的门控（PG-01~PG-13），任一不过即阻塞                  |
 | 规则引擎 | 字数、标点、格式、词表、节奏、跨章、一致性——约 30 条可机检规则        |
 | 事务器   | 归档是一次原子提交（暂存→校验→提交→读回），不是「写一堆文件祈祷成功」 |
-| 服务     | 34 个服务操作（28 工具 + 4 投影 + 2 工具子操作），四条通道复用         |
+| 服务     | 34 个服务操作（28 工具 + 4 投影 + 2 工具子操作），四条通道复用        |
 
 | 不是                 | 原因                                                |
 | -------------------- | --------------------------------------------------- |
@@ -210,19 +210,19 @@ Agent 预设  1 个（「网文工坊」）
 
 ### 2.2 模块清单
 
-| 模块            | 职责                                               | 依赖          | 有 IO  | 测试方式                    |
-| --------------- | -------------------------------------------------- | ------------- | ------ | --------------------------- |
-| `src/types.ts`  | 全部跨层类型、常量、错误码                         | —             | 否     | 类型检查                    |
-| `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表        | types         | 否     | 纯单测 + 表驱动             |
-| `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度         | types, domain | 否     | 纯单测 + golden             |
+| 模块            | 职责                                                   | 依赖          | 有 IO  | 测试方式                    |
+| --------------- | ------------------------------------------------------ | ------------- | ------ | --------------------------- |
+| `src/types.ts`  | 全部跨层类型、常量、错误码                             | —             | 否     | 类型检查                    |
+| `src/domain/`   | 字数、分段、句长、SimHash、评分算术、迁移表            | types         | 否     | 纯单测 + 表驱动             |
+| `src/rules/`    | 规则包编译、规则注册表、求值流水线、严重度             | types, domain | 否     | 纯单测 + golden             |
 | `src/store/`    | 原子写、事务、锁、schema、迁移、注册表、会话绑定、备份 | types         | **是** | 真实 tmpdir + 故障注入      |
-| `src/engine/`   | 34 个操作、选择解析、门控、任务书、只读投影、journal | 全部下层      | 间接   | 集成（真 store + 真 rules） |
-| `src/tools/`    | 28 个 `defineTool`：caller → 窄化 → 调 op → render | engine        | 否     | 假 engine（spy）            |
-| `src/commands/` | 5 条斜杠命令（`/novel` 内含选择/scan/resume 子命令） | engine        | 否     | 假 engine                   |
-| `src/remote/`   | 3 个只读投影 + DTO 版本                            | engine        | 否     | 假 engine + 形状断言        |
-| `src/skills/`   | 1 份入口技能正文                                   | —             | 否     | 快照 + 字数上限             |
-| `src/client/`   | 侧栏入口 + 面板（view model 独立可测）             | desktop 类型  | 否     | DOM + 假 ctx                |
-| `src/index.ts`  | 装配：建 store → 建 engine → 注册适配器            | 全部          | 否     | 集成冒烟                    |
+| `src/engine/`   | 34 个操作、选择解析、门控、任务书、只读投影、journal   | 全部下层      | 间接   | 集成（真 store + 真 rules） |
+| `src/tools/`    | 28 个 `defineTool`：caller → 窄化 → 调 op → render     | engine        | 否     | 假 engine（spy）            |
+| `src/commands/` | 5 条斜杠命令（`/novel` 内含选择/scan/resume 子命令）   | engine        | 否     | 假 engine                   |
+| `src/remote/`   | 3 个只读投影 + DTO 版本                                | engine        | 否     | 假 engine + 形状断言        |
+| `src/skills/`   | 1 份入口技能正文                                       | —             | 否     | 快照 + 字数上限             |
+| `src/client/`   | 侧栏入口 + 面板（view model 独立可测）                 | desktop 类型  | 否     | DOM + 假 ctx                |
+| `src/index.ts`  | 装配：建 store → 建 engine → 注册适配器                | 全部          | 否     | 集成冒烟                    |
 
 ### 2.3 依赖规则（由测试固化，不靠自觉）
 
@@ -273,40 +273,40 @@ export function apply(ctx: Context, config: Config) {
 
 **这是全系统的唯一入口**。工具、命令、面板、任务书都只能调这些操作。
 
-| 类别     | 操作                | 写盘                         | 门控依赖                         | 幂等键                                    |
-| -------- | ------------------- | ---------------------------- | -------------------------------- | ----------------------------------------- |
-| 生命周期 | `initProject`       | 是                           | —                                | 项目根路径                                |
-|          | `archiveChapter`    | 是（事务）                   | PG-01~10/12/13（不含 PG-11）      | `(chapter, contentHash)`                  |
-|          | `amend`             | 是                           | PG-01                            | 无（修复不 replay）                       |
-|          | `rollback`          | 是                           | —                                | `(chapter, toStage, chapterHash)`         |
-| 提交     | `submitWorldPlan`   | 是                           | PG-01/02/11                      | `(chapter, digest)`                       |
-|          | `submitChapterPlan` | 是                           | PG-01/02/13                      | `(chapter, digest)`                       |
-|          | `submitDraft`       | 是                           | PG-01/02/03/04/05/06/13          | `(chapter, contentHash)`                  |
-|          | `submitReview`      | 是                           | PG-01/02/07/09/11                | `(chapter, round, contentHash)`           |
-|          | `submitRevision`    | 是                           | PG-01/02/03/04/05/08/09/11       | `(chapter, round, contentHash)`           |
+| 类别     | 操作                | 写盘                         | 门控依赖                            | 幂等键                                    |
+| -------- | ------------------- | ---------------------------- | ----------------------------------- | ----------------------------------------- |
+| 生命周期 | `initProject`       | 是                           | —                                   | 项目根路径                                |
+|          | `archiveChapter`    | 是（事务）                   | PG-01~10/12/13（不含 PG-11）        | `(chapter, contentHash)`                  |
+|          | `amend`             | 是                           | PG-01                               | 无（修复不 replay）                       |
+|          | `rollback`          | 是                           | —                                   | `(chapter, toStage, chapterHash)`         |
+| 提交     | `submitWorldPlan`   | 是                           | PG-01/02/11                         | `(chapter, digest)`                       |
+|          | `submitChapterPlan` | 是                           | PG-01/02/13                         | `(chapter, digest)`                       |
+|          | `submitDraft`       | 是                           | PG-01/02/03/04/05/06/13             | `(chapter, contentHash)`                  |
+|          | `submitReview`      | 是                           | PG-01/02/07/09/11                   | `(chapter, round, contentHash)`           |
+|          | `submitRevision`    | 是                           | PG-01/02/03/04/05/08/09/11          | `(chapter, round, contentHash)`           |
 |          | `runCheck`          | 是                           | PG-01/02/03/04/05/06/07/08/09/10/11 | `(chapter, contentHash, semantic, scope)` |
-| 查询     | `getStatus`         | 否                           | —                                | —                                         |
-|          | `getBrief`          | 是（仅 `briefs` 字段，幂等） | —                                | `(stage, chapter, stateDigest)`           |
-|          | `countWords`        | 否                           | —                                | —                                         |
-|          | `queryState`        | 否                           | —                                | —                                         |
-|          | `diff`              | 否                           | —                                | —                                         |
-|          | `auditHistory`      | 否                           | —                                | —                                         |
-|          | `advise`            | 否                           | —                                | —                                         |
-|          | `export`            | 是（导出目录）               | —                                | `(kind, chapter)`                         |
-| 投影     | `panelSummary`      | 否                           | —                                | —                                         |
-|          | `panelChapters`     | 否                           | —                                | —                                         |
-|          | `panelGates`        | 否                           | —                                | —                                         |
-|          | `stats`             | 否                           | —                                | —                                         |
-| 书级规划 | `submitBookPlan`    | 是                           | —                                | `(blueprint digest)`                      |
-|          | `submitOutline`     | 是                           | —                                | `(outline digest)`                        |
-|          | `importOutline`     | 否（dry_run）/是             | —                                | `(content hash)`                          |
-|          | `submitWorldbook`   | 是                           | —                                | `(worldbook digest)`                      |
-|          | `reopenChapter`     | 是（事务）                   | 仅已归档且活动章未开始           | `(chapter, reason)`                       |
-|          | `restoreBackup`     | 是（事务）                   | 仅活动章；manifest 章号必须匹配  | 无（修复不 replay，每次恢复都再建备份）   |
-| 可观测   | `search`            | 否                           | —                                | —                                         |
-|          | `doctor`            | 否                           | —                                | —                                         |
-|          | `report`            | 否                           | —                                | —                                         |
-|          | `guide`             | 否                           | —                                | —                                         |
+| 查询     | `getStatus`         | 否                           | —                                   | —                                         |
+|          | `getBrief`          | 是（仅 `briefs` 字段，幂等） | —                                   | `(stage, chapter, stateDigest)`           |
+|          | `countWords`        | 否                           | —                                   | —                                         |
+|          | `queryState`        | 否                           | —                                   | —                                         |
+|          | `diff`              | 否                           | —                                   | —                                         |
+|          | `auditHistory`      | 否                           | —                                   | —                                         |
+|          | `advise`            | 否                           | —                                   | —                                         |
+|          | `export`            | 是（导出目录）               | —                                   | `(kind, chapter)`                         |
+| 投影     | `panelSummary`      | 否                           | —                                   | —                                         |
+|          | `panelChapters`     | 否                           | —                                   | —                                         |
+|          | `panelGates`        | 否                           | —                                   | —                                         |
+|          | `stats`             | 否                           | —                                   | —                                         |
+| 书级规划 | `submitBookPlan`    | 是                           | —                                   | `(blueprint digest)`                      |
+|          | `submitOutline`     | 是                           | —                                   | `(outline digest)`                        |
+|          | `importOutline`     | 否（dry_run）/是             | —                                   | `(content hash)`                          |
+|          | `submitWorldbook`   | 是                           | —                                   | `(worldbook digest)`                      |
+|          | `reopenChapter`     | 是（事务）                   | 仅已归档且活动章未开始              | `(chapter, reason)`                       |
+|          | `restoreBackup`     | 是（事务）                   | 仅活动章；manifest 章号必须匹配     | 无（修复不 replay，每次恢复都再建备份）   |
+| 可观测   | `search`            | 否                           | —                                   | —                                         |
+|          | `doctor`            | 否                           | —                                   | —                                         |
+|          | `report`            | 否                           | —                                   | —                                         |
+|          | `guide`             | 否                           | —                                   | —                                         |
 
 面板路由实际调用 `panelBundle`，它是 `panelSummary` / `panelChapters` / `panelGates` 的组合投影，并额外返回只读的 projects/selection/missing/resume；它不增加业务操作计数，也不引入写路径。`currentProject`、`useProject`、`unbindProject`、`scanProjects`、`resumePrompt` 是命令/面板支持方法，不属于 34 个工具/投影/子操作，也不新增项目正文写入口。
 
@@ -425,7 +425,7 @@ ENGINE_RULEPACK_INVALID / ENGINE_ID_EXHAUSTED
 | INV-11 | 名字前缀唯一（工具/事件/技能）                           | 装配              | 注册时检查冲突清单                                 |
 | INV-12 | 每个落盘文件带 `schema_version`                          | store             | 遍历 fixture 校验                                  |
 | INV-13 | 项目选择不依赖进程内 `lastRoot`                          | engine 选择器     | A/B 会话并发、重启、源码扫描                       |
-| INV-14 | 删除/移动/替换的项目不静默换书、不自动重建                | engine/store      | missing/identity 矩阵 + 事务 root 消失测试          |
+| INV-14 | 删除/移动/替换的项目不静默换书、不自动重建               | engine/store      | missing/identity 矩阵 + 事务 root 消失测试         |
 | INV-15 | 面板选择只影响视图，不写 active/绑定/项目                | remote/client     | 面板切换前后 registry/bindings/项目快照比对        |
 
 ### 2.12 备选架构与否决理由
@@ -472,7 +472,17 @@ dsh-novel-write-engine/
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
-  "files": ["lib", "presets", "rulepacks", "briefs", "skills", "cordis.patch.yml", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "lib",
+    "presets",
+    "rulepacks",
+    "briefs",
+    "skills",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+  ],
   "exports": {
     ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
     "./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" },
@@ -616,15 +626,45 @@ targets:
 schema_version: 1
 updated_at: '...'
 book:
-  { premise: '', logline: '', themes: [], tone: '', pov: '', audience: '',
-    selling_points: [], ending: '', strict: false }
+  {
+    premise: '',
+    logline: '',
+    themes: [],
+    tone: '',
+    pov: '',
+    audience: '',
+    selling_points: [],
+    ending: '',
+    strict: false,
+  }
 volumes:
-  - { id: V1, title: '第一卷', start_chapter: 1, end_chapter: 30,
-      goal: '', arc: '', climax: '', status: planned }
+  - {
+      id: V1,
+      title: '第一卷',
+      start_chapter: 1,
+      end_chapter: 30,
+      goal: '',
+      arc: '',
+      climax: '',
+      status: planned,
+    }
 chapters:
-  - { num: 1, volume: 1, title: '开端之雨', scene_type: 日常过渡章,
-      goal: '', conflict: '', hook: '', cast: [], target_words: [2000, 3000],
-      notes: '', status: planned, archived_at: null, word_count: null, score: null }
+  - {
+      num: 1,
+      volume: 1,
+      title: '开端之雨',
+      scene_type: 日常过渡章,
+      goal: '',
+      conflict: '',
+      hook: '',
+      cast: [],
+      target_words: [2000, 3000],
+      notes: '',
+      status: planned,
+      archived_at: null,
+      word_count: null,
+      score: null,
+    }
 ```
 
 `book.strict` 为 true 时，P2/P3 必须有当前章卡；只要章卡存在，任何模式下都要通过标题/场景/目标字数/cast 的 PG-13 对齐检查。归档卡不可改，需先 `novel_reopen`（reason 必填）。大纲是规划输入与进度视图，不是第二真相。
@@ -920,7 +960,8 @@ cjkChars         = count(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/)
 englishWords     = count(/[A-Za-z]+/)
 numbers          = count(/(?<![A-Za-z0-9])[0-9]+(?![A-Za-z])/)
 punctuationTotal = chinesePunct + englishPunct
-  chinesePunct   = count(/[\u3000-\u303f\uff00-\uffef]/)
+  chinesePunct   = count(/[\u3001-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014\u2026]/)
+  indentChars    = count(/\u3000/)   # 0.2.17: U+3000 is an indent, never a word
   englishPunct   = count(/[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef]/u)
 
 # 辅助量（全引擎唯一定义）
@@ -1174,6 +1215,25 @@ interface Violation {
 
 **没有 `info` 级别**。常见的 INFO（如爽点为空）不阻塞——本引擎要么 `advisory`（记录不阻塞），要么 `blocker`。不设第三个语义模糊的层级。
 
+### 5.12 风格包（0.2.17）
+
+风格是**书的属性**，不是章节的证据。它回答的是「这本书该长什么样」，与规则包「什么词不能说」分工如下：
+
+| 维度   | 规则包 `rulepacks/default.yaml`            | 风格包 `stylepacks/*.yaml`                                                    |
+| ------ | ------------------------------------------ | ----------------------------------------------------------------------------- |
+| 词     | 全局词表（零容忍 / 软限 / 元叙述 / AI 腔） | 只拥有 `banned_patterns` 这一份项目级补充                                     |
+| 阈值   | 全局阈值（段长 90、句号密度、破折号预算）  | 风格阈值（句长分布、变异系数、段句数、对白区间、抽象情绪/比喻密度、爽点间隔） |
+| 严重度 | 决定 blocker / advisory                    | 只决定「是否升级」：`banned_patterns` 超限才升 blocker                        |
+| 作用域 | 全书                                       | 单项目（`novel.yaml.style`）                                                  |
+
+**三态与不可变**：`undefined` 是「早于 0.2.17 建立」——零归档章时可设置一次，且必须过确认门控；字符串是「已定」；`null` 是「用户明确选择不用」。后两者同样不可变。选错只能新建项目，所以 `novel_init` 会在落盘前弹一次确认，`/novel style show <id>` 给出完整参数。
+
+**十条规则**（全部 advisory，只有 `STYLE_BANNED_PATTERN` 超限升 blocker）：`STYLE_BANNED_PATTERN`、`STYLE_SENTENCE_MIX`、`STYLE_BURSTINESS`、`STYLE_PARAGRAPH_CHARS`、`STYLE_PARAGRAPH_SENTENCES`、`STYLE_DIALOGUE_RATIO`、`STYLE_ABSTRACT_EMOTION`、`STYLE_METAPHOR_DENSITY`、`STYLE_COOL_POINT_GAP`、`STYLE_EMOTION_CUES`。
+
+**对白有两个数**：风格包给的是**瞄准点**（`dialogue.ratio` 单一数，进任务书告诉模型往哪写），项目给的是**验收线**（`targets.dialogue_ratio` 区间，`DIALOGUE_RATIO` 判越界）。两个码、两个语义，互不覆盖。
+
+**AI 腔七类**（`AI_TONE_META/ACK/COMPARATIVE/PROTECTIVE/SOCRATIC/TEMPLATE/JUDGMENT`）：每条 entry 带 `match`、`scope`、`window`、`escalation`。同一 span 同时命中零容忍时 AI 腔胜出（更具体、带 `replacement`），零容忍该 span 不再重复计分。
+
 ---
 
 ## 6. 存储层
@@ -1259,7 +1319,7 @@ interface Store {
 
 ### 6.6 快照与只读投影
 
-- `EngineService.load()` 逐文件读 `novel.yaml + pipeline + 六本台账 + 当前正文/plan/review/check`，末尾再读一次 `pipeline`；若 `revision` 在读取期间变化，重试一次，仍变则报 `ENGINE_TXN_ABORTED`，不会交付混合快照。
+- `EngineService.load()` 逐文件读 `novel.yaml + pipeline + 八本台账 + 当前正文/plan/review/check`，末尾再读一次 `pipeline`；若 `revision` 在读取期间变化，重试一次，仍变则报 `ENGINE_TXN_ABORTED`，不会交付混合快照。
 - 只读操作（status / 面板 / 命令）用快照，不取写锁；锁只保护写入。
 - 面板与命令的章节表、门控、摘要走 `engine/projections/` 的 `projectChapters` / `projectGates` / `projectSummary`；`getStatus` 自己组装 `StatusReport`（字段与快照一致），不再维护一个平行的 `projectStatus`。历史 `projectStatus` 已删除，避免测试只覆盖死代码。
 
@@ -1290,8 +1350,14 @@ projects:
 # ~/.dsh/novel-write-engine/session-bindings.yaml
 schema_version: 1
 bindings:
-  - { session_id: '...', root: '/abs/path/to/novel', title: '某书',
-      project_created_at: '...', bound_at: '...', source: 'explicit' }
+  - {
+      session_id: '...',
+      root: '/abs/path/to/novel',
+      title: '某书',
+      project_created_at: '...',
+      bound_at: '...',
+      source: 'explicit',
+    }
 ```
 
 - 注册表/绑定是**便利设施**，不是真相：删了不会删项目；正文仍由 `EngineService` 单一写入口维护。
@@ -1385,11 +1451,13 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
 
+0.2.17 是文风层与证据收口版本：8 份内置风格包（`stylepacks/`）与 14 条断言的编译器，风格是书的属性、开书时由插件弹窗确认一次、之后不可变；九项风格指标与十条 `STYLE_*` 规则（九条 advisory，只有 `STYLE_BANNED_PATTERN` 超限升 blocker）；七类 `AI_TONE_*`（39 条 entry，同一 span 与零容忍重叠时 AI 腔胜出）；对白改为「目标值 + 验收区间」两个数。同版修掉 20 条 P1：全角缩进不再计词、引文只允许跨相邻两段、短章能过 PG-09、语义匹配器与 PG-08/09 统一、`话说`/`读者` 不再误杀、锁定基线 2 字、handoff 跨章、reopen 清汉字数、brief 预算按 UTF-8 字节、briefs 损坏可修、amend_issues 要证据、restore 台账护栏、锁回收不误删、事务 `rolled_back` 终态、面板 304/计数/刷新、批量任务书渲染、status 警告、部分 scope 计入 `partial_checks`。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`novel.yaml.style` 磁盘可选、输入契约必填；`payload_version` 仍为 7，`PANEL_VERSION` 升到 0.2.17。
+
 0.2.16 只修 `/novel scan` 的取目录链路：`apply()` 原先在加载期抓一次 `workingDirectory` 服务快照，提供方尚未 ACTIVE 时该快照永久为 `undefined`，之后每次取目录都失败；命令与工具守卫又用空 `catch` 吞掉 `ensure()` 的异常，使「服务缺失」「无 agent 上下文」「目录不可读」三种故障都显示成「请在项目工作区中执行」。现在 `resolveWorkingDirectory()` 按调用解析，`Invocation.cwdError` 把具体原因带到命令层，`/novel scan` 在无目录时回落到当前会话绑定的项目根并注明「来源：工作区|会话绑定」。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`payload_version` 仍为 7；`PANEL_VERSION` 升到 0.2.16。
 
 0.2.15 只修面板「删行代替分页」一个病根：删除 `panelSectionBudget`（按数组顺序 `pop` 行迁就 64KB 上限、迁就完把 `next_cursor` 置空），分页改由 `panelSectionPage` 在发页前缩短页面并把游标改写到第一条未放下的行，`chapters`、`characters`、`foreshadows`、`timeline`、`relationships` 共用；客户端 `sectionPager` 成为分页文案与控件的唯一 owner，人物栏补上翻页；`worldbook` 十四组列表改用 `panelPreviewGroups` 按组预览（每组 50，按字节预算收缩最大组），每次收缩写进 `counts` 的 `total`/`shown`。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`payload_version` 仍为 7；`PANEL_VERSION` 升到 0.2.15。
 
-0.2.14 是账本语义与诊断可达版本：资源写入分 set/add 并拒绝同章双写，`current_state.unset` 可清空标量，负余额改由 `targets.allow_negative_balances` 控制；错误统一带 `details`（field/expected/received/allowed/example/nearest），patch 失败给最近匹配；PG-01 指出具体依赖变化，brief 按阶段依赖表签名并支持批量签发，收据归档压缩到 `history/briefs/`；P1 预算保底 `open_foreshadows ≥ min(8,N)`、`recent_summaries ≥ 2` 且 `required_omitted=0`；advisory 按 code 聚合为一行、实例 id 保持可单独确认，台账级 finding 定位 `{ledger,entity}`；PG-09/PG-08/delta anchor 共用引号与跨行归一；`novel_amend` 支持路径 patch、before/after 与 7 个台账的 `novel_restore`；doctor 支持 baseline；PG-06 有章卡时降为 warning。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，新字段可选；`PANEL_VERSION` 升到 0.2.14，面板协议 `payload_version` 仍为 7。
+0.2.14 是账本语义与诊断可达版本：资源写入分 set/add 并拒绝同章双写，`current_state.unset` 可清空标量，负余额改由 `targets.allow_negative_balances` 控制；错误统一带 `details`（field/expected/received/allowed/example/nearest），patch 失败给最近匹配；PG-01 指出具体依赖变化，brief 按阶段依赖表签名并支持批量签发，收据归档压缩到 `history/briefs/`；P1 保底 `open_foreshadows` 与 `recent_summaries` 恒在（0.2.17 起上下文不再裁剪，该保底机制已删除）；advisory 按 code 聚合为一行、实例 id 保持可单独确认，台账级 finding 定位 `{ledger,entity}`；PG-09/PG-08/delta anchor 共用引号与跨行归一；`novel_amend` 支持路径 patch、before/after 与 7 个台账的 `novel_restore`；doctor 支持 baseline；PG-06 有章卡时降为 warning。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，新字段可选；`PANEL_VERSION` 升到 0.2.14，面板协议 `payload_version` 仍为 7。
 
 0.2.13 是台账可信度与自评校准版本：新增汉字下限、对话双口径、标点细分、数字/算式结果块、世界书锁定基线、关系 `type_code`、伏笔计划与兑现锚点、稳定时间线 `event_key`、brief 收据 current 视图、告警实例 id/理由、`novel_state` 分页，以及 P3/P4 自评锚点与题材 profile。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，所有新字段可选，不自动改写旧台账；`PANEL_VERSION` 升到 0.2.13，面板协议 `payload_version` 仍为 7。
 
@@ -1407,21 +1475,21 @@ const TRANSITIONS: readonly Transition[] = [
 
 0.2.5 把不变量扩到全入口：blueprint/import（含 dry-run）/amend(outline)/outline 共用归档卷与 active 卡保护；`reindexed` 显式回显，归档卡不伪造 `archived_at`。语义证据允许跨句/跨段，check 区分 submission 与 content 轮次；world delta 以 ledger 存在性仲裁并给 warning；pending 只读诊断与 init 恢复；summary-only 修订不改正文、不消耗 revise、可直接 check/archive；resources 深合并且只接受非负整数。详见 CHANGELOG 的 0.2.5 条目。
 
-| 编号  | 名称             | 判定条件                                                                                 | 触发点            |
-| ----- | ---------------- | ---------------------------------------------------------------------------------------- | ----------------- |
-| PG-01 | `BRIEF_REQUIRED` | 该阶段任务书已签发且 digest 与当前状态匹配                                               | 所有 submit       |
-| PG-02 | `STAGE_ORDER`    | 只能提交当前阶段允许的产物                                                               | 所有 submit       |
-| PG-03 | `WORD_COUNT`     | `totalWordCount >= minWords`                                                             | P3 / P5 / P6 / P9 |
-| PG-04 | `FORMAT`         | 格式类规则 0 个 blocker                                                                  | P3 / P5 / P6 / P9 |
-| PG-05 | `SUMMARY_SCHEMA` | 10 必填字段齐全 + 类型正确                                                               | P3 / P6 / P9      |
-| PG-06 | `SCENE_TYPE`     | 四选一 + 节奏约束（不连续 3 章同型；战斗不连续 2 章）                                    | P3 / P6 / P9      |
-| PG-13 | `OUTLINE_ALIGNMENT` | 有章卡时标题/场景/目标字数/cast 必须一致；严格模式无卡也拒绝；归档卡不可改 | P2 / P3 |
-| PG-07 | `SCORE`          | 15 维齐全、算术闭合；P4 允许低分如实进入修订，`total >= minScore` 在 P6 与 P9 归档前执行 | P4 / P6 / P9      |
-| PG-08 | `ISSUES_CLEARED` | 所有 `blocker` issue 状态 `fixed` 且有证据                                               | P5 / P6 / P8 / P9 |
-| PG-09 | `READING_PROOF`  | 三处原文引用按实际段落验证；开头/结尾边界不可用提交段落号绕过                            | P4 / P5 / P6 / P9 |
-| PG-10 | `CONSISTENCY`    | 跨章对账（伏笔/时间线/资源/关系/重复）                                                   | P6 / P8 / P9      |
-| PG-11 | `ROUNDS`         | 轮次未超限                                                                               | P4 / P5 / P6      |
-| PG-12 | `ARCHIVE_ATOMIC` | 事务三端一致 + 读回验证通过                                                              | P9                |
+| 编号  | 名称                | 判定条件                                                                                 | 触发点            |
+| ----- | ------------------- | ---------------------------------------------------------------------------------------- | ----------------- |
+| PG-01 | `BRIEF_REQUIRED`    | 该阶段任务书已签发且 digest 与当前状态匹配                                               | 所有 submit       |
+| PG-02 | `STAGE_ORDER`       | 只能提交当前阶段允许的产物                                                               | 所有 submit       |
+| PG-03 | `WORD_COUNT`        | `totalWordCount >= minWords`                                                             | P3 / P5 / P6 / P9 |
+| PG-04 | `FORMAT`            | 格式类规则 0 个 blocker                                                                  | P3 / P5 / P6 / P9 |
+| PG-05 | `SUMMARY_SCHEMA`    | 10 必填字段齐全 + 类型正确                                                               | P3 / P6 / P9      |
+| PG-06 | `SCENE_TYPE`        | 四选一 + 节奏约束（不连续 3 章同型；战斗不连续 2 章）                                    | P3 / P6 / P9      |
+| PG-13 | `OUTLINE_ALIGNMENT` | 有章卡时标题/场景/目标字数/cast 必须一致；严格模式无卡也拒绝；归档卡不可改               | P2 / P3           |
+| PG-07 | `SCORE`             | 15 维齐全、算术闭合；P4 允许低分如实进入修订，`total >= minScore` 在 P6 与 P9 归档前执行 | P4 / P6 / P9      |
+| PG-08 | `ISSUES_CLEARED`    | 所有 `blocker` issue 状态 `fixed` 且有证据                                               | P5 / P6 / P8 / P9 |
+| PG-09 | `READING_PROOF`     | 三处原文引用按实际段落验证；开头/结尾边界不可用提交段落号绕过                            | P4 / P5 / P6 / P9 |
+| PG-10 | `CONSISTENCY`       | 跨章对账（伏笔/时间线/资源/关系/重复）                                                   | P6 / P8 / P9      |
+| PG-11 | `ROUNDS`            | 轮次未超限                                                                               | P4 / P5 / P6      |
+| PG-12 | `ARCHIVE_ATOMIC`    | 事务三端一致 + 读回验证通过                                                              | P9                |
 
 **求值顺序固定**（不是「哪条先命中算哪条」）：
 
@@ -1665,36 +1733,36 @@ ctx.skills.register({
 
 ### 9.1 二十八个工具（全部是 `EngineService` 的薄适配器）
 
-| #   | 工具                 | 阶段     | 服务操作            | 写盘              |
-| --- | -------------------- | -------- | ------------------- | ----------------- |
-| 1   | `novel_init`         | —        | `initProject`       | 是                |
-| 2   | `novel_status`       | —        | `getStatus`         | 项目正文否；显式 root 写绑定 |
-| 3   | `novel_brief`        | P1~P6/P8 | `getBrief`          | 是（`state/briefs.yaml`） |
-| 4   | `novel_plan_world`   | P1       | `submitWorldPlan`   | 是                |
-| 5   | `novel_plan_chapter` | P2       | `submitChapterPlan` | 是                |
-| 6   | `novel_write_draft`  | P3       | `submitDraft`       | 是                |
-| 7   | `novel_review`       | P4       | `submitReview`      | 是                |
-| 8   | `novel_revise`       | P5/P6    | `submitRevision`    | 是                |
-| 9   | `novel_check`        | P6       | `runCheck`          | 是                |
-| 10  | `novel_archive`      | P7+P8+P9 | `archiveChapter`    | 是（事务）        |
-| 11  | `novel_word_count`   | 任意     | `countWords`        | 否                |
-| 12  | `novel_state`        | 任意     | `queryState`        | 否                |
-| 13  | `novel_amend`        | 任意     | `amend`             | 是                |
-| 14  | `novel_rollback`     | 任意     | `rollback`          | 是                |
-| 15  | `novel_diff`         | 任意     | `diff`              | 否                |
-| 16  | `novel_export`       | 任意     | `export`            | 是（导出目录）    |
-| 17  | `novel_audit`        | 任意     | `auditHistory`      | 否                |
-| 18  | `novel_pipeline`     | 任意     | `advise`            | 否                |
-| 19  | `novel_blueprint`    | 任意     | `submitBookPlan`    | 是                |
-| 20  | `novel_outline`      | 任意     | `submitOutline`     | 是                |
-| 21  | `novel_outline_import` | 任意   | `importOutline`     | 可选              |
-| 22  | `novel_worldbook`    | 任意     | `submitWorldbook`   | 是                |
-| 23  | `novel_search`       | 任意     | `search`            | 否                |
-| 24  | `novel_doctor`       | 任意     | `doctor`            | 否                |
-| 25  | `novel_report`       | 任意     | `report`            | 否                |
-| 26  | `novel_guide`        | 任意     | `guide`             | 否                |
-| 27  | `novel_reopen`       | 已归档章 | `reopenChapter`     | 是（事务）        |
-| 28  | `novel_restore`      | 活动章   | `restoreBackup`     | 是（事务）        |
+| #   | 工具                   | 阶段     | 服务操作            | 写盘                         |
+| --- | ---------------------- | -------- | ------------------- | ---------------------------- |
+| 1   | `novel_init`           | —        | `initProject`       | 是                           |
+| 2   | `novel_status`         | —        | `getStatus`         | 项目正文否；显式 root 写绑定 |
+| 3   | `novel_brief`          | P1~P6/P8 | `getBrief`          | 是（`state/briefs.yaml`）    |
+| 4   | `novel_plan_world`     | P1       | `submitWorldPlan`   | 是                           |
+| 5   | `novel_plan_chapter`   | P2       | `submitChapterPlan` | 是                           |
+| 6   | `novel_write_draft`    | P3       | `submitDraft`       | 是                           |
+| 7   | `novel_review`         | P4       | `submitReview`      | 是                           |
+| 8   | `novel_revise`         | P5/P6    | `submitRevision`    | 是                           |
+| 9   | `novel_check`          | P6       | `runCheck`          | 是                           |
+| 10  | `novel_archive`        | P7+P8+P9 | `archiveChapter`    | 是（事务）                   |
+| 11  | `novel_word_count`     | 任意     | `countWords`        | 否                           |
+| 12  | `novel_state`          | 任意     | `queryState`        | 否                           |
+| 13  | `novel_amend`          | 任意     | `amend`             | 是                           |
+| 14  | `novel_rollback`       | 任意     | `rollback`          | 是                           |
+| 15  | `novel_diff`           | 任意     | `diff`              | 否                           |
+| 16  | `novel_export`         | 任意     | `export`            | 是（导出目录）               |
+| 17  | `novel_audit`          | 任意     | `auditHistory`      | 否                           |
+| 18  | `novel_pipeline`       | 任意     | `advise`            | 否                           |
+| 19  | `novel_blueprint`      | 任意     | `submitBookPlan`    | 是                           |
+| 20  | `novel_outline`        | 任意     | `submitOutline`     | 是                           |
+| 21  | `novel_outline_import` | 任意     | `importOutline`     | 可选                         |
+| 22  | `novel_worldbook`      | 任意     | `submitWorldbook`   | 是                           |
+| 23  | `novel_search`         | 任意     | `search`            | 否                           |
+| 24  | `novel_doctor`         | 任意     | `doctor`            | 否                           |
+| 25  | `novel_report`         | 任意     | `report`            | 否                           |
+| 26  | `novel_guide`          | 任意     | `guide`             | 否                           |
+| 27  | `novel_reopen`         | 已归档章 | `reopenChapter`     | 是（事务）                   |
+| 28  | `novel_restore`        | 活动章   | `restoreBackup`     | 是（事务）                   |
 
 ### 9.2 四个关键契约
 
@@ -1738,7 +1806,7 @@ parameters: { stage: { type: 'string', required: true, enum: ['P1','P2','P3','P4
 output: { stage, chapter, digest, title, content, content_hash, fields, context }
 ```
 
-`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。`fields` 同时暴露 `world_plan_error`/`plan_error`/`review_error`/`check_error`。`context.context_meta` 是 `{version, stage, budget, used, over_budget, protected, truncated, omitted, strategy}`；P2/P3/P4/P5/P6 的 `world_plan` 目标/约束、P3/P4/P5 的 `characters`、P6 的 `active_cast`、正文、当前 plan/review/check、摘要等受保护键不裁剪；`world_plan.characters/locations` 是候选名单，可裁剪。裁剪项参与 digest。
+`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。`fields` 同时暴露 `world_plan_error`/`plan_error`/`review_error`/`check_error`。`context.context_meta` 是 `{version, stage, used, complete, strategy}`。0.2.17 删除了上下文预算：任务书**不做任何裁剪**，`used` 只是对返回文档自身的 UTF-8 字节数报告。各阶段的 pack 形状（活跃卡、最近五章摘要、世界书投影）仍是"这个阶段需要什么"，但那由阶段决定，不是由字节上限决定。
 
 **这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「世界计划 + 本章活跃角色完整卡 + 前章结尾 + 待推进伏笔」；P6 拿「全量台账 + active_cast + 机检报告」；不相关的一律不给。
 
@@ -2126,7 +2194,7 @@ rulepack.platform（平台默认） < novel.yaml.targets（项目声明） < 插
 | `src/commands/**` |      85 |       85 |        85 |         85 | 假 engine                       |
 | `src/remote/**`   |      85 |       85 |        85 |         85 | 形状断言                        |
 | `src/client/**`   |      85 |       85 |        85 |         85 | view model 单独 ≥95             |
-| **全局**          |  **90** |   **89** |    **90** |     **90** | 兜底；branches 按 89 地板     |
+| **全局**          |  **90** |   **89** |    **90** |     **90** | 兜底；branches 按 89 地板       |
 
 **为什么纯函数层要 100%**：`domain` 是「字数、算术、迁移表」——它们错了，上面所有门控都错。而且它们无 IO、无异步、无时间，100% 是可达的；达不到说明设计里混进了不该有的东西。
 
@@ -2260,36 +2328,36 @@ CI 不伪造这个解析结果。
 
 ### 14.1 切片与工期
 
-| 切片 | 内容                                                                  | 估时（人日） |
-| ---- | --------------------------------------------------------------------- | ------------ |
-| S1   | 包骨架 · 构建链 · Config · 装配 · `arch.spec` · harness               | 2.5          |
-| S2   | 领域层：字数 / 分段 / 句长 / SimHash / 评分算术 / 迁移表              | 3            |
-| S3   | 存储层：FsStore · 原子写 · 事务七步 · 锁 · journal · schema · migrate | 4            |
-| S4   | 规则层：编译器 · 注册表 · 求值流水线 · 八类规则                       | 6            |
-| S5   | 门控层：13 门控 · 求值器 · 证据模型                                   | 4            |
-| S6   | 引擎服务：32 操作 · 幂等 · 4 个投影                                   | 7            |
-| S7   | 适配层：28 工具 · 5 命令 · 3 remote                                   | 5            |
-| S8   | 知识层：入口技能 · 7 份任务书 · 类型与平台 · 规则包内容               | 3            |
-| S9   | 客户端：构建链 · slot 注册 · 面板 · remote                            | 4.5          |
-| S10  | 预设：补丁 · 人格 · 名录测试                                          | 0.5          |
+| 切片 | 内容                                                                                     | 估时（人日） |
+| ---- | ---------------------------------------------------------------------------------------- | ------------ |
+| S1   | 包骨架 · 构建链 · Config · 装配 · `arch.spec` · harness                                  | 2.5          |
+| S2   | 领域层：字数 / 分段 / 句长 / SimHash / 评分算术 / 迁移表                                 | 3            |
+| S3   | 存储层：FsStore · 原子写 · 事务七步 · 锁 · journal · schema · migrate                    | 4            |
+| S4   | 规则层：编译器 · 注册表 · 求值流水线 · 八类规则                                          | 6            |
+| S5   | 门控层：13 门控 · 求值器 · 证据模型                                                      | 4            |
+| S6   | 引擎服务：32 操作 · 幂等 · 4 个投影                                                      | 7            |
+| S7   | 适配层：28 工具 · 5 命令 · 3 remote                                                      | 5            |
+| S8   | 知识层：入口技能 · 7 份任务书 · 类型与平台 · 规则包内容                                  | 3            |
+| S9   | 客户端：构建链 · slot 注册 · 面板 · remote                                               | 4.5          |
+| S10  | 预设：补丁 · 人格 · 名录测试                                                             | 0.5          |
 | S11  | 导出：md / txt / epub / outline / worldbook / proposal（内置 zlib）· 封面 SVG · 平台简介 | 2.5          |
-| S12  | 多项目注册表 · 切换 · 跨项目导入 · audit · diff · rollback            | 3.5          |
-| S13  | 测试收口：覆盖率达标 · dirty fixture · 15 条证伪测试 · e2e harness    | 4            |
-| S14  | 文档 · README · 双语 · 发布门禁 · `pnpm pack` 验证                    | 3            |
-|      | **合计**                                                              | **≈ 52.5**   |
+| S12  | 多项目注册表 · 切换 · 跨项目导入 · audit · diff · rollback                               | 3.5          |
+| S13  | 测试收口：覆盖率达标 · dirty fixture · 15 条证伪测试 · e2e harness                       | 4            |
+| S14  | 文档 · README · 双语 · 发布门禁 · `pnpm pack` 验证                                       | 3            |
+|      | **合计**                                                                                 | **≈ 52.5**   |
 
 > 52.5 人日是「一个人按测试先行节奏认真做完」的量；AI 辅助下日历时间约 12–18 天。节奏是**每片先写测试、再写实现**，宁可慢，不可错。
 
 ### 14.2 导出的六种格式
 
-| 格式    | 实现                                                                                 | 校验              |
-| ------- | ------------------------------------------------------------------------------------ | ----------------- |
-| `.md`   | 章节标题 + 正文拼接                                                                  | 字数与单章一致    |
-| `.txt`  | 同上，无 Markdown 装饰                                                               | 编码 UTF-8 无 BOM |
-| `.epub` | **自写 ZIP 容器**（`node:zlib` deflateRaw + 中央目录），`mimetype` 首条且 store 方式 | T-12 解压回读     |
-| `outline` | 书级大纲 Markdown 模板 | 可重新导入 |
-| `worldbook` | 世界观 Markdown | 条目完整 |
-| `proposal` | 书级提案 | 不输出空章节 |
+| 格式        | 实现                                                                                 | 校验              |
+| ----------- | ------------------------------------------------------------------------------------ | ----------------- |
+| `.md`       | 章节标题 + 正文拼接                                                                  | 字数与单章一致    |
+| `.txt`      | 同上，无 Markdown 装饰                                                               | 编码 UTF-8 无 BOM |
+| `.epub`     | **自写 ZIP 容器**（`node:zlib` deflateRaw + 中央目录），`mimetype` 首条且 store 方式 | T-12 解压回读     |
+| `outline`   | 书级大纲 Markdown 模板                                                               | 可重新导入        |
+| `worldbook` | 世界观 Markdown                                                                      | 条目完整          |
+| `proposal`  | 书级提案                                                                             | 不输出空章节      |
 
 封面 SVG 由纯字符串模板生成（书名 + 类型 + 作者），不引 canvas；平台简介按模板 + 变量填充，文案可自定义。
 
@@ -2319,22 +2387,22 @@ CI 不伪造这个解析结果。
 
 ## 15. 设计决策
 
-| #        | 决策点             | 结论                                                               | 依据                                         |
-| -------- | ------------------ | ------------------------------------------------------------------ | -------------------------------------------- |
-| **D-01** | 编排权归谁         | 模型编排，插件做状态机 + 门禁                                      | 模型擅写、不擅记；状态必须机械保证（§7）     |
-| **D-02** | P7/P8/P9 是否合并  | 合并为一次原子归档                                                 | 三步之间有撕裂窗口，合并后窗口消失（§6.3）   |
-| **D-03** | 阶段知识怎么投递   | `novel_brief` 按需下发，不做 9 个常驻技能                          | token 成本与「加载错阶段」双风险（§8.2）     |
-| **D-04** | 「逐字阅读」怎么验 | 三处原文引用可验证（PG-09）                                        | 口头承诺不可验证，引用可验证（§7.7）         |
-| **D-05** | 分数形态           | 结构化扣分项，算术必须闭合                                         | 裸分数无法复核、无法定位（§7.8）             |
-| **D-06** | 状态文件格式       | YAML 全量 + journal 用 JSONL                                       | 人可读 + 追加式日志（§4.2、§6.4）            |
-| **D-07** | 规则包             | 随包定稿 + 用户可覆盖                                              | 开箱可用，灵活性来自外置（§1.4、§8.4）       |
-| **D-08** | 是否带 Web UI      | 交付「网文工坊」面板                                               | 入口在宿主侧栏，取数走 remote（§10）         |
-| **D-09** | 功能范围与节奏     | 0.1.0 全量；0.1.x 只打磨；0.2 仅重大架构升级                       | 版本只承载缺陷与打磨                         |
-| **D-10** | 多项目             | 注册表 + 切换 + 设定包导入导出；实时共享留 0.2                     | 实时共享是架构级，需共享层与冲突裁决（§6.8） |
-| **D-11** | 是否带内置预设     | 交付「网文工坊」预设；工具挂根、预设只做身份与名录裁剪             | 根行必须挂面板，预设裁能力（§11.3）          |
+| #        | 决策点             | 结论                                                                               | 依据                                         |
+| -------- | ------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------- |
+| **D-01** | 编排权归谁         | 模型编排，插件做状态机 + 门禁                                                      | 模型擅写、不擅记；状态必须机械保证（§7）     |
+| **D-02** | P7/P8/P9 是否合并  | 合并为一次原子归档                                                                 | 三步之间有撕裂窗口，合并后窗口消失（§6.3）   |
+| **D-03** | 阶段知识怎么投递   | `novel_brief` 按需下发，不做 9 个常驻技能                                          | token 成本与「加载错阶段」双风险（§8.2）     |
+| **D-04** | 「逐字阅读」怎么验 | 三处原文引用可验证（PG-09）                                                        | 口头承诺不可验证，引用可验证（§7.7）         |
+| **D-05** | 分数形态           | 结构化扣分项，算术必须闭合                                                         | 裸分数无法复核、无法定位（§7.8）             |
+| **D-06** | 状态文件格式       | YAML 全量 + journal 用 JSONL                                                       | 人可读 + 追加式日志（§4.2、§6.4）            |
+| **D-07** | 规则包             | 随包定稿 + 用户可覆盖                                                              | 开箱可用，灵活性来自外置（§1.4、§8.4）       |
+| **D-08** | 是否带 Web UI      | 交付「网文工坊」面板                                                               | 入口在宿主侧栏，取数走 remote（§10）         |
+| **D-09** | 功能范围与节奏     | 0.1.0 全量；0.1.x 只打磨；0.2 仅重大架构升级                                       | 版本只承载缺陷与打磨                         |
+| **D-10** | 多项目             | 注册表 + 切换 + 设定包导入导出；实时共享留 0.2                                     | 实时共享是架构级，需共享层与冲突裁决（§6.8） |
+| **D-11** | 是否带内置预设     | 交付「网文工坊」预设；工具挂根、预设只做身份与名录裁剪                             | 根行必须挂面板，预设裁能力（§11.3）          |
 | **D-12** | 测试覆盖率         | 全局 statements/lines/functions ≥90%、branches ≥89%；domain 100%；分层门槛见 §13.3 | 治「大量输出但不可信」（§13）                |
-| **D-13** | 架构               | 六层 + `EngineService` 单一入口；工具/命令/面板/任务书皆为薄适配器 | 消灭四份实现漂移（§2）                       |
-| **D-14** | 独立性             | 不迁移、不共存；规则包随包发布，运行时不读包外路径                 | 插件自足（§1.6、§8.4）                       |
+| **D-13** | 架构               | 六层 + `EngineService` 单一入口；工具/命令/面板/任务书皆为薄适配器                 | 消灭四份实现漂移（§2）                       |
+| **D-14** | 独立性             | 不迁移、不共存；规则包随包发布，运行时不读包外路径                                 | 插件自足（§1.6、§8.4）                       |
 
 三条固定口径：版本从 `0.1.0` 起；`projectRoot` 默认 `./novel`；段落长度按 `total_word_count`。
 
@@ -2342,17 +2410,17 @@ CI 不伪造这个解析结果。
 
 ## 附录 A：术语对照
 
-| 术语       | 说明                                                            |
-| ---------- | --------------------------------------------------------------- |
-| 见证书     | 正文 `chapters/*.md`，唯一权威                                  |
-| 影子       | 由正文派生的数据 `state/*.yaml`                                 |
+| 术语       | 说明                                                                          |
+| ---------- | ----------------------------------------------------------------------------- |
+| 见证书     | 正文 `chapters/*.md`，唯一权威                                                |
+| 影子       | 由正文派生的数据 `state/*.yaml`                                               |
 | 规划       | 0.2.0 的蓝图/大纲/世界观 `outline/*.yaml`，是规划输入与进度视图，不是第二真相 |
-| 阶段任务书 | 由 `novel_brief` 投递的阶段指令                                 |
-| 门控       | 阶段推进的硬性检查，PG-01~PG-13                                 |
-| 核销       | delta 逐实体声明，不可静默跳过                                  |
-| 事务       | `archiveChapter` 的原子归档                                     |
-| 阅读证明   | 可验证引用，PG-09                                               |
-| 服务操作   | 本引擎核心抽象，34 个（含 2 个工具子操作）                      |
+| 阶段任务书 | 由 `novel_brief` 投递的阶段指令                                               |
+| 门控       | 阶段推进的硬性检查，PG-01~PG-13                                               |
+| 核销       | delta 逐实体声明，不可静默跳过                                                |
+| 事务       | `archiveChapter` 的原子归档                                                   |
+| 阅读证明   | 可验证引用，PG-09                                                             |
+| 服务操作   | 本引擎核心抽象，34 个（含 2 个工具子操作）                                    |
 
 ## 附录 B：与开发指南的对照
 
@@ -2416,14 +2484,14 @@ CI 不伪造这个解析结果。
 
 ## 附录 E：未验证事项
 
-| #   | 事项                                                 | 状态                                       | 何时验证                  |
-| --- | ---------------------------------------------------- | ------------------------------------------ | ------------------------- |
-| 1   | `dsh.bundle.patch` 数组 + 预设补丁在真实安装下的行为 | 依据官方 `web-app` 源码，未实机            | S10 实现时                |
-| 2   | typert remote 命名空间声明的完整写法                 | 只读到 `schedule/catalog` 用法，未写过一个 | S9 第一个任务             |
-| 3   | `ctx.clock` 是否存在（本设计用自注入 `Clock`）       | 未确认，已按不依赖处理                     | S2                        |
-| 4   | EPUB 在 Readium / Apple Books 的兼容性               | 未测                                       | S11                       |
-| 5   | 面板在窄屏 / 深色主题下的真实表现                    | 未测                                       | S9 验收                   |
+| #   | 事项                                                 | 状态                                       | 何时验证                     |
+| --- | ---------------------------------------------------- | ------------------------------------------ | ---------------------------- |
+| 1   | `dsh.bundle.patch` 数组 + 预设补丁在真实安装下的行为 | 依据官方 `web-app` 源码，未实机            | S10 实现时                   |
+| 2   | typert remote 命名空间声明的完整写法                 | 只读到 `schedule/catalog` 用法，未写过一个 | S9 第一个任务                |
+| 3   | `ctx.clock` 是否存在（本设计用自注入 `Clock`）       | 未确认，已按不依赖处理                     | S2                           |
+| 4   | EPUB 在 Readium / Apple Books 的兼容性               | 未测                                       | S11                          |
+| 5   | 面板在窄屏 / 深色主题下的真实表现                    | 未测                                       | S9 验收                      |
 | 6   | 28 个工具的 prompt 成本实测值                        | 估 3–4k，未测                              | 0.2.0 完成后用真实会话量一次 |
-| 7   | Windows 下 rename 语义与锁回收                       | 未测（本机 WSL）                           | S3 + CI matrix            |
+| 7   | Windows 下 rename 语义与锁回收                       | 未测（本机 WSL）                           | S3 + CI matrix               |
 
 > 这张表的作用：把所有「我以为」标出来。没验证的，不写成已验证。

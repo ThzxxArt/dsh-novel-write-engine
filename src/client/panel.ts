@@ -1385,6 +1385,7 @@ const CSS = `
 .nwe-dim-card-head span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--nwe-muted); }
 .nwe-dim-card-head strong { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .nwe-dim-card .nwe-v6-bar { display: block; margin-top: 8px; }
+.nwe-style-warn { color: var(--nwe-warn); }
 .nwe-dim-card .nwe-v6-bar > span { display: block; height: 5px; border-radius: 99px; background: var(--nwe-border); }
 .nwe-dim-card .nwe-v6-bar i { display: block; height: 100%; border-radius: inherit; background: var(--nwe-accent); }
 .nwe-health-layout { display: block; }
@@ -3745,6 +3746,24 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
               `${data.identity.targets.words_per_chapter[0]}–${data.identity.targets.words_per_chapter[1]} 字 / 章 · ${data.identity.targets.total_chapters ?? '不限'} 章`,
             ],
             ['主题', data.blueprint.themes.join(' / ') || '—'],
+            [
+              '文风',
+              data.identity.style == null
+                ? '未启用'
+                : `${data.identity.style.name}（${data.identity.style.id}）`,
+            ],
+            ...(data.style_verdict == null
+              ? []
+              : [
+                  [
+                    '文风状态',
+                    data.style_verdict.verdict === 'pass'
+                      ? '本章贴合'
+                      : data.style_verdict.verdict === 'no-draft'
+                        ? '尚无正文'
+                        : `本章 ${data.style_verdict.findings.length} 项偏离`,
+                  ] as [string, string],
+                ]),
             ['基调 / POV', `${data.blueprint.tone || '—'} / ${data.blueprint.pov || '—'}`],
             [
               '读者 / 卖点',
@@ -4118,7 +4137,12 @@ const sectionItemCount = (section: PanelSectionState | null): number | undefined
 
 const tabIntro = (tab: SectionTab, view: PanelView, section: PanelSectionState | null): ReactElement => {
   const meta = TAB_META[tab]
-  const total = tab === 'chapters' ? view.stats.chapters : sectionItemCount(section)
+  // The chapters tab used `stats.chapters` (archived count) while its own table
+  // header counted every row, so the chip said "1 章" above a list of two. Use the
+  // same projection the table does, and fall back only when the section is absent.
+  const sectionCount =
+    tab === 'chapters' ? (sectionItemCount(section) ?? view.stats.chapters) : sectionItemCount(section)
+  const total = sectionCount
   const note = total === undefined ? '只读投影' : tab === 'chapters' ? `${total} 章` : `${total} 条记录`
   return createElement(
     'header',
@@ -4518,7 +4542,10 @@ const sectionBlock = (
   )
 }
 
-const worldbookSection = (items: unknown): ReactElement => {
+const worldbookSection = (
+  items: unknown,
+  counts: Record<string, { total: number; shown: number }> | undefined,
+): ReactElement => {
   const row = asRow(items)
   if (row === null) return sectionList('设定', items)
   const groups: Array<[string, string]> = [
@@ -4580,8 +4607,12 @@ const worldbookSection = (items: unknown): ReactElement => {
   ]
   const blocks = [
     ...(intro.length === 0 ? [] : [sectionBlock('蓝图', intro, 'blueprint')]),
-    ...groups.map(([key, label]) => sectionBlock(label, row[key], key)),
-    ...ledgerGroups.map(([key, label]) => sectionBlock(label, ledger?.[key], `ledger-${key}`)),
+    // Structured lists have no cursor, so a group that hit the preview cap would
+    // otherwise render as if it were complete. Every group reports shown/total.
+    ...groups.map(([key, label]) => sectionBlock(label, row[key], key, counts?.[key])),
+    ...ledgerGroups.map(([key, label]) =>
+      sectionBlock(label, ledger?.[key], `ledger-${key}`, counts?.[`ledger_${key}`]),
+    ),
   ].filter((block): block is ReactElement => block !== null)
   return blocks.length === 0
     ? createElement('div', { className: 'nwe-empty' }, '设定：暂无数据')
@@ -4714,6 +4745,7 @@ const qualitySection = (
         )
   const extras = [
     pacingRows.length === 0 ? null : sectionBlock('节奏', pacingRows, 'pacing'),
+    styleCard(row.style_metrics, row.style_targets),
     effortBlock,
   ].filter((block): block is ReactElement => block !== null)
   return createElement(
@@ -4734,6 +4766,154 @@ const qualitySection = (
     createElement('div', { className: 'nwe-dim-grid' }, ...bars),
     ...extras,
     qualityDetailPanel(detail, onDetail),
+  )
+}
+
+/**
+ * 0.2.17 style card: the nine measurements next to what the pack asked for.
+ *
+ * A number without its target is not actionable — "抽象情绪 3.2/千字" only means
+ * something when the ceiling is 3. Every row therefore renders `actual / target`
+ * and turns `--nwe-warn` when it is on the wrong side of it.
+ */
+const styleCard = (metrics: unknown, targets: unknown): ReactElement | null => {
+  const row = asRow(metrics)
+  const target = asRow(targets)
+  if (row === null || target === null) return null
+  const sentence = asRow(row.sentence) ?? {}
+  const diction = asRow(row.diction) ?? {}
+  const structure = asRow(row.structure) ?? {}
+  const emotion = asRow(row.emotion) ?? {}
+  const dialogue = asRow(row.dialogue) ?? {}
+  const wanted = asRow(target.sentence) ?? {}
+  const thresholds = asRow(target.thresholds) ?? {}
+  const num = (value: unknown, fallback = 0): number => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+  const pct = (value: number): string => `${(value * 100).toFixed(1)}%`
+  // Per-1000 rates are divisions, so they arrive as e.g. 10.204081632653061.
+  // The rest of the card is one decimal; showing the raw float made one row look
+  // like a different precision from its neighbours.
+  const rate = (value: number): string => value.toFixed(1)
+  const mix: Array<[string, string, number, number]> = [
+    ['短句', 'short', num(sentence.short_ratio), num(wanted.short_ratio)],
+    ['中句', 'medium', num(sentence.medium_ratio), num(wanted.medium_ratio)],
+    ['长句', 'long', num(sentence.long_ratio), num(wanted.long_ratio)],
+  ]
+  const tolerance = num(thresholds.sentence_mix_tolerance, 0.15)
+  const dialogueTolerance = num(thresholds.dialogue_target_tolerance, 0.15)
+  const dialogueTarget = num(target.dialogue)
+  // Same resolution as `dialogueRatioFor` on the rule side: `lines` and `chars`
+  // each pick one reading, `both` takes the worse of the two. Taking the max
+  // unconditionally reported a deviation the rule never judged.
+  const dialogueMetric = textOf(target.dialogue_metric, 'both')
+  const dialogueActual =
+    dialogueMetric === 'lines'
+      ? num(dialogue.line_ratio)
+      : dialogueMetric === 'chars'
+        ? num(dialogue.char_ratio)
+        : Math.max(num(dialogue.line_ratio), num(dialogue.char_ratio))
+  const abstractMax = num(thresholds.abstract_emotion_max, 0)
+  const metaphorMax = num(thresholds.metaphor_per_1000_max, 0)
+  const coolAllowed = Math.round(
+    num(target.cool_point_every_chars) * num(thresholds.cool_point_gap_factor, 1.5),
+  )
+  const rows: Array<{ label: string; value: string; warn: boolean }> = [
+    {
+      label: '对白占比',
+      value: `${pct(dialogueActual)} / 目标 ${pct(dialogueTarget)}`,
+      warn: Math.abs(dialogueActual - dialogueTarget) > dialogueTolerance,
+    },
+    {
+      label: '抽象情绪',
+      value: `${rate(num(diction.abstract_emotion_per_1000))} / 千字（上限 ${abstractMax || '—'}）`,
+      warn: abstractMax > 0 && num(diction.abstract_emotion_per_1000) > abstractMax,
+    },
+    {
+      label: '比喻标记',
+      value: `${rate(num(diction.metaphor_per_1000))} / 千字（上限 ${metaphorMax || '—'}）`,
+      warn: metaphorMax > 0 && num(diction.metaphor_per_1000) > metaphorMax,
+    },
+    {
+      label: '爽点空窗',
+      value: `${num(structure.longest_cool_gap_chars)} 字（允许 ${coolAllowed || '—'}）`,
+      warn: coolAllowed > 0 && num(structure.longest_cool_gap_chars) > coolAllowed,
+    },
+    {
+      label: '情绪线索',
+      value: `${rate(num(emotion.cues_per_1000))} / 千字`,
+      warn: false,
+    },
+    // The ninth reading. `burstiness_min` is a rule the pack actually judges, so
+    // omitting it left the card blind to one of the checks that can drift.
+    {
+      label: '句长变异',
+      value: `${num(sentence.cv).toFixed(2)} / 下限 ${num(thresholds.burstiness_min, 0).toFixed(2)}`,
+      warn: num(thresholds.burstiness_min, 0) > 0 && num(sentence.cv) < num(thresholds.burstiness_min),
+    },
+  ]
+  return createElement(
+    'section',
+    { className: 'nwe-subsection' },
+    createElement(
+      'div',
+      { className: 'nwe-group-head' },
+      createElement(
+        'span',
+        { className: 'nwe-group-icon is-spark', 'aria-hidden': 'true' },
+        sectionGlyph('spark', 16),
+      ),
+      createElement('h3', null, `文风 · ${textOf(target.name, textOf(target.id))}`),
+    ),
+    createElement(
+      'div',
+      { className: 'nwe-dim-grid' },
+      ...mix.map(([label, key, actual, wantedRatio]) =>
+        createElement(
+          'article',
+          { className: 'nwe-dim-card', key },
+          createElement(
+            'div',
+            { className: 'nwe-dim-card-head' },
+            createElement('span', null, label),
+            createElement(
+              'strong',
+              { className: Math.abs(actual - wantedRatio) > tolerance ? 'nwe-style-warn' : undefined },
+              `${pct(actual)} / ${pct(wantedRatio)}`,
+            ),
+          ),
+          createElement(
+            'div',
+            {
+              className: 'nwe-v6-bar',
+              role: 'progressbar',
+              'aria-label': `${label}占比`,
+              'aria-valuemin': 0,
+              'aria-valuemax': 100,
+              'aria-valuenow': Math.round(actual * 100),
+            },
+            createElement(
+              'span',
+              null,
+              createElement('i', { style: { width: `${Math.min(100, actual * 100)}%` } }),
+            ),
+          ),
+        ),
+      ),
+      ...rows.map((entry) =>
+        createElement(
+          'article',
+          { className: 'nwe-dim-card', key: entry.label },
+          createElement(
+            'div',
+            { className: 'nwe-dim-card-head' },
+            createElement('span', null, entry.label),
+            createElement('strong', { className: entry.warn ? 'nwe-style-warn' : undefined }, entry.value),
+          ),
+        ),
+      ),
+    ),
   )
 }
 
@@ -5294,7 +5474,7 @@ const sectionPanel = (
     return withSearch(
       leadsSection(items, section.payload?.counts, sectionCursor, onSectionCursor, section.payload),
     )
-  if (tab === 'worldbook') return withSearch(worldbookSection(items))
+  if (tab === 'worldbook') return withSearch(worldbookSection(items, section.payload?.counts))
   if (tab === 'quality') return qualitySection(items, chapter, qualityDetail, onQualityDetail)
   if (tab === 'health') return healthSection(items)
   return sectionList('数据', Array.isArray(items) ? items : [items])
@@ -5583,6 +5763,10 @@ export function NovelPanel(): ReactElement {
   const controllerRef = useRef<AbortController | null>(null)
   const queryRootRef = useRef<string | null>(selectedRoot)
   const sectionEtagRef = useRef<{ key: string; etag: string } | null>(null)
+  // Which query key the current `section` payload actually belongs to. A
+  // validator can outlive the payload it describes (switching to 概览 clears the
+  // section), so a 304 must only be honoured when we still hold that payload.
+  const sectionLoadedKeyRef = useRef<string | null>(null)
   const bundleEtagRef = useRef<{ root: string; etag: string } | null>(null)
   const lastSilentAt = useRef(0)
   const quietPolls = useRef(0)
@@ -5664,10 +5848,13 @@ export function NovelPanel(): ReactElement {
       }
       setView((previous) => {
         const next = buildView(payload, result.error)
-        // A brief background failure must not wipe a readable panel or the
-        // choose/missing view. Keep the last view whenever its selector still
-        // has projects; a user-visible refresh may still replace it.
-        if (silent && result.error !== null && previous.projects.length > 0) return previous
+        // A failed refresh must not wipe a readable panel or the choose/missing
+        // view. Keep the last project list and selection on the visible path
+        // too, and surface the failure in the footer exactly like the silent
+        // path — otherwise one timeout replaces every tab with an error page.
+        if (result.error !== null && previous.projects.length > 0) {
+          return { ...previous, syncError: result.error }
+        }
         return next
       })
     } finally {
@@ -5684,6 +5871,7 @@ export function NovelPanel(): ReactElement {
   useEffect(() => {
     if (tab === 'overview' || view.state !== 'ready') {
       setSection(null)
+      sectionLoadedKeyRef.current = null
       return
     }
     const root = queryRootRef.current
@@ -5708,8 +5896,17 @@ export function NovelPanel(): ReactElement {
         ? { loading: true, error: null, payload: null }
         : { ...previous, loading: true, error: null },
     )
-    void fetchPanel(fetch, path, controller.signal, cachedEtag).then((result) => {
+    void (async () => {
+      let result = await fetchPanel(fetch, path, controller.signal, cachedEtag)
       if (controller.signal.aborted) return
+      // A validator survives a section reset: 概览 clears the payload but the
+      // etag ref still holds this tab's validator, so coming back would get a
+      // 304 and render 「暂无数据」 over a section that has data. Only honour a
+      // 304 when the payload it describes is still the one on screen.
+      if (result.notModified === true && sectionLoadedKeyRef.current !== queryKey) {
+        result = await fetchPanel(fetch, path, controller.signal, undefined)
+        if (controller.signal.aborted) return
+      }
       if (result.notModified === true) {
         setSection((previous) =>
           previous === null
@@ -5721,8 +5918,9 @@ export function NovelPanel(): ReactElement {
       if (result.payload?.etag !== undefined) {
         sectionEtagRef.current = { key: queryKey, etag: result.payload.etag }
       }
+      sectionLoadedKeyRef.current = queryKey
       setSection({ loading: false, error: result.error, payload: result.payload as PanelPayloadDto | null })
-    })
+    })()
     return () => controller.abort()
   }, [tab, view.state, selectedRoot, chapterQuery, revisionTick, sectionSearch, sectionCursor])
 

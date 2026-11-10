@@ -329,6 +329,12 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       await store.removeTree(backupDir(input.txid)).catch(() => undefined)
     }
     if (!journaledCommitted && !rootDisappeared) {
+      // 0.2.17: when files had already been renamed and the compensation put
+      // them back, the journal may hold a partial `committed` row for this
+      // txid. Recording `aborted` left that row authoritative and every later
+      // write failed TXN_ABORTED forever. `rolled_back` is the terminal row
+      // that says "the files are at the pre-image again".
+      const status = renamed.length > 0 && rollbackProblem === null ? 'rolled_back' : 'aborted'
       await appendJournal(
         store,
         {
@@ -338,7 +344,7 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
           chapter: input.chapter,
           revision: input.revision,
           files: input.files.map((file) => file.path),
-          status: 'aborted',
+          status,
           code: error instanceof EngineError ? error.code : ERROR_CODES.TXN_ABORTED,
           reason: error instanceof Error ? error.message : String(error),
         },

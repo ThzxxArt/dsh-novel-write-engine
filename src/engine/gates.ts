@@ -5,6 +5,7 @@ import { canRun, roundsExhausted } from '../domain/transitions.js'
 import { applyExclusions, reviewArithmeticProblems } from '../domain/scoring.js'
 import { isNarratorAlias } from '../domain/narrator.js'
 import {
+  evidenceOccurrences,
   matchEvidence,
   normalizeEvidenceText,
   openingInFirstTwoParagraphs,
@@ -165,10 +166,11 @@ const wordCount: Gate = (input) => {
     ...(totalShort ? [`counted words ${metrics.total_word_count} < ${min}`] : []),
     ...(cjkShort ? [`CJK chars ${metrics.cjk_chars} < ${minCjk}`] : []),
   ]
+  const indents = metrics.indent_chars ?? 0
   return [
     block(
       'PG-03',
-      `text fails the project length target: ${reasons.join('; ')} (${metrics.cjk_chars} 汉字 + ${metrics.punctuation_chars} 标点 + ${metrics.english_words} 英文词 + ${metrics.numbers} 数字)`,
+      `text fails the project length target: ${reasons.join('; ')} (${metrics.cjk_chars} 汉字 + ${metrics.punctuation_chars} 标点 + ${metrics.english_words} 英文词 + ${metrics.numbers} 数字${indents > 0 ? `；已剔除 ${indents} 个全角缩进字符` : ''})`,
       `the engine counts punctuation as words, while the optional CJK lower bound is checked separately; add ${Math.max(0, min - metrics.total_word_count)} counted words / ${Math.max(0, minCjk - metrics.cjk_chars)} CJK chars, then call novel_word_count to verify`,
     ),
   ]
@@ -681,18 +683,12 @@ function actualParagraph(text: string, reference: ReadingProofReference): number
   if (typeof reference !== 'object' || reference === null || typeof reference.quote !== 'string') return -1
   const quote = reference.quote.trim()
   if (quote === '') return -1
-  const match = matchEvidence(text, quote)
-  if (!match.found || match.paragraph === null) return -1
-  const paragraphs = splitParagraphs(text)
-  const matches: number[] = []
-  for (const [index, paragraph] of paragraphs.entries()) {
-    if (normalizeEvidenceText(paragraph).includes(normalizeEvidenceText(quote))) matches.push(index + 1)
-  }
-  if (matches.length === 0) return match.paragraph
+  const occurrences = evidenceOccurrences(text, quote)
+  if (occurrences.length === 0) return -1
   const target = Number.isInteger(reference.paragraph) && reference.paragraph > 0 ? reference.paragraph : 1
-  return matches.reduce((best, candidate) =>
-    Math.abs(candidate - target) < Math.abs(best - target) ? candidate : best,
-  )
+  return occurrences
+    .map((occurrence) => occurrence.paragraph)
+    .reduce((best, candidate) => (Math.abs(candidate - target) < Math.abs(best - target) ? candidate : best))
 }
 
 /** Verify one reading-proof reference and report the real paragraph on failure. */
@@ -784,23 +780,45 @@ const readingProof: Gate = (input) => {
   const actuals = checks.map((check, index) =>
     check.actual === null ? actualParagraph(input.text, references[index]!) : check.actual,
   )
-  // The submitted paragraph is a locator hint with ±1 tolerance. The boundary
-  // claim itself must use where the quote actually is, or three paragraphs can
-  // be shifted by one to turn a middle quote into an "opening" quote.
-  if (actuals[0]! > 2) problems.push('the opening quote must come from the first two paragraphs')
-  // "Middle" must be an interior paragraph, not merely a third distinct one.
-  // Short chapters need a relaxation: with four paragraphs, 2/3 are both
-  // interior; with five or more, the first two and last two are excluded.
-  const middleMin = paragraphs <= 4 ? 2 : 3
-  const middleMax = paragraphs <= 4 ? Math.max(2, paragraphs - 1) : paragraphs - 2
-  if (actuals[1]! > 0 && (actuals[1]! < middleMin || actuals[1]! > middleMax)) {
-    problems.push('the middle quote must come from the body of the chapter, not its first or last edges')
+  // Three references that quote the same sentence prove one read, not three.
+  const quotes = references.map((reference) =>
+    typeof reference.quote === 'string' ? normalizeEvidenceText(reference.quote) : '',
+  )
+  if (new Set(quotes).size < 3) {
+    problems.push('the three quotes must be different')
   }
-  if (actuals[2]! > 0 && actuals[2]! < Math.max(1, paragraphs - 1)) {
-    problems.push('the ending quote must come from the last two paragraphs')
-  }
-  if (new Set(actuals.filter((index) => index > 0)).size < 3) {
-    problems.push('the three quotes must come from three distinct paragraphs')
+  if (paragraphs <= 2) {
+    // A one- or two-paragraph chapter cannot supply three distinct paragraphs:
+    // the old rule made PG-09 mathematically unsatisfiable there, so every short
+    // chapter was permanently blocked. Degrade to a two-slot citation — the
+    // opening comes from the first paragraph and the ending from the last, while
+    // the middle quote may share a paragraph with either as long as all three
+    // quotes differ.
+    if (actuals[0]! > 0 && actuals[0]! !== 1) {
+      problems.push('the opening quote must come from the first paragraph of a short chapter')
+    }
+    if (actuals[2]! > 0 && actuals[2]! !== paragraphs) {
+      problems.push('the ending quote must come from the last paragraph of a short chapter')
+    }
+  } else {
+    // The submitted paragraph is a locator hint with ±1 tolerance. The boundary
+    // claim itself must use where the quote actually is, or three paragraphs can
+    // be shifted by one to turn a middle quote into an "opening" quote.
+    if (actuals[0]! > 2) problems.push('the opening quote must come from the first two paragraphs')
+    // "Middle" must be an interior paragraph, not merely a third distinct one.
+    // Short chapters need a relaxation: with four paragraphs, 2/3 are both
+    // interior; with five or more, the first two and last two are excluded.
+    const middleMin = paragraphs <= 4 ? 2 : 3
+    const middleMax = paragraphs <= 4 ? Math.max(2, paragraphs - 1) : paragraphs - 2
+    if (actuals[1]! > 0 && (actuals[1]! < middleMin || actuals[1]! > middleMax)) {
+      problems.push('the middle quote must come from the body of the chapter, not its first or last edges')
+    }
+    if (actuals[2]! > 0 && actuals[2]! < Math.max(1, paragraphs - 1)) {
+      problems.push('the ending quote must come from the last two paragraphs')
+    }
+    if (new Set(actuals.filter((index) => index > 0)).size < 3) {
+      problems.push('the three quotes must come from three distinct paragraphs')
+    }
   }
   return problems.length === 0
     ? []
@@ -808,10 +826,13 @@ const readingProof: Gate = (input) => {
         block(
           'PG-09',
           problems.join('; '),
-          'quote at least 8 Chinese characters (12 characters overall) from the real paragraph you read; paragraphs are separated by blank lines and exclude the title',
+          'quote at least 8 Chinese characters (12 characters overall) from the real paragraph you read; paragraphs are separated by blank lines and exclude the title. A one- or two-paragraph chapter uses the short-chapter rule: first paragraph for the opening, last for the ending, three different quotes',
           undefined,
           {
-            expected: 'three quotes from the first two / body / last two paragraphs',
+            expected:
+              paragraphs <= 2
+                ? 'three different quotes; opening from the first paragraph, ending from the last'
+                : 'three quotes from the first two / body / last two paragraphs',
             received: checks.map((check, index) => ({
               slot: ['opening', 'middle', 'ending'][index],
               submitted_paragraph: check.paragraph,

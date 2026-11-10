@@ -522,7 +522,7 @@ describe('panel view model', () => {
       expect(container.textContent).toContain('/novel unbind')
       expect(container.textContent).toContain('scan --register')
       expect(container.textContent).toContain('全部命令：入口、子命令与组合')
-      expect(container.textContent).toContain('25 种带名写法')
+      expect(container.textContent).toContain('27 种带名写法')
       expect(container.textContent).toContain('25 个 admin 操作')
       for (const command of COMMAND_ENTRY) {
         expect(container.textContent, command.form).toContain(command.form)
@@ -679,6 +679,29 @@ describe('panel view model', () => {
     const noScores = payload()
     noScores.chapters.rows = noScores.chapters.rows.map((row) => ({ ...row, status: 'draft' }))
     expect(buildView(noScores).stats.averageScore).toBe(0)
+  })
+
+  it('hides the engine position when the book defines no volumes', () => {
+    // The handoff scaffold fills `第一卷 · 第一幕 1/5` even for a book whose
+    // outline has zero volumes. Echoing that claimed a division the same screen
+    // reported as "卷 0 · 这本书还没有蓝图".
+    const scaffolded = payload()
+    scaffolded.summary.volume = 1
+    scaffolded.summary.volume_name = '第一卷'
+    scaffolded.summary.act = '第一幕'
+    scaffolded.summary.act_progress = '2/5'
+    scaffolded.summary.book!.outline.volumes = []
+    const subtitle = buildView(scaffolded).subtitle
+    expect(subtitle).not.toContain('第一卷')
+    expect(subtitle).not.toContain('第一幕')
+    expect(subtitle).toContain('第 2 章')
+
+    // A book without a blueprint at all is the same case.
+    const noBook = payload()
+    noBook.summary.volume = 1
+    noBook.summary.volume_name = '第一卷'
+    noBook.summary.book = undefined
+    expect(buildView(noBook).subtitle).not.toContain('第一卷')
   })
 
   it('renders loading, error, outdated and empty states', () => {
@@ -2024,6 +2047,46 @@ describe('client registration and rendering', () => {
     expect(markup).not.toContain('>partial<')
   })
 
+  it('counts the chapter tab badge from the rows it lists, not the archived total', () => {
+    // The chip read `stats.chapters` (archived = 1) while the table header under
+    // it said "共 2 章", so one screen showed two different chapter counts.
+    const base = payload()
+    // archived count is 1; the table lists two rows (one archived, one draft).
+    base.summary.totalChapters = 1
+    const section = {
+      loading: false,
+      error: null,
+      payload: {
+        ...base,
+        payload_version: 7,
+        section: 'chapters' as const,
+        total: 2,
+        returned: 2,
+        truncated: false,
+        items: [
+          { num: 1, title: '开端之雨', status: 'archived', word_count: 2000, score: 145 },
+          { num: 2, title: '第二封信', status: 'draft', word_count: 1200 },
+        ],
+      },
+    }
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(base),
+        false,
+        () => undefined,
+        () => undefined,
+        'chapters',
+        () => undefined,
+        section as never,
+      ),
+    )
+    // Assert the chip element itself: `toContain('2 章')` also matches the
+    // section header "共 2 章" and would pass on the old code.
+    const chip = /nwe-tab-intro-count[^>]*>([^<]+)</.exec(markup)
+    expect(chip?.[1]).toBe('2 章')
+    expect(markup).toContain('共 2 章')
+  })
+
   it('renders a filterable chapter table with pagination metadata', () => {
     const base = payload()
     const markup = renderToStaticMarkup(
@@ -3069,5 +3132,369 @@ describe('client registration and rendering', () => {
     expect(pages.quality).toContain('nwe-effort-grid')
     expect(pages.chapters).toContain('nwe-chapter-cards-mobile')
     expect(pages.health).toContain('nwe-health-grid')
+  })
+
+  it('reports how much of each worldbook group is shown (P1-17)', () => {
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'worldbook',
+        () => undefined,
+        {
+          loading: false,
+          error: null,
+          payload: {
+            ...payload(),
+            payload_version: 7,
+            section: 'worldbook',
+            items: {
+              locations: [{ name: '旧港' }],
+              ledger: { locations: [{ name: '码头' }] },
+            },
+            counts: {
+              locations: { shown: 50, total: 120 },
+              ledger_locations: { shown: 20, total: 20 },
+            },
+            total: 70,
+            returned: 70,
+            truncated: true,
+            etag: 'W/"worldbook"',
+          },
+        },
+      ),
+    )
+    // A preview that hit the cap must not read as the whole ledger.
+    expect(markup).toContain('地点（50 / 共 120）')
+    expect(markup).toContain('台账地点（20）')
+  })
+
+  it('keeps a section readable after leaving and returning to it (P1-16)', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    const sectionPayload = {
+      ...payload(),
+      payload_version: 7,
+      section: 'characters',
+      items: [{ name: '角色甲', role: 'protagonist' }],
+      total: 1,
+      returned: 1,
+      truncated: false,
+      etag: 'W/"characters"',
+    }
+    const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+      if (
+        String(input).includes('section=characters') &&
+        init?.headers &&
+        new Headers(init.headers).get('if-none-match')
+      ) {
+        return { ok: false, status: 304, json: async () => ({}) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (String(input).includes('section=characters') ? sectionPayload : payload()),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const tabNamed = (label: string): HTMLButtonElement =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (button) => button.textContent === label,
+      )!
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      await act(async () => {
+        tabNamed('人物').click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('角色甲')
+      // 概览 clears the section payload while the validator for 人物 survives.
+      await act(async () => {
+        tabNamed('概览').click()
+        await Promise.resolve()
+      })
+      await act(async () => {
+        tabNamed('人物').click()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      // A 304 with no cached payload must not render an empty section.
+      expect(container.textContent).toContain('角色甲')
+      expect(container.textContent).not.toContain('人物：暂无数据')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+
+  it('keeps the project selector when a visible refresh fails (P1-18)', async () => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.append(container)
+    let fail = false
+    const fetchMock = vi.fn(async () => {
+      if (fail) return { ok: false, status: 500, json: async () => ({ error: '宿主暂时不可用' }) }
+      return { ok: true, status: 200, json: async () => payload() }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(createElement(NovelPanel))
+      })
+      expect(container.textContent).toContain('测试之书')
+      fail = true
+      const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="刷新项目状态"]')!
+      await act(async () => {
+        refresh.click()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      // One failed refresh must not replace every tab with an error page.
+      expect(container.textContent).toContain('测试之书')
+      expect(container.textContent).toContain('宿主暂时不可用')
+      expect(container.querySelector('select')).not.toBeNull()
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      vi.unstubAllGlobals()
+      container.remove()
+    }
+  })
+})
+
+describe('0.2.17 panel style card', () => {
+  const styleSection = (metrics: unknown, targets: unknown): PanelSectionState => ({
+    loading: false,
+    error: null,
+    payload: {
+      ...payload(),
+      payload_version: 7,
+      section: 'quality',
+      items: {
+        quality: { average: 140, median: 140, min: 140, max: 140, samples: 1, attempts: 1, dimensions: [] },
+        dimensions: [],
+        pacing: null,
+        effort: null,
+        style_metrics: metrics,
+        style_targets: targets,
+      },
+      total: 1,
+      returned: 1,
+      truncated: false,
+      etag: 'W/"quality"',
+    },
+  })
+
+  const metrics = {
+    version: 1,
+    style_id: 'cold-suspense',
+    sentence: { short_ratio: 0.5, medium_ratio: 0.3, long_ratio: 0.2, total: 10 },
+    paragraph: { count: 2, max_chars: 100, max_sentences: 4, mean_sentences: 2 },
+    dialogue: { line_ratio: 0.4, char_ratio: 0.3 },
+    diction: { abstract_emotion_per_1000: 9, metaphor_per_1000: 1 },
+    structure: { longest_cool_gap_chars: 100 },
+    emotion: { cues_per_1000: 3 },
+  }
+
+  const targets = {
+    id: 'cold-suspense',
+    name: '冷峻悬疑',
+    sentence: { short_ratio: 0.3, medium_ratio: 0.45, long_ratio: 0.25 },
+    dialogue: 0.25,
+    thresholds: { sentence_mix_tolerance: 0.15, dialogue_target_tolerance: 0.15, abstract_emotion_max: 3 },
+    cool_point_every_chars: 1000,
+  }
+
+  it('renders the nine measurements with their targets', () => {
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(metrics, targets),
+      ),
+    )
+    expect(markup).toContain('文风 · 冷峻悬疑')
+    for (const label of [
+      '短句',
+      '中句',
+      '长句',
+      '对白占比',
+      '抽象情绪',
+      '比喻标记',
+      '爽点空窗',
+      '情绪线索',
+      '句长变异',
+    ]) {
+      expect(markup).toContain(label)
+    }
+    // The measurement and the target are shown together; a number alone is not
+    // actionable.
+    expect(markup).toContain('30.0%')
+    expect(markup).toContain('目标 25.0%')
+  })
+
+  it('shows the burstiness low bound the rule judges', () => {
+    const pack = { ...targets, thresholds: { ...targets.thresholds, burstiness_min: 0.35 } }
+    const flattish = { ...metrics, sentence: { ...metrics.sentence, cv: 0.12 } }
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(flattish, pack),
+      ),
+    )
+    expect(markup).toContain('句长变异')
+    expect(markup).toContain('0.12 / 下限 0.35')
+    expect(markup).toContain('nwe-style-warn')
+  })
+
+  it('rounds per-1000 rates so one row does not show raw float precision', () => {
+    // 1 / 98 chars * 1000 = 10.204081632653061; the card next to it shows 12.5%.
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(
+          {
+            ...metrics,
+            emotion: { cues_per_1000: 10.204081632653061 },
+            diction: { abstract_emotion_per_1000: 3.4482758620689653, metaphor_per_1000: 0 },
+          },
+          targets,
+        ),
+      ),
+    )
+    expect(markup).toContain('10.2 / 千字')
+    expect(markup).toContain('3.4 / 千字')
+    expect(markup).not.toContain('10.204')
+    expect(markup).not.toContain('3.448')
+  })
+
+  it('marks a deviation with the warn class', () => {
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(metrics, targets),
+      ),
+    )
+    // short 0.50 vs target 0.30 (drift 0.20 > 0.15) and 抽象情绪 9 > 3.
+    expect(markup).toContain('nwe-style-warn')
+  })
+
+  it('judges the configured dialogue metric, not always the worse reading', () => {
+    const render = (metric: string): string =>
+      renderToStaticMarkup(
+        panelElement(
+          buildView(payload()),
+          false,
+          () => undefined,
+          () => undefined,
+          'quality',
+          () => undefined,
+          styleSection(
+            { ...metrics, dialogue: { line_ratio: 0.4, char_ratio: 0.25 } },
+            {
+              ...targets,
+              dialogue_metric: metric,
+            },
+          ),
+        ),
+      )
+    // Target 0.25, tolerance 0.15. `lines` reads 0.40 (drift 0.15, at the edge),
+    // `chars` reads 0.25 (no drift). The card must follow the configured metric
+    // instead of always taking max(0.40, 0.25).
+    const lines = render('lines')
+    const chars = render('chars')
+    const count = (markup: string): number => (markup.match(/nwe-style-warn/g) ?? []).length
+    expect(count(chars)).toBeLessThan(count(lines))
+  })
+
+  it('renders nothing when the book has no style', () => {
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(null, null),
+      ),
+    )
+    expect(markup).not.toContain('文风 ·')
+  })
+})
+
+describe('panel style verdict row', () => {
+  const withVerdict = (verdict: 'pass' | 'attention' | 'no-draft', findings: string[] = []): string => {
+    const base = payload()
+    const book = panelBookData()
+    const p = {
+      ...base,
+      summary: {
+        ...base.summary,
+        bookData: {
+          ...book,
+          identity: { ...book.identity, style: { id: 'cold-suspense', name: '冷峻悬疑' } },
+          style_verdict: { verdict, findings },
+        },
+      },
+    }
+    return renderToStaticMarkup(
+      panelElement(
+        buildView(p),
+        false,
+        () => undefined,
+        () => undefined,
+        'overview',
+      ),
+    )
+  }
+
+  it('says the chapter fits when the verdict passes', () => {
+    expect(withVerdict('pass')).toContain('本章贴合')
+  })
+
+  it('counts the deviations instead of saying "fits"', () => {
+    const markup = withVerdict('attention', ['句长分布偏离', '抽象情绪超限'])
+    expect(markup).toContain('本章 2 项偏离')
+    expect(markup).not.toContain('本章贴合')
+  })
+
+  it('never claims a fit for a chapter with no manuscript', () => {
+    const markup = withVerdict('no-draft')
+    expect(markup).toContain('尚无正文')
+    expect(markup).not.toContain('本章贴合')
   })
 })

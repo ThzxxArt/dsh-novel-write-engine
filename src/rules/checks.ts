@@ -3,8 +3,10 @@ import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../doma
 import { textSimilarity } from '../domain/simhash.js'
 import { resolveLockBaseline } from '../engine/entity-anchors.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
+import { STYLE_RULE_IMPLEMENTATIONS } from './style-checks.js'
+import { AI_TONE_IMPLEMENTATIONS } from './ai-tone.js'
 import type { Severity, Violation } from '../types.js'
-import type { Rule, RuleContext } from './types.js'
+import type { Rule, RuleContext, TermEntry } from './types.js'
 
 const v = (code: string, severity: Severity, paragraph: number, detail: string): Violation => ({
   code,
@@ -34,6 +36,36 @@ const countOccurrences = (text: string, needle: string): number => {
 }
 
 const countHits = (text: string, term: string): number => countOccurrences(text, term)
+
+/** A character that ends a word: whitespace or any Unicode punctuation. */
+const WORD_BOUNDARY = /[\s\p{P}]/u
+
+/** Occurrences of a term that satisfy the entry's declared match mode. */
+const termHits = (text: string, entry: TermEntry): number => {
+  const term = entry.term
+  if (term === '') return 0
+  const mode = entry.match ?? 'substring'
+  if (mode === 'line_start') {
+    return splitParagraphs(text).filter((paragraph) => paragraph.startsWith(term)).length
+  }
+  if (mode === 'standalone') {
+    let count = 0
+    let at = text.indexOf(term)
+    while (at !== -1) {
+      const before = at === 0 ? undefined : text[at - 1]
+      const after = text[at + term.length]
+      if (
+        (before === undefined || WORD_BOUNDARY.test(before)) &&
+        (after === undefined || WORD_BOUNDARY.test(after))
+      ) {
+        count += 1
+      }
+      at = text.indexOf(term, at + term.length)
+    }
+    return count
+  }
+  return countOccurrences(text, term)
+}
 
 /**
  * A format blocker must quote what it found. "contains a full-width semicolon"
@@ -219,10 +251,13 @@ const zeroTolerance: Rule = (ctx) =>
             .map((paragraph, index) => ({ paragraph, index }))
             .filter(({ paragraph }) => dialogueCharacterRatio(paragraph) < dominant)
         : paragraphs.map((paragraph, index) => ({ paragraph, index }))
-    const source = eligible.map(({ paragraph }) => paragraph).join('\n\n')
-    const hits = countHits(source, entry.term)
-    if (hits === 0) return []
-    const paragraph = (eligible.find(({ paragraph }) => paragraph.includes(entry.term))?.index ?? 0) + 1
+    // C8: an AI-tone entry is the more specific owner of the same span and
+    // carries a replacement, so those occurrences step aside. Only the covered
+    // ones — a second, plain occurrence still blocks.
+    const covered = ctx.toneCoveredTerms?.get(entry.term) ?? 0
+    const hits = eligible.reduce((total, { paragraph }) => total + termHits(paragraph, entry), 0) - covered
+    if (hits <= 0) return []
+    const paragraph = (eligible.find(({ paragraph }) => termHits(paragraph, entry) > 0)?.index ?? 0) + 1
     return [
       v(
         LEXICON_RULES.ZERO_TOLERANCE,
@@ -253,13 +288,13 @@ const softLimit: Rule = (ctx) =>
 
 const metaNarration: Rule = (ctx) =>
   ctx.rulepack.lexicon.meta_narration.flatMap((entry) => {
-    const hits = countHits(ctx.text, entry.term)
+    const hits = termHits(ctx.text, entry)
     if (hits === 0) return []
     return [
       v(
         LEXICON_RULES.META_NARRATION,
         'blocker',
-        firstParagraphContaining(ctx.text, entry.term),
+        firstParagraphFor(ctx.text, entry),
         `"${entry.term}" is meta narration`,
       ),
     ]
@@ -1595,23 +1630,64 @@ const worstMention = (
     null,
   )
 
-const lockedDetailDrift: Rule = (ctx) => {
-  const names = new Set<string>([
-    ...Object.keys(ctx.evidence.locks?.locations ?? {}),
-    ...Object.keys(ctx.evidence.locks?.characters ?? {}),
-    ...(ctx.evidence.world?.locations ?? []).map((entry) => entry.name),
-    ...(ctx.evidence.worldbook?.characters ?? []).map((entry) => entry.name),
-    ...(ctx.evidence.worldbook?.locations ?? []).map((entry) => entry.name),
-  ])
+/** Names that carry a lock, grouped by kind; merging them re-checked characters as locations. */
+const lockEntities = (ctx: RuleContext): Array<{ kind: 'character' | 'location'; names: string[] }> => [
+  {
+    kind: 'location',
+    names: [
+      ...new Set([
+        ...Object.keys(ctx.evidence.locks?.locations ?? {}),
+        ...(ctx.evidence.world?.locations ?? []).map((entry) => entry.name),
+        ...(ctx.evidence.worldbook?.locations ?? []).map((entry) => entry.name),
+      ]),
+    ],
+  },
+  {
+    kind: 'character',
+    names: [
+      ...new Set([
+        ...Object.keys(ctx.evidence.locks?.characters ?? {}),
+        ...(ctx.evidence.worldbook?.characters ?? []).map((entry) => entry.name),
+      ]),
+    ],
+  },
+]
+
+/** A rule that cannot run must say so; silence reads as "no drift". */
+const lockBaselineMissing: Rule = (ctx) => {
   const results: Violation[] = []
-  for (const name of names) {
-    if (!ctx.text.includes(name)) continue
-    for (const kind of ['location', 'character'] as const) {
-      const baseline = resolveLockBaseline(name, kind, {
+  for (const { kind, names } of lockEntities(ctx)) {
+    for (const name of names) {
+      if (!ctx.text.includes(name)) continue
+      const resolved = resolveLockBaseline(name, kind, {
         worldbook: ctx.evidence.worldbook ?? null,
         world: ctx.evidence.world,
         locks: ctx.evidence.locks,
       })
+      if (resolved.baseline !== null) continue
+      results.push(
+        v(
+          CROSS_RULES.LOCK_BASELINE_MISSING,
+          'advisory',
+          firstParagraphContaining(ctx.text, name),
+          `${name} (${kind}) has no canonical description (${resolved.gap}), so the lock drift check cannot run for it; add an appearance/description to the worldbook or a lock anchor`,
+        ),
+      )
+    }
+  }
+  return results
+}
+
+const lockedDetailDrift: Rule = (ctx) => {
+  const results: Violation[] = []
+  for (const { kind, names } of lockEntities(ctx)) {
+    for (const name of names) {
+      if (!ctx.text.includes(name)) continue
+      const baseline = resolveLockBaseline(name, kind, {
+        worldbook: ctx.evidence.worldbook ?? null,
+        world: ctx.evidence.world,
+        locks: ctx.evidence.locks,
+      }).baseline
       if (baseline === null) continue
       // The worst described paragraph is the drift; picking the best-fitting
       // one let a compliant opening hide a contradictory later paragraph (X11).
@@ -1665,6 +1741,13 @@ function firstParagraphContaining(text: string, needle: string): number {
   return Math.max(1, index + 1)
 }
 
+/** First paragraph that holds an occurrence satisfying the entry's match mode. */
+function firstParagraphFor(text: string, entry: TermEntry): number {
+  const paragraphs = splitParagraphs(text)
+  const index = paragraphs.findIndex((paragraph) => termHits(paragraph, entry) > 0)
+  return Math.max(1, index + 1)
+}
+
 function paragraphOfIndex(text: string, index: number): number {
   const prefix = text.slice(0, Math.max(0, index))
   const completed = splitParagraphs(prefix).length
@@ -1714,4 +1797,10 @@ export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
   [CROSS_RULES.TIME_REGRESSION]: timeRegression,
   [CROSS_RULES.RELATION_UNKNOWN]: relationUnknown,
   [CROSS_RULES.LOCKED_DETAIL_DRIFT]: lockedDetailDrift,
+  [CROSS_RULES.LOCK_BASELINE_MISSING]: lockBaselineMissing,
+  // 0.2.17 style family. They are always registered and each returns [] when the
+  // project has no style, so one registry still owns every code.
+  ...STYLE_RULE_IMPLEMENTATIONS,
+  // 0.2.17 AI-tone family: seven codes, one shared evaluation.
+  ...AI_TONE_IMPLEMENTATIONS,
 }

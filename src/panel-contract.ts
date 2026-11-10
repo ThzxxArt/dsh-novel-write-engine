@@ -24,6 +24,8 @@ export interface PanelBookData {
     author: string
     description: string
     created_at: string
+    /** 0.2.17: the bound style pack, or null when the book has none. */
+    style?: { id: string; name: string } | null
     targets: {
       words_per_chapter: [number, number]
       total_chapters: number | null
@@ -89,6 +91,28 @@ export interface PanelBookData {
   }
   pacing: BookReport['pacing']
   effort: BookReport['effort']
+  /** 0.2.17: this chapter's nine style measurements; absent without a pack. */
+  style_metrics?: import('./domain/style.js').StyleMetrics | null
+  /**
+   * 0.2.17: the pack's targets travel with the measurements. The panel cannot
+   * colour a deviation without knowing what the pack asked for, and it must
+   * judge the same dialogue reading the rule judged (`dialogue_metric`).
+   */
+  style_targets?: {
+    id: string
+    name: string
+    sentence: { short_ratio: number; medium_ratio: number; long_ratio: number }
+    dialogue: number
+    dialogue_metric: 'lines' | 'chars' | 'both'
+    thresholds: Record<string, number>
+    /** The cool-point budget the gap is judged against. */
+    cool_point_every_chars: number
+  } | null
+  /**
+   * 0.2.17: whether the active chapter still reads like the book. Present only
+   * when a pack is bound, so an old project's payload keeps the 0.2.16 shape.
+   */
+  style_verdict?: { verdict: 'pass' | 'attention' | 'no-draft'; findings: string[] } | null
   health: {
     state_errors: Array<{ path: string; code: string; message: string }>
     outline: { present: boolean; error: string | null }

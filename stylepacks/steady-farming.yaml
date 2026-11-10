@@ -1,0 +1,102 @@
+schema_version: 1
+id: steady-farming
+name: 稳健种田
+description: 具体生活细节，资源逐项积累，低冲突但有明确目标。
+audience: general
+genres: [historical, urban, daily]
+pov: third-limited
+tense: past
+register: neutral
+narrative_distance: medium
+
+sentence:
+  short_ratio: 0.3
+  medium_ratio: 0.5
+  long_ratio: 0.2
+  burstiness: high
+  max_consecutive_same_length: 4
+
+paragraph:
+  max_chars: 120
+  one_action_per_paragraph: true
+  max_sentences: 4
+  max_actions: 3
+
+dialogue:
+  ratio: 0.25
+  tag_style: sparse
+  allow_interruptions: false
+  allow_fragments: false
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: low
+  idiom: medium
+  sensory_channels: [taste, smell, touch, sound]
+
+structure:
+  opening_moves: [routine, small_anomaly, object]
+  scene_transition: time_skip
+  hook_moves: [new_resource, small_crisis, relationship]
+  cool_point_every_chars: 1200
+
+emotion:
+  intensity: low
+  expression: concrete
+  required_beats: [body_reaction, relationship_stake, cost]
+  min_cues_per_1000: 1.5
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 金手指
+  - 系统提示
+  - 恭喜宿主
+  - 秒杀
+  - 碾压
+  - 一夜暴富
+
+exemplars:
+  - |
+    “第一锅酱熬坏了。”
+    “倒了吧。”老周说。
+    “别倒。”小赵拿勺子舀了一点，“还能救。”
+    “怎么救？”
+    “加糖，再熬半刻钟。”
+    “要是不行呢？”
+    “那就当甜面酱卖，反正都是黑的。”
+  - |
+    “账上还剩三两七钱。”老周把木板递过去。
+    “米价涨了两文。”小赵说。
+    “炭呢？”
+    “没动。”
+    “先不买炭。”
+    “那冬天怎么过？”
+    “把西屋的窗补上，柴火省一半。”
+    “补窗也要钱。”
+    “所以先买纸，不买炭。”
+
+critic_rubric:
+  - 细节：写清楚东西多少钱、怎么做、要花多久。
+  - 积累：每章至少完成一件可复用的生产资料。
+  - 目标：低冲突不等于没有目标，章末要看到下一步。
+  - 成本：收益必须对应时间、体力或人情成本。
+  - 生活感：让食物、天气、账本和邻里关系参与叙事。
+  - 情绪：日常要有满足、疲惫、心疼和盼头，不能只报账。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 2
+  metaphor_per_1000_max: 3

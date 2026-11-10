@@ -1,0 +1,16 @@
+# 0.2.17 bundled style packs.
+#
+# The order here is the order `/novel style list` prints, so it is grouped by
+# reader expectation rather than alphabetically. Adding a pack means adding the
+# YAML file *and* this line: the loader reads only what this index names, so a
+# stray file in the directory can never become a silently available option.
+schema_version: 1
+packs:
+  - cold-suspense
+  - hot-blooded-fast
+  - ensemble-power
+  - infinite-flow
+  - light-daily
+  - romance-push-pull
+  - steady-farming
+  - weird-horror

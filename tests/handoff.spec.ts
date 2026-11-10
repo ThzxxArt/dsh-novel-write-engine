@@ -24,11 +24,15 @@ describe('0.1.3 handoff progression', () => {
       act: '第一幕',
       act_progress: '1/5',
     })
-    expect(advanceHandoff(handoff({ act_progress: '5/5' }), 6)).toMatchObject({
+    // 0.2.17: the stored chapter is the starting point, so a jump advances one
+    // beat per skipped chapter instead of a single step.
+    expect(advanceHandoff(handoff({ current_chapter: 5, act_progress: '5/5' }), 6)).toMatchObject({
       act: '第二幕',
       act_progress: '1/5',
     })
-    expect(advanceHandoff(handoff({ act: '第四幕', act_progress: '5/5' }), 21)).toMatchObject({
+    expect(
+      advanceHandoff(handoff({ current_chapter: 20, act: '第四幕', act_progress: '5/5' }), 21),
+    ).toMatchObject({
       volume: 1,
       act: '第五幕',
       act_progress: '1/5',
@@ -108,20 +112,28 @@ describe('0.1.3 handoff progression', () => {
 
   it('applies act-only, progress-only and invalid-progress overrides', () => {
     expect(
-      advanceHandoff(handoff({ act: '第一幕', act_progress: '2/5' }), 3, { act: '第二幕' }),
+      advanceHandoff(handoff({ current_chapter: 2, act: '第一幕', act_progress: '2/5' }), 3, {
+        act: '第二幕',
+      }),
     ).toMatchObject({ act: '第二幕', act_progress: '1/5' })
     expect(
-      advanceHandoff(handoff({ act: '第一幕', act_progress: '2/5' }), 3, { act_progress: '4/5' }),
+      advanceHandoff(handoff({ current_chapter: 2, act: '第一幕', act_progress: '2/5' }), 3, {
+        act_progress: '4/5',
+      }),
     ).toMatchObject({ act: '第一幕', act_progress: '4/5' })
-    expect(advanceHandoff(handoff({ act_progress: 'bad' }), 2)).toMatchObject({
+    expect(advanceHandoff(handoff({ current_chapter: 1, act_progress: 'bad' }), 2)).toMatchObject({
       act: '第一幕',
       act_progress: '1/5',
     })
-    expect(advanceHandoff(handoff({ act: '序章', act_progress: '5/5' }), 2)).toMatchObject({
+    expect(
+      advanceHandoff(handoff({ current_chapter: 1, act: '序章', act_progress: '5/5' }), 2),
+    ).toMatchObject({
       act: '序章',
       act_progress: '1/5',
     })
-    expect(advanceHandoff(handoff({ act: '第十幕', act_progress: '5/5' }), 2)).toMatchObject({
+    expect(
+      advanceHandoff(handoff({ current_chapter: 1, act: '第十幕', act_progress: '5/5' }), 2),
+    ).toMatchObject({
       act: '第十一幕',
     })
     expect(advanceHandoff(handoff({ volume: 0 as never, volume_name: ' ' }), 2)).toMatchObject({

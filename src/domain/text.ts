@@ -1,9 +1,45 @@
 /** Paragraph splitting is the unit of every location the engine reports. */
 export function splitParagraphs(text: string): string[] {
-  return text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
+  return paragraphSpans(text).map((span) => span.text)
+}
+
+/** One paragraph with its exact source offsets; `start`/`end` exclude the blank margin. */
+export interface ParagraphSpan {
+  start: number
+  end: number
+  text: string
+}
+
+const isSpace = (char: string): boolean => char === '\u3000' || /\s/u.test(char)
+
+/**
+ * Offset-preserving paragraph view. `splitParagraphs` is the string-only
+ * convenience view of it; evidence matching needs the offsets to map a hit
+ * back to a paragraph without re-scanning the manuscript.
+ */
+export function paragraphSpans(text: string): ParagraphSpan[] {
+  const spans: ParagraphSpan[] = []
+  let lineStart = 0
+  while (lineStart <= text.length) {
+    const newline = text.indexOf('\n', lineStart)
+    const lineEnd = newline === -1 ? text.length : newline
+    let start = lineStart
+    let end = lineEnd
+    while (start < end && isSpace(text[start]!)) start += 1
+    while (end > start && isSpace(text[end - 1]!)) end -= 1
+    if (end > start) spans.push({ start, end, text: text.slice(start, end) })
+    if (newline === -1) break
+    lineStart = newline + 1
+  }
+  return spans
+}
+
+/** 1-based paragraph containing `offset`; the last paragraph when past the end. */
+export function paragraphAtOffset(spans: readonly ParagraphSpan[], offset: number): number {
+  for (const [index, span] of spans.entries()) {
+    if (offset < span.end) return index + 1
+  }
+  return Math.max(1, spans.length)
 }
 
 /** One sentence occurrence with exact source offsets and 1-based paragraph. */
@@ -150,14 +186,89 @@ export function normalizeEvidenceText(text: string): string {
   return normalizeQuoteStyle(text).replace(/\s+/g, '')
 }
 
+/** One character-level fold shared by the plain and the offset-preserving normalizer. */
+const QUOTE_FOLD: Readonly<Record<string, string>> = {
+  '“': '"',
+  '”': '"',
+  '«': '"',
+  '»': '"',
+  '「': '"',
+  '」': '"',
+  '『': '"',
+  '』': '"',
+  '‘': "'",
+  '’': "'",
+  '−': '-',
+  '–': '-',
+  '—': '-',
+}
+
+/**
+ * The normalized string plus, for every normalized character, the offset of
+ * the source character that produced it. Evidence matching needs both: the
+ * comparison runs on the folded text, while every reported location, sentence
+ * id and interval must be expressed in manuscript offsets.
+ */
+interface NormalizedText {
+  value: string
+  offsets: number[]
+}
+
+function normalizeWithOffsets(text: string): NormalizedText {
+  const value: string[] = []
+  const offsets: number[] = []
+  const push = (char: string, at: number): void => {
+    value.push(char)
+    offsets.push(at)
+  }
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]!
+    if (char === '…') {
+      let end = index
+      while (end < text.length && text[end] === '…') end += 1
+      push('…', index)
+      index = end - index >= 2 ? end : index + 1
+      continue
+    }
+    if (char === '.') {
+      let end = index
+      while (end < text.length && text[end] === '.') end += 1
+      if (end - index >= 3) {
+        push('…', index)
+        index = end
+        continue
+      }
+      push('.', index)
+      index += 1
+      continue
+    }
+    const folded = QUOTE_FOLD[char] ?? char
+    if (!isSpace(folded)) push(folded, index)
+    index += 1
+  }
+  return { value: value.join(''), offsets }
+}
+
 /** How a quote was located: exact text, normalized text, or across a line break. */
 export type EvidenceMatchVia = 'exact' | 'normalized' | 'crossline'
+
+/** One located occurrence in manuscript offsets. */
+export interface EvidenceOccurrence {
+  start: number
+  end: number
+  /** 1-based paragraph the occurrence starts in. */
+  paragraph: number
+  via: EvidenceMatchVia
+}
 
 export interface EvidenceMatch {
   found: boolean
   /** 1-based paragraph the quote starts in. */
   paragraph: number | null
   via: EvidenceMatchVia | null
+  /** Paragraph range the occurrence covers; only a crossline hit spans two. */
+  span?: { from: number; to: number }
   /** Closest paragraph when the quote was not found. */
   nearest?: { paragraph: number; text: string; offset: number; similarity: number }
 }
@@ -185,50 +296,100 @@ function commonSubstringLength(left: string, right: string): number {
 }
 
 /**
- * One matcher shared by PG-08 evidence, PG-09 reading proof and delta anchors.
- * A quote copied from the manuscript must not be rejected because the model
- * typed a curly quote or split it across a line.
+ * Every place a quote occurs, in manuscript offsets.
+ *
+ * Three passes, in decreasing strictness: the raw text, the quote/whitespace
+ * normalized text, then **adjacent paragraph pairs only**. The old
+ * implementation joined every paragraph into one string, so a quote could be
+ * stitched together from any two paragraphs of the chapter and still be
+ * "verbatim"; limiting the join to a real neighbour pair keeps the legitimate
+ * case (dialogue split by an action beat) without inventing text.
+ */
+export function evidenceOccurrences(text: string, quote: string): EvidenceOccurrence[] {
+  const needle = quote.trim()
+  if (needle === '') return []
+  const spans = paragraphSpans(text)
+  const push = (results: EvidenceOccurrence[], start: number, end: number, via: EvidenceMatchVia): void => {
+    results.push({ start, end, paragraph: paragraphAtOffset(spans, start), via })
+  }
+  const exact: EvidenceOccurrence[] = []
+  let at = text.indexOf(needle)
+  while (at !== -1) {
+    push(exact, at, at + needle.length, 'exact')
+    at = text.indexOf(needle, at + 1)
+  }
+  if (exact.length > 0) return exact
+
+  // `needle` is already trimmed and non-empty; folding quotes and stripping
+  // spaces cannot empty it, so there is no second emptiness check here.
+  const normalizedNeedle = normalizeEvidenceText(needle)
+
+  // The normalized pass is per paragraph. Running it over the concatenated
+  // chapter would delete every paragraph break and re-create the very splice
+  // this function exists to forbid.
+  const normalized: EvidenceOccurrence[] = []
+  for (const span of spans) {
+    const normalizedParagraph = normalizeWithOffsets(span.text)
+    let hit = normalizedParagraph.value.indexOf(normalizedNeedle)
+    while (hit !== -1) {
+      push(
+        normalized,
+        span.start + normalizedParagraph.offsets[hit]!,
+        span.start + normalizedParagraph.offsets[hit + normalizedNeedle.length - 1]! + 1,
+        'normalized',
+      )
+      hit = normalizedParagraph.value.indexOf(normalizedNeedle, hit + 1)
+    }
+  }
+  if (normalized.length > 0) return normalized
+
+  const crossline: EvidenceOccurrence[] = []
+  for (let index = 0; index + 1 < spans.length; index += 1) {
+    const left = spans[index]!
+    const right = spans[index + 1]!
+    const pair = normalizeWithOffsets(text.slice(left.start, right.end))
+    let pairHit = pair.value.indexOf(normalizedNeedle)
+    while (pairHit !== -1) {
+      push(
+        crossline,
+        left.start + pair.offsets[pairHit]!,
+        left.start + pair.offsets[pairHit + normalizedNeedle.length - 1]! + 1,
+        'crossline',
+      )
+      pairHit = pair.value.indexOf(normalizedNeedle, pairHit + 1)
+    }
+  }
+  return crossline
+}
+
+/**
+ * One matcher shared by PG-08 evidence, PG-09 reading proof, the P6 semantic
+ * checks and delta anchors. A quote copied from the manuscript must not be
+ * rejected because the model typed a curly quote or split it across a line,
+ * and it must not be accepted because two unrelated paragraphs were glued.
  */
 export function matchEvidence(text: string, quote: string): EvidenceMatch {
   const needle = quote.trim()
-  const paragraphs = splitParagraphs(text)
   if (needle === '') return { found: false, paragraph: null, via: null }
-  const exactIndex = paragraphs.findIndex((paragraph) => paragraph.includes(needle))
-  if (exactIndex !== -1) return { found: true, paragraph: exactIndex + 1, via: 'exact' }
-  const normalizedNeedle = normalizeEvidenceText(needle)
-  if (normalizedNeedle !== '') {
-    const normalizedIndex = paragraphs.findIndex((paragraph) =>
-      normalizeEvidenceText(paragraph).includes(normalizedNeedle),
-    )
-    if (normalizedIndex !== -1) {
-      return { found: true, paragraph: normalizedIndex + 1, via: 'normalized' }
-    }
-    // A quote may span two paragraphs (dialogue split by an action beat).
-    const joined = normalizeEvidenceText(paragraphs.join(''))
-    const joinedAt = joined.indexOf(normalizedNeedle)
-    if (joinedAt !== -1) {
-      // Map the normalized offset back to a paragraph by consuming characters.
-      let consumed = 0
-      let paragraph = 1
-      for (const [index, row] of paragraphs.entries()) {
-        const length = normalizeEvidenceText(row).length
-        if (consumed + length > joinedAt) {
-          paragraph = index + 1
-          break
-        }
-        consumed += length
-      }
-      return { found: true, paragraph, via: 'crossline' }
+  const spans = paragraphSpans(text)
+  const occurrences = evidenceOccurrences(text, needle)
+  const first = occurrences[0]
+  if (first !== undefined) {
+    return {
+      found: true,
+      paragraph: first.paragraph,
+      via: first.via,
+      span: { from: first.paragraph, to: paragraphAtOffset(spans, first.end - 1) },
     }
   }
   let best: EvidenceMatch['nearest']
-  for (const [index, paragraph] of paragraphs.entries()) {
-    const length = commonSubstringLength(normalizeEvidenceText(needle), normalizeEvidenceText(paragraph))
+  for (const [index, paragraph] of spans.entries()) {
+    const length = commonSubstringLength(normalizeEvidenceText(needle), normalizeEvidenceText(paragraph.text))
     const similarity = length / Math.max(1, Array.from(normalizeEvidenceText(needle)).length)
     if (best === undefined || similarity > best.similarity) {
       best = {
         paragraph: index + 1,
-        text: Array.from(paragraph).slice(0, 30).join(''),
+        text: Array.from(paragraph.text).slice(0, 30).join(''),
         offset: length,
         similarity,
       }

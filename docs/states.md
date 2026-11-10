@@ -1,3 +1,16 @@
+## 0.2.17 文风字段
+
+- **`novel.yaml.style` 是三态**，不是两态：
+  - **缺失**（`undefined`）是「这本书早于 0.2.17 建立」。只有在这种状态下、且**没有任何归档章**时，可以设置一次；设置后立即转「已定」。
+  - **字符串**是 8 份内置包之一，**不可更改**。
+  - **`null`** 是用户在看过 8 份包之后**明确选择不用**，与「已定」同等不可变。
+- **迁移窗口的判定只有一个 owner**（`styleWindowOpen`）：章节索引里没有 `archived_at` 非空的行，且 `chapters/` 下没有非当前章的正文章。索引丢行不会被误判成「没写过」。
+- **`novel.yaml.style_confirmation`**（可选字符串）记录创建时确认门的实际结果：`confirmed` 或 `skipped:*`。缺省表示早于 0.2.17。降级不是静默：它写在文件里，`novel_status.style_confirmation` 与面板都能看到。
+- **风格包不是项目文件**：`stylepacks/*.yaml` 随 npm 包发布，项目里只存 id。包被删或手改成未知 id 时，引擎把 `style` 当 `null` 处理（规则休眠、读写不阻断），`novel_doctor` 报 `style-pack` warning。
+- **`checks/*.check.yaml` 的 `machine.style`** 是 0.2.17 字段，只在有风格包时写入；旧 check 文档仍可读，无风格的机器结果逐字段与 0.2.16 一致。
+- **`context.style`** 在 P2–P6 的任务书里总是完整的风格块：`targets`、`banned_patterns`（前 12 条）、1 段 `exemplars`、全部 `critic_rubric`、`thresholds`。0.2.17 删除了上下文预算，因此不再有 `style_omitted` 这个字段。
+- **对白两个数不要混**：`targets.dialogue_ratio` 是项目验收区间（用户确认、不可变）；风格包的 `dialogue.ratio` 是瞄准点（进任务书）。`STYLE_DIALOGUE_RATIO` 判偏离目标，`DIALOGUE_RATIO` 判越出区间，两个码不冲突。
+
 ## 0.2.14 字段与恢复
 
 - **资源**：`characters[].current_state.resources` 是绝对值（set）；`summary.resource_changes[].delta` 是增量（add）。同一章同一角色同一资源同时出现会被拒绝（`ENGINE_RESOURCE_DOUBLE_COUNT`），错误回显 `original / delta / result`。负余额默认拒绝，`novel.yaml targets.allow_negative_balances: true` 时才允许债务。
@@ -36,7 +49,7 @@ archive_card:
   hook: 蜡印
   notes: 作者备注
   archived_at: 2026-10-31T00:00:00.000Z
-archive_card_digest: "v1:..."
+archive_card_digest: 'v1:...'
 ```
 
 它们由归档事务写入，`novel_amend` 只能比较、不能新增或改写。缺字段的旧记录走只读回退：outline 可读时用当前卡，outline 不可读且有备份时用备份卡；两者都没有时 fail closed。
@@ -58,15 +71,15 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 ## 迁移表
 
-| 从                 | 操作                | 到                                                      | 门控                          |
-| ------------------ | ------------------- | ------------------------------------------------------- | ----------------------------- |
-| `idle` / `done`    | `submitWorldPlan`   | `P2`                                                    | 01,02                         |
-| `P2`               | `submitChapterPlan` | `P3`                                                    | 01,02,13                      |
-| `P3`               | `submitDraft`       | `P4`                                                    | 01,02,04,03,05,06,13          |
-| `P4`               | `submitReview`      | `P5`（有 blocker）/ `P6`                                | 01,02,09,07,11                |
-| `P5`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,09,08,11       |
-| `P6`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,08,09,11       |
-| `P6`               | `runCheck`          | `ready_to_archive`（完整 scope）/ 停留 `P6`（单 scope） | 01,02,04,03,05,06,07,08,09,10,11 |
+| 从                 | 操作                | 到                                                      | 门控                                |
+| ------------------ | ------------------- | ------------------------------------------------------- | ----------------------------------- |
+| `idle` / `done`    | `submitWorldPlan`   | `P2`                                                    | 01,02                               |
+| `P2`               | `submitChapterPlan` | `P3`                                                    | 01,02,13                            |
+| `P3`               | `submitDraft`       | `P4`                                                    | 01,02,04,03,05,06,13                |
+| `P4`               | `submitReview`      | `P5`（有 blocker）/ `P6`                                | 01,02,09,07,11                      |
+| `P5`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,09,08,11             |
+| `P6`               | `submitRevision`    | `P4`                                                    | 01,02,04,03,05,08,09,11             |
+| `P6`               | `runCheck`          | `ready_to_archive`（完整 scope）/ 停留 `P6`（单 scope） | 01,02,04,03,05,06,07,08,09,10,11    |
 | `ready_to_archive` | `archiveChapter`    | `done`                                                  | 01,02,04,03,05,06,07,08,09,10,12,13 |
 
 `runCheck` 的 PG-03 字数下限与 PG-07 评审分数下限不随 `scope` 关闭：check 是归档前置，单 scope 只跳过硬性内容/连续性机检（PG-04/PG-10），不能用一个“integrity only”绕过字数或评分。

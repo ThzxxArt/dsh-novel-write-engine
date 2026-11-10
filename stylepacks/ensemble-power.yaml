@@ -1,0 +1,99 @@
+schema_version: 1
+id: ensemble-power
+name: 群像权谋
+description: 多视角轮转，对白机锋，信息不对称，章末翻盘或代价。
+audience: general
+genres: [historical, fantasy, urban]
+pov: third-omniscient
+tense: past
+register: restrained
+narrative_distance: medium
+
+sentence:
+  short_ratio: 0.25
+  medium_ratio: 0.5
+  long_ratio: 0.25
+  burstiness: high
+  max_consecutive_same_length: 4
+
+paragraph:
+  max_chars: 120
+  one_action_per_paragraph: true
+  max_sentences: 4
+  max_actions: 3
+
+dialogue:
+  ratio: 0.4
+  tag_style: sparse
+  allow_interruptions: true
+  allow_fragments: true
+
+diction:
+  abstract_emotion_density: low
+  metaphor_density: low
+  adjective_density: low
+  slang: low
+  idiom: medium
+  sensory_channels: [sound, sight, touch, smell]
+
+structure:
+  opening_moves: [dialogue, ceremony, anomaly]
+  scene_transition: hard_cut
+  hook_moves: [reversal, alliance_shift, cost]
+  cool_point_every_chars: 1200
+
+emotion:
+  intensity: medium
+  expression: restrained
+  required_beats: [relationship_stake, cost, choice, vulnerability]
+  min_cues_per_1000: 2
+
+banned_patterns:
+  - 不是……而是……
+  - 仿佛
+  - 不禁
+  - 眸中
+  - 缓缓
+  - 空气仿佛凝固
+  - 心中五味杂陈
+  - 嘴角勾起一抹
+  - 命运的齿轮
+  - 运筹帷幄
+  - 深不可测
+  - 意味深长
+  - 棋子
+  - 棋局
+
+exemplars:
+  - |
+    “北门是谁放的？”
+    “我。”
+    “为什么？”
+    “因为南门更想让你死。”他把兵符往桌上一推，“你自己选。”
+    “我选你。”
+    “选我什么？”
+    “选你今晚睡哪间牢房。”
+  - |
+    三更，祠堂的灯还亮着。
+    “账册第七页少了一笔。”老周说。
+    “你看得倒仔细。”族老端着茶，没喝。
+    “少的是谁的？”
+    “你父亲的。”
+    “那您刚才为什么说不知道？”
+    族老把茶放下：“因为我还想给你留条路。”
+
+critic_rubric:
+  - 多视角：每场戏至少让一个配角的利益和主角不同。
+  - 对白：话里有话，回答可以绕开问题，但不能空。
+  - 信息差：读者要比某个当事人多知道一件事。
+  - 翻盘：章末改变力量关系，而不是只放狠话。
+  - 代价：每次结盟都要付出可见的成本。
+  - 情绪：权谋要有得失和背叛的痛感，不能只算账。
+
+thresholds:
+  burstiness_min: 0.35
+  dialogue_ratio_min: 0.25
+  dialogue_ratio_max: 0.6
+  banned_patterns_max: 1
+  abstract_emotion_max: 3
+  metaphor_per_1000_max: 4

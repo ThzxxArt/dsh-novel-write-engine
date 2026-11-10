@@ -47,9 +47,8 @@ describe('brief context packs', () => {
         context_meta: {
           version: 1,
           stage: 'P3',
-          budget: 16_000,
-          over_budget: false,
-          strategy: 'stage-v3',
+          complete: true,
+          strategy: 'complete',
         },
       })
       const context = brief.data.context as {

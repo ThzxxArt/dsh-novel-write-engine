@@ -231,7 +231,9 @@ describe('review probes', () => {
       handoff: null,
     }
     const context = briefContext(input)
-    expect(JSON.stringify(context).length).toBeLessThanOrEqual(8_000)
+    // Complete, not trimmed: all 120 candidates are present.
+    expect((context as { characters: unknown[] }).characters).toHaveLength(120)
+    expect((context as { context_meta: { complete: boolean } }).context_meta.complete).toBe(true)
   })
 
   it('surfaces a readable journal mismatch before recommending a write', async () => {

@@ -179,7 +179,7 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
     expect(bare.blocking.some((item) => item.code === 'PG-06')).toBe(true)
   })
 
-  it('B15 blames the required floor when the floor itself blows the budget', () => {
+  it('B15 delivers eight long foreshadows whole instead of blaming a floor', () => {
     const items: ForeshadowsDocument['items'] = Array.from({ length: 8 }, (_, index) => ({
       id: `FS-${String(index + 1).padStart(3, '0')}`,
       title: `伏笔${index + 1}`,
@@ -187,8 +187,8 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
       last_touched: index + 1,
       status: 'planted' as const,
       resolved_at: null,
-      // ~2k characters each: eight of them are ~16k against P1's 6k budget, and
-      // the floor keeps all eight, so the pack cannot be trimmed under budget.
+      // ~2k characters each. Under the old budget this was the case that blew
+      // P1's 6k limit; the pack now simply carries them.
       description: '伏'.repeat(2000),
       advance_log: [],
     }))
@@ -213,20 +213,14 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
       previousText: null,
       handoff: null,
     })
-    const meta = context.context_meta as {
-      over_budget: boolean
-      over_budget_reason: string | null
-      required_omitted: number
-      floor_kept: Record<string, number>
-      protected: string[]
+    // 0.2.17: no budget, no floor, no blame string. The eight rows arrive whole.
+    const meta = context.context_meta as { complete: boolean; used: number }
+    expect(meta.complete).toBe(true)
+    expect(meta.used).toBeGreaterThan(16_000)
+    expect(context.open_foreshadows as Array<{ description: string }>).toHaveLength(8)
+    for (const row of context.open_foreshadows as Array<{ description: string }>) {
+      expect(row.description).toHaveLength(2000)
     }
-    expect(meta.over_budget).toBe(true)
-    expect(meta.required_omitted).toBe(0)
-    expect(meta.floor_kept.open_foreshadows).toBe(8)
-    // `open_foreshadows` is not a protected block: the eight-floor is. Saying
-    // "protected_block" pointed the author at a list that was not the problem.
-    expect(meta.protected).not.toContain('open_foreshadows')
-    expect(meta.over_budget_reason).toBe('required_floor')
   })
 
   it('B16 keeps the archive when history/ cannot be staged, and says why', async () => {
@@ -484,7 +478,7 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
     }
   })
 
-  it('B6 advertises the seven ledger restores at the tool surface', () => {
+  it('B6 advertises the eight ledger restores at the tool surface', () => {
     const tools = new Map(
       createNovelTools({
         withSignal: vi.fn(async (_signal: unknown, task: () => Promise<unknown>) => task()),
@@ -493,8 +487,9 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
     const restore = tools.get('novel_restore')!
     // A capability only the implementation knows is a capability the model will
     // not use: the description used to stop at chapter/outline/pipeline.
-    expect(restore.description).toContain('seven state ledgers')
+    expect(restore.description).toContain('eight state ledgers')
     for (const ledger of [
+      'chapters',
       'characters',
       'world',
       'locks',

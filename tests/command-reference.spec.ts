@@ -31,7 +31,7 @@ describe('command reference', () => {
   it('covers the five entries and all named /novel forms without duplicates', () => {
     const forms = allCommandForms()
     expect(COMMAND_ENTRY).toHaveLength(5)
-    expect(COMMAND_FORM_COUNT).toBe(25)
+    expect(COMMAND_FORM_COUNT).toBe(27)
     expect(new Set(forms).size).toBe(forms.length)
     for (const form of [
       '/novel',
