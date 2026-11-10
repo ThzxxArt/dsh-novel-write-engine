@@ -59,6 +59,19 @@ export interface WorkingDirectoryLike {
   ensure(agent: { id?: string }, signal?: AbortSignal): Promise<string>
 }
 
+/**
+ * How the host's `workingDirectory` service reaches the tools. `resolve` is
+ * preferred: it is called per invocation so a provider that registers after
+ * this plugin applies is still found.
+ */
+export interface WorkingDirectoryOptions {
+  workingDirectory?: WorkingDirectoryLike
+  resolveWorkingDirectory?: () => WorkingDirectoryLike | undefined
+}
+
+const resolveService = (options: WorkingDirectoryOptions): WorkingDirectoryLike | undefined =>
+  options.resolveWorkingDirectory?.() ?? options.workingDirectory
+
 interface ToolExec {
   signal?: AbortSignal
   agent?: { id?: string }
@@ -66,9 +79,10 @@ interface ToolExec {
 
 /** Wrap an execute body with caller context, cancellation and a machine-code error. */
 const makeGuarded =
-  (engine: EngineService, workingDirectory?: WorkingDirectoryLike) =>
+  (engine: EngineService, options: WorkingDirectoryOptions = {}) =>
   <A>(body: (args: A) => Promise<unknown>) =>
   async (args: A, exec?: ToolExec): Promise<any> => {
+    const workingDirectory = resolveService(options)
     const caller: EngineCaller = {}
     if (typeof exec?.agent?.id === 'string' && exec.agent.id !== '') caller.sessionId = exec.agent.id
     if (exec?.agent !== undefined && workingDirectory !== undefined) {
@@ -394,9 +408,9 @@ const utilityRoot = {
  */
 export function createNovelTools(
   engine: EngineService,
-  options: { workingDirectory?: WorkingDirectoryLike } = {},
+  options: WorkingDirectoryOptions = {},
 ): ReturnType<typeof defineTool>[] {
-  const guarded = makeGuarded(engine, options.workingDirectory)
+  const guarded = makeGuarded(engine, options)
   return [
     defineTool({
       name: 'novel_init',

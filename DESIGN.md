@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.15`                                                                                                 |
+| 插件版本 | `0.2.16`                                                                                                 |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1384,6 +1384,8 @@ const TRANSITIONS: readonly Transition[] = [
 0.2.4 起，`novel_outline` 的 chapters 按 `num`、volumes 按 `title` upsert：省略不删，删除只走 `remove`/`remove_volumes`，活动章/归档章/不存在章/已完成卷拒绝删除。写入支持 `dry_run`、`added/updated/removed` 回显和 `outline.deprecated.yaml`；`novel_restore` 可用 `paths:["outline/outline.yaml"]` 从备份恢复。`novel_blueprint.volumes` 仍整体 replace，但删卷必须 `confirm_remove:true`。
 
 0.2.6 新增语义配对冲突、world entity anchors、panel v6 bookData，并补 pipeline 恢复、summary-only 一次性 PG-01、outline restore 卷守卫与 PG-05 null 行保护。
+
+0.2.16 只修 `/novel scan` 的取目录链路：`apply()` 原先在加载期抓一次 `workingDirectory` 服务快照，提供方尚未 ACTIVE 时该快照永久为 `undefined`，之后每次取目录都失败；命令与工具守卫又用空 `catch` 吞掉 `ensure()` 的异常，使「服务缺失」「无 agent 上下文」「目录不可读」三种故障都显示成「请在项目工作区中执行」。现在 `resolveWorkingDirectory()` 按调用解析，`Invocation.cwdError` 把具体原因带到命令层，`/novel scan` 在无目录时回落到当前会话绑定的项目根并注明「来源：工作区|会话绑定」。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`payload_version` 仍为 7；`PANEL_VERSION` 升到 0.2.16。
 
 0.2.15 只修面板「删行代替分页」一个病根：删除 `panelSectionBudget`（按数组顺序 `pop` 行迁就 64KB 上限、迁就完把 `next_cursor` 置空），分页改由 `panelSectionPage` 在发页前缩短页面并把游标改写到第一条未放下的行，`chapters`、`characters`、`foreshadows`、`timeline`、`relationships` 共用；客户端 `sectionPager` 成为分页文案与控件的唯一 owner，人物栏补上翻页；`worldbook` 十四组列表改用 `panelPreviewGroups` 按组预览（每组 50，按字节预算收缩最大组），每次收缩写进 `counts` 的 `total`/`shown`。仍保持 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 为 1，`payload_version` 仍为 7；`PANEL_VERSION` 升到 0.2.15。
 

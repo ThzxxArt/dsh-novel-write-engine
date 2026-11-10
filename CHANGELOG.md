@@ -1,3 +1,29 @@
+## 0.2.16
+
+0.2.16 只修 `/novel scan` 的取目录链路：在项目工作区里执行却回答「请在项目工作区中执行」。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，`payload_version` 仍为 7。
+
+### Fixed
+
+- **服务快照改为按调用解析**：`apply()` 原先在加载期抓一次 `workingDirectory` 服务，宿主提供方此时仍处于 LOADING 时该快照永久为 `undefined`，之后每次取工作目录都失败。现在命令与工具都通过 `resolveWorkingDirectory()` 在每次调用时解析，提供方晚到也能找到。
+- **失败原因不再被吞**：`withInvocation` 与工具守卫原先用空 `catch` 吞掉 `ensure()` 的异常，导致「服务拿不到」「agent 上下文缺失」「目录读不了」三种完全不同的故障都显示成同一句「请在项目工作区中执行」。现在原因随 `Invocation.cwdError` 传递给需要的命令，`/novel scan` 会原样回报。
+- **`/novel scan` 不再无谓拒绝**：invocation 没有目录时回落到当前会话已绑定的项目根，并在首行注明「扫描根：<路径>（来源：会话绑定）」；只有既无目录也无绑定时才报错，且报出具体原因。
+
+### Changed
+
+- `PANEL_VERSION` 升到 0.2.16。
+
+### Verified
+
+- 新增 `tests/0216.spec.ts` 四条：插件加载后才注册 `workingDirectory` 服务时 `/novel scan --register` 仍成功；无目录时回落到会话绑定并标注来源；无服务且无绑定时报出「宿主没有提供 workingDirectory 服务」而非笼统文案；工具按调用解析目录（连续两次调用各触发一次 `ensure`）。
+- 四条用例先在旧实现上跑红（4/4 失败），恢复修复后全绿。
+- 全量 105 个测试文件 / 1206 项通过；覆盖率 94.19/89.05/97.28/94.19（逐文件门禁通过）。
+- `typecheck`、`lint`、`build`、`check:pack`（27 文件）、`check:artifacts`、`check:install`、`check:host`（面板 401→200、headless `novel_init` 执行、移除层）、`check:crash`、`check:hygiene`（173 文件）、`test:isolated`（65 源文件）、`validate:rulepack`、`check:preset`（13 包）全部通过。
+
+### Upgrade
+
+- 无需迁移：命令输出只多一行扫描根与更具体的原因，契约字段不变。
+- npm `latest` 仍为 0.2.15，本版只通过 GitHub Release 分发；安装用 Release 附件里的 tarball。
+
 ## 0.2.15
 
 0.2.15 只做一件事：把面板「删行代替分页」这一个病根从所有栏目拔掉。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，`payload_version` 仍为 7，新字段可选。

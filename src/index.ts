@@ -84,13 +84,22 @@ export function apply(ctx: Context, config: Config): void {
   const provider = ctx as unknown as { provide?: (name: string, value: unknown) => void }
   provider.provide?.('novelEngine', engine)
 
-  const serviceOf = (ctx as unknown as { get?: (name: string) => unknown }).get
-  const workingDirectory =
-    typeof serviceOf === 'function'
-      ? (serviceOf.call(ctx, 'workingDirectory') as WorkingDirectoryLike | undefined)
-      : undefined
+  // Resolve the host service on every call instead of capturing one snapshot
+  // during load. A provider that is still LOADING when this plugin applies makes
+  // the snapshot permanently `undefined`, which silently disabled every cwd
+  // lookup: `/novel scan` then answered "请在项目工作区中执行" from inside the
+  // very workspace it was run in.
+  const resolveWorkingDirectory = (): WorkingDirectoryLike | undefined => {
+    const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+    if (typeof get !== 'function') return undefined
+    try {
+      return get.call(ctx, 'workingDirectory') as WorkingDirectoryLike | undefined
+    } catch {
+      return undefined
+    }
+  }
 
-  for (const tool of createNovelTools(engine, { workingDirectory })) {
+  for (const tool of createNovelTools(engine, { resolveWorkingDirectory })) {
     if (toolsMode === 'core' && !CORE_TOOLS.includes(tool.name as ToolName)) continue
     ctx.tools.register(tool)
   }
@@ -100,7 +109,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   optional.inject(['commands'], (commandsCtx) => {
-    for (const command of createCommands(engine, { workingDirectory })) {
+    for (const command of createCommands(engine, { resolveWorkingDirectory })) {
       commandsCtx.effect(() => commandsCtx.commands.register(command), `${name}: command ${command.name}`)
     }
   })

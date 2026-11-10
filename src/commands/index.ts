@@ -15,6 +15,8 @@ export interface CommandWorkingDirectory {
 
 export interface CommandHost {
   workingDirectory?: CommandWorkingDirectory
+  /** Called per invocation so a service registered after load is still found. */
+  resolveWorkingDirectory?: () => CommandWorkingDirectory | undefined
 }
 
 export interface Invocation {
@@ -24,6 +26,8 @@ export interface Invocation {
   agent?: { id?: string }
   /** Resolved by the wrapper; exposed for unit tests and scan. */
   cwd?: string
+  /** Why `cwd` could not be resolved; surfaced by commands that need it. */
+  cwdError?: string
 }
 
 /** One command definition; `handler` is the property the registry expects. */
@@ -335,13 +339,31 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
           if (unknown.length > 0 || positional.length > 0) {
             return bad('用法：/novel scan [--register]；scan 不接受路径参数')
           }
-          const cwd = invocation.cwd
+          // `/novel scan` needs a directory to scan. Prefer the invocation cwd;
+          // when the host could not supply one, fall back to the project this
+          // session is already bound to instead of refusing outright — the user
+          // is in a project workspace either way.
+          let cwd = invocation.cwd
+          let cwdSource = '工作区'
           if (cwd === undefined || cwd === '') {
-            return bad('请在项目工作区中执行 /novel scan')
+            const current = await engine.currentProject().catch(() => null)
+            if (current !== null && current.bound && current.selection !== null) {
+              cwd = current.selection.root
+              cwdSource = '会话绑定'
+            }
+          }
+          if (cwd === undefined || cwd === '') {
+            return bad(
+              [
+                `无法确定扫描根：${invocation.cwdError ?? '宿主没有提供工作目录'}`,
+                '可以在项目工作区中执行 /novel scan；取不到工作目录时，先 /novel use <路径> 绑定项目再执行。',
+              ].join('\n'),
+            )
           }
           const register = flags.includes('--register')
           const result = await engine.scanProjects({ cwd, register })
           const lines = [
+            `扫描根：${cwd}（来源：${cwdSource}）`,
             `扫描到 ${result.candidates.length} 个候选；${result.candidates.filter((row) => row.registered).length} 个已登记${result.truncated ? '（只显示前 50 个，请缩小工作区）' : ''}`,
             ...result.candidates.map((candidate) => {
               const state = candidate.state === 'ok' ? '' : ` [${candidate.state}]`
@@ -404,18 +426,30 @@ export function createCommands(engine: EngineService, host: CommandHost = {}): C
     if (typeof invocation.agent?.id === 'string' && invocation.agent.id !== '') {
       caller.sessionId = invocation.agent.id
     }
+    let cwdError: string | undefined
     if (invocation.cwd !== undefined && invocation.cwd !== '') {
       caller.cwd = invocation.cwd
-    } else if (invocation.agent !== undefined && host.workingDirectory !== undefined) {
-      try {
-        caller.cwd = await host.workingDirectory.ensure(invocation.agent, invocation.signal)
-      } catch {
-        // A broken cwd must not invalidate an existing binding.
+    } else if (invocation.agent === undefined) {
+      cwdError = '这条命令没有携带 agent 上下文'
+    } else {
+      const service = host.resolveWorkingDirectory?.() ?? host.workingDirectory
+      if (service === undefined) {
+        cwdError = '宿主没有提供 workingDirectory 服务'
+      } else {
+        try {
+          caller.cwd = await service.ensure(invocation.agent, invocation.signal)
+        } catch (error) {
+          // A broken cwd must not invalidate an existing binding, but the reason
+          // must survive: "请在项目工作区中执行" hid a service that was missing
+          // at load time and a directory that genuinely could not be read.
+          cwdError = `读取工作目录失败：${error instanceof Error ? error.message : String(error)}`
+        }
       }
     }
     const enriched: Invocation = {
       ...invocation,
       ...(caller.cwd === undefined ? {} : { cwd: caller.cwd }),
+      ...(cwdError === undefined ? {} : { cwdError }),
     }
     const run = (): Promise<CommandResultShape> => task(enriched)
     const withCaller = (

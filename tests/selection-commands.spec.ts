@@ -511,7 +511,8 @@ describe('command boundary errors', () => {
       }
       const scan = await command.handler(invocation('scan'))
       expect(scan.kind).toBe('error')
-      expect(scan.text).toContain('请在项目工作区中执行')
+      expect(scan.text).toContain('无法确定扫描根')
+      expect(scan.text).toContain('没有携带 agent 上下文')
       const pathArg = await command.handler(
         invocation('scan /tmp/other', { id: 'session-a' }, '/tmp/project-workspace'),
       )
@@ -701,6 +702,9 @@ describe('command edge branches', () => {
     expect(projects.text).toContain('项目 1 个')
     const scan = await command.handler(invocation('scan', { id: 'session-a' }))
     expect(scan.kind).toBe('error')
-    expect(scan.text).toContain('请在项目工作区中执行')
+    expect(scan.text).toContain('无法确定扫描根')
+    // The reason must survive: a swallowed `ensure()` failure used to be
+    // reported as "you are not in a project workspace", which was false.
+    expect(scan.text).toContain('cwd disappeared')
   })
 })

@@ -179,7 +179,7 @@
 - `novel_init` 是例外：省略 `project_root` 时只落配置 `projectRoot`，不读会话绑定/工作区/active；创建成功后才绑定当前会话。
 - `novel_status` 文本新增「项目根 … · 选择来源 …」一行；JSON 的 `selection` 为 `{source, root}`。
 - 新增错误码：`ENGINE_PROJECT_AMBIGUOUS`（列候选，要求显式选择）、`ENGINE_PROJECT_MISSING`（会话绑定目录不存在，保留绑定）、`ENGINE_PROJECT_IDENTITY_MISMATCH`（原路径换成另一本书，禁止写入）。
-- `/novel scan` 只扫 `cwd`、`cwd/novel`、直接子目录；最多 50 个候选，不递归、不跟随符号链接；普通模式只读，`--register` 只登记 `ok`，不改 active/绑定。
+- `/novel scan` 只扫 `cwd`、`cwd/novel`、直接子目录；最多 50 个候选，不递归、不跟随符号链接；普通模式只读，`--register` 只登记 `ok`，不改 active/绑定。cwd 取不到时回落到当前会话已绑定的项目根，首行注明「扫描根：…（来源：工作区|会话绑定）」；两者都没有才报错，并给出具体原因（服务缺失 / 无 agent 上下文 / 目录不可读）。
 - `/novel use` 成功绑定后 best-effort 登记项目，便于随后在 `/novel projects` 与面板看到；不改 active。损坏项目（`novel.yaml` 不可读）不绑定、不登记，先用显式 `project_root` 修复。
 - `/novel resume` 只读，要求 Agent 会话；文本由 `formatResumePrompt` 生成，与面板复制按钮同源，包含书名、绝对 root、章节、阶段、下一步和首调用显式 `project_root` 的约束。
 - 面板 payload v4：`projects[]`、`selection`、`summary.root`、`missing`、`resume`；选择器只改 GET `?root=` 与 `localStorage`，不写会话绑定。

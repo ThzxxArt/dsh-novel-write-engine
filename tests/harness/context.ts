@@ -22,6 +22,12 @@ export interface FakeHost {
   effects: Array<() => void>
   events: Array<{ name: string; payload: unknown }>
   provided: Record<string, unknown>
+  /**
+   * What `ctx.get(name)` answers. Mutable on purpose: a Cordis provider can
+   * become available after a plugin applies, and a plugin that captured the
+   * service during load would never see it.
+   */
+  services: Record<string, unknown>
   ctx: Record<string, unknown>
   dispose: () => void
 }
@@ -43,6 +49,7 @@ export function fakeHost(
     effects: [],
     events: [],
     provided: {},
+    services: {},
     dispose: () => undefined,
     ctx: {},
   }
@@ -86,9 +93,7 @@ export function fakeHost(
         host.tools.push(tool)
       }),
     },
-    get: vi.fn((name: string) =>
-      connectionMode === 'get' && name === 'connection' ? connection : undefined,
-    ),
+    get: vi.fn((name: string) => host.services[name]),
     inject: vi.fn((wanted: string[], body: (scope: unknown) => void) => {
       if (wanted.every((service) => services.includes(service))) body(scoped)
     }),
@@ -104,6 +109,7 @@ export function fakeHost(
       host.provided[name] = value
     }),
   }
+  if (connectionMode === 'get') host.services.connection = connection
   host.dispose = () => {
     for (const disposer of host.effects.reverse()) disposer()
   }
