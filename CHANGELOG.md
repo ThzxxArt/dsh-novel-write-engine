@@ -22,7 +22,7 @@
 ### Upgrade
 
 - 无需迁移：命令输出只多一行扫描根与更具体的原因，契约字段不变。
-- npm `latest` 仍为 0.2.15，本版只通过 GitHub Release 分发；安装用 Release 附件里的 tarball。
+- npm `latest` 已指向本版；安装用 `dsh plugin --profile web add dsh-novel-write-engine@latest`，离线场景用对应 Release 附件里的 tarball。
 
 ## 0.2.15
 

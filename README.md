@@ -10,7 +10,6 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-novel-write-engine?style=flat-square&logo=npm&label=downloads)](https://www.npmjs.com/package/dsh-novel-write-engine)
 [![CI](https://img.shields.io/github/actions/workflow/status/ThzxxArt/dsh-novel-write-engine/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/ThzxxArt/dsh-novel-write-engine/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ThzxxArt/dsh-novel-write-engine?style=flat-square&logo=github&label=release)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases)
-[![version](https://img.shields.io/badge/version-0.2.16-2f81f7?style=flat-square)](https://github.com/ThzxxArt/dsh-novel-write-engine/releases/tag/v0.2.16)
 [![Node](https://img.shields.io/badge/Node-%3E%3D24.9.0-339933?style=flat-square&logo=node.js&logoColor=white)](#1-兼容性)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%20~%200.3-6f42c1?style=flat-square)](#1-兼容性)
 [![License](https://img.shields.io/github/license/ThzxxArt/dsh-novel-write-engine?style=flat-square)](LICENSE)
@@ -20,9 +19,9 @@
 </div>
 
 > [!IMPORTANT]
-> 当前版本 **0.2.16**。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
+> 当前发布版本以 npm `latest` 标签为准。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 0.2.16 只修一件事：`/novel scan` 在项目工作区里却说「请在项目工作区中执行」。病根是插件在加载期抓了一次 `workingDirectory` 服务的快照——宿主提供方当时还没就绪时，这个快照永久为 `undefined`，之后每次取工作目录都失败，而失败原因又被空 `catch` 吞掉，最终无论什么故障都显示同一句话。现在服务改为**每次调用时解析**，`ensure()` 的具体失败原因会原样回报；确实取不到目录时，`/novel scan` 回落到当前会话已绑定的项目根并注明来源。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
+> 最近一版只修一件事：`/novel scan` 在项目工作区里却说「请在项目工作区中执行」。病根是插件在加载期抓了一次 `workingDirectory` 服务的快照——宿主提供方当时还没就绪时，这个快照永久为 `undefined`，之后每次取工作目录都失败，而失败原因又被空 `catch` 吞掉，最终无论什么故障都显示同一句话。现在服务改为**每次调用时解析**，`ensure()` 的具体失败原因会原样回报；确实取不到目录时，`/novel scan` 回落到当前会话已绑定的项目根并注明来源。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
 
 ---
 
@@ -204,11 +203,11 @@ pnpm --version       # CLI 安装插件时需要
 corepack enable
 corepack prepare pnpm@11.28.9 --activate
 
-dsh plugin --profile web add dsh-novel-write-engine@0.2.15
+dsh plugin --profile web add dsh-novel-write-engine@latest
 ```
 
 > [!NOTE]
-> npm `latest` 目前仍是 **0.2.15**。0.2.16 只通过 GitHub Release 分发，需要 `workingDirectory` 修复时请用下面的 tarball 安装方式，或直接装 Release 附件。
+> 安装命令用 `@latest` 拿 npm 上的当前发布版本。需要离线或留档固定副本时，改用下面的 tarball 安装方式。
 
 安装后重启 DSH，或刷新 Web 页面。
 
@@ -255,10 +254,10 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-得到 `dsh-novel-write-engine-0.2.16.tgz`，复制到目标机器后：
+得到 `dsh-novel-write-engine-<version>.tgz`，复制到目标机器后：
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.16.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-<version>.tgz
 ```
 
 tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和两层 patch，不需要在目标机器重新构建。
@@ -270,7 +269,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 
 1. 左侧栏进入 **插件**；
 2. 点 **添加插件**；
-3. 填 npm 包名 `dsh-novel-write-engine`（或精确版本 `dsh-novel-write-engine@0.2.15`；0.2.16 尚未上 npm）；
+3. 填 npm 包名 `dsh-novel-write-engine`，或带标签 `dsh-novel-write-engine@latest`；
 4. 安装后启用，刷新页面，新开会话。
 
 插件页安装的是当前 profile 的依赖；Desktop 的插件页管理的是 `desktop` profile。
@@ -631,20 +630,20 @@ corepack pnpm test
 
 ## 升级与卸载
 
-### 升级到 0.2.16
+### 升级到最新版
 
-0.2.16 只修 `/novel scan` 的取目录链路，不动 schema 与门控：插件原先在加载期抓一次 `workingDirectory` 服务快照，宿主提供方尚未就绪时该快照永久为 `undefined`，之后每次取目录都失败；失败原因又被空 `catch` 吞掉，于是无论「服务拿不到」还是「目录读不了」，都统一显示成「请在项目工作区中执行」。现在服务按调用时解析，`ensure()` 的具体失败原因原样回报，取不到目录时 `/novel scan` 回落到当前会话已绑定的项目根并注明来源。`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7，`PANEL_VERSION` 升到 0.2.16。
-
-没有破坏性行为变化，也不需要迁移数据。升级后 `/novel scan` 首行会写「扫描根：<路径>（来源：工作区|会话绑定）」，失败时给出具体原因而不是笼统责备工作区。npm `latest` 仍是 0.2.15，本次只发布 GitHub Release：
+判断要不要升级，直接看 npm `latest` 指向哪一版；装同一套命令即可，不需要迁移数据：
 
 ```bash
 dsh plugin --profile web remove dsh-novel-write-engine
-dsh plugin --profile web add /absolute/path/to/dsh-novel-write-engine-0.2.16.tgz
+dsh plugin --profile web add dsh-novel-write-engine@latest
 ```
 
-升级后刷新页面、新开会话。面板教程版本升到 0.2.16；旧标签页显示“需要刷新”时刷新即可。
+升级后刷新页面、新开会话；面板教程版本随之更新，旧标签页显示“需要刷新”时刷新即可。
 
-历史版本（0.2.14 含 8 处破坏性行为变化：资源双写拒绝、PG-06 降级、实体锚点 8 字、`state_delta` 未知键拒绝等）的升级说明见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
+最近一版只修 `/novel scan` 的取目录链路，不动 schema 与门控：插件原先在加载期抓一次 `workingDirectory` 服务快照，宿主提供方尚未就绪时该快照永久为 `undefined`，之后每次取目录都失败；失败原因又被空 `catch` 吞掉，于是无论「服务拿不到」还是「目录读不了」，都统一显示成「请在项目工作区中执行」。现在服务按调用时解析，`ensure()` 的具体失败原因原样回报，取不到目录时 `/novel scan` 回落到当前会话已绑定的项目根并注明来源。升级后 `/novel scan` 首行会写「扫描根：<路径>（来源：工作区|会话绑定）」。`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7。
+
+逐版的变更与迁移细节见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
 ### 从源码目录升级
 
@@ -802,7 +801,7 @@ presets/          # 内置 Agent 预设 patch
 tests/            # 单测、集成、falsify、e2e
 ```
 
-### 当前工作树验证（0.2.16 基线）
+### 当前工作树验证
 
 以当前工作树实际跑出的结果为准：
 
@@ -811,7 +810,7 @@ tests/            # 单测、集成、falsify、e2e
 - `typecheck`、`lint`、`build`、`check:pack`（27 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（173 文件）、`test:isolated`（65 源文件）、`validate:rulepack`：通过；
 - `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通，13 个包全部解析；
 - 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行”；未做触屏真机与屏幕阅读器验收；
-- 0.2.16 改了 `workingDirectory` 的解析时机与 `/novel scan` 的取目录回落；新增四条用例先在旧实现上跑红（4/4 失败）再转绿：宿主在插件加载后才注册服务、无目录时回落到会话绑定、失败原因原样回报、工具按调用解析而非构造时一次。
+- 最近一版改了 `workingDirectory` 的解析时机与 `/novel scan` 的取目录回落；新增四条用例先在旧实现上跑红（4/4 失败）再转绿：宿主在插件加载后才注册服务、无目录时回落到会话绑定、失败原因原样回报、工具按调用解析而非构造时一次。
 - 覆盖率请在**锁定依赖**的工作树上跑（`pnpm install --frozen-lockfile`）；本机 `node_modules` 漂到 vitest 5 时，V8 分支口径不同会误报未达阈值。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
