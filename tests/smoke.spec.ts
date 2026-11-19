@@ -121,6 +121,51 @@ describe('plugin assembly', () => {
     expect(denied.statusCode).toBe(503)
   })
 
+  it('defers to the host admission when Connection has no rejection probe', async () => {
+    // Hosts after the 0.2.2 auth refactor dropped `requestRejection`, isolate
+    // Connection behind Cordis injection, and authenticate every registered
+    // route themselves. Calling `admit()` there throws, which the host answers
+    // as a bare 400 — so the route must never call it and must declare its own
+    // admission requirement instead.
+    const host = fakeHost(undefined, 'get')
+    const admit = vi.fn(() => {
+      throw new Error('cannot get property "connection.authentication" without inject')
+    })
+    host.services.connection = { admit }
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    expect((route as unknown as { auth?: string }).auth).toBe('required')
+    const response = { statusCode: 0, setHeader: () => undefined, end: () => undefined }
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: '127.0.0.1:3080' } },
+      response,
+    )
+    expect(response.statusCode).toBe(200)
+    expect(admit).not.toHaveBeenCalled()
+  })
+
+  it('calls the connection fence through the service, not as a detached method', async () => {
+    // Hosts before the auth refactor expose `requestRejection` as a prototype
+    // method that reads `this`; detaching it throws inside the handler and the
+    // host answers a bare 400.
+    class Fence {
+      private readonly allowed = 'ok.example'
+      requestRejection(request: { headers?: Record<string, string> }) {
+        return request.headers?.host === this.allowed ? undefined : 403
+      }
+    }
+    const host = fakeHost(undefined, 'get')
+    host.services.connection = new Fence()
+    apply(host.ctx as never, config)
+    const route = host.routes[0]!
+    const response = { statusCode: 0, setHeader: () => undefined, end: () => undefined }
+    await (route.handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'GET', headers: { host: 'ok.example' } },
+      response,
+    )
+    expect(response.statusCode).toBe(200)
+  })
+
   it('registers only ten tools in core mode', () => {
     const host = fakeHost()
     apply(

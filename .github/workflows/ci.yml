@@ -142,6 +142,32 @@ jobs:
       - name: Mount, execute novel_init and remove the plugin in the real host
         run: DSH_BIN="$RUNNER_TEMP/dsh-runtime/node_modules/.bin/dsh" pnpm check:host
 
+  # Compatibility canary: the job above proves the declared minimum host still
+  # works, this one proves the newest published host does. 0.2.2 moved
+  # Connection behind Cordis service isolation and removed
+  # `requestRejection`; a pinned runtime could not see that, and the panel
+  # answered 400 to every authenticated read until the route declared its own
+  # auth policy. Keep this on the floating channel on purpose.
+  host-compat:
+    name: host-gate (newest DSH)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install the newest published DSH runtime
+        run: npm install --prefix "$RUNNER_TEMP/dsh-newest" --no-audit --no-fund @deepseek-ai/dsh@latest
+      - name: Mount the plugin in the newest host
+        run: DSH_BIN="$RUNNER_TEMP/dsh-newest/node_modules/.bin/dsh" pnpm check:host
+
   platform-build:
     name: platform-build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

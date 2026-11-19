@@ -137,17 +137,22 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   optional.inject(['webServer'], (webCtx) => {
-    // The panel is an exact route, so it wins before the host's `/api` prefix
-    // admission. Reuse the connection service's trust/authentication fence here.
+    // The host authenticates a registered route before its handler runs (the
+    // descriptor declares `auth: 'required'`). Older hosts authenticate
+    // nothing at the route layer and instead expose
+    // `connection.requestRejection`; newer hosts removed that method, isolate
+    // Connection behind Cordis injection, and answer a bare 400 when a plugin
+    // calls `connection.admit()` from outside. So: use the narrow rejection
+    // probe when the host has it, and otherwise let the host's own admission
+    // stand rather than inventing a fence the host has already applied.
     const guard: PanelGuard = (request) => {
       const connection = connectionFence(webCtx) ?? connectionFence(ctx)
       if (connection === undefined) return 503
-      if (connection.requestRejection !== undefined) return connection.requestRejection(request)
-      if (connection.admit !== undefined) {
-        const admission = connection.admit(request) as { rejection?: 401 | 403 } | { peer?: unknown }
-        return 'rejection' in admission ? admission.rejection : undefined
-      }
-      return 503
+      // Call through the service: hosts before the auth refactor expose this as
+      // a prototype method whose `this` is the Connection instance, so a
+      // detached reference throws instead of answering.
+      if (typeof connection.requestRejection !== 'function') return undefined
+      return connection.requestRejection(request)
     }
     webCtx.effect(
       () => webCtx.webServer.register(panelRoute(engine, guard)),
@@ -159,7 +164,6 @@ export function apply(ctx: Context, config: Config): void {
 /** The slice of Connection the exact panel route needs. */
 interface ConnectionFence {
   requestRejection?: (request: unknown) => 401 | 403 | undefined
-  admit?: (request: unknown) => unknown
 }
 
 /**

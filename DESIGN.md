@@ -1939,7 +1939,7 @@ PG-03 WORD_COUNT: 正文 1832 字 < 2000 字下限。
 
 ### 10.3 数据通道
 
-- 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；连接层缺席时 503。
+- 只读 HTTP 路由 `/api/novel-write-engine/panel`：GET/HEAD，精确匹配，可带 `?root=`；路由声明 `auth: 'required'`，由宿主在进入处理器前完成认证。连接层缺席时 503；宿主对 `Connection` 做了服务隔离（新版）时不再调用 `connection.admit()`，改用宿主的准入结果，因为该调用会以裸 400 结束。
 - `root` 只接受注册表、active 或配置 `projectRoot`；其他路径返回 `missing.reason="not_registered"`，不读取任意目录。
 - 客户端相对请求 `api/novel-write-engine/panel`，兼容 `--public-url` 子路径；非 2xx 时展示宿主 `error` 字段。
 - DTO v6：`projects[]`、`selection`、可选 `summary/chapters/gates/resume`、`missing`、`empty`；`summary` 增加 `bookData`（identity/blueprint/progress/current/worldbook/cast/relationships/foreshadows/timeline/outline/quality/pacing/effort/health）以及 `advisories`/`legacy`、quality 的 `samples`/`attempts`/`trend_basis`、pending；章节行增加 scene_type/dialogue ratio/hook/final_check/effort/archived_at；`summary.root` 暴露绝对路径。版本不匹配时面板降级为「需刷新」。

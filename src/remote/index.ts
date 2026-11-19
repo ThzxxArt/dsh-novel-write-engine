@@ -198,5 +198,13 @@ export function panelHandler(engine: EngineService, guard: PanelGuard = denyAll)
 
 /** The route descriptor passed to `webServer.register`. */
 export function panelRoute(engine: EngineService, guard: PanelGuard = denyAll) {
-  return { kind: 'exact' as const, path: PANEL_ROUTE, handler: panelHandler(engine, guard) }
+  // `auth: 'required'` is the host's own admission: newer hosts authenticate
+  // every registered route before the handler runs, including exact routes.
+  // Older hosts ignore the field and are fenced by the supplied guard instead.
+  return {
+    kind: 'exact' as const,
+    path: PANEL_ROUTE,
+    auth: 'required' as const,
+    handler: panelHandler(engine, guard),
+  }
 }

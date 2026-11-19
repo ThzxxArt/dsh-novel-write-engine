@@ -10,5 +10,8 @@ it('T-10 the remote module exposes no write method', () => {
   }
   const route = remote.panelRoute({} as never)
   expect(route.handler).toBeTypeOf('function')
-  expect(Object.keys(route).sort()).toEqual(['handler', 'kind', 'path'])
+  expect(Object.keys(route).sort()).toEqual(['auth', 'handler', 'kind', 'path'])
+  // The host must authenticate the route itself: on hosts that isolate the
+  // Connection service the handler cannot carry its own fence.
+  expect(route.auth).toBe('required')
 })

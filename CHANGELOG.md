@@ -1,3 +1,16 @@
+## 0.2.18
+
+0.2.18 修一个宿主升级后的**面板 400**：DSH 0.2.2 起把 `Connection` 放进 Cordis 服务隔离，插件从外部调用 `connection.admit()` 会抛 `cannot get property "connection.authentication" without inject`，宿主把处理器抛出的异常统一回成裸 400，于是面板显示「书稿读取失败」。同一个版本移除了 `connection.requestRejection`，改由路由自身的 `auth` 策略在进入处理器前认证。
+
+### Fixed
+
+- **面板在 DSH 0.2.2 上返回 400**：路由现在显式声明 `auth: 'required'`，由宿主完成认证；插件只在宿主仍提供 `connection.requestRejection`（旧版）时用它做第二道栅栏，不再调用 `admit()`。
+- **回归门禁**：`pnpm check:host` 现在会在新版宿主上直接失败（`authenticated panel request should be 200, got 400`）；新增单测覆盖「宿主隔离 Connection、只暴露 `admit`」的形态，断言路由不调用它且照常出数据。
+
+### Changed
+
+- `PANEL_VERSION` / `package.json` 升到 0.2.18。
+
 ## 0.2.17
 
 0.2.17 做两件事：给书一个**文风层**，并把 20 处「门看起来在、其实没在」的证据洞补上。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 保持 1，`payload_version` 保持 7。
