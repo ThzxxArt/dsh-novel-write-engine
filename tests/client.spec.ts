@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { buildView, fetchPanel } from '../src/client/viewmodel.js'
 import { apply as applyClient, NovelIcon, NovelPanel } from '../src/client/index.js'
-import { panelElement } from '../src/client/panel.js'
+import { PANEL_CSS, panelElement } from '../src/client/panel.js'
 import type { PanelSectionState } from '../src/client/panel.js'
 import { ADMIN_OPERATION_GROUPS, COMMAND_ENTRY, COMMAND_GROUPS } from '../src/command-reference.js'
 import type { PanelPayloadDto } from '../src/client/dto.js'
@@ -3277,7 +3277,11 @@ describe('client registration and rendering', () => {
 })
 
 describe('0.2.17 panel style card', () => {
-  const styleSection = (metrics: unknown, targets: unknown): PanelSectionState => ({
+  const styleSection = (
+    metrics: unknown,
+    targets: unknown,
+    selfCheck: unknown = null,
+  ): PanelSectionState => ({
     loading: false,
     error: null,
     payload: {
@@ -3291,6 +3295,7 @@ describe('0.2.17 panel style card', () => {
         effort: null,
         style_metrics: metrics,
         style_targets: targets,
+        self_check: selfCheck,
       },
       total: 1,
       returned: 1,
@@ -3318,6 +3323,44 @@ describe('0.2.17 panel style card', () => {
     thresholds: { sentence_mix_tolerance: 0.15, dialogue_target_tolerance: 0.15, abstract_emotion_max: 3 },
     cool_point_every_chars: 1000,
   }
+
+  it('renders the thirteen checklist rows with √ / × / —', () => {
+    const rows = Array.from({ length: 13 }, (_, index) => ({
+      id: `SC-ITEM-${index + 1}`,
+      title: `第 ${index + 1} 项标准`,
+      category: index < 6 ? 'voice' : 'layout',
+      verdict: index === 0 ? 'pass' : index === 1 ? 'fail' : 'na',
+      basis: 'hybrid',
+      detail: '第 2 段：证据',
+    }))
+    const markup = renderToStaticMarkup(
+      panelElement(
+        buildView(payload()),
+        false,
+        () => undefined,
+        () => undefined,
+        'quality',
+        () => undefined,
+        styleSection(metrics, targets, rows),
+      ),
+    )
+    expect(markup).toContain('自查清单')
+    // One pass, one fail, eleven not-applicable: the tally must name all three.
+    expect(markup).toContain('√ 1 · × 1 · — 11')
+    // Thirteen rendered rows; the stylesheet also names the class, so the count
+    // anchors on the attribute instead of the bare token.
+    expect(markup.match(/class="nwe-selfcheck-row/g)).toHaveLength(13)
+    expect(markup).toContain('未通过')
+    expect(markup).toContain('不适用')
+    expect(markup).toContain('aria-label="投稿自查清单"')
+    // 390px: the row is a grid whose text column may shrink, and long details
+    // wrap inside it. Removing either would let the card scroll sideways.
+    expect(markup).toContain('nwe-selfcheck')
+    expect(PANEL_CSS).toContain(
+      '.nwe-selfcheck-row { display: grid; grid-template-columns: 18px minmax(0, 1fr);',
+    )
+    expect(PANEL_CSS).toContain('overflow-wrap: anywhere')
+  })
 
   it('renders the nine measurements with their targets', () => {
     const markup = renderToStaticMarkup(

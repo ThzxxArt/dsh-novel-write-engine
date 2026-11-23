@@ -63,6 +63,7 @@ export const ARRAY_PARAMETER_CONTRACT: Record<string, Record<string, ArrayParame
     scope: { semantics: 'replace' },
     semantic: { semantics: 'replace' },
     acknowledge: { semantics: 'replace' },
+    self_check: { semantics: 'replace' },
   },
   novel_worldbook: {
     rules: { semantics: 'replace' },

@@ -43,7 +43,13 @@ import {
 import { countWordMetrics } from '../domain/wordcount.js'
 import { measureStyle, styleVocabulary } from '../domain/style.js'
 import { STYLE_RULES } from '../codes.js'
-import { reviewArithmeticProblems, totalScore } from '../domain/scoring.js'
+import {
+  dimensionScore,
+  machineDimensionScores,
+  reviewArithmeticProblems,
+  totalScore,
+} from '../domain/scoring.js'
+import type { MachineDimensionScore, MachineScoreHit } from '../domain/scoring.js'
 import {
   dedupeAdvisories,
   runMachineChecks,
@@ -53,6 +59,7 @@ import {
   type MachineResult,
 } from '../rules/pipeline.js'
 import type { Rulepack, StylePack } from '../rules/types.js'
+import { buildSelfCheck, selfCheckSpec, type SelfCheckAnswer } from '../rules/selfcheck.js'
 import { stylePackMap } from '../stylepack.js'
 import { applyExclusions } from '../domain/scoring.js'
 import {
@@ -217,6 +224,7 @@ import {
   type OutlineChapter,
   type OutlineDocument,
   type SearchReport,
+  type SelfCheckDocument,
   type WorldbookDocument,
   RELATIONSHIP_TYPE_CODES,
 } from '../types.js'
@@ -364,6 +372,14 @@ export interface CheckSubmission {
   acknowledge_reasons?: Record<string, string>
   /** 0.2.14: stop re-reporting this acknowledged class after this chapter. */
   acknowledge_until_chapter?: number
+  /**
+   * 0.2.19: model verdicts for the thirteen submission self-check items.
+   *
+   * Only `hybrid` and `model` rows may be answered. A row whose machine half
+   * already failed cannot be turned into a pass here: the engine owns the fact
+   * layer, and an override would make the checklist decorative.
+   */
+  self_check?: SelfCheckAnswer[]
   root?: string
 }
 
@@ -741,6 +757,34 @@ const PANEL_GROUP_PREVIEW = 50
  */
 const PANEL_LEADS_AUX_LIMIT = 50
 const PANEL_LEADS_PAGE_SIZE = 50
+
+/**
+ * 0.2.19 §9.4.4: every dimension a review issue points at, with the points that
+ * dimension actually lost.
+ *
+ * An issue about R-W-04 whose dimension carries no deduction is an unanchored
+ * score: the reviewer recorded a problem and the number ignored it. The engine
+ * cannot tell whether the deduction belongs somewhere else, so this is a
+ * warning, never a rejection.
+ */
+function deductionAnchors(review: ReviewDocument): Array<{ id: string; issues: number; deduction: number }> {
+  const counts = new Map<string, number>()
+  for (const issue of review.issues) {
+    if (typeof issue.dimension !== 'string' || issue.dimension.trim() === '') continue
+    counts.set(issue.dimension, (counts.get(issue.dimension) ?? 0) + 1)
+  }
+  const rows: Array<{ id: string; issues: number; deduction: number }> = []
+  for (const [id, count] of counts) {
+    const dimension = review.dimensions.find((candidate) => candidate.id === id)
+    if (dimension === undefined) continue
+    rows.push({
+      id,
+      issues: count,
+      deduction: dimension.deductions.reduce((total, entry) => total + entry.delta, 0),
+    })
+  }
+  return rows
+}
 
 export class EngineService {
   private readonly stores = new Map<string, FsStore>()
@@ -5915,6 +5959,10 @@ export class EngineService {
       next_stage: Stage
       /** Present only for an issue amendment. */
       amended?: string[]
+      /** 0.2.19: format dimensions whose declared score the engine overrode. */
+      adjusted?: Array<{ id: string; declared: number; effective: number; basis: string }>
+      /** 0.2.19: the engine's score for all five format dimensions. */
+      machine_scores?: NonNullable<ReviewDocument['machine_scores']>
       rounds?: RoundCounters
     }>
   > {
@@ -5944,15 +5992,60 @@ export class EngineService {
         }
         const provided: ScoreDimension[] = input.dimensions
         const excluded = applyExclusions(provided, this.rulepack.exclusions)
-        const computed = totalScore(excluded.dimensions)
+        // 0.2.19 机检度: the five format dimensions are the engine's, not the
+        // model's. Both numbers are kept so the receipt can show what was
+        // declared and what was counted.
+        const machineScores = this.machineScoresFor(snapshot, text)
+        const machineRecords: NonNullable<ReviewDocument['machine_scores']> = []
+        const scoredDimensions: ScoreDimension[] = excluded.dimensions.map((dimension) => {
+          const score = machineScores.get(dimension.id)
+          if (score === undefined) return dimension
+          const declared = dimensionScore(dimension)
+          machineRecords.push({
+            id: dimension.id,
+            declared,
+            effective: score.effective,
+            basis: 'machine',
+            rules: score.rules,
+          })
+          if (score.deduction === 0) return { ...dimension, max: score.max, deductions: [] }
+          return {
+            ...dimension,
+            max: score.max,
+            deductions: score.rules.map((rule) => ({
+              rule: rule.code,
+              location: this.machineLocation(snapshot, text, rule.code),
+              note: `机检命中 ${rule.hits} 次，扣 ${rule.delta} 分（权重 × 次数，单项上限见 MACHINE_SCORING）`,
+              delta: rule.delta,
+            })),
+          }
+        })
+        const computed = totalScore(scoredDimensions)
         // The engine already computes the total; requiring the caller to
         // recompute it only produced "claimed X != actual Y" loops (M14).
         const claimed = input.total ?? computed
-        if (input.total !== undefined && (!Number.isInteger(input.total) || input.total !== computed)) {
+        // 0.2.19: a *structural* review problem (unknown dimension id, a delta
+        // that exceeds its maximum, a duplicate row) is an input error and is
+        // reported before the gates. Only the claimed total is deferred, because
+        // telling an out-of-order caller "your total is wrong" sends it off to
+        // fix the wrong thing.
+        const structure = reviewArithmeticProblems(scoredDimensions, computed)
+        if (structure.length > 0) {
           throw new EngineInputError(
             ERROR_CODES.SCORE_MISMATCH,
+            `review arithmetic does not close: ${structure.join('; ')}`,
+          )
+        }
+        const totalProblem = (): EngineInputError | null => {
+          if (input.total === undefined || (Number.isInteger(input.total) && input.total === computed)) {
+            return null
+          }
+          return new EngineInputError(
+            ERROR_CODES.SCORE_MISMATCH,
             `claimed total ${String(input.total)} does not equal 150 - Σdelta (${computed})`,
-            'omit total and let the engine compute it, or recompute after the rulepack exclusions',
+            machineRecords.some((record) => record.declared !== record.effective)
+              ? `总分行：你写的 ${String(input.total)} / 引擎按机检度算的 ${computed}。格式硬性五维（R-W-06…R-W-10）由引擎给分，先看 novel_brief 返回的 machine_scores 再提交。`
+              : 'omit total and let the engine compute it, or recompute after the rulepack exclusions',
             {
               details: {
                 field: 'total',
@@ -5962,19 +6055,13 @@ export class EngineService {
                 changed: [],
                 engine_total: computed,
                 raw_total: totalScore(provided),
+                machine_scores: machineRecords,
                 // The rulepack can drop duplicate or mutually exclusive
                 // deductions. A bare "claimed ≠ computed" hides that policy;
                 // list exactly which rows were removed (M14).
                 exclusions_applied: excluded.dropped_entries,
               },
             },
-          )
-        }
-        const arithmetic = reviewArithmeticProblems(excluded.dimensions, claimed)
-        if (arithmetic.length > 0) {
-          throw new EngineInputError(
-            ERROR_CODES.SCORE_MISMATCH,
-            `review arithmetic does not close: ${arithmetic.join('; ')}`,
           )
         }
         const issues = input.issues
@@ -6048,16 +6135,21 @@ export class EngineService {
           chapter: input.chapter,
           round: snapshot.pipeline.rounds.review + 1,
           content_hash: sha256(text),
-          dimensions: excluded.dimensions,
+          dimensions: scoredDimensions,
           issues,
-          total: claimed,
+          total: computed,
           proof: input.proof,
+          ...(machineRecords.length === 0 ? {} : { machine_scores: machineRecords }),
         }
         await this.assertGates(snapshot, 'submitReview', {
           briefStage: 'P4',
           review,
           proof: input.proof,
         })
+        // Stage, brief and reading-proof problems are reported first; only a
+        // submission that could legally land is judged on its declared total.
+        const totalError = totalProblem()
+        if (totalError !== null) throw totalError
         if (text === '') {
           throw new EngineInputError(
             ERROR_CODES.STAGE_ORDER,
@@ -6114,9 +6206,13 @@ export class EngineService {
             total: review.total,
             open_blockers: openBlockers,
             next_stage: next,
+            // 0.2.19 机检度: what the model declared per format dimension versus
+            // what the engine counted. An empty list means the two agreed.
+            adjusted: machineRecords.filter((record) => record.declared !== record.effective),
+            machine_scores: machineRecords,
           },
-          warnings:
-            excluded.dropped > 0
+          warnings: [
+            ...(excluded.dropped > 0
               ? [
                   {
                     code: 'SCORE_EXCLUSIONS',
@@ -6133,7 +6229,18 @@ export class EngineService {
                         .join('; '),
                   },
                 ]
-              : [],
+              : []),
+            // 0.2.19 §9.4.4: a dimension that has an issue pointing at it but
+            // carries no deduction at all means the score ignores a finding the
+            // reviewer itself recorded. Advisory: it does not block, it makes an
+            // unaudited score visible.
+            ...deductionAnchors(review)
+              .filter((entry) => entry.deduction === 0)
+              .map((entry) => ({
+                code: 'DEDUCTION_NOT_ANCHORED',
+                message: `${entry.id} 有一条 issue 指向它，但该维度零扣分；分数没有反映这条问题`,
+              })),
+          ],
         }
       },
     })
@@ -6673,6 +6780,118 @@ export class EngineService {
     })
   }
 
+  /**
+   * 0.2.19: validate the model's self-check answers and build the thirteen rows.
+   *
+   * Three things are refused here, because each one would make the checklist
+   * meaningless:
+   *
+   * 1. a `machine` row — the engine owns those five outright;
+   * 2. a duplicate id — one row, one answer;
+   * 3. a `pass` on a row whose machine half already failed (plan §5, invariant
+   *    5). The model may add a judgement the machine cannot make; it may not
+   *    delete evidence the machine found.
+   */
+  private submitSelfCheck(
+    violations: readonly Violation[],
+    text: string,
+    chapter: number,
+    answers: readonly SelfCheckAnswer[] | undefined,
+  ): SelfCheckDocument | undefined {
+    const block = this.rulepack.selfcheck
+    if (block === undefined) {
+      if (answers !== undefined && Array.isArray(answers) && answers.length > 0) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'self_check needs a rule pack with a `selfcheck` block; this pack has none',
+          'remove self_check, or upgrade the rule pack; without the block the eleven checklist codes never run',
+        )
+      }
+      return undefined
+    }
+    if (answers !== undefined && !Array.isArray(answers)) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        'self_check must be an array of {id, verdict, note}',
+        'omit self_check, or pass an array of model answers',
+      )
+    }
+    const list = answers ?? []
+    const seen = new Set<string>()
+    for (const answer of list) {
+      if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          'each self_check entry must be an object with id, verdict and note',
+        )
+      }
+      const spec = selfCheckSpec(String(answer.id))
+      if (spec === undefined) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `self_check id "${String(answer.id)}" is not one of the thirteen checklist items`,
+          'ids are SC-METAPHOR … SC-TRANSITION, as returned by novel_status',
+        )
+      }
+      if (spec.basis === 'machine') {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${spec.id} is decided by the engine; submitting a verdict is not accepted`,
+          'leave machine-decided rows out of self_check',
+        )
+      }
+      if (answer.verdict !== 'pass' && answer.verdict !== 'fail') {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${spec.id}.verdict must be pass or fail`,
+          'use na only in the engine output; a submission is a judgement',
+        )
+      }
+      if (typeof answer.note !== 'string' || answer.note.trim() === '') {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${spec.id}.note is required`,
+          'say why the row passes or fails; an unexplained verdict cannot be audited',
+        )
+      }
+      if (seen.has(spec.id)) {
+        throw new EngineInputError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${spec.id} appears twice in self_check`,
+          'one row, one answer',
+        )
+      }
+      seen.add(spec.id)
+      if (answer.verdict === 'pass') {
+        const fired = violations.filter((violation) => spec.codes.includes(violation.code))
+        if (fired.length > 0) {
+          const codes = [...new Set(fired.map((violation) => violation.code))]
+          throw new EngineInputError(
+            ERROR_CODES.SCHEMA_INVALID,
+            `${spec.id} cannot be marked pass: ${fired.length} machine finding(s) behind it (${codes.join(', ')})`,
+            'the machine half is the fact layer; fix the text and re-check, or answer fail with the reason',
+            {
+              details: {
+                field: `self_check.${spec.id}`,
+                codes,
+                paragraphs: [...new Set(fired.map((violation) => violation.location.paragraph))].filter(
+                  (paragraph) => paragraph !== undefined,
+                ),
+              },
+            },
+          )
+        }
+      }
+    }
+    return buildSelfCheck({
+      text,
+      chapter,
+      contentHash: sha256(text),
+      violations,
+      answers: list,
+    })
+  }
+
   async runCheck(input: CheckSubmission): Promise<
     OpResult<{
       chapter: number
@@ -6691,6 +6910,8 @@ export class EngineService {
       numeric: NonNullable<CheckDocument['machine']['numeric']>
       stage: Stage
       semantic: { items: import('./semantic.js').SemanticItemResult[]; findings: BlockingItem[] }
+      /** 0.2.19: the thirteen checklist rows; absent when the pack has no selfcheck block. */
+      self_check?: SelfCheckDocument
       rounds: { check: number }
       counted: boolean
     }>
@@ -6707,6 +6928,10 @@ export class EngineService {
             scope,
             acknowledge: input.acknowledge ?? [],
             acknowledge_reasons: input.acknowledge_reasons ?? {},
+            // 0.2.19: two submissions that differ only in the model's checklist
+            // answers are different attempts. Without this key the second one is
+            // refused as "identical to the last refused attempt".
+            self_check: input.self_check ?? [],
           }),
         )}`,
       run: async (snapshot, context) => {
@@ -6757,6 +6982,12 @@ export class EngineService {
         )
         // Persist one row per instance (audit evidence); the *view* below rolls
         // them up by code so a chapter reads as one line per problem class.
+        const selfCheck = this.submitSelfCheck(
+          scopedMachine.violations,
+          text,
+          input.chapter,
+          input.self_check,
+        )
         const advisoryRows = scopedMachine.violations.filter((violation) => violation.severity === 'advisory')
         const machineAdvisories = dedupeAdvisories(advisoryRows)
         const advisoryCodes = [...new Set(machineAdvisories.map((violation) => violation.code))]
@@ -6861,6 +7092,8 @@ export class EngineService {
             ...(semanticResult.findings.length === 0 ? {} : { findings: semanticResult.findings }),
           },
           ...(acknowledged.length === 0 ? {} : { acknowledged }),
+          // 0.2.19: the thirteen checklist rows, bound to this content hash.
+          ...(selfCheck === undefined ? {} : { self_check: selfCheck }),
           ...(verdict === 'fail' ? { failure_class: 'content' as const, counted: true as const } : {}),
           verdict,
         }
@@ -6956,6 +7189,7 @@ export class EngineService {
             numeric: scopedMachine.numeric,
             stage: nextStage,
             semantic: { items: semanticResult.items, findings: semanticResult.findings },
+            ...(selfCheck === undefined ? {} : { self_check: selfCheck }),
             rounds: { check: nextPipeline.rounds.check },
             counted: verdict === 'fail',
           },
@@ -7179,6 +7413,28 @@ export class EngineService {
           status: 'reviewed',
           content_hash: sha256(text),
           summary,
+          // 0.2.19: the chapter row remembers the checklist outcome, so the book
+          // report aggregates thirteen rows per chapter without re-reading every
+          // check document on disk.
+          ...(snapshot.check?.self_check === undefined
+            ? {}
+            : {
+                self_check: {
+                  pass: snapshot.check.self_check.summary.pass,
+                  fail: snapshot.check.self_check.summary.fail,
+                  na: snapshot.check.self_check.summary.na,
+                  failed: snapshot.check.self_check.items
+                    .filter((item) => item.verdict === 'fail')
+                    .map((item) => item.id),
+                  unjudged: snapshot.check.self_check.items
+                    .filter((item) => item.verdict === 'na')
+                    .map((item) => item.id),
+                },
+              }),
+          // 0.2.19 机检度: remember which basis produced `score`, so the book
+          // report can name chapters a re-check would re-score instead of
+          // averaging two scales as if they were one.
+          scoring_basis: snapshot.review?.machine_scores === undefined ? 'self_report' : 'machine',
         }
 
         const roleHints: Record<string, string> = {}
@@ -8574,6 +8830,10 @@ export class EngineService {
         // 0.2.17: the nine style measurements next to the score dimensions, so
         // "this chapter drifted" and "this chapter scored low" sit together.
         style_metrics: panel.bookData?.style_metrics ?? null,
+        // 0.2.19: the thirteen checklist rows sit beside the style card for the
+        // same reason — a row that failed and a number that drifted are two
+        // readings of one chapter, and the author fixes them together.
+        self_check: panel.bookData?.self_check ?? null,
         // The targets travel with the measurements: the client cannot colour a
         // deviation without knowing what the pack asked for.
         style_targets:
@@ -10172,6 +10432,22 @@ export class EngineService {
           : { state: pending.state, txid: pending.txid ?? '', detail: pending.detail ?? '' },
       outlineError: snapshot.outlineError,
       worldbookError: snapshot.worldbookError,
+      // 0.2.19: the active chapter's checklist, clipped to a row-sized detail so
+      // thirteen rows cannot push the payload past 64KB.
+      selfCheck:
+        snapshot.check?.self_check === undefined
+          ? null
+          : snapshot.check.self_check.items.map((item) => ({
+              id: item.id,
+              title: item.title,
+              category: item.category,
+              verdict: item.verdict,
+              basis: item.basis,
+              detail: (item.verdict === 'fail' && item.evidence.length > 0
+                ? `第 ${item.evidence[0]!.paragraph} 段：${item.evidence[0]!.detail}`
+                : (item.note ?? (item.verdict === 'pass' ? '通过' : '—'))
+              ).slice(0, 160),
+            })),
       // 0.2.17: one pack resolution per panel snapshot, reused by identity and
       // the overview card so the two cannot name different styles. Metrics are
       // measured directly — re-running the whole machine pass here would be a
@@ -11352,6 +11628,34 @@ export class EngineService {
     return runMachineChecks(text, this.machineOptions(snapshot, extra))
   }
 
+  /**
+   * 0.2.19 机检度: the engine's own score for the five format dimensions.
+   *
+   * One machine pass, one mapping. The rules see the same code set the check
+   * document will show, so a score can never disagree with the findings behind
+   * it.
+   */
+  private machineScoresFor(snapshot: Snapshot, text: string): Map<string, MachineDimensionScore> {
+    const machine = this.machine(snapshot, text, { summary: snapshot.plan?.summary ?? null })
+    const hits: MachineScoreHit[] = machine.violations.map((violation) => ({
+      code: violation.code,
+      hits: 1,
+    }))
+    // R-W-09 字数 is an internal signal, not a rule code: PG-03 already blocks a
+    // chapter under the floor, and the score must count the same fact.
+    const floor = snapshot.project.targets.words_per_chapter[0]
+    if (countWordMetrics(text).total_word_count < floor) hits.push({ code: 'WORD_COUNT_SHORT', hits: 1 })
+    return machineDimensionScores(hits)
+  }
+
+  /** "第 N 段" for the first finding of `code`; "全章" when it did not fire. */
+  private machineLocation(snapshot: Snapshot, text: string, code: string): string {
+    const machine = this.machine(snapshot, text, { summary: snapshot.plan?.summary ?? null })
+    const violation = machine.violations.find((candidate) => candidate.code === code)
+    const paragraph = violation?.location.paragraph
+    return paragraph === undefined ? '全章' : `第 ${paragraph} 段`
+  }
+
   private briefContextFor(stage: string, snapshot: Snapshot, chapter: number): Record<string, unknown> {
     let cache = this.briefContextCache.get(snapshot)
     if (cache === undefined) {
@@ -11398,6 +11702,25 @@ export class EngineService {
       // 0.2.17: resolved once per brief; a book with no pack gets `null`, which
       // keeps the context byte-identical to 0.2.16.
       style: this.stylepackFor(snapshot.project),
+      // 0.2.19: whether the pack carries the selfcheck block decides whether the
+      // brief may promise a checklist at all.
+      selfcheck: this.rulepack.selfcheck !== undefined,
+      // 0.2.19 机检度: the engine's own score for the five format dimensions, so
+      // P4 submits a total it can actually match instead of guessing.
+      machineScores:
+        stage === 'P4' && snapshot.text !== null && snapshot.text.trim() !== ''
+          ? Object.fromEntries(
+              [...this.machineScoresFor(snapshot, snapshot.text)].map(([id, score]) => [
+                id,
+                {
+                  max: score.max,
+                  deduction: score.deduction,
+                  effective: score.effective,
+                  rules: score.rules,
+                },
+              ]),
+            )
+          : null,
     })
     cache.set(cacheKey, context)
     return context

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import {
   GATE_ORDER,
   OPERATIONS,
+  SELF_CHECK_SPEC,
   STYLE_PACK_LINES,
   TOOL_NAMES,
   loadStyleCatalogue,
@@ -100,6 +101,42 @@ for (const code of [
 // 7. The state contract doc must describe the project's style field.
 const statesDoc = read('docs/states.md')
 check('states/style', statesDoc.includes('style'), 'docs/states.md does not mention style')
+
+// 8. 0.2.19: the thirteen submission self-check items are one table in code and
+// one document for the author. Assert both, line by line, so a renamed row or a
+// changed basis is a red build instead of a wrong answer the model reads out.
+const selfCheckDoc = read('docs/selfcheck.md')
+for (const entry of SELF_CHECK_SPEC) {
+  check(
+    `selfcheck/${entry.id}`,
+    selfCheckDoc.includes(`| \`${entry.id}\` |`),
+    `docs/selfcheck.md has no row for ${entry.id}`,
+  )
+  check(
+    `selfcheck/${entry.id}/title`,
+    selfCheckDoc.includes(entry.title),
+    `docs/selfcheck.md does not carry the checklist wording of ${entry.id}`,
+  )
+  check(
+    `selfcheck/${entry.id}/basis`,
+    selfCheckDoc.includes(`\`${entry.basis}\``),
+    `docs/selfcheck.md does not state the basis ${entry.basis} (${entry.id})`,
+  )
+}
+check('selfcheck/count', SELF_CHECK_SPEC.length === 13, `SELF_CHECK_SPEC has ${SELF_CHECK_SPEC.length} rows`)
+
+// The three briefs that carry the checklist must name it, or the model is scored
+// against a table it never saw.
+for (const [stage, needles] of [
+  ['P3', ['投稿自查清单', '13']],
+  ['P4', ['self_check', 'machine_scores', 'must_answer']],
+  ['P6', ['自查清单复核', 'must_answer']],
+]) {
+  const brief = read(`briefs/${stage}.md`)
+  for (const needle of needles) {
+    check(`briefs/${stage}`, brief.includes(needle), `briefs/${stage}.md does not mention ${needle}`)
+  }
+}
 
 if (problems.length > 0) {
   for (const problem of problems) console.error(`docs check failed — ${problem}`)

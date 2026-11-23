@@ -133,6 +133,125 @@ export function maxOf(id: string): number {
   return SCORE_DIMENSIONS.find((dimension) => dimension.id === id)?.max ?? 0
 }
 
+/* --------------------------------------------------------------- 机检度 (0.2.19) */
+
+/** One rule's contribution to one dimension. */
+export interface MachineScoreRule {
+  /** The rule code whose findings deduct points. */
+  code: string
+  /** Points per finding. */
+  weight: number
+  /** The most this one code may ever deduct from this dimension. */
+  cap: number
+}
+
+/**
+ * 机检度 (WP4): the five format dimensions the engine scores itself.
+ *
+ * This is a *design decision*, not taste, so it is a constant table rather than
+ * a rulepack block: which format facts are worth how many points must not vary
+ * per project, or the same manuscript would score differently under a different
+ * pack. `DESIGN.md` has claimed since 1500 that a ● dimension is engine-scored;
+ * until 0.2.19 the model's own number was taken at face value.
+ *
+ * `WORD_COUNT_SHORT` is not a rule code — it is the internal signal the engine
+ * raises when the chapter is under the floor, and it exists so R-W-09 uses the
+ * same arithmetic as every other dimension instead of a special case.
+ */
+export const MACHINE_SCORING: Readonly<Record<string, readonly MachineScoreRule[]>> = {
+  'R-W-06': [
+    { code: 'LONG_PARAGRAPH', weight: 2, cap: 4 },
+    { code: 'SHORT_PARAGRAPH', weight: 1, cap: 2 },
+  ],
+  'R-W-07': [
+    { code: 'AI_TONE_META', weight: 2, cap: 4 },
+    { code: 'AI_TONE_TEMPLATE', weight: 1, cap: 2 },
+    { code: 'FRAME_REPEAT', weight: 1, cap: 2 },
+    { code: 'PARALLEL_RUN', weight: 1, cap: 2 },
+  ],
+  'R-W-08': [
+    { code: 'PUNCT_STANDARD', weight: 2, cap: 4 },
+    { code: 'QUOTE_UNBALANCED', weight: 4, cap: 4 },
+    { code: 'ILLEGAL_QUOTE', weight: 2, cap: 4 },
+    { code: 'SEMICOLON', weight: 1, cap: 2 },
+    { code: 'SCENE_SEPARATOR', weight: 2, cap: 4 },
+    { code: 'MD_CONTAMINATION', weight: 2, cap: 4 },
+  ],
+  'R-W-09': [{ code: 'WORD_COUNT_SHORT', weight: 2, cap: 2 }],
+  'R-W-10': [{ code: 'TITLE_FORMAT', weight: 1, cap: 1 }],
+}
+
+/** The five dimensions the engine decides; no model deduction survives here. */
+export const MACHINE_DIMENSIONS: readonly string[] = Object.keys(MACHINE_SCORING)
+
+/**
+ * 机检度 per dimension: ● the engine decides, ◐ the engine supplies evidence,
+ * ○ only the model can judge.
+ *
+ * `R-W-13 信息增量` moved from ● to ◐ in 0.2.19. It was marked ● in `DESIGN.md`
+ * from the start, but "does this chapter tell the reader something new" has no
+ * mechanical reading: calling it engine-scored was a documentation error that
+ * would have required inventing a metric nobody could defend.
+ */
+export const DIMENSION_BASIS: Readonly<Record<string, 'machine' | 'hybrid' | 'semantic'>> = {
+  'R-W-06': 'machine',
+  'R-W-07': 'machine',
+  'R-W-08': 'machine',
+  'R-W-09': 'machine',
+  'R-W-10': 'machine',
+  'R-W-13': 'hybrid',
+}
+
+/** Basis for a dimension id; every unlisted dimension is the model's call. */
+export function basisOf(id: string): 'machine' | 'hybrid' | 'semantic' {
+  return DIMENSION_BASIS[id] ?? 'semantic'
+}
+
+/** One code's finding count for a chapter. */
+export interface MachineScoreHit {
+  code: string
+  hits: number
+}
+
+export interface MachineDimensionScore {
+  id: string
+  max: number
+  deduction: number
+  effective: number
+  rules: Array<{ code: string; hits: number; delta: number }>
+}
+
+/**
+ * `deduction = min(max, Σ_code min(cap, weight × hits))`.
+ *
+ * The cap is per code, not for the dimension: a chapter with three long
+ * paragraphs and one stub must not be able to spend the whole paragraph budget
+ * on the long ones and hide the stub.
+ */
+export function machineDimensionScores(hits: readonly MachineScoreHit[]): Map<string, MachineDimensionScore> {
+  const counts = new Map<string, number>()
+  for (const hit of hits) {
+    if (!Number.isFinite(hit.hits) || hit.hits <= 0) continue
+    counts.set(hit.code, (counts.get(hit.code) ?? 0) + hit.hits)
+  }
+  const scores = new Map<string, MachineDimensionScore>()
+  for (const [id, rules] of Object.entries(MACHINE_SCORING)) {
+    const max = maxOf(id)
+    const applied: MachineDimensionScore['rules'] = []
+    let total = 0
+    for (const rule of rules) {
+      const count = counts.get(rule.code) ?? 0
+      if (count <= 0) continue
+      const delta = Math.min(rule.cap, rule.weight * count)
+      applied.push({ code: rule.code, hits: count, delta })
+      total += delta
+    }
+    const deduction = Math.min(max, total)
+    scores.set(id, { id, max, deduction, effective: max - deduction, rules: applied })
+  }
+  return scores
+}
+
 /**
  * Drop the lighter side of a mutually exclusive pair when both fire on the same
  * location, and drop repeated identical deductions. Order is preserved.

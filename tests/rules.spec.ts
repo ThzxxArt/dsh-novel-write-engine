@@ -390,8 +390,9 @@ describe('rule pack compiler', () => {
 describe('machine pipeline', () => {
   it('runs the five steps in order and never emits the lexicon first', () => {
     expect(PIPELINE_STEPS).toEqual(['segment', 'density', 'quote', 'exemption', 'lexicon'])
-    // 0.2.17 adds ten STYLE_* and seven AI_TONE_* rules to the same registry.
-    expect(Object.keys(BUILTIN_RULES)).toHaveLength(56)
+    // 0.2.17 adds ten STYLE_* and seven AI_TONE_* rules to the same registry;
+    // 0.2.19 adds eleven SELFCHECK_* codes for the submission checklist.
+    expect(Object.keys(BUILTIN_RULES)).toHaveLength(67)
   })
 
   it('detects format, punctuation and lexicon violations', () => {

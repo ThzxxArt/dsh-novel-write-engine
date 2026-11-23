@@ -1102,6 +1102,37 @@ export function createNovelTools(
         },
         acknowledge_reasons: openObject('Token 到理由的映射；每个 acknowledge 项都必须有非空理由。'),
         acknowledge_until_chapter: int,
+        self_check: {
+          ...arrayOf(
+            objectOf({
+              id: required({
+                type: 'string',
+                enum: [
+                  'SC-METAPHOR',
+                  'SC-CONCRETE',
+                  'SC-FORMULA',
+                  'SC-PARALLEL',
+                  'SC-LIST',
+                  'SC-DIALOGUE-BEAT',
+                  'SC-DASH',
+                  'SC-QUOTE',
+                  'SC-PUNCT',
+                  'SC-PARAGRAPH',
+                  'SC-LINEBREAK',
+                  'SC-CHAPTER-BREAK',
+                  'SC-TRANSITION',
+                ] as const,
+              }),
+              verdict: required({ type: 'string', enum: ['pass', 'fail'] as const }),
+              note: required(str),
+              evidence: str,
+            }),
+          ),
+          description: arraySemanticsDescription(
+            'replace',
+            '只接受 hybrid/model 行的判定；机器行传了直接拒。',
+          ),
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -1117,6 +1148,9 @@ export function createNovelTools(
           ...(typeof args.acknowledge_until_chapter === 'number'
             ? { acknowledge_until_chapter: args.acknowledge_until_chapter }
             : {}),
+          ...(args.self_check === undefined
+            ? {}
+            : { self_check: asJson(args.self_check, 'self_check') as never[] }),
           root: args.project_root,
         }),
       ),

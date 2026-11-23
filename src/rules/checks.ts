@@ -5,6 +5,7 @@ import { resolveLockBaseline } from '../engine/entity-anchors.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import { STYLE_RULE_IMPLEMENTATIONS } from './style-checks.js'
 import { AI_TONE_IMPLEMENTATIONS } from './ai-tone.js'
+import { SELFCHECK_RULE_IMPLEMENTATIONS, separatorOnlyParagraph } from './selfcheck.js'
 import type { Severity, Violation } from '../types.js'
 import type { Rule, RuleContext, TermEntry } from './types.js'
 
@@ -176,7 +177,10 @@ const sceneSeparator: Rule = (ctx) => {
         )
     }
   })
-  return results
+  // 0.2.19 S13: a paragraph that is nothing but ellipses or dashes is a
+  // separator too. Same owner, not a new code: the checklist question is
+  // "did a transition sign sneak in", and two codes would answer it twice.
+  return [...results, ...separatorOnlyParagraph(ctx)]
 }
 
 const longParagraph: Rule = (ctx) => {
@@ -1803,4 +1807,7 @@ export const BUILTIN_RULES: Readonly<Record<string, Rule>> = {
   ...STYLE_RULE_IMPLEMENTATIONS,
   // 0.2.17 AI-tone family: seven codes, one shared evaluation.
   ...AI_TONE_IMPLEMENTATIONS,
+  // 0.2.19 submission self-check family. Eleven codes, each gated on
+  // `rulepack.selfcheck`, so a pre-0.2.19 pack produces no new finding at all.
+  ...SELFCHECK_RULE_IMPLEMENTATIONS,
 }

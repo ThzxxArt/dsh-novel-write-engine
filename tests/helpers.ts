@@ -272,9 +272,15 @@ export async function readyToArchive(input: {
   await bootstrapToDraft(input)
   await writeDraft({ ...input, text, summary: input.summary })
   await input.engine.getBrief({ stage: 'P4', root: input.root })
+  const sample = sampleReview(1, text, input.issues === undefined ? {} : { issues: input.issues })
   await input.engine.submitReview({
     chapter: 1,
-    ...sampleReview(1, text, input.issues === undefined ? {} : { issues: input.issues }),
+    // 0.2.19: the five format dimensions are scored by the engine, so a fixture
+    // cannot predict the total from its own deductions. Omit `total` and let the
+    // engine compute it — exactly what a real caller is told to do.
+    dimensions: sample.dimensions,
+    issues: sample.issues,
+    proof: sample.proof,
     root: input.root,
   })
   await input.engine.getBrief({ stage: 'P6', root: input.root })

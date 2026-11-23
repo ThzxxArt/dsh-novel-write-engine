@@ -29,8 +29,7 @@
 | `sentence.short/medium/long_ratio`                   | 0..1，和 ≈1              | `STYLE_SENTENCE_MIX`                               | 是                |
 | `sentence.burstiness`                                | low/medium/high          | 只作说明；实际判 `thresholds.burstiness_min`       | 是                |
 | `sentence.max_consecutive_same_length`               | 1..12                    | `STYLE_BURSTINESS` 的 `longest_run`                | 是                |
-| `paragraph.max_chars`                                | 40..400                  | `STYLE_PARAGRAPH_CHARS`（仅当比全局 90 更严）      | 是                |
-| `paragraph.max_sentences`                            | 1..12                    | `STYLE_PARAGRAPH_SENTENCES`                        | 是                |
+| `paragraph.max_chars`                                | 40..400                  | `STYLE_PARAGRAPH_CHARS`（仅当比全局 90 更严）      | 是                || `paragraph.max_sentences`                            | 1..12                    | `STYLE_PARAGRAPH_SENTENCES`                        | 是                |
 | `paragraph.max_actions` / `one_action_per_paragraph` | 0..12 / bool             | **不机检**（中文动词不可靠）                       | 是                |
 | `dialogue.ratio`                                     | 0..1                     | `STYLE_DIALOGUE_RATIO`（判**偏离目标**，不是越界） | 是（作为 target） |
 | `dialogue.tag_style` / `allow_*`                     | 枚举                     | 不机检                                             | 是                |
@@ -40,8 +39,8 @@
 | `structure.opening_moves` / `hook_moves`             | 枚举数组                 | 不机检                                             | 是                |
 | `emotion.min_cues_per_1000`                          | 0..10                    | `STYLE_EMOTION_CUES`                               | 是                |
 | `emotion.required_beats`                             | 5 枚举                   | 不机检                                             | 是                |
-| `banned_patterns`                                    | 1..40 条，每条 2..40 字  | `STYLE_BANNED_PATTERN`                             | 是（前 12 条）    |
-| `exemplars`                                          | 1..3 段，每段 40..400 字 | 不机检                                             | 是（1 段）        |
+| `banned_patterns`                                    | 1..40 条，每条 2..40 字  | `STYLE_BANNED_PATTERN`                             | 是（全部）        |
+| `exemplars`                                          | 1..3 段，每段 40..400 字 | 不机检                                             | 是（全部）        |
 | `critic_rubric`                                      | 3..8 条，每条 4..60 字   | 不机检                                             | 是（全部）        |
 | `thresholds.*`                                       | 见下                     | 决定十条规则                                       | 是                |
 

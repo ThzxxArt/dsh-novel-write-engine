@@ -208,3 +208,14 @@ export {
   stylePackMap,
   stylePackSummaries,
 } from './stylepack.js'
+// 0.2.19: the thirteen-item submission checklist is a public contract — the docs
+// gate compares docs/selfcheck.md against it row by row.
+export { SELF_CHECK_SPEC, buildSelfCheck, selfCheckSpec } from './rules/selfcheck.js'
+export type { SelfCheckAnswer, SelfCheckSpecEntry } from './rules/selfcheck.js'
+export {
+  MACHINE_DIMENSIONS,
+  MACHINE_SCORING,
+  DIMENSION_BASIS,
+  basisOf,
+  machineDimensionScores,
+} from './domain/scoring.js'

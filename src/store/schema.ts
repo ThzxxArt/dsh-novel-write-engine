@@ -121,6 +121,9 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     // field was written but not declared, so the engine could not read back
     // the review it had just amended (REVIEW_UNREADABLE).
     amendments: f('array'),
+    // 0.2.19 机检度: the engine's own score per format dimension. Optional so a
+    // review written before 0.2.19 stays readable.
+    machine_scores: f('array'),
   },
   check: {
     chapter: req('integer'),
@@ -133,6 +136,9 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     failure_class: f('string', { enum: ['submission', 'content'] }),
     counted: f('boolean'),
     legacy_format: f('boolean'),
+    // 0.2.19: the thirteen submission self-check rows. Optional, so a document
+    // written by an earlier version is still a legal check document.
+    self_check: f('object'),
     verdict: req('string', { enum: ['pass', 'fail'] }),
   },
   worldPlan: {

@@ -321,7 +321,10 @@ describe('0.2.17 style metrics edges', () => {
     })
     const vocab = styleVocabulary(bare)
     expect(vocab.abstractEmotion).toEqual([])
-    expect(vocab.metaphor).toEqual([])
+    // 0.2.19: the metaphor vocabulary is an object, because a marker list alone
+    // counted 好像/画像/偶像 as similes. An empty pack has no markers and no
+    // anchors, so the matcher finds nothing.
+    expect(vocab.metaphor).toEqual({ markers: [], concrete_anchors: [] })
     expect(vocab.emotionCues).toEqual([])
   })
 
@@ -620,7 +623,7 @@ describe('0.2.17 remaining guards', () => {
     }
     expect(styleVocabulary(partial)).toEqual({
       abstractEmotion: [],
-      metaphor: [],
+      metaphor: { markers: [], concrete_anchors: [] },
       emotionCues: [],
       pleasure: [],
       adjectives: [],
@@ -632,7 +635,7 @@ describe('0.2.17 remaining guards', () => {
     const empty = compileStylePack({ ...basePack(), banned_patterns: ['眸中'] }, { fileId: 'base-pack' }).pack
     const metrics = measureStyle('雨。', empty, {
       abstractEmotion: [],
-      metaphor: [],
+      metaphor: { markers: [], concrete_anchors: [] },
       emotionCues: [],
       pleasure: [],
       adjectives: [],
@@ -643,7 +646,7 @@ describe('0.2.17 remaining guards', () => {
     // An empty term in a list is ignored rather than counted once per character.
     const withEmpty = measureStyle('雨。', empty, {
       abstractEmotion: [''],
-      metaphor: [],
+      metaphor: { markers: [], concrete_anchors: [] },
       emotionCues: [],
       pleasure: [''],
       adjectives: [],

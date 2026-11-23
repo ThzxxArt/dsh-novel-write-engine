@@ -1,5 +1,6 @@
 import { LIMITS } from '../constants.js'
 import { compareText } from '../domain/stable.js'
+import { SELF_CHECK_SPEC } from '../rules/selfcheck.js'
 import { bookBrief, emptyOutline, emptyWorldbook, outlineCard, worldbookBrief } from './book.js'
 import { projectHandoff } from './handoff.js'
 import type {
@@ -54,6 +55,21 @@ export interface BriefContextInput {
   style?: StylePack | null
   /** Fresh machine findings, so P4 is not asked to rediscover format defects. */
   machine?: unknown
+  /**
+   * 0.2.19 机检度: the engine's score for the five format dimensions.
+   *
+   * P4 must submit a total that matches it, so it is handed the numbers up front.
+   * Null or absent means "no draft to score", which keeps P1/P2/P5/P6 identical.
+   */
+  machineScores?: Record<string, unknown> | null
+  /**
+   * 0.2.19: whether the rule pack carries a `selfcheck` block.
+   *
+   * Without the block the eleven checklist codes never run, so promising the
+   * model a checklist would be a promise the engine cannot keep. Absent means
+   * "no checklist", which keeps a pre-0.2.19 pack's brief byte-identical.
+   */
+  selfcheck?: boolean
   previousText: string | null
   handoff: HandoffDocument | null
   /** 0.2.0 planning layer; optional for older callers and tests. */
@@ -272,6 +288,30 @@ function stageBriefContext(input: BriefContextInput): Record<string, unknown> {
   const epoch = '1970-01-01T00:00:00.000Z'
   const outline = input.outline ?? emptyOutline(epoch)
   const worldbook = input.worldbook ?? emptyWorldbook(epoch)
+  /**
+   * 0.2.19: the submission checklist, in checklist order.
+   *
+   * One table, three stages: P3 writes against it, P4 answers the eight rows the
+   * engine cannot decide, P6 confirms them again. Three copies of the list would
+   * let the three stages describe three different standards.
+   */
+  const selfCheckBlock = (): Record<string, unknown> | null => {
+    if (input.selfcheck !== true || !['P3', 'P4', 'P6'].includes(input.stage)) return null
+    return {
+      version: 1,
+      checklist: SELF_CHECK_SPEC.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        basis: entry.basis,
+      })),
+      // The five `machine` rows are the engine's; a submission for one is refused.
+      must_answer: SELF_CHECK_SPEC.filter((entry) => entry.basis !== 'machine').map((entry) => entry.id),
+      ...(input.stage === 'P4' && input.machineScores !== undefined && input.machineScores !== null
+        ? { machine_scores: input.machineScores }
+        : {}),
+    }
+  }
+  const selfCheck = selfCheckBlock()
   const mentioned = [
     input.text ?? '',
     input.project.description,
@@ -288,6 +328,7 @@ function stageBriefContext(input: BriefContextInput): Record<string, unknown> {
       platform: input.project.platform,
       targets: input.project.targets,
     },
+    ...(selfCheck === null ? {} : { self_check: selfCheck }),
     // 0.2.17: the style block reaches P2–P6 only. P1 declares the world and P8
     // closes the chapter; neither needs to be told how the prose should read.
     ...(input.style === undefined ||
@@ -461,8 +502,11 @@ function styleBlock(pack: StylePack, project: NovelProject): Record<string, unkn
       structure: pack.structure,
       emotion: pack.emotion,
     },
-    banned_patterns: pack.banned_patterns.slice(0, 12),
-    exemplars: pack.exemplars.slice(0, 1),
+    // D4: every banned pattern, not the first twelve. The check judges the
+    // chapter against the whole pack, so a truncated brief deducted points for
+    // phrases the model was never shown. Truncation here was a silent lie.
+    banned_patterns: pack.banned_patterns,
+    exemplars: pack.exemplars,
     critic_rubric: pack.critic_rubric,
     thresholds: pack.thresholds,
   }

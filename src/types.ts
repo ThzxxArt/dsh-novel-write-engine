@@ -281,6 +281,21 @@ export interface ReviewDocument {
   proof?: ReadingProof
   /** 0.2.14: reviewer metadata corrections; does not consume a review round. */
   amendments?: Array<{ at: string; note: string; issues: string[] }>
+  /**
+   * 0.2.19 机检度: the dimensions the engine scored itself.
+   *
+   * Both numbers are kept — what the model declared and what the engine
+   * computed — because the difference is the evidence that the score is not a
+   * self-assessment. Only the `effective` value enters `total`.
+   */
+  machine_scores?: Array<{
+    id: string
+    declared: number
+    effective: number
+    basis: 'machine' | 'hybrid' | 'semantic'
+    /** The findings responsible, with the points each one took. */
+    rules?: Array<{ code: string; hits: number; delta: number }>
+  }>
 }
 
 /** Where a finding lives: manuscript paragraph, ledger entry, or both. */
@@ -382,7 +397,73 @@ export interface CheckDocument {
    * doctor names the chapter instead of failing the read.
    */
   legacy_format?: true
+  /**
+   * 0.2.19: the thirteen submission self-check rows for this chapter.
+   *
+   * Optional because every document written before 0.2.19 is still a legal
+   * check document. Absent means "this project has no `selfcheck` block", which
+   * is also why a pre-0.2.19 rule pack produces no rows at all.
+   */
+  self_check?: SelfCheckDocument
   verdict: 'pass' | 'fail'
+}
+
+/** 0.2.19: the stable id of one submission self-check item (SC-1 … SC-13). */
+export type SelfCheckId =
+  | 'SC-METAPHOR'
+  | 'SC-CONCRETE'
+  | 'SC-FORMULA'
+  | 'SC-PARALLEL'
+  | 'SC-LIST'
+  | 'SC-DIALOGUE-BEAT'
+  | 'SC-DASH'
+  | 'SC-QUOTE'
+  | 'SC-PUNCT'
+  | 'SC-PARAGRAPH'
+  | 'SC-LINEBREAK'
+  | 'SC-CHAPTER-BREAK'
+  | 'SC-TRANSITION'
+
+/**
+ * Who is allowed to decide one item.
+ *
+ * `machine` — the engine decides, the model may not override.
+ * `hybrid` — the engine supplies the fact layer; the model may only confirm a
+ *            failure, never turn one into a pass.
+ * `model`  — only the model can judge; the engine marks what to look at.
+ */
+export type SelfCheckBasis = 'machine' | 'hybrid' | 'model'
+
+/** One quoted paragraph behind a self-check verdict. */
+export interface SelfCheckEvidence {
+  paragraph: number
+  quote: string
+  detail: string
+}
+
+/** One row of the submission checklist, exactly as the editor's table reads. */
+export interface SelfCheckItem {
+  id: SelfCheckId
+  category: 'voice' | 'layout'
+  /** The checklist line, verbatim. */
+  title: string
+  basis: SelfCheckBasis
+  verdict: 'pass' | 'fail' | 'na'
+  /** Every rule code that contributed to this verdict, in canonical order. */
+  codes: string[]
+  evidence: SelfCheckEvidence[]
+  /** Why a hybrid/model item reached its verdict. */
+  note?: string
+}
+
+/** The thirteen rows for one chapter, bound to the manuscript they judged. */
+export interface SelfCheckDocument {
+  schema_version: 1
+  chapter: number
+  content_hash: string
+  /** Always thirteen, always in checklist order. */
+  items: SelfCheckItem[]
+  summary: { pass: number; fail: number; na: number }
 }
 
 /** Every persisted document whose damage status/panel can report. */
@@ -481,7 +562,33 @@ export interface ChapterRecord {
   /** How hard this chapter was before it was archived. */
   rounds?: RoundCounters
   final_check?: 'pass' | 'fail'
+  /**
+   * 0.2.19: the submission checklist outcome at archive time.
+   *
+   * A summary, not the thirteen rows: the rows live in the chapter's check
+   * document, and the book report needs only counts plus which items failed.
+   * Legacy rows archived before 0.2.19 omit it, which reads as "not measured".
+   */
+  self_check?: {
+    pass: number
+    fail: number
+    na: number
+    /** Items that failed in this chapter. */
+    failed: SelfCheckId[]
+    /** Items the engine could not judge (no dialogue, no prose) — not failures. */
+    unjudged: SelfCheckId[]
+  }
   archived_at?: string
+  /**
+   * 0.2.19: how this chapter was scored.
+   *
+   * `machine` means the review carries the engine-computed `machine_scores`
+   * rows for R-W-06…R-W-10. A row archived before 0.2.19 (or written by an
+   * older client) omits it, which reads as `self_report`: re-checking that
+   * chapter will re-score it under the machine basis and the number can move.
+   * The book report lists those chapters instead of silently mixing two scales.
+   */
+  scoring_basis?: 'machine' | 'self_report'
   /** Keys allocated by the archive transaction; lets a cross-process retry replay. */
   assigned_ids?: Record<string, string>
   /** Digest of the archive request that produced this row. */
@@ -1125,6 +1232,38 @@ export interface BookReport {
     /** 0.2.14: the projection that produced `attempts`, not a second addition. */
     attempt_basis?: 'committed_review_submissions' | 'committed_journal' | 'chapter_record'
     dimensions: Array<{ id: string; average: number; samples: number; max: number }>
+  }
+  /**
+   * 0.2.19: the submission checklist across the whole book.
+   *
+   * Present only when at least one archived chapter was checked under a rule
+   * pack that carries the `selfcheck` block; an older book has no rows and the
+   * field is absent rather than a table of zeroes.
+   */
+  self_check?: {
+    /** Archived chapters that carried a checklist outcome. */
+    chapters: number
+    items: Array<{
+      id: SelfCheckId
+      title: string
+      pass: number
+      fail: number
+      na: number
+      /** `fail / (pass + fail)`; `na` rows are not counted as failures. */
+      fail_rate: number
+    }>
+    /** The three items that failed most often, most frequent first. */
+    worst: SelfCheckId[]
+  }
+  /**
+   * 0.2.19: archived chapters whose score predates the machine-scored format
+   * dimensions (R-W-06…R-W-10). Absent when every archived chapter carries the
+   * engine basis, so a book written entirely under 0.2.19+ stays quiet.
+   */
+  scoring_basis?: {
+    machine: 'R-W-06..R-W-10'
+    legacy_chapters: number[]
+    note: string
   }
   /** Per-chapter effort survives archive (pipeline rounds are reset). */
   effort: {

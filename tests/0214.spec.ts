@@ -618,10 +618,14 @@ describe('0.2.14 amend, restore and review correction', () => {
       ]
       const chapterProse = (index: number): string => {
         const bank = banks[index]!
+        // 0.2.19: the opener rotates. Seven paragraphs starting 骑楼的… is a
+        // formula, and `FRAME_REPEAT` now reports it — which would make this
+        // fixture test the checklist instead of the doctor baseline.
+        const openers = ['早上', '晌午', '午后', '傍晚', '天黑前', '夜里', '收摊前']
         return Array.from({ length: 8 }, (_, row) =>
           row === 0
             ? `风从窗缝里挤进来，把桌上${bank.place}的${bank.object}吹得发晃，他伸手按住，又继续${bank.act}。`
-            : `${bank.place}的第${row}段里，他把${bank.object}挪到一边，重新${bank.act}。${bank.sound}从巷口传过来，灯影在墙上晃了一下。`,
+            : `${openers[row % openers.length]}，${bank.place}的第${row}段里，他把${bank.object}挪到一边，重新${bank.act}。${bank.sound}从巷口传过来，灯影在墙上晃了一下。`,
         ).join('\n\n')
       }
       const texts = banks.map((_, index) => chapterProse(index))

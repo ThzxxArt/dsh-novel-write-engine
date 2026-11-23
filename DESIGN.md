@@ -992,7 +992,7 @@ nonEmptyLines = lines.filter(l => l.trim() !== '').length
 **对话指标**：
 
 ```
-dialogue_lines = 含英文直引号 " 的行数
+dialogue_lines = 含四种常见引号（" “ ” 「 」 『 』）任一者的行数
 dialogue_ratio = dialogue_lines / nonEmptyLines     // 小数字面量，禁百分比
 ```
 
@@ -1121,14 +1121,18 @@ rhythm:
 
 | 规则码                      | 判定                                                                  | 数据来源           |
 | --------------------------- | --------------------------------------------------------------------- | ------------------ |
-| `CROSS_CHAPTER_REPEAT`      | 与近 3 章正文段落相似度 > 阈值                                        | 正文               |
+| `DUPLICATE_PARAGRAPH`       | 与近 3 章正文段落相似度 > 阈值                                        | 正文               |
 | `FS_REVISITED_TOO_SOON`     | 提及伏笔时 `chapter - last_touched < minDormancy` 且 `new_info=false` | `foreshadows.yaml` |
-| `FS_MENTION_OVER_LIMIT`     | 同一伏笔本章提及 > 2 处                                               | 正文 + 台账        |
-| `RESOURCE_NEGATIVE_BALANCE` | 累计 `resource_changes` 出现负余额                                    | `chapters.yaml`    |
-| `TIMELINE_TIME_REGRESSION`  | 故事时间早于前一事件却标为后续章                                      | `timeline.yaml`    |
-| `RELATION_UNDECLARED`       | 两角色强互动但 `relationships.yaml` 无记录（弱判定）                  | 正文 + 台账        |
-| `CHARACTER_UNKNOWN`         | `characters_appeared` 里的角色不在 `characters.yaml`                  | 索引               |
-| `FORESHADOW_DANGLING`       | 伏笔埋设后 `maxDormancy` 章未推进/回收                                | 台账               |
+| `FS_REVISITED_TOO_SOON`     | 同一伏笔本章提及 > 2 处（并入上一行，同一 owner）                     | 正文 + 台账        |
+| `RESOURCE_MISMATCH`         | `resource_changes` 的符号/单位/证据与正文不一致                       | `chapters.yaml`    |
+| `TIME_REGRESSION`           | 故事时间早于前一事件却标为后续章                                      | `timeline.yaml`    |
+| `RELATION_UNKNOWN`          | 两角色强互动但 `relationships.yaml` 无记录（弱判定）                  | 正文 + 台账        |
+| `RELATION_UNKNOWN`          | `characters_appeared` 里的角色不在 `characters.yaml`（并入同一 owner） | 索引               |
+| `FORESHADOW_DORMANT`        | 伏笔埋设后 `maxDormancy` 章未推进/回收                                | 台账               |
+| `FORESHADOW_OVERDUE`        | `planned_resolve` 已过章仍未回收                                      | 台账               |
+| `FORESHADOW_DUPLICATE_TITLE`| 两条未回收伏笔标题高度相似                                            | 台账               |
+| `LOCKED_DETAIL_DRIFT`       | 正文细节与锁定设定漂移                                                | `locks.yaml`       |
+| `LOCK_BASELINE_MISSING`     | 没有可比对的锁定基线（无法判定，如实说明）                            | `locks.yaml`       |
 
 相似度：**段落级 SimHash + 双阈值**（≥0.90 blocker「复写」；0.75~0.90 advisory「疑似」）。不做全文字符串比对，也不引第三方库（自实现 ~40 行）。
 
@@ -1495,10 +1499,12 @@ const TRANSITIONS: readonly Transition[] = [
 
 ```
 PG-01 任务书 → PG-02 阶段 → PG-04 格式 → PG-03 字数
-  → PG-05 摘要 → PG-06 场景类型 → PG-09 阅读证明
-  → PG-07 评分 → PG-08 问题清零 → PG-10 一致性
-  → PG-11 轮次 → PG-12 归档事务
+  → PG-05 摘要 → PG-06 场景类型 → PG-13 大纲对齐
+  → PG-09 阅读证明 → PG-07 评分 → PG-08 问题清零
+  → PG-10 一致性 → PG-11 轮次 → PG-12 归档事务
 ```
+
+顺序与 `codes.ts` 的 `GATE_ORDER` 逐项一致；`check:docs` 断言这个长度与 `PG-01~PG-13` 的范围。
 
 `runCheck` 的 `scope` 默认 `['content','integrity']`；只给 `content` 时 PG-04 执行、PG-10 跳过，只给 `integrity` 时相反。PG-03 字数与 PG-07 评审分数下限始终执行，scope 不能把它们关掉；collect 的机检结果按同一 scope 过滤，`scope` 写入 check 文档并参与幂等 key。
 
@@ -1582,6 +1588,11 @@ PG-09 READING_PROOF failed:
 > 15 项加总必须严格等于 150，规则包编译时断言（§5.2 第 1 条），不等则拒绝启动。
 >
 > **机检度是新增元数据**：● 的维度由引擎直接给分（模型不得覆盖）；◐ 的维度引擎给「事实层」证据、模型给「判断层」结论；○ 的维度必须由模型判断，但结论必须附原文证据（与 §7.7 同源机制）。
+>
+> **0.2.19 起这句话是真的**：`src/domain/scoring.ts` 的 `MACHINE_SCORING` 给出 `R-W-06/07/08/09/10` 的
+> 扣分表（`deduction = min(max, Σ min(cap, weight × hits))`），`submitReview` 用引擎分数覆盖模型声明值，
+> review 文档落 `machine_scores`（declared 与 effective 并存），回执给 `adjusted[]`。
+> `R-W-13 信息增量` 由 ● 改 ◐：它没有可辩护的机械读数。
 
 #### 分数必须是可核对的算术
 

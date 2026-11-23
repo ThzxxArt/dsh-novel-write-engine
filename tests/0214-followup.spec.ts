@@ -748,10 +748,13 @@ describe('R10: the last four assertions that could not fail', () => {
       ]
       const prose = (index: number): string => {
         const bank = banks[index]!
+        // 0.2.19: same reason as the 0214 fixture — a fixed opener on seven
+        // paragraphs is a formula that `FRAME_REPEAT` reports.
+        const openers = ['早上', '晌午', '午后', '傍晚', '天黑前', '夜里', '收摊前']
         return Array.from({ length: 8 }, (_, row) =>
           row === 0
             ? `风从窗缝里挤进来，把桌上${bank.place}的${bank.object}吹得发晃，他伸手按住，又继续${bank.act}。`
-            : `${bank.place}的第${row}段里，他把${bank.object}挪到一边，重新${bank.act}。${bank.sound}从巷口传过来，灯影在墙上晃了一下。`,
+            : `${openers[row % openers.length]}，${bank.place}的第${row}段里，他把${bank.object}挪到一边，重新${bank.act}。${bank.sound}从巷口传过来，灯影在墙上晃了一下。`,
         ).join('\n\n')
       }
       // Two archived chapters of the same scene type: only then is a third one

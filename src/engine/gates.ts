@@ -189,6 +189,11 @@ const format: Gate = (input, options) => {
       'LONG_PARAGRAPH',
       'TITLE_FORMAT',
       'SYSTEM_LABEL',
+      // 0.2.19: the two new format blockers belong to this gate, or "blocker"
+      // would only mean "fails the P6 check" and a broken draft could still
+      // spend a review and a revision round before anyone noticed.
+      'PUNCT_STANDARD',
+      'QUOTE_UNBALANCED',
     ],
     input.text,
     {

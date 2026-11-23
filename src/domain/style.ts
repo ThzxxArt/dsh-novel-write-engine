@@ -1,4 +1,10 @@
-import { splitParagraphs, splitSentences, sentenceLengths } from './text.js'
+import {
+  paragraphAtOffset,
+  paragraphSpans,
+  splitParagraphs,
+  splitSentences,
+  sentenceLengths,
+} from './text.js'
 import { isBlank } from './wordcount.js'
 import type { StylePack, SensoryChannel } from '../rules/types.js'
 
@@ -28,11 +34,137 @@ const SENSORY_CHANNEL_TERMS: Readonly<Record<SensoryChannel, readonly string[]>>
 /** Word lists a pack does not own: they come from the rulepack. */
 export interface StyleVocabulary {
   abstractEmotion: readonly string[]
-  metaphor: readonly string[]
+  metaphor: MetaphorVocabulary
   emotionCues: readonly string[]
   pleasure: readonly string[]
   adjectives: readonly string[]
   senses: readonly string[]
+}
+
+/**
+ * The words the metaphor matcher needs.
+ *
+ * `markers` are the simile markers; `concrete_anchors` are the concrete nouns
+ * and measure words that must appear right after a marker for it to be a
+ * simile at all. Both are vocabulary, so the rulepack owns them (C10).
+ */
+export interface MetaphorVocabulary {
+  markers: readonly string[]
+  concrete_anchors: readonly string[]
+}
+
+/* ---------------------------------------------------------- metaphor matcher */
+
+/**
+ * 0.2.19 D2: characters that make 像 part of a compound noun rather than a
+ * simile. `好` covers 好像, `图/画/肖/头` cover 图像/画像/肖像/头像, `偶/雕/佛/
+ * 塑/铜/石/木/泥` cover 偶像/雕像/佛像/塑像/铜像/石像/木像/泥像, `影/录/想`
+ * cover 影像/录像/想像, and `不` covers the negation 不像.
+ *
+ * This list is grammar, not taste, so it lives in code: a pack that ships only
+ * markers still gets the compound exclusion and cannot reintroduce the 0.2.18
+ * over-count.
+ */
+const METAPHOR_COMPOUND_HEADS: ReadonlySet<string> = new Set([
+  '好',
+  '图',
+  '画',
+  '肖',
+  '头',
+  '偶',
+  '雕',
+  '佛',
+  '塑',
+  '铜',
+  '石',
+  '木',
+  '泥',
+  '影',
+  '录',
+  '想',
+  '不',
+])
+
+/** 似的 is a simile only when it hangs off one of these. 风似的走开了 is not one. */
+const SIMILE_LEADS: ReadonlySet<string> = new Set(['像', '跟', '和', '如'])
+
+/** 像 + a pronoun/demonstrative is the preposition: 像他这样的人也能活下来。 */
+const PREPOSITIONAL_HEADS: ReadonlySet<string> = new Set([
+  '他',
+  '她',
+  '它',
+  '我',
+  '你',
+  '您',
+  '这',
+  '那',
+  '谁',
+  '其',
+  '们',
+  '如',
+  '此',
+  '什',
+  '咋',
+  '哪',
+])
+
+/** How far right of the marker a concrete anchor may sit. */
+const METAPHOR_RIGHT_WINDOW = 12
+
+/** One simile occurrence, with the paragraph it starts in. */
+export interface MetaphorHit {
+  marker: string
+  /** Character offset of the marker in the source text. */
+  start: number
+  /** 1-based paragraph number, matching `splitParagraphs`. */
+  paragraph: number
+}
+
+/**
+ * Every simile in `text`, under one definition.
+ *
+ * The 0.2.17 counter was a substring scan over `markers`, and `像` is a single
+ * character: 好像是这样的，画像挂在墙上，他偶像的照片。 measured three similes.
+ * A marker now only counts when
+ *
+ * 1. the character before it is not a compound head,
+ * 2. 似的 hangs off 像/跟/和/如,
+ * 3. the next character is not a pronoun/demonstrative (the prepositional 像),
+ * 4. the twelve characters to its right contain a concrete anchor — skipped
+ *    when the pack declares no anchors, so an old pack degrades to 1–3 only.
+ */
+export function metaphorHits(text: string, vocabulary: MetaphorVocabulary): MetaphorHit[] {
+  const markers = vocabulary.markers.filter((marker) => marker !== '')
+  if (markers.length === 0) return []
+  // Longest first so 如同 wins over 如 and 好似 over 好 at the same offset.
+  const ordered = [...markers].sort((left, right) => right.length - left.length)
+  const spans = paragraphSpans(text)
+  const hits: MetaphorHit[] = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const marker = ordered.find((candidate) => text.startsWith(candidate, cursor))
+    if (marker === undefined) {
+      cursor += 1
+      continue
+    }
+    const start = cursor
+    const end = start + marker.length
+    // Never re-read a matched marker as part of the next one.
+    cursor = end
+    const previous = start === 0 ? undefined : text[start - 1]
+    if (marker === '似的' && (previous === undefined || !SIMILE_LEADS.has(previous))) continue
+    if (previous !== undefined && METAPHOR_COMPOUND_HEADS.has(previous)) continue
+    const right = text.slice(end, end + METAPHOR_RIGHT_WINDOW)
+    if (PREPOSITIONAL_HEADS.has(right[0] ?? '')) continue
+    if (
+      vocabulary.concrete_anchors.length > 0 &&
+      !vocabulary.concrete_anchors.some((anchor) => right.includes(anchor))
+    ) {
+      continue
+    }
+    hits.push({ marker, start, paragraph: paragraphAtOffset(spans, start) })
+  }
+  return hits
 }
 
 export interface StyleMetrics {
@@ -75,6 +207,11 @@ export interface StyleMetrics {
  * The one banned-pattern matcher (C2). A `……` entry is a bounded template —
  * `A[\s\S]{0,12}B` — and everything else is a literal substring.
  *
+ * The gap is **lazy**. A greedy `{0,12}` starts at the first A and stretches to
+ * the last B it can reach, so 不是要钱，而是要命。他不是怕死，而是怕疼。 counted
+ * as *one* frame instead of two: the single match swallowed both occurrences.
+ * Occurrence counting needs the nearest B, not the furthest (0.2.19 S3).
+ *
  * It lives here, next to the metrics that count its hits, because the rule and
  * the measurement must never disagree about what "hit" means. `rules/style.ts`
  * re-exports it so the compiler validates with the exact same function.
@@ -84,7 +221,7 @@ export function stylePatternToRegExp(pattern: string): RegExp {
     ? pattern
         .split('……')
         .map((piece) => piece.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        .join('[\\s\\S]{0,12}')
+        .join('[\\s\\S]{0,12}?')
     : pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(source, 'g')
 }
@@ -159,7 +296,7 @@ export function measureStyle(text: string, pack: StylePack, vocabulary: StyleVoc
   )
 
   const abstractEmotion = countTerms(text, vocabulary.abstractEmotion)
-  const metaphor = countTerms(text, vocabulary.metaphor)
+  const metaphor = metaphorHits(text, vocabulary.metaphor).length
   const adjectives = countTerms(text, vocabulary.adjectives)
   const sensory = countTerms(text, vocabulary.senses)
   const cues = countTerms(text, vocabulary.emotionCues)
@@ -258,7 +395,7 @@ export function dialogueRatioFor(
 export function styleVocabulary(rulepack: {
   semantics: {
     abstract_emotion?: { terms: string[] }
-    metaphor?: { markers: string[] }
+    metaphor?: { markers: string[]; concrete_anchors?: string[] }
     emotion_cues?: { terms: string[] }
     adjective_density: { adjectives: string[] }
     sensory_density: { senses: string[] }
@@ -267,7 +404,10 @@ export function styleVocabulary(rulepack: {
 }): StyleVocabulary {
   return {
     abstractEmotion: rulepack.semantics.abstract_emotion?.terms ?? [],
-    metaphor: rulepack.semantics.metaphor?.markers ?? [],
+    metaphor: {
+      markers: rulepack.semantics.metaphor?.markers ?? [],
+      concrete_anchors: rulepack.semantics.metaphor?.concrete_anchors ?? [],
+    },
     emotionCues: rulepack.semantics.emotion_cues?.terms ?? [],
     pleasure: rulepack.semantics.pleasure_density.keywords,
     adjectives: rulepack.semantics.adjective_density.adjectives,

@@ -1,7 +1,9 @@
 import { SCORE_DIMENSIONS, FULL_SCORE, type Exclusion } from '../domain/scoring.js'
+import { stylePatternToRegExp } from '../domain/style.js'
 import { ALL_RULE_CODES } from '../codes.js'
 import { ERROR_CODES, GENRES, PLATFORMS, SCENE_TYPES, SCHEMA_VERSION, EngineFaultError } from '../types.js'
-import type { Rulepack } from './types.js'
+import { compileToneMatcher, usesLineAnchor } from './ai-tone.js'
+import type { AiToneEntry, Rulepack } from './types.js'
 
 const platformDefaults = (words: [number, number], dialogue: [number, number]) => ({
   words_per_chapter: words,
@@ -58,7 +60,7 @@ export const DEFAULT_RULEPACK: Rulepack = {
     // 0.2.17: empty by default, so a pack that predates the style layer compiles
     // to silence rather than to a half-configured rule.
     abstract_emotion: { terms: [] },
-    metaphor: { markers: [] },
+    metaphor: { markers: [], concrete_anchors: [] },
     emotion_cues: { terms: [] },
   },
   platform: {
@@ -128,6 +130,136 @@ const AI_TONE_SEVERITIES = ['blocker', 'advisory'] as const
 const AI_TONE_SCOPES = ['any', 'narration', 'dialogue'] as const
 const AI_TONE_ESCALATIONS = ['none', 'one_level'] as const
 const AI_TONE_MATCHES = ['exact', 'regex', 'template'] as const
+
+const positiveInt = (value: unknown, path: string, min = 1): number => {
+  const parsed = num(value, path)
+  if (!Number.isInteger(parsed) || parsed < min) return invalid(`${path} must be an integer >= ${min}`)
+  return parsed
+}
+
+const stringList = (value: unknown, path: string): string[] => {
+  const list = array(value, path)
+  for (const [index, entry] of list.entries()) string(entry, `${path}[${index}]`)
+  const strings = list as string[]
+  if (new Set(strings).size !== strings.length) invalid(`${path} must not repeat an entry`)
+  return strings
+}
+
+/**
+ * 0.2.19: validate the submission self-check block.
+ *
+ * Every number here decides whether a finding is a false positive, so the block
+ * is rejected rather than half-understood: an unknown key, a zero window or a
+ * frame without the `……` separator would silently change what the engine says
+ * about a manuscript. Ten assertions, one per class of defect (plan §11).
+ */
+function validateSelfcheck(raw: unknown): void {
+  if (raw === undefined) return
+  const block = object(raw, 'selfcheck')
+  knownKeys(
+    block,
+    [
+      'version',
+      'metaphor',
+      'concrete',
+      'frames',
+      'opening_repeat',
+      'parallel',
+      'enumeration',
+      'dialogue_run',
+      'paragraph',
+      'punctuation',
+    ],
+    'selfcheck',
+  )
+  // 1. version
+  if (block.version !== 1) invalid('selfcheck.version must be 1')
+
+  // 2. every threshold is a positive integer with a documented floor
+  const metaphor = object(block.metaphor, 'selfcheck.metaphor')
+  knownKeys(metaphor, ['max_per_sentence', 'max_stacks_per_paragraph'], 'selfcheck.metaphor')
+  positiveInt(metaphor.max_per_sentence, 'selfcheck.metaphor.max_per_sentence')
+  positiveInt(metaphor.max_stacks_per_paragraph, 'selfcheck.metaphor.max_stacks_per_paragraph', 2)
+
+  const concrete = object(block.concrete, 'selfcheck.concrete')
+  knownKeys(concrete, ['abstract_nouns', 'min_per_paragraph'], 'selfcheck.concrete')
+  // 5. both word lists must exist and be unique, or the count is meaningless
+  if (stringList(concrete.abstract_nouns, 'selfcheck.concrete.abstract_nouns').length === 0) {
+    invalid('selfcheck.concrete.abstract_nouns must not be empty')
+  }
+  positiveInt(concrete.min_per_paragraph, 'selfcheck.concrete.min_per_paragraph', 2)
+
+  const frames = array(block.frames, 'selfcheck.frames')
+  for (const [index, entry] of frames.entries()) {
+    const path = `selfcheck.frames[${index}]`
+    const frame = object(entry, path)
+    knownKeys(frame, ['pattern', 'max'], path)
+    const pattern = string(frame.pattern, `${path}.pattern`)
+    // 3. the bounded template is the only syntax a frame may use
+    if (!pattern.includes('……')) invalid(`${path}.pattern must contain …… between its two halves`)
+    const compiled = stylePatternToRegExp(pattern)
+    // A frame that compiles to the empty string matches everywhere and would
+    // report every paragraph. `stylePatternToRegExp` never returns empty for a
+    // `……` pattern, but asserting it keeps the invariant explicit.
+    if (compiled.source === '') invalid(`${path}.pattern compiles to an empty matcher`)
+    positiveInt(frame.max, `${path}.max`)
+  }
+
+  const opening = object(block.opening_repeat, 'selfcheck.opening_repeat')
+  knownKeys(opening, ['min_count', 'prefix_chars', 'exclude'], 'selfcheck.opening_repeat')
+  positiveInt(opening.min_count, 'selfcheck.opening_repeat.min_count', 2)
+  positiveInt(opening.prefix_chars, 'selfcheck.opening_repeat.prefix_chars', 1)
+  // 4. an opener exclusion is one or two characters: it is compared with the
+  //    first character of the prefix.
+  const exclude = array(opening.exclude, 'selfcheck.opening_repeat.exclude')
+  for (const [index, entry] of exclude.entries()) {
+    const value = string(entry, `selfcheck.opening_repeat.exclude[${index}]`)
+    const length = Array.from(value).length
+    if (length > 2) invalid(`selfcheck.opening_repeat.exclude[${index}] must be 1 or 2 characters`)
+  }
+
+  const parallel = object(block.parallel, 'selfcheck.parallel')
+  knownKeys(parallel, ['min_run', 'length_delta', 'max_short_sentence'], 'selfcheck.parallel')
+  // A run of two equal sentences is a coincidence, not a 排比.
+  positiveInt(parallel.min_run, 'selfcheck.parallel.min_run', 3)
+  positiveInt(parallel.length_delta, 'selfcheck.parallel.length_delta')
+  positiveInt(parallel.max_short_sentence, 'selfcheck.parallel.max_short_sentence', 2)
+
+  const enumeration = object(block.enumeration, 'selfcheck.enumeration')
+  knownKeys(enumeration, ['min_items', 'max_item_chars', 'ordinals'], 'selfcheck.enumeration')
+  positiveInt(enumeration.min_items, 'selfcheck.enumeration.min_items', 3)
+  positiveInt(enumeration.max_item_chars, 'selfcheck.enumeration.max_item_chars')
+  if (stringList(enumeration.ordinals, 'selfcheck.enumeration.ordinals').length === 0) {
+    invalid('selfcheck.enumeration.ordinals must not be empty')
+  }
+
+  const dialogueRun = object(block.dialogue_run, 'selfcheck.dialogue_run')
+  knownKeys(dialogueRun, ['min_run', 'dialogue_share'], 'selfcheck.dialogue_run')
+  positiveInt(dialogueRun.min_run, 'selfcheck.dialogue_run.min_run', 2)
+  // 7. a share outside (0, 1] would either match nothing or match everything.
+  const share = num(dialogueRun.dialogue_share, 'selfcheck.dialogue_run.dialogue_share')
+  if (!(share > 0 && share <= 1)) invalid('selfcheck.dialogue_run.dialogue_share must be in (0, 1]')
+
+  const paragraph = object(block.paragraph, 'selfcheck.paragraph')
+  knownKeys(paragraph, ['min_chars', 'min_run'], 'selfcheck.paragraph')
+  positiveInt(paragraph.min_chars, 'selfcheck.paragraph.min_chars', 2)
+  positiveInt(paragraph.min_run, 'selfcheck.paragraph.min_run', 1)
+
+  const punctuation = object(block.punctuation, 'selfcheck.punctuation')
+  knownKeys(punctuation, ['halfwidth', 'spaces', 'odd_symbols'], 'selfcheck.punctuation')
+  bool(punctuation.halfwidth, 'selfcheck.punctuation.halfwidth')
+  bool(punctuation.spaces, 'selfcheck.punctuation.spaces')
+  // 6. a "symbol" of two characters would match a word, not a decoration.
+  for (const [index, entry] of array(
+    punctuation.odd_symbols,
+    'selfcheck.punctuation.odd_symbols',
+  ).entries()) {
+    const value = string(entry, `selfcheck.punctuation.odd_symbols[${index}]`)
+    if (Array.from(value).length !== 1) {
+      invalid(`selfcheck.punctuation.odd_symbols[${index}] must be exactly one character`)
+    }
+  }
+}
 
 /**
  * 0.2.17: validate `lexicon.ai_tone`.
@@ -201,6 +333,7 @@ function validateAiTone(raw: unknown): void {
         'escalation',
         'exclude_if_matches',
         'standalone',
+        'multiline',
         'note',
         'replacement',
         'false_positives',
@@ -225,11 +358,22 @@ function validateAiTone(raw: unknown): void {
       for (const [termIndex, term] of terms.entries()) string(term, `${path}.terms[${termIndex}]`)
     } else if (match === 'regex') {
       const pattern = string(entry.pattern, `${path}.pattern`)
-      // 4. a regex that does not compile would throw at check time.
+      const multiline = entry.multiline === true
+      // 4. a regex that does not compile would throw at check time. Validate
+      //    through the run-time compiler so load and run cannot disagree.
+      if (entry.multiline !== undefined) bool(entry.multiline, `${path}.multiline`)
       try {
-        new RegExp(pattern, 'g')
+        compileToneMatcher({ match: 'regex', pattern, multiline } as AiToneEntry)
       } catch {
         invalid(`${path}.pattern does not compile`)
+      }
+      // 4b. D1: `^…$` without the m flag can only match a chapter that is exactly
+      //     that one sentence, which is a rule that never fires. Refusing it at
+      //     load time is the only way this cannot come back through a new entry.
+      if (usesLineAnchor(pattern) && !multiline) {
+        invalid(
+          `${path}.pattern uses ^ or $ without multiline: true; without the m flag the anchors match the entire chapter, not a line`,
+        )
       }
     } else {
       const template = string(entry.template, `${path}.template`)
@@ -312,6 +456,9 @@ export function compileRulepack(raw: unknown): Rulepack {
       'quality',
       'exclusions',
       'exemptions',
+      // 0.2.19: the submission self-check block. Optional, so a pack that
+      // predates it still compiles and produces no new finding.
+      'selfcheck',
     ],
     'root',
   )
@@ -372,7 +519,6 @@ export function compileRulepack(raw: unknown): Rulepack {
   // a mapping with exactly one non-empty string array.
   for (const [key, listKey] of [
     ['abstract_emotion', 'terms'],
-    ['metaphor', 'markers'],
     ['emotion_cues', 'terms'],
   ] as const) {
     const block = nested(semantics, key, [listKey])
@@ -382,6 +528,22 @@ export function compileRulepack(raw: unknown): Rulepack {
     const list = array(block[listKey], `semantics.${key}.${listKey}`)
     for (const [index, entry] of list.entries()) {
       string(entry, `semantics.${key}.${listKey}[${index}]`)
+    }
+  }
+  // 0.2.19 D2: the metaphor block gained an anchor list. It stays optional so a
+  // 0.2.17 pack still compiles; the compound exclusion is in code either way.
+  const metaphor = nested(semantics, 'metaphor', ['markers', 'concrete_anchors'])
+  if (metaphor !== null) {
+    for (const [index, entry] of array(metaphor.markers, 'semantics.metaphor.markers').entries()) {
+      string(entry, `semantics.metaphor.markers[${index}]`)
+    }
+    if (metaphor.concrete_anchors !== undefined) {
+      for (const [index, entry] of array(
+        metaphor.concrete_anchors,
+        'semantics.metaphor.concrete_anchors',
+      ).entries()) {
+        string(entry, `semantics.metaphor.concrete_anchors[${index}]`)
+      }
     }
   }
   const waterWords = nested(semantics, 'water_words', ['window', 'threshold', 'scene_thresholds', 'terms'])
@@ -404,6 +566,7 @@ export function compileRulepack(raw: unknown): Rulepack {
   ])
   nested(lexicon, 'conclusion_first', ['verbs', 'causals'])
   validateAiTone(lexicon === null ? null : lexicon.ai_tone)
+  validateSelfcheck(root.selfcheck)
   for (const key of ['reader_intrusion', 'god_view'] as const) {
     if (lexicon === null || lexicon[key] === undefined) continue
     for (const [index, raw] of array(lexicon[key], `lexicon.${key}`).entries()) {

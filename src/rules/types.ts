@@ -73,7 +73,14 @@ export interface Rulepack {
      * without them compiles to empty and simply makes the density rules silent.
      */
     abstract_emotion?: { terms: string[] }
-    metaphor?: { markers: string[] }
+    /**
+     * 0.2.19 D2: `markers` alone made a substring counter that read 好像 / 画像 /
+     * 偶像 as three similes. `concrete_anchors` is the optional list of concrete
+     * nouns and measure words that must follow a marker; omitting it keeps the
+     * compound and prepositional exclusions (which live in code) and drops only
+     * the "does it point at something you can see" test.
+     */
+    metaphor?: { markers: string[]; concrete_anchors?: string[] }
     emotion_cues?: { terms: string[] }
   }
   /** Platform style profiles; `initProject` uses these when the caller omits targets. */
@@ -114,6 +121,78 @@ export interface Rulepack {
   quality: { dimensions: Array<{ id: string; max: number }> }
   exclusions: Array<{ pair: [string, string]; family: string }>
   exemptions: string[]
+  /**
+   * 0.2.19: the submission self-check block.
+   *
+   * Absent means "this pack predates 0.2.19", and the eleven `SC-*` codes stay
+   * silent — the same rule the style layer follows, so an old pack produces the
+   * old output byte for byte. The compiler rejects unknown keys, a bad version
+   * and out-of-range thresholds, because every value here decides whether a
+   * finding is a false positive.
+   */
+  selfcheck?: SelfcheckBlock
+}
+
+/** 0.2.19 thresholds. Every window is declared here so a pack can tune noise. */
+export interface SelfcheckBlock {
+  version: 1
+  metaphor: {
+    /** More similes than this in one sentence is a stack. */
+    max_per_sentence: number
+    /** Stacked sentences in one paragraph before the paragraph is reported. */
+    max_stacks_per_paragraph: number
+  }
+  concrete: {
+    /** Abstract nouns that carry no image on their own. */
+    abstract_nouns: string[]
+    /** At least this many in one paragraph, with no sensory anchor, is abstract. */
+    min_per_paragraph: number
+  }
+  /** 关联词帧 → 本段允许次数. `……` is the same bounded-template syntax as a style pack. */
+  frames: Array<{ pattern: string; max: number }>
+  opening_repeat: {
+    /** One two-character opener this many times in a chapter is a formula. */
+    min_count: number
+    prefix_chars: number
+    /** Openers that begin with these characters are ordinary grammar, not a tic. */
+    exclude: string[]
+  }
+  parallel: {
+    min_run: number
+    /** Sentences in one run whose lengths may differ by at most this much. */
+    length_delta: number
+    /** The longest sentence that still counts as a short line. */
+    max_short_sentence: number
+  }
+  enumeration: {
+    min_items: number
+    max_item_chars: number
+    ordinals: string[]
+  }
+  dialogue_run: {
+    /** Consecutive dialogue-dominant paragraphs that make a defect. */
+    min_run: number
+    /** Character share inside quotes that makes a paragraph dialogue-dominant. */
+    dialogue_share: number
+  }
+  paragraph: {
+    /** A non-dialogue paragraph shorter than this is a stub. */
+    min_chars: number
+    /**
+     * 0.2.19 WP7: how many consecutive stubs make a habit.
+     *
+     * Measured on a real 57-chapter manuscript: one 4-character paragraph is a
+     * deliberate beat ("咸。"), and reporting each one put the code at 2.97% of
+     * paragraphs — above the 2% false-positive ceiling. Three in a row is the
+     * thing the checklist describes.
+     */
+    min_run: number
+  }
+  punctuation: {
+    halfwidth: boolean
+    spaces: boolean
+    odd_symbols: string[]
+  }
 }
 
 /** Context every rule receives. Rules are pure: no IO, no clock, no randomness. */
@@ -190,6 +269,18 @@ export interface AiToneEntry {
   escalation?: 'none' | 'one_level'
   exclude_if_matches?: string[]
   standalone?: boolean
+  /**
+   * 0.2.19: compile a `regex` entry with the `m` flag, so `^` and `$` mean
+   * "start/end of a line" instead of "start/end of the whole chapter".
+   *
+   * This is an explicit opt-in rather than an automatic `m` for every regex:
+   * adding `m` to a pattern that spans lines would change what `.` and the
+   * anchors mean for entries that never asked for it. The compiler refuses a
+   * pattern that uses line anchors without declaring this, so the 0.2.17 defect
+   * (`^行…$` could only match a chapter that was exactly that one sentence)
+   * cannot come back through a new entry.
+   */
+  multiline?: boolean
   note?: string
   replacement?: string
   false_positives?: string[]

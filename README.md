@@ -65,7 +65,7 @@
 | 身份     | 说明                                                                     |
 | -------- | ------------------------------------------------------------------------ |
 | 状态机   | 9 个命名阶段，非法迁移直接拒绝，断点可续                                 |
-| 规则引擎 | 字数、格式、标点、词表、节奏、跨章一致性，约 30 条机检规则               |
+| 规则引擎 | 字数、格式、标点、词表、节奏、跨章一致性、投稿自查，67 个机检码       |
 | 账本系统 | 正文是唯一真实来源，`state/*.yaml` 是引擎维护的影子层                    |
 | 事务器   | staging → 校验 → 备份 → pending → rename → 读回 → committed              |
 | 观测面   | `novel_status`、`novel_report`、`novel_doctor`、`novel_search`、只读面板 |
@@ -808,12 +808,13 @@ tests/            # 单测、集成、falsify、e2e
 
 以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**105 个测试文件 / 1206 项全部通过**；
-- 覆盖率：**语句 94.19% / 分支 89.05% / 函数 97.28% / 行 94.19%**；逐文件与 `src/rules` 分支门禁通过；client bundle 241.55 KB（react-dom 外置）；
-- `typecheck`、`lint`、`build`、`check:pack`（27 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（173 文件）、`test:isolated`（65 源文件）、`validate:rulepack`：通过；
+- `corepack pnpm test`：**117 个测试文件 / 1521 项全部通过**；
+- 覆盖率：**语句 94.29% / 分支 89.43% / 函数 97.62% / 行 94.29%**；逐文件与 `src/rules` 分支门禁通过；client bundle 251.38 KB（react-dom 外置）；
+- `typecheck`、`lint`、`build`、`check:docs`、`check:pack`（42 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（191 文件）、`test:isolated`（71 源文件）、`validate:rulepack`、`validate:stylepacks`：通过；
 - `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通，13 个包全部解析；
-- 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行”；未做触屏真机与屏幕阅读器验收；
-- 最近一版改了 `workingDirectory` 的解析时机与 `/novel scan` 的取目录回落；新增四条用例先在旧实现上跑红（4/4 失败）再转绿：宿主在插件加载后才注册服务、无目录时回落到会话绑定、失败原因原样回报、工具按调用解析而非构造时一次。
+- 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行、自查清单 13 行在 390px 不横向溢出”；`check:visual` 需要 Playwright + Chromium，本轮真浏览器 **13 张截图**（1280 七个页签 + 390 质量页 + 文风卡 + 自查卡三态）见 `docs/evidence/0.2.19/`；
+- 真实模型：`agnes-2.5-flash` 与 `agnes-3.0-flash` 各跑完一整章（P1→P8 归档→导出），都被引擎接受；逐阶段日志、正文与披露见 `docs/0.2.19-acceptance.md` §9 与 `docs/evidence/0.2.19/real-model-*.md`；
+- 0.2.19 新增的 11 个码在真实 57 章稿上实测（只读、逐段统计）：命中段落占比最高的 `DIALOGUE_RUN` 1.42%、`FRAME_REPEAT` 0.88%，全部低于 2% 红线；两个新 blocker 中 `QUOTE_UNBALANCED` 0 命中、`PUNCT_STANDARD` 6 段（0.07%，均为真实半角标点）。测量口径与逐条样本见 `docs/0.2.19-acceptance.md`；
 - 覆盖率请在**锁定依赖**的工作树上跑（`pnpm install --frozen-lockfile`）；本机 `node_modules` 漂到 vitest 5 时，V8 分支口径不同会误报未达阈值。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。

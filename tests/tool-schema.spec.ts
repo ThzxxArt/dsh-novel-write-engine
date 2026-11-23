@@ -44,7 +44,12 @@ describe('0.2.9 typed tool contract', () => {
       (total, tool) => total + Buffer.byteLength(JSON.stringify(tool.parameters)),
       0,
     )
-    expect(bytes).toBeLessThanOrEqual(32_000)
+    // 0.2.19 raised this from 32,000 to 33,000 for `novel_check.self_check`:
+    // thirteen checklist ids plus verdict/note/evidence is ~590 bytes of real
+    // model-facing contract, not padding. Recorded as deviation P9 in
+    // docs/0.2.19-acceptance.md; the guard still exists so the next addition has
+    // to justify itself the same way.
+    expect(bytes).toBeLessThanOrEqual(33_000)
   })
 
   it('types the outline book blueprint patch', () => {

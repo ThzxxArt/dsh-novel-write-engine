@@ -1413,6 +1413,23 @@ const CSS = `
 .nwe-effort-card { padding: 12px 14px; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-surface); }
 .nwe-effort-card span { display: block; color: var(--nwe-muted); font-size: 10.5px; }
 .nwe-effort-card strong { display: block; margin-top: 2px; font-size: 22px; font-weight: 650; line-height: 1.1; letter-spacing: -.035em; }
+/* 0.2.19 自查清单：13 行、√/×、390px 不横向溢出。 */
+.nwe-selfcheck { display: grid; gap: 0; border: 1px solid var(--nwe-border); border-radius: 8px; background: var(--nwe-surface); overflow: hidden; }
+.nwe-selfcheck > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--nwe-border); }
+.nwe-selfcheck > header h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.nwe-selfcheck > header span { color: var(--nwe-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.nwe-selfcheck-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--nwe-border); }
+.nwe-selfcheck-row:last-child { border-bottom: 0; }
+.nwe-selfcheck-row .nwe-mark { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; text-align: center; color: var(--nwe-ok); }
+.nwe-selfcheck-row.is-fail .nwe-mark { color: var(--nwe-bad); }
+.nwe-selfcheck-row.is-na .nwe-mark { color: var(--nwe-muted); }
+.nwe-selfcheck-row strong { display: block; font-size: 12px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.nwe-selfcheck-row em { display: block; margin-top: 2px; color: var(--nwe-muted); font-size: 10.5px; font-style: normal; line-height: 1.5; overflow-wrap: anywhere; }
+.nwe-selfcheck-row code { color: var(--nwe-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; }
+@media (max-width: 430px) {
+  .nwe-selfcheck-row { padding: 8px 10px; }
+  .nwe-selfcheck > header { padding: 10px 10px 8px; }
+}
 .nwe-section-search {
   display: flex;
   align-items: center;
@@ -4745,6 +4762,7 @@ const qualitySection = (
         )
   const extras = [
     pacingRows.length === 0 ? null : sectionBlock('节奏', pacingRows, 'pacing'),
+    selfCheckCard(row.self_check),
     styleCard(row.style_metrics, row.style_targets),
     effortBlock,
   ].filter((block): block is ReactElement => block !== null)
@@ -4766,6 +4784,64 @@ const qualitySection = (
     createElement('div', { className: 'nwe-dim-grid' }, ...bars),
     ...extras,
     qualityDetailPanel(detail, onDetail),
+  )
+}
+
+/**
+ * 0.2.19 自查清单卡：13 行、√/×、一行一句判词。
+ *
+ * 这是一张**投稿前**的表，所以按清单顺序渲染，不按严重度排序：作者是照着这张
+ * 表逐项打勾的，顺序本身就是它的用法。`na` 用「—」而不是「×」——「本章没有
+ * 对白」不是失败。
+ */
+const selfCheckCard = (value: unknown): ReactElement | null => {
+  const rows = Array.isArray(value)
+    ? value.map((entry) => asRow(entry)).filter((entry) => entry !== null)
+    : []
+  if (rows.length === 0) return null
+  const marks: Record<string, string> = { pass: '√', fail: '×', na: '—' }
+  const tally = rows.reduce<Record<string, number>>((total, row) => {
+    const verdict = String(row.verdict ?? 'na')
+    total[verdict] = (total[verdict] ?? 0) + 1
+    return total
+  }, {})
+  return createElement(
+    'section',
+    { className: 'nwe-selfcheck', 'aria-label': '投稿自查清单' },
+    createElement(
+      'header',
+      null,
+      createElement('h3', null, '自查清单'),
+      createElement('span', null, `√ ${tally.pass ?? 0} · × ${tally.fail ?? 0} · — ${tally.na ?? 0}`),
+    ),
+    ...rows.map((row, index) => {
+      const verdict = String(row.verdict ?? 'na')
+      const mark = marks[verdict] ?? '—'
+      return createElement(
+        'div',
+        {
+          className: `nwe-selfcheck-row${verdict === 'fail' ? ' is-fail' : verdict === 'na' ? ' is-na' : ''}`,
+          key: `${String(row.id ?? index)}`,
+        },
+        createElement('span', { className: 'nwe-mark', 'aria-hidden': 'true' }, mark),
+        createElement(
+          'div',
+          null,
+          createElement(
+            'strong',
+            null,
+            textOf(row.title, ''),
+            ' ',
+            createElement('code', null, textOf(row.id, '')),
+          ),
+          createElement(
+            'em',
+            null,
+            `${mark === '√' ? '通过' : mark === '×' ? '未通过' : '不适用'} · ${textOf(row.detail, '')}`,
+          ),
+        ),
+      )
+    }),
   )
 }
 
@@ -6065,3 +6141,8 @@ export function NovelIcon({ size }: { size?: number }): ReactElement {
 }
 
 export { buildView }
+/**
+ * The panel stylesheet, exported so a test can assert a layout rule instead of
+ * trusting that it survived an edit. The real pixel proof is `check:visual`.
+ */
+export const PANEL_CSS = CSS

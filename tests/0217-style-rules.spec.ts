@@ -115,9 +115,11 @@ describe('0.2.17 style metrics', () => {
   })
 
   it('normalises the three densities per 1000 non-whitespace characters (附录 C-19/20/22)', () => {
-    // 1000 non-ws chars: 989 filler + 8 emotion terms + 3 metaphor markers.
-    const base = '雨'.repeat(1000 - 8 - 3)
-    const text = `${base}悲伤愤怒恐惧孤独像如同`
+    // 1000 non-ws chars: 987 filler + 8 chars of four emotion terms + 5 chars
+    // carrying two similes. 0.2.19: a marker only counts when it points at
+    // something concrete, so each one now names an object.
+    const base = '雨'.repeat(1000 - 8 - 5)
+    const text = `${base}悲伤愤怒恐惧孤独像刀如同网`
     const measured = metrics(text)
     expect(measured.diction.abstract_emotion_per_1000).toBe(4)
     expect(measured.diction.metaphor_per_1000).toBe(2)
@@ -218,8 +220,15 @@ describe('0.2.17 style rules', () => {
 
   it('STYLE_METAPHOR_DENSITY reports over the per-1000 ceiling', () => {
     const base = '雨'.repeat(980)
-    expect(codesOf(`${base}像如同仿佛宛如好似`, cold).has(STYLE_RULES.METAPHOR_DENSITY)).toBe(true)
-    expect(codesOf(`${base}像`, cold).has(STYLE_RULES.METAPHOR_DENSITY)).toBe(false)
+    // 0.2.19: five similes that each name something concrete; five bare markers
+    // in a row are not similes and no longer count (D2).
+    expect(
+      codesOf(`${base}像刀如同一张网仿佛一池死水宛如一口井好似一面镜子`, cold).has(
+        STYLE_RULES.METAPHOR_DENSITY,
+      ),
+    ).toBe(true)
+    expect(codesOf(`${base}像刀`, cold).has(STYLE_RULES.METAPHOR_DENSITY)).toBe(false)
+    expect(codesOf(`${base}像如同仿佛宛如好似`, cold).has(STYLE_RULES.METAPHOR_DENSITY)).toBe(false)
   })
 
   it('STYLE_COOL_POINT_GAP allows the documented 1.5x stretch (附录 C-28)', () => {

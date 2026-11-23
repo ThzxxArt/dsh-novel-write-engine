@@ -2,6 +2,7 @@ import { bookPlanPresent, outlineDrift, outlineSummary, worldbookCounts } from '
 import { normalizeRole } from './state-delta.js'
 import { compareText } from '../domain/stable.js'
 import { splitParagraphs } from '../domain/text.js'
+import { SELF_CHECK_SPEC } from '../rules/selfcheck.js'
 import { stylePackSummaries } from '../stylepack.js'
 import type {
   AuditRow,
@@ -128,6 +129,47 @@ const worldAnchors = (world?: WorldDocument): NonNullable<BookReport['worldbook'
     }
   }
   return out.slice(0, 10)
+}
+
+/**
+ * 0.2.19: fold the per-chapter checklist outcomes into one book-level table.
+ *
+ * `fail_rate` divides by `pass + fail`, not by the chapter count: an item that
+ * was `na` in half the book (a chapter with no dialogue, for instance) is not
+ * failing in those chapters, and counting it as a failure would manufacture a
+ * problem out of a missing object.
+ */
+function aggregateSelfCheck(records: readonly ChapterRecord[]): BookReport['self_check'] | null {
+  const measured = records.filter((record) => record.self_check !== undefined)
+  if (measured.length === 0) return null
+  const items = SELF_CHECK_SPEC.map((entry) => {
+    let pass = 0
+    let fail = 0
+    let na = 0
+    for (const record of measured) {
+      const row = record.self_check!
+      // The row keeps the failed ids and the unjudged ids, so every item is
+      // classifiable without re-reading the chapter's check document.
+      if (row.failed.includes(entry.id)) fail += 1
+      else if (row.unjudged.includes(entry.id)) na += 1
+      else pass += 1
+    }
+    const graded = pass + fail
+    return {
+      id: entry.id,
+      title: entry.title,
+      pass,
+      fail,
+      na,
+      fail_rate: graded === 0 ? 0 : Math.round((fail / graded) * 1000) / 1000,
+    }
+  })
+  const worst = [...items]
+    .filter((item) => item.fail > 0)
+    .sort((left, right) => right.fail_rate - left.fail_rate || compareText(left.id, right.id))
+    .slice(0, 3)
+    .map((item) => item.id)
+  return { chapters: measured.length, items, worst }
 }
 
 /** Build the whole-book report from one committed snapshot. No IO. */
@@ -380,6 +422,17 @@ export function buildBookReport(input: ReportInput): BookReport {
     warnings.push('部分旧章缺少归档 effort 元数据；报告已按事务日志回填')
   }
   const persistedAnchors = worldAnchors(input.world)
+  // 0.2.19 机检度: a chapter archived before the engine scored the five format
+  // dimensions carries no `machine` basis. Its number is not comparable with a
+  // re-scored one, so the report names it instead of averaging two scales.
+  const legacyScoring = records
+    // Every `ChapterRecord` is an archived chapter: `reopen` restores the ledger
+    // pre-image, so a record cannot survive without an archive. Filtering on
+    // `archived_at` here dropped the oldest rows — they predate that field and
+    // the report backfills it from the journal two screens above — which made a
+    // real 57-chapter book warn about chapters 2–57 and stay silent about 1.
+    .filter((record) => record.scoring_basis !== 'machine')
+    .map((record) => record.num)
   return {
     progress: {
       archived: records.length,
@@ -458,6 +511,16 @@ export function buildBookReport(input: ReportInput): BookReport {
       rollbacks: effortChapters.reduce((total, chapter) => total + chapter.rollbacks, 0),
       chapters: effortChapters,
     },
+    ...(aggregateSelfCheck(records) === null ? {} : { self_check: aggregateSelfCheck(records)! }),
+    ...(legacyScoring.length === 0
+      ? {}
+      : {
+          scoring_basis: {
+            machine: 'R-W-06..R-W-10',
+            legacy_chapters: legacyScoring,
+            note: '这些章按模型自评口径评审；重跑 P6 会按机检度重算，分数可能下降',
+          },
+        }),
     pacing: {
       scene_types: sceneTypes,
       hook_strength: hookStrength,
@@ -952,6 +1015,13 @@ export interface PanelBookDataInput {
   styleMetrics?: StyleMetrics | null
   /** 0.2.17: the same judgement `novel_report.style` makes, for the panel. */
   styleVerdict?: { verdict: 'pass' | 'attention' | 'no-draft'; findings: string[] } | null
+  /**
+   * 0.2.19: the active chapter's thirteen checklist rows.
+   *
+   * Only the current chapter: thirteen rows × every chapter would blow the 64KB
+   * panel payload. The book-wide picture lives in `report.self_check`.
+   */
+  selfCheck?: PanelBookData['self_check']
   pending: { state: string; txid: string; detail: string } | null
   outlineError: string | null
   worldbookError: string | null
@@ -1170,6 +1240,9 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
     ...(input.styleVerdict === undefined || input.styleVerdict === null
       ? {}
       : { style_verdict: input.styleVerdict }),
+    // 0.2.19: thirteen rows for the active chapter. Absent when no check exists,
+    // so a project that never reached P6 keeps the earlier payload.
+    ...(input.selfCheck === undefined ? {} : { self_check: input.selfCheck }),
   }
 }
 

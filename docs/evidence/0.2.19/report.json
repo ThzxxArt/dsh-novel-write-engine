@@ -1,0 +1,38 @@
+{
+ "url": "http://127.0.0.1:45201/?token=xH-JrMk3uScmEH2iVbQdhrgoQCaKQ015dv6CbOv1Z_k",
+ "cleanUrl": "http://127.0.0.1:44659/?token=1cBNYhyIlrIZZBDgkryawaop62rNC27vh8gm0SzeT0A",
+ "screenshots": [
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-overview.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-概览.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-章节.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-人物.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-线索.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-设定.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-质量.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-1280-健康.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/panel-390-quality.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/style-card.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/selfcheck-card.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/selfcheck-card-390.png",
+  "/mnt/d/CodeWorkspace/dsh-novel-write-engine/docs/evidence/0.2.19/selfcheck-clean.png"
+ ],
+ "warnCount": 5,
+ "overflow": {
+  "scrollWidth": 390,
+  "clientWidth": 390,
+  "body": 390,
+  "offenders": []
+ },
+ "checklist": {
+  "bookA": {
+   "pass": 10,
+   "fail": 1,
+   "na": 2
+  },
+  "clean": {
+   "pass": 11,
+   "fail": 0,
+   "na": 2
+  }
+ }
+}

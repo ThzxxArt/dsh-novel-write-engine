@@ -87,6 +87,32 @@ export const AI_TONE_RULES = {
   JUDGMENT: 'AI_TONE_JUDGMENT',
 } as const
 
+/**
+ * 0.2.19 submission self-check family (SC-*).
+ *
+ * Eleven codes for the items on the editor's pre-submission checklist. Two are
+ * blockers because they are mechanically repairable damage (an unpaired quote
+ * turns the rest of the paragraph into dialogue; a half-width mark in Chinese
+ * prose is a typo). The other nine are advisory: they describe a reading
+ * impression, and an impression must never block archiving.
+ *
+ * All eleven are gated on `rulepack.selfcheck`, so a pack that predates 0.2.19
+ * produces exactly the earlier output.
+ */
+export const SELFCHECK_RULES = {
+  METAPHOR_STACK: 'METAPHOR_STACK',
+  PROSE_ABSTRACT: 'PROSE_ABSTRACT',
+  FRAME_REPEAT: 'FRAME_REPEAT',
+  PARALLEL_RUN: 'PARALLEL_RUN',
+  ENUMERATION: 'ENUMERATION',
+  DIALOGUE_RUN: 'DIALOGUE_RUN',
+  QUOTE_UNBALANCED: 'QUOTE_UNBALANCED',
+  PUNCT_STANDARD: 'PUNCT_STANDARD',
+  SHORT_PARAGRAPH: 'SHORT_PARAGRAPH',
+  MID_SENTENCE_BREAK: 'MID_SENTENCE_BREAK',
+  CHAPTER_END_OPEN: 'CHAPTER_END_OPEN',
+} as const
+
 export const ALL_RULE_CODES: readonly string[] = [
   ...Object.values(FORMAT_RULES),
   ...Object.values(LEXICON_RULES),
@@ -95,6 +121,7 @@ export const ALL_RULE_CODES: readonly string[] = [
   ...Object.values(CROSS_RULES),
   ...Object.values(STYLE_RULES),
   ...Object.values(AI_TONE_RULES),
+  ...Object.values(SELFCHECK_RULES),
 ]
 
 /** Gate identifiers in fixed evaluation order. */

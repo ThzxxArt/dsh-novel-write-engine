@@ -482,6 +482,9 @@ lexicon:
         category: template_phrase
         match: regex
         pattern: '^行[，,]\s*(认了|听你的|你说得对|你说了算|稳|重|轻|平|直)\s*[。！？!?]?$'
+        # 0.2.19 D1: without this the anchors mean "the whole chapter", so the
+        # entry could only fire on a chapter that was exactly that one sentence.
+        multiline: true
         severity: advisory
         scope: any
         note: "行，xxx；只匹配抽象让步/评判，不匹配'行，走吧'"
@@ -616,6 +619,22 @@ semantics:
     terms: [悲伤, 愤怒, 恐惧, 孤独, 委屈, 绝望, 幸福, 痛苦, 无奈, 心酸]
   metaphor:
     markers: [像, 如同, 仿佛, 宛如, 好似, 好比, 似的]
+    # 0.2.19 D2: a marker only counts as a simile when something you can see
+    # follows it. 好像/画像/偶像 are excluded in code (compound heads), so this
+    # list only answers "does the marker point at a concrete thing".
+    concrete_anchors:
+      [
+        口, 井, 潭, 水, 河, 海, 湖, 岸, 滩, 洞, 坑, 缝, 山, 石, 土, 泥, 沙, 灰, 尘,
+        刀, 剑, 枪, 棍, 绳, 网, 锁, 门, 窗, 墙, 楼, 路, 桥, 船, 车, 轮, 灯, 炉,
+        锅, 碗, 杯, 盘, 桌, 椅, 床, 被, 衣, 鞋, 帽, 包, 箱, 柜, 书, 笔, 纸, 墨,
+        钱, 铜, 银, 金, 铁, 木, 竹, 砖, 瓦, 布, 线, 盐, 糖, 醋, 酒, 茶, 药, 烟,
+        火, 冰, 雨, 雪, 风, 云, 光, 影, 血, 骨, 肉, 皮, 毛, 声, 响, 味道, 气味,
+        叶, 叶柄, 枝, 树干, 树根, 花, 草, 根, 藤, 果, 籽, 芽,
+        猫, 狗, 蛇, 鸟, 鱼, 虫, 马, 牛, 羊, 鸡, 鼠, 蚁, 蜂,
+        眼, 手, 脸, 牙, 舌, 喉, 胃, 心, 肺, 脉, 筋, 掌, 指, 肩, 背, 膝, 脚, 发, 眉, 唇,
+        个, 只, 条, 片, 张, 根, 把, 件, 块, 团, 阵, 股, 层, 滴, 粒, 颗, 扇, 道,
+        座, 间, 栋, 面, 汪, 堆, 束, 缕, 抹, 丝, 圈, 排, 串, 群, 双, 对, 副, 架, 艘, 辆, 匹, 尾, 棵, 株,
+      ]
   emotion_cues:
     terms: [手, 肩, 喉, 呼吸, 心跳, 后背, 指尖, 掌心, 牙, 胃, 眼, 嘴角]
 
@@ -690,3 +709,71 @@ exclusions:
   - { pair: [LEX_SOFT_LIMIT, LEX_ZERO_TOLERANCE], family: style }
 
 exemptions: []
+
+# 0.2.19 投稿自查清单（SC-1…SC-13）。
+#
+# 这一块是**全局标准，与风格包无关**：没有绑定风格包的项目照样跑这 13 项。
+# 整块可选——旧的规则包没有它时，11 个新码全部静默，输出与 0.2.18 一致。
+# 每个阈值都直接决定误报率，所以编译器强制校验，不接受半配置。
+selfcheck:
+  version: 1
+
+  # S1 比喻只留一个：一句里超过 1 个算堆叠；一段里 2 句以上堆叠再报一次。
+  metaphor:
+    max_per_sentence: 1
+    max_stacks_per_paragraph: 2
+
+  # S2 画面感：机器只给事实层证据，「能不能成像」由 P4 判。
+  concrete:
+    abstract_nouns: [气氛, 氛围, 情绪, 感觉, 状态, 意义, 命运, 灵魂, 气息, 气场]
+    min_per_paragraph: 2
+
+  # S3 固定句式：`……` 之间最多 12 个字，窗口是**段**。
+  # 一章里用一次 不是……而是…… 是正常叙述，一段里连用两次才是套子。
+  frames:
+    - { pattern: '不是……而是……', max: 1 }
+    - { pattern: '与其说……不如说……', max: 1 }
+    - { pattern: '如果说……那么……', max: 1 }
+    - { pattern: '当……的时候', max: 2 }
+    - { pattern: '因为……所以……', max: 2 }
+    - { pattern: '一边……一边……', max: 2 }
+    - { pattern: '越……越……', max: 2 }
+  opening_repeat:
+    min_count: 3
+    prefix_chars: 2
+    # 代词/连词打头是正常语法，不是口气。
+    exclude: [他, 她, 它, 我, 你, 这, 那, 但, 而, 就, 也, 还, 又, 是, 有]
+
+  # S4 短句排比：动作章多给一句（连击短句是风格）。
+  parallel:
+    min_run: 3
+    length_delta: 2
+    max_short_sentence: 12
+
+  # S5 清单罗列：序数句 / 顿号长清单 / 「短名词：说明」块。
+  enumeration:
+    min_items: 3
+    max_item_chars: 6
+    ordinals:
+      [第一, 第二, 第三, 第四, 第五, 其一, 其二, 其三, 其四, 其五,
+       首先, 其次, 再次, 然后, 最后, 一是, 二是, 三是, 四是, 五是]
+
+  # S6 短对话穿插：连续 4 段纯对白没有动作就是「他说…她说…」的打乒乓球。
+  # WP7 实测：真实 57 章稿上 4 段会命中 3.94% 的段落，超过 2% 红线；放宽到 6。
+  dialogue_run:
+    min_run: 6
+    dialogue_share: 0.6
+
+  # S10 段落下限：「三五个字就另起一段」。上限仍由 LONG_PARAGRAPH 独占。
+  # 单句短段是刻意的节奏（「咸。」），连续 3 段才是习惯；实测 2.97% → 调成连续。
+  paragraph:
+    min_chars: 7
+    min_run: 3
+
+  # S9 标点统一。半角标点只在紧邻中文时才算错，
+  # 3.5% / 10,000 / U.S. / A-B 与整段英文都豁免。
+  punctuation:
+    halfwidth: true
+    spaces: true
+    odd_symbols: ['~', '～', '※', '★', '☆', '→', '←', '↑', '↓']
+

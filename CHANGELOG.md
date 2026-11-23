@@ -1,3 +1,41 @@
+## 0.2.19
+
+0.2.19 把「投稿前自查表」那 13 项从**编辑脑子里的经验**变成引擎里的**可核查对象**：各有稳定 id、判定来源与证据段落；同时把 `DESIGN.md` 写了很久、代码里一行没有的「机检度」补上——格式硬性 15 分从自评改成引擎给分。
+
+仍是 28 工具、13 门控、15 维、150 分制、5 个语义项、8 个风格包、6 种导出；`SCHEMA_VERSION` 保持 1，`payload_version` 保持 7。
+
+### Added
+
+- **投稿自查清单 13 项（`SC-1` … `SC-13`）**：5 项纯机器（破折号、标点、段落、分行、转场）、7 项「机器举证 + 模型下结论」、1 项纯模型（画面感）。`novel_check` 的 check 文档新增 `self_check`，13 行恒按清单顺序，带判定、规则码与段落证据；`docs/selfcheck.md` 与代码里的 `SELF_CHECK_SPEC` 逐行比对（`check:docs`）。
+- **11 个新规则码**：`METAPHOR_STACK`、`PROSE_ABSTRACT`、`FRAME_REPEAT`、`PARALLEL_RUN`、`ENUMERATION`、`DIALOGUE_RUN`、`QUOTE_UNBALANCED`、`PUNCT_STANDARD`、`SHORT_PARAGRAPH`、`MID_SENTENCE_BREAK`、`CHAPTER_END_OPEN`。其中只有 `QUOTE_UNBALANCED`（引号未配对）与 `PUNCT_STANDARD`（中文稿里的半角标点/空格/装饰符）是 blocker，其余 9 个都是 advisory。
+- **规则包新增可选块 `selfcheck`**：阈值、关联词帧、抽象名词表、序数表、装饰符表。整块可选——旧规则包没有它时 11 个新码全部静默，输出与 0.2.18 一致。
+- **机检度（`MACHINE_SCORING`）**：`R-W-06` 段落长度、`R-W-07` 去 AI 味、`R-W-08` 硬性禁令、`R-W-09` 字数、`R-W-10` 标题——这 5 维共 15 分由引擎按 `min(cap, weight × hits)` 计分，模型的声明值被记录但不生效。`novel_review` 回执新增 `adjusted[]`（你写的 / 引擎算的）与 `machine_scores`，review 文档同步落盘；`novel_brief P4` 提前给出机器分，模型按它复算总分。
+- **`R-W-13 信息增量` 由 ● 改 ◐**：设计纠偏——「这一章有没有给读者新信息」没有可辩护的机械读数，标成「引擎给分」是文档错误。
+- **全书报告 `self_check`**：章节账本记住每章的清单结果，`novel_report` 聚合 13 项的 pass/fail/na 与 `fail_rate`，并给出最差三项。
+- **口径变更标记 `scoring_basis`**：归档时在章节账本写下 `machine`（评审带 `machine_scores`）或 `self_report`（0.2.18 及更早的旧行）。`novel_report` 遇到旧行时给出 `scoring_basis.legacy_chapters`，说明「重跑 P6 会按机检度重算、分数可能下降」，不再把两种口径悄悄平均。
+- **面板「自查清单」卡**：13 行、√/×/—，一行一句判词；390px 不横向溢出。
+
+### Fixed
+
+- **`AI-TPL-001` 从来没命中过**（D1）：AI 腔正则编译时只给 `g` 旗标，而这条模式的 `^…$` 意味着「整章就是这一句」。新增条目级 `multiline: true`，并让编译器**拒绝**带 `^`/`$` 却没声明的模式——同一类缺陷不能再从新条目回来。
+- **比喻计数把「好像 / 画像 / 偶像」算成比喻**（D2）：标记「像」是单字，纯子串计数让它在一句话里数出三个比喻。匹配器现在要求左侧不是复合词词头（好/图/画/偶/石/木/泥…）、`似的` 必须挂在 `像/跟/和/如` 后面、右侧 12 字内要有具体名词或量词，`像他这样的人` 这种介词用法不算。实测真实 57 章稿：0 误报。
+- **P4 任务书只带 12 条禁句**（D4）：`banned_patterns.slice(0, 12)` 让 5 个内置包被截（最多丢 5 条），模型被扣分却从没被告知那几条。现在全量带上，示例也全量。
+- **`DIALOGUE_RATIO_SKEWED` 零直接用例**（D5）：56 个码里唯一没有规则层断言的，补齐正例、两个反例与判定细节断言。
+- **`STYLE_PARAGRAPH_CHARS` 对 7 个包静默**（D3，判定修正）：不是代码缺陷——包上限 ≥ 全局 90 时，包要报的段落集合是 `LONG_PARAGRAPH` 已拦住集合的子集，让它开火只会在已被 blocker 挡住的段落上再叠一条 advisory。真缺陷是 7 个包装了声明的不可达约束且无人断言；本轮写进 `docs/stylepack.md` 并逐个断言该 guard 语义。
+- **风格包 `……` 模板改为惰性匹配**：贪心的 `{0,12}` 会让「不是要钱，而是要命。他不是怕死，而是怕疼。」只算**一次**帧——一次匹配吞掉两处。计数要用最近的 B，不是最远的。
+
+### Changed
+
+- `PANEL_VERSION` / `package.json` 升到 0.2.19。
+- README 的规则码表、工具与文档计数、工作树验证数字按实测更新。
+- `novel_check` 新增可选入参 `self_check`：只接受 hybrid/model 行；机器行传了直接拒；机器已判 fail 的行不得填 pass。
+
+### 迁移
+
+- 在飞草稿可能因为两个新 blocker 突然过不了格式门：两者都是机械可修的，`novel_check` 回执给逐段证据。
+- 格式硬性五维的分数以引擎为准；总分请按 `novel_brief` 返回的 `machine_scores` 复算，否则 `ENGINE_SCORE_MISMATCH` 会同时回显两个数字。
+- 旧规则包没有 `selfcheck` 块时 11 个新码静默，check 文档不写 `self_check`；给包补上该块即可启用。紧急情况可用 `exemptions: [PUNCT_STANDARD]` 单条关闭，不改代码。
+
 ## 0.2.18
 
 0.2.18 修一个宿主升级后的**面板 400**：DSH 0.2.2 起把 `Connection` 放进 Cordis 服务隔离，插件从外部调用 `connection.admit()` 会抛 `cannot get property "connection.authentication" without inject`，宿主把处理器抛出的异常统一回成裸 400，于是面板显示「书稿读取失败」。同一个版本移除了 `connection.requestRejection`，改由路由自身的 `auth` 策略在进入处理器前认证。

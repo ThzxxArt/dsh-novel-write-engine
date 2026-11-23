@@ -20,6 +20,20 @@ export interface PanelWorldEntry {
 }
 
 export interface PanelBookData {
+  /**
+   * 0.2.19: the thirteen rows of the submission checklist for the active
+   * chapter, in checklist order. `null` when the project has no check yet or the
+   * rule pack predates the block; `detail` is a one-line reason small enough to
+   * render in a row.
+   */
+  self_check?: Array<{
+    id: string
+    title: string
+    category: 'voice' | 'layout'
+    verdict: 'pass' | 'fail' | 'na'
+    basis: 'machine' | 'hybrid' | 'model'
+    detail: string
+  }> | null
   identity: {
     author: string
     description: string

@@ -35,11 +35,54 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
 const TEMPLATE_GAP = '[^\\n]{1,8}'
 
 /**
- * Build the matcher for one entry. `g` is mandatory: the evaluator needs every
+ * Flags for one entry's matcher. `g` is mandatory: the evaluator needs every
  * occurrence, and a non-global regex would silently stop at the first.
+ *
+ * `m` is opt-in (`multiline: true`). A pattern such as `^行…$` is line-anchored
+ * by intent; compiled without `m` it can only match a chapter that is exactly
+ * that one sentence, which is how `AI-TPL-001` never fired (D1).
+ */
+export function toneFlags(entry: Pick<AiToneEntry, 'multiline'>): string {
+  return entry.multiline === true ? 'gm' : 'g'
+}
+
+/**
+ * Whether a regex source anchors to a line start/end.
+ *
+ * `^` inside a character class is a negation (`[^。！？]`), not an anchor, and an
+ * escaped `\^` is a literal. The scan tracks both, so this asks the question the
+ * compiler needs answered rather than "does the string contain a caret".
+ */
+export function usesLineAnchor(source: string): boolean {
+  let inClass = false
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]!
+    if (char === '\\') {
+      index += 1
+      continue
+    }
+    if (inClass) {
+      if (char === ']') inClass = false
+      continue
+    }
+    if (char === '[') {
+      inClass = true
+      continue
+    }
+    if (char === '^' || char === '$') return true
+  }
+  return false
+}
+
+/**
+ * Build the matcher for one entry.
+ *
+ * The single owner of "how a tone entry becomes a RegExp": the compiler
+ * validates with this function too, so a validate-time regex and a run-time
+ * regex cannot disagree.
  */
 export function compileToneMatcher(entry: AiToneEntry): RegExp {
-  if (entry.match === 'regex') return new RegExp(entry.pattern!, 'g')
+  if (entry.match === 'regex') return new RegExp(entry.pattern!, toneFlags(entry))
   if (entry.match === 'template') {
     const source = entry
       .template!.split(/\{[a-z]+\}/)
