@@ -21,7 +21,7 @@
 > [!IMPORTANT]
 > 当前发布版本以 npm `latest` 标签为准。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 最近一版给书一个**文风层**：8 份内置风格包（冷峻悬疑 / 热血快节奏 / 群像权谋 / 无限流 / 轻松日常 / 女频拉扯 / 稳健种田 / 怪谈克苏鲁），开书时选一次、之后不可更改；十条 `STYLE_*` 规则与七类 `AI_TONE_*` 规则让「写得像不像这本书」变成可机检的数字，而不是提示词里的形容词。同一版还补了 20 处「门看起来在、其实没在」的证据洞：全角缩进不再计词、引文不能跨任意段拼接、短章不再过不了 PG-09、`话说`/`读者` 不再被当套话。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
+> 最近一版是**投稿自查**：把编辑脑子里的 13 条退稿标准做成引擎可判定的对象——5 项纯机器、7 项「机器举证 + 模型下结论」、1 项纯模型。`novel_check` 的 check 文档多出一张 13 行的 `self_check` 表，面板质量页多一张自查卡；11 个新规则码里只有 `QUOTE_UNBALANCED` 与 `PUNCT_STANDARD` 是 blocker，旧规则包没有 `selfcheck` 块时 11 码全静默。同一版补上 `DESIGN.md` 写了很久、代码里没有的**机检度**：`R-W-06`…`R-W-10` 这 5 个格式维度（15 分）改由引擎按 `min(单项上限, 权重 × 命中次数)` 计分，模型声明值只记录不生效，P4 任务书提前给出 `machine_scores`。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
 
 ---
 
@@ -158,6 +158,36 @@ P7、P8、P9 在 `novel_archive` 一次事务里完成。单章归档后状态�
 
 合计严格 **150**。默认 `minScore = 120`，可在配置里改；它是 PG-07 的唯一过关线。
 
+**机检度**：`R-W-06`…`R-W-10` 这 5 维（共 15 分）由引擎自己算，不是模型自评。每个格式命中按 `min(单项上限, 权重 × 命中次数)` 扣分，单项上限之和不超过维度满分；模型仍然要提交这 5 维（契约不变），但提交的分数会被覆盖，`novel_review` 回执的 `adjusted[]` 列出「你写的 / 引擎算的」，`machine_scores` 给出五个维度的 `max / deduction / effective / 命中规则`。P4 任务书提前带上 `machine_scores`，按它复算总分才不会 `ENGINE_SCORE_MISMATCH`。
+
+### 投稿自查清单（13 项）
+
+这是编辑退稿理由里出现频率最高的 13 条，0.2.19 起每项都有稳定 id、判定来源与证据段落。判定分三类：
+
+- **machine（5 项）**：引擎直接判死，模型提交判定会被拒绝；
+- **hybrid（7 项）**：引擎给事实层证据，模型给判断层结论；机器已判 fail 时，模型不能填 pass；
+- **model（1 项）**：机器只标出「需要看这里」，能不能成立由模型判。
+
+| #   | 自查项       | 判定    | 规则码                                                     |
+| --- | ------------ | ------- | ---------------------------------------------------------- |
+| S1  | 比喻只留一个 | hybrid  | `METAPHOR_STACK`                                           |
+| S2  | 画面感       | model   | `PROSE_ABSTRACT`                                           |
+| S3  | 固定句式     | hybrid  | `FRAME_REPEAT`、`STYLE_BANNED_PATTERN`                     |
+| S4  | 短句排比     | hybrid  | `PARALLEL_RUN`、`UNIFORM_SENTENCE`                         |
+| S5  | 清单罗列     | hybrid  | `ENUMERATION`                                              |
+| S6  | 短对话穿插   | hybrid  | `DIALOGUE_RUN`                                             |
+| S7  | 破折号       | machine | `DASH_BUDGET`                                              |
+| S8  | 对话标点     | hybrid  | `QUOTE_UNBALANCED`、`ILLEGAL_QUOTE`                        |
+| S9  | 标点统一     | machine | `PUNCT_STANDARD`、`SEMICOLON`、`ENGLISH_ELLIPSIS`          |
+| S10 | 段落         | machine | `LONG_PARAGRAPH`、`SHORT_PARAGRAPH`                        |
+| S11 | 分行         | machine | `MID_SENTENCE_BREAK`                                       |
+| S12 | 分章         | hybrid  | `CHAPTER_END_OPEN`                                         |
+| S13 | 转场         | machine | `SCENE_SEPARATOR`                                          |
+
+11 个新码里只有两个是 blocker：`QUOTE_UNBALANCED`（一段里半角引号个数为奇数，会把后文整段渲染成对白）与 `PUNCT_STANDARD`（中文紧邻半角标点、两字之间半角空格、`~ ～ ※ ★ ☆ →` 等装饰符）。两者都在 PG-04 就拦，不用等到 P6；`3.5%`、`10,000`、`U.S.`、`A/B` 和整段英文不会误杀。其余 9 个是 advisory，不阻塞归档。紧急情况可以在规则包写 `exemptions: [PUNCT_STANDARD]` 单条关闭，不改代码。
+
+读面：`novel_check` 的 check 文档带 `self_check`（13 行、判定、证据段落与规则码，恒按清单顺序）；`novel_report` 聚合全书 `pass/fail/na` 与最差三项；面板质量页有「自查清单」卡，13 行、√/×/—，390px 不横向溢出。完整口径见 [docs/selfcheck.md](docs/selfcheck.md)。
+
 ### 关键数字
 
 | 项目           |           数量 |
@@ -167,6 +197,8 @@ P7、P8、P9 在 `novel_archive` 一次事务里完成。单章归档后状态�
 | 阶段           |              9 |
 | 门控           |             13 |
 | 评分维度       | 15（满分 150） |
+| 机检规则码     |             67 |
+| 投稿自查项     |             13 |
 | 阶段任务书     | 7（P1–P6、P8） |
 | 状态账本       |              8 |
 | 导出格式       |              6 |
@@ -641,7 +673,13 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 
 升级后刷新页面、新开会话；面板教程版本随之更新，旧标签页显示“需要刷新”时刷新即可。
 
-最近一版只修 `/novel scan` 的取目录链路，不动 schema 与门控：插件原先在加载期抓一次 `workingDirectory` 服务快照，宿主提供方尚未就绪时该快照永久为 `undefined`，之后每次取目录都失败；失败原因又被空 `catch` 吞掉，于是无论「服务拿不到」还是「目录读不了」，都统一显示成「请在项目工作区中执行」。现在服务按调用时解析，`ensure()` 的具体失败原因原样回报，取不到目录时 `/novel scan` 回落到当前会话已绑定的项目根并注明来源。升级后 `/novel scan` 首行会写「扫描根：<路径>（来源：工作区|会话绑定）」。`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7。
+最近一版是 0.2.19，升级前要知道三件事：
+
+1. **在飞草稿可能过不了格式门**。新增的两个 blocker（`QUOTE_UNBALANCED`、`PUNCT_STANDARD`）在 PG-04 就开火：一段里半角引号个数为奇数，或中文紧邻半角标点/两字之间半角空格，会被拒绝并给逐段证据。机械可修；实在不想改，用 `exemptions: [PUNCT_STANDARD]` 单条关闭。已归档的章不会自动重算，只有重新 `novel_reopen` 再提交时才会撞上。
+2. **格式硬性五维的分数以引擎为准**。`R-W-06`…`R-W-10` 的模型声明值会被覆盖；如果你有脚本自己算 `total`，请按 `novel_brief` 返回的 `machine_scores` 复算，或干脆省略 `total` 让引擎实算，否则会收到 `ENGINE_SCORE_MISMATCH`（回执同时给两个数字）。
+3. **旧规则包不受影响**。规则包里没有 `selfcheck` 块时，11 个新码与 S13 的整段省略号扩展全部静默，check 文档不写 `self_check`，输出与 0.2.18 一致；给包补上该块即可启用。
+
+`SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7，项目文件不需要迁移。
 
 逐版的变更与迁移细节见 [CHANGELOG.md](CHANGELOG.md)；更早版本使用对应发布 tag 或 Release 快照查看。
 
@@ -813,8 +851,8 @@ tests/            # 单测、集成、falsify、e2e
 - `typecheck`、`lint`、`build`、`check:docs`、`check:pack`（42 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（191 文件）、`test:isolated`（71 源文件）、`validate:rulepack`、`validate:stylepacks`：通过；
 - `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通，13 个包全部解析；
 - 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行、自查清单 13 行在 390px 不横向溢出”；`check:visual` 需要 Playwright + Chromium，本轮真浏览器 **13 张截图**（1280 七个页签 + 390 质量页 + 文风卡 + 自查卡三态）见 `docs/evidence/0.2.19/`；
-- 真实模型：`agnes-2.5-flash` 与 `agnes-3.0-flash` 各跑完一整章（P1→P8 归档→导出），都被引擎接受；逐阶段日志、正文与披露见 `docs/0.2.19-acceptance.md` §9 与 `docs/evidence/0.2.19/real-model-*.md`；
-- 0.2.19 新增的 11 个码在真实 57 章稿上实测（只读、逐段统计）：命中段落占比最高的 `DIALOGUE_RUN` 1.42%、`FRAME_REPEAT` 0.88%，全部低于 2% 红线；两个新 blocker 中 `QUOTE_UNBALANCED` 0 命中、`PUNCT_STANDARD` 6 段（0.07%，均为真实半角标点）。测量口径与逐条样本见 `docs/0.2.19-acceptance.md`；
+- 真实模型：`agnes-2.5-flash` 在发布前复跑中再次走完一整章（P1→P8 归档→导出，`ok: true`）；`agnes-3.0-flash` 的六阶段一次通过记录来自上一跑，发布前复跑未能复现——它的一半失败是供应商免费额度 `HTTP 429`，另一半是自己反复写「」引号触发 `ILLEGAL_QUOTE`（0.2.17 起就有这条门）。逐阶段日志、正文与披露见 `docs/0.2.19-acceptance.md` §9 与 `docs/evidence/0.2.19/real-model-*.md`；
+- 0.2.19 新增的 11 个码在真实 57 章稿上实测（只读、逐段统计）：命中段落占比最高的 `DIALOGUE_RUN` 1.42%、`FRAME_REPEAT` 0.88%，全部低于 2% 红线；两个新 blocker 中 `QUOTE_UNBALANCED` 0 命中、`PUNCT_STANDARD` 6 段（0.07%，分布在 4 章）——其中 2 段是真正的半角问号与半角引号，4 段是刻意的半角空格落款，重跑 P6 会被挡住，迁移办法（换成全角空格或顿号）写在 `docs/0.2.19-acceptance.md` §7.3；
 - 覆盖率请在**锁定依赖**的工作树上跑（`pnpm install --frozen-lockfile`）；本机 `node_modules` 漂到 vitest 5 时，V8 分支口径不同会误报未达阈值。
 
 具体数字会随代码变化；发布前请以重新跑出的结果为准，不要把历史数字当保证。
