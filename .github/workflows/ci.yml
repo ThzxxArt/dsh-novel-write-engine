@@ -112,7 +112,7 @@ jobs:
       - run: pnpm check:artifacts
       - run: pnpm check:install
       - run: pnpm check:crash
-      - name: Scale gate (600 chapters: brief size, read-model latency)
+      - name: "Scale gate: 600 chapters, brief size and read-model latency"
         run: pnpm check:scale
       - name: Disk-full gate (real ENOSPC rollback)
         # GitHub runners have passwordless sudo, so this must produce a real

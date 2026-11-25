@@ -7,6 +7,7 @@
  * answer the model reads out loud.
  */
 import { readFileSync, readdirSync } from 'node:fs'
+import { parse as parseYaml } from 'yaml'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -26,9 +27,31 @@ const read = (name) => readFileSync(`${root}${name}`, 'utf8')
 const design = read('DESIGN.md')
 
 const problems = []
+
 const check = (label, condition, detail) => {
   if (condition) return
   problems.push(`${label}: ${detail}`)
+}
+
+// 0.2.20 release: GitHub answers a broken workflow file with "This run likely
+// failed because of a workflow file issue" and **zero jobs**, so the failure has
+// no log to read and every later gate is skipped. A plain YAML colon in an
+// unquoted `name:` did exactly that. Parse every workflow here so the same
+// mistake is a red local gate instead of a dead CI run.
+for (const file of readdirSync(join(root, '.github/workflows')).filter((name) => /\.ya?ml$/.test(name))) {
+  const text = readFileSync(join(root, '.github/workflows', file), 'utf8')
+  try {
+    const parsed = parseYaml(text)
+    check(
+      `workflow/${file}`,
+      typeof parsed === 'object' && parsed !== null && parsed.jobs !== undefined,
+      `${file} has no jobs block`,
+    )
+  } catch (error) {
+    problems.push(
+      `workflow/${file}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
+    )
+  }
 }
 
 // 0. 0.2.20 release review: the version is a product fact in four places —
