@@ -327,8 +327,20 @@ describe('0.2.20 review 3: the lock never spins', () => {
       await symlink(join(dir, 'no-such-target'), join(dir, '.engine.lock'))
       const lock = new FileLock(join(dir, '.engine.lock'), 50, 200)
       const started = Date.now()
-      await expect(lock.acquire()).rejects.toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
+      // 0.2.20 release: Windows follows a dangling reparse point when the file
+      // is opened with O_CREAT, so there `acquire()` legitimately succeeds by
+      // creating the target. The invariant that holds everywhere — and the one
+      // this test exists for — is that it never spins; only a platform that
+      // refuses the open can also prove the rejection.
+      let rejected = false
+      try {
+        await lock.acquire()
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
+        rejected = true
+      }
       expect(Date.now() - started).toBeLessThan(5_000)
+      if (process.platform !== 'win32') expect(rejected).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

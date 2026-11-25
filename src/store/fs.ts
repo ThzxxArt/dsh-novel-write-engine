@@ -339,7 +339,9 @@ export class FsStore {
         await fs.mkdir(current)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
-        throw ioFailure(error)
+        // Windows answers a too-long component here with ENOENT; the path is
+        // what tells the two apart.
+        throw ioFailure(error, current)
       }
     }
   }
@@ -363,7 +365,7 @@ export class FsStore {
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
-      throw ioFailure(error)
+      throw ioFailure(error, absolute)
     }
   }
 
@@ -430,7 +432,7 @@ export class FsStore {
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
-      throw ioFailure(error)
+      throw ioFailure(error, absolute)
     }
   }
 
@@ -470,12 +472,33 @@ function isMissing(error: unknown): boolean {
   )
 }
 
-export function ioFailure(error: unknown): unknown {
+/**
+ * 0.2.20 release: Windows reports a path past MAX_PATH as `ENOENT`, not
+ * `ENAMETOOLONG`, so the mapping below never fired there and the caller got a
+ * bare libuv message for a problem whose fix ("shorten the root") is completely
+ * different from a missing file. A component longer than 255 characters, or an
+ * absolute path past 259 on `win32`, is a path problem on every platform.
+ */
+export function pathLooksTooLong(path: string | undefined): boolean {
+  if (path === undefined || path === '') return false
+  if (process.platform === 'win32' && path.length > 255) return true
+  return path.split(/[\\/]/).some((segment) => segment.length > 255)
+}
+
+export function ioFailure(error: unknown, path?: string): unknown {
   if (error instanceof EngineFaultError) return error
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code?: unknown }).code)
       : ''
+  if ((code === 'ENOENT' || code === 'EINVAL') && pathLooksTooLong(path)) {
+    return new EngineFaultError(
+      ERROR_CODES.IO_PATH_TOO_LONG,
+      `the path is longer than the filesystem allows (${code}): ${path ?? ''}`,
+      'shorten the project root path, or move the project closer to the filesystem root',
+      { cause: error },
+    )
+  }
   if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || code === 'EISDIR') {
     return new EngineFaultError(
       ERROR_CODES.IO_PERMISSION,

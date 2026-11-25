@@ -100,3 +100,16 @@ describe('0.2.20 release: a CRLF checkout renders the same brief', () => {
     }
   })
 })
+
+describe('0.2.20 release: a too-long path is named on every platform', () => {
+  it('maps Windows ENOENT for an oversized component to the path code', async () => {
+    const { pathLooksTooLong } = await import('../src/store/fs.js')
+    // Windows reports MAX_PATH overruns as ENOENT; the old mapping only knew
+    // ENAMETOOLONG, so the author got a bare libuv message for a problem whose
+    // fix ("shorten the root") is nothing like a missing file.
+    expect(pathLooksTooLong(undefined)).toBe(false)
+    expect(pathLooksTooLong('state/short.yaml')).toBe(false)
+    expect(pathLooksTooLong(`state/${'x'.repeat(300)}.yaml`)).toBe(true)
+    expect(pathLooksTooLong(`/tmp/${'y'.repeat(260)}/file.yaml`)).toBe(true)
+  })
+})
