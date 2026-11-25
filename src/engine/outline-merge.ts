@@ -252,6 +252,20 @@ const remapVolume = (
   }
 }
 
+/**
+ * Refuse a volume change that moves an archived chapter outside the volume it
+ * was archived under.
+ *
+ * 0.2.21 review: the evidence key is the volume's stable id, not its title.
+ * `mergeVolumes` upserts by title but deliberately keeps the id across a rename
+ * (0.2.9 stable ids, and `remapVolume` recomputes the positional index from the
+ * range afterwards). Looking the new volume up by title made a rename look like
+ * a removal: a volume holding archived chapters could not be renamed at all,
+ * and the error claimed the chapter had left a volume whose range still covered
+ * it. Match by id first, falling back to the title for legacy rows without an
+ * id; a real removal still fails because neither key resolves, and a range that
+ * no longer covers the archived chapter still fails on the range check.
+ */
 export const assertArchivedCardVolumes = (
   archivedChapters: readonly ChapterRecord[],
   cards: readonly OutlineChapter[],
@@ -260,6 +274,7 @@ export const assertArchivedCardVolumes = (
   operation = 'outline write',
 ): void => {
   const byNum = new Map(cards.map((card) => [card.num, card]))
+  const newById = new Map(newVolumes.map((volume) => [volume.id, volume]))
   const newByTitle = volumeByTitle(newVolumes)
   for (const record of archivedChapters) {
     const card = byNum.get(record.num)
@@ -268,7 +283,7 @@ export const assertArchivedCardVolumes = (
         ? oldVolumes[card.volume - 1]
         : oldVolumes.find((volume) => record.num >= volume.start_chapter && record.num <= volume.end_chapter)
     if (previous === undefined) continue
-    const next = newByTitle.get(previous.title)
+    const next = (previous.id === '' ? undefined : newById.get(previous.id)) ?? newByTitle.get(previous.title)
     if (next === undefined || record.num < next.start_chapter || record.num > next.end_chapter) {
       throw new EngineInputError(
         ERROR_CODES.SCHEMA_INVALID,

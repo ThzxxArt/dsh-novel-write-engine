@@ -13,6 +13,17 @@ export interface TermEntry {
    * 话说/读者/仿佛 inside sentences, so substring matching rejected legal prose.
    */
   match?: 'substring' | 'standalone' | 'line_start'
+  /**
+   * 0.2.20: characters that make an occurrence part of a longer word.
+   *
+   * `standalone` used to require punctuation on both sides, which meant 不禁 /
+   * 仿佛 / 似乎 — the three terms it was written for — could never fire inside a
+   * normal sentence like 他不禁笑了. The rule now counts the term wherever it
+   * appears *except* when the neighbouring character belongs to one of these
+   * lists, which is what "not a compound" actually means.
+   */
+  excludeLeft?: string[]
+  excludeRight?: string[]
 }
 
 /** A soft-limit word, optionally relaxed for some genres. */
@@ -238,6 +249,27 @@ export interface RuleContext {
    * byte-identical to 0.2.16.
    */
   style?: StylePack
+  /**
+   * 0.2.20 D1: the quote style the *project* declared.
+   *
+   * `ascii` (the default) means `"` is the dialogue quote and curly/CJK marks are
+   * wrong; `curly` means 弯引号 or 「」 are correct and `"` is wrong. Before
+   * 0.2.20 the engine hard-coded the ASCII preference, so a manuscript that used
+   * 「」 consistently — the form most Chinese web fiction actually ships — was
+   * blocked on every line. What the rule owns is consistency with the declared
+   * style plus never mixing both in one paragraph.
+   */
+  quotes?: 'ascii' | 'curly'
+  /**
+   * 0.2.20 D2: escalate the two cross-chapter rules a strict book must not ship.
+   *
+   * `RESOURCE_MISMATCH` and `LOCKED_DETAIL_DRIFT` stay advisory by default
+   * because their evidence is heuristic (a number in prose, a description that
+   * changed on purpose). A project that declares `strict_cross: true` wants them
+   * to block. `TIME_REGRESSION` is a blocker either way — a story cannot move
+   * backwards — and has no switch.
+   */
+  strictCross?: boolean
   /** Measured once per chapter by the pipeline; the rules only read it. */
   styleMetrics?: import('../domain/style.js').StyleMetrics
   /**

@@ -112,6 +112,13 @@ jobs:
       - run: pnpm check:artifacts
       - run: pnpm check:install
       - run: pnpm check:crash
+      - name: Scale gate (600 chapters: brief size, read-model latency)
+        run: pnpm check:scale
+      - name: Disk-full gate (real ENOSPC rollback)
+        # GitHub runners have passwordless sudo, so this must produce a real
+        # ENOSPC. A 2 here means the job lost mount rights and the check was
+        # skipped — treat that as a failure, not a pass.
+        run: pnpm check:errno
       - run: node --check lib/client.js
       - run: mkdir -p dist && npm pack --pack-destination dist
       - uses: actions/upload-artifact@v4

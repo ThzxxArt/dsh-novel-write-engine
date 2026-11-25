@@ -12,7 +12,12 @@ import {
   type Genre,
   type Platform,
 } from '../types.js'
-import { amendPatchTouchesKey, type EngineCaller, type EngineService } from '../engine/service.js'
+import {
+  amendPatchTouchesKey,
+  MUTABLE_AMEND_PATHS,
+  type EngineCaller,
+  type EngineService,
+} from '../engine/service.js'
 
 /**
  * Compatibility helper for already-serialized legacy payloads and dynamic
@@ -226,7 +231,15 @@ const makeGuarded =
 const percent = (value: number): string => `${Math.round(value * 1000) / 10}%`
 
 const text = (value: unknown): Array<{ type: 'text'; text: string }> => [
-  { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) },
+  {
+    type: 'text',
+    // 0.2.20 review 3: the host measures the characters of this string, and
+    // every budget in the engine is computed on compact JSON. Pretty-printing
+    // with two-space indentation added ~40% (a 7,200-code-point page arrived as
+    // 10,086), so a payload the engine had proved fits was pruned anyway. Emit
+    // the same bytes the budget measured.
+    text: typeof value === 'string' ? value : JSON.stringify(value),
+  },
 ]
 
 /**
@@ -580,6 +593,22 @@ export function createNovelTools(
           description:
             'Default true. When true the plugin asks the user to confirm the five permanent fields before writing anything; false skips the dialog (scripts, CI, subagents).',
         },
+        quotes: {
+          type: 'string',
+          enum: ['ascii', 'curly'] as const,
+          description:
+            'Dialogue quote style for the whole book: ascii (半角 ") or curly (弯引号 “” / 直角引号 「」). Default ascii. Decided here; it may only change before the first archived chapter. A curly book rejects half-width quotes and vice versa.',
+        },
+        strict_cross: {
+          type: 'boolean',
+          description:
+            'Treat the two heuristic continuity findings (RESOURCE_MISMATCH, LOCKED_DETAIL_DRIFT) as blockers. Default false.',
+        },
+        self_check_required: {
+          type: 'boolean',
+          description:
+            'Require the eight model-answered self-check rows before archiving. Default true; false is the project-level escape.',
+        },
         premise: { type: 'string', description: 'Optional one-sentence premise for the book plan.' },
         logline: { type: 'string' },
         themes: stringArray('replace', 'Book themes; supplied list replaces the theme list.'),
@@ -643,6 +672,9 @@ export function createNovelTools(
           dialogue_ratio_metric: args.dialogue_ratio_metric as 'lines' | 'chars' | 'both' | undefined,
           style: args.style as string,
           style_confirmation: confirmation,
+          quotes: args.quotes as 'ascii' | 'curly' | undefined,
+          strict_cross: args.strict_cross as boolean | undefined,
+          self_check_required: args.self_check_required as boolean | undefined,
           premise: args.premise as string,
           logline: args.logline as string,
           themes: args.themes as string[],
@@ -769,7 +801,7 @@ export function createNovelTools(
     defineTool({
       name: 'novel_brief',
       description:
-        'Fetch the task book for a stage. Issuing it records the digest PG-01 checks. Pass `stage` for one stage or `stages` for several in one transaction.',
+        'Fetch the task book for a stage. Issuing it records the digest PG-01 checks. Pass `stage` for one stage or `stages` for several in one transaction. The ordinary brief is windowed to the host result limit; `full:true` is a diagnostic escape that may be pruned by the host.',
       parameters: {
         stage: {
           type: 'string',
@@ -783,6 +815,11 @@ export function createNovelTools(
             'replace',
             '一次性签发多个阶段：同一事务写一条批量收据，返回 briefs[]。',
           ),
+        },
+        full: {
+          type: 'boolean',
+          description:
+            '仅用于诊断：返回未窗口化的全量台账。结果可能超过宿主 8192 码点而被裁剪，且签发的 digest 不能用于提交；提交前请重新取普通任务书。',
         },
         chapter: { type: 'integer' },
         project_root: root,
@@ -802,20 +839,23 @@ export function createNovelTools(
           // A batch request used to render only the first stage; the model paid
           // for the transaction and never saw P6/P8 (0.2.17 P1-19).
           const briefs = Array.isArray(value.briefs) && value.briefs.length > 0 ? value.briefs : [value]
-          return text(
-            briefs
-              .map((brief) =>
-                [
-                  brief.stage === undefined ? '' : `# ${brief.stage}`,
-                  brief.content ?? '',
-                  `brief digest: ${brief.digest ?? ''}`,
-                  brief.fields === undefined ? '' : `fields:\n${JSON.stringify(brief.fields)}`,
-                  brief.context === undefined ? '' : `context:\n${JSON.stringify(brief.context)}`,
-                ]
-                  .filter((line) => line !== '')
-                  .join('\n'),
-              )
-              .join('\n\n---\n\n'),
+          return withWarnings(
+            text(
+              briefs
+                .map((brief) =>
+                  [
+                    brief.stage === undefined ? '' : `# ${brief.stage}`,
+                    brief.content ?? '',
+                    `brief digest: ${brief.digest ?? ''}`,
+                    brief.fields === undefined ? '' : `fields:\n${JSON.stringify(brief.fields)}`,
+                    brief.context === undefined ? '' : `context:\n${JSON.stringify(brief.context)}`,
+                  ]
+                    .filter((line) => line !== '')
+                    .join('\n'),
+                )
+                .join('\n\n---\n\n'),
+            ),
+            raw,
           )
         },
       },
@@ -823,6 +863,7 @@ export function createNovelTools(
         engine.getBrief({
           ...(args.stage === undefined ? {} : { stage: args.stage }),
           ...(args.stages === undefined ? {} : { stages: args.stages as never[] }),
+          ...(args.full === undefined ? {} : { full: args.full }),
           chapter: args.chapter,
           root: args.project_root,
         }),
@@ -1133,6 +1174,16 @@ export function createNovelTools(
             '只接受 hybrid/model 行的判定；机器行传了直接拒。',
           ),
         },
+        self_check_waivers: {
+          // The thirteen ids are already typed on `self_check` above; repeating
+          // the enum here would spend ~380 bytes of the parameter budget on a
+          // copy. The engine validates the id against the same spec.
+          ...arrayOf(objectOf({ id: required(str), reason: required(str) })),
+          description: arraySemanticsDescription(
+            'replace',
+            '豁免自查行（id 同 self_check），必须写理由；机器行不可豁免。',
+          ),
+        },
         project_root: root,
       },
       output: jsonOutput,
@@ -1151,6 +1202,9 @@ export function createNovelTools(
           ...(args.self_check === undefined
             ? {}
             : { self_check: asJson(args.self_check, 'self_check') as never[] }),
+          ...(args.self_check_waivers === undefined
+            ? {}
+            : { self_check_waivers: asJson(args.self_check_waivers, 'self_check_waivers') as never[] }),
           root: args.project_root,
         }),
       ),
@@ -1279,6 +1333,11 @@ export function createNovelTools(
           type: 'boolean',
           description: 'For kind=briefs: only the current receipt per chapter/stage.',
         },
+        with_chars: {
+          type: 'boolean',
+          description:
+            'For kind=history: include each body size in characters. Off by default; reading every body costs one full manuscript read per revision.',
+        },
         view: {
           type: 'string',
           enum: ['all', 'current'] as const,
@@ -1301,6 +1360,7 @@ export function createNovelTools(
           ...(args.status === undefined ? {} : { status: args.status }),
           ...(args.include_history === undefined ? {} : { include_history: args.include_history }),
           ...(args.current_only === undefined ? {} : { current_only: args.current_only }),
+          ...(args.with_chars === undefined ? {} : { with_chars: args.with_chars }),
           ...(args.view === 'all' || args.view === 'current' ? { view: args.view } : {}),
           root: args.project_root,
         }),
@@ -1313,19 +1373,9 @@ export function createNovelTools(
         path: {
           type: 'string',
           required: true,
-          enum: [
-            'novel.yaml',
-            'state/chapters.yaml',
-            'state/characters.yaml',
-            'state/world.yaml',
-            'state/locks.yaml',
-            'state/timeline.yaml',
-            'state/foreshadows.yaml',
-            'state/relationships.yaml',
-            'state/handoff.yaml',
-            'outline/outline.yaml',
-            'outline/worldbook.yaml',
-          ] as const,
+          // 0.2.20 WP3: generated from the engine's own table, so a path the
+          // engine accepts can never be missing from the schema again.
+          enum: MUTABLE_AMEND_PATHS,
         },
         content: openObject('按 path 的完整替换文档；根必须是映射。与 patch 二选一。'),
         patch: {
@@ -1333,14 +1383,29 @@ export function createNovelTools(
           items: objectOf({
             op: required({ type: 'string', enum: ['replace', 'add', 'remove'] as const }),
             path: required(str),
-            value: { type: 'json' },
+            // 0.2.20 review 4: `{ type: 'json' }` is not a JSON-Schema type the
+            // host understands, so `defineTool` dropped it and the wire schema
+            // became `{}` — the one parameter a model must fill in had no
+            // description at all. A replace value may be any JSON, so the
+            // schema stays open and says so in words.
+            value: {
+              type: 'json',
+              description: '任意 JSON 替换值；与 op=replace 配合',
+            },
           }),
           description: arraySemanticsDescription(
             'replace',
             '局部修改：点路径（items.3.title）；与 content 二选一。',
           ),
         },
-        allow_delete: bool,
+        deleted: {
+          type: 'array',
+          items: { type: 'string' },
+          description: arraySemanticsDescription(
+            'replace',
+            '允许删除的行键，形如 locations.name:当铺 / items.id:FS-003 / chapters.num:12；未列出的行被删会报错。',
+          ),
+        },
         reason: { type: 'string', required: true },
         confirm: {
           type: 'boolean',
@@ -1401,7 +1466,7 @@ export function createNovelTools(
             ? {}
             : { content: asJson<Record<string, unknown>>(args.content, 'content') }),
           ...(args.patch === undefined ? {} : { patch: args.patch as never[] }),
-          ...(typeof args.allow_delete === 'boolean' ? { allow_delete: args.allow_delete } : {}),
+          ...(args.deleted === undefined ? {} : { deleted: args.deleted }),
           reason: args.reason,
           root: args.project_root,
         })
@@ -1477,9 +1542,24 @@ export function createNovelTools(
           description:
             'Page size 1..200 (the engine clamps to 200). Capped so the host result pruner cannot cut a self-inconsistent head/tail.',
         },
-        cursor: { type: 'integer' },
+        cursor: {
+          type: 'integer',
+          description:
+            '返回 seq 大于此值的行；不带 cursor 时是第一页（最早），因此一直往后翻可以读到全部行。',
+        },
+        latest: {
+          type: 'boolean',
+          description: '从最新一行往前取一页（诊断刚发生的事）；与 cursor 连用只改变这一页的位置。',
+        },
         chapter: { type: 'integer' },
-        op: { type: 'string' },
+        op: {
+          type: 'string',
+          // 0.2.20 WP3: a typo used to return an empty page that reads as "no
+          // such history". The engine now validates against its closed union and
+          // lists the legal names; repeating all thirty in the schema costs 359
+          // bytes of the parameter budget the guard exists to protect.
+          description: '按 op 过滤；未知名称报 ENGINE_SCHEMA_INVALID 并列出允许值。',
+        },
         status: { type: 'string', enum: ['committed', 'aborted'] as const },
         since: { type: 'string' },
         until: { type: 'string' },
@@ -1490,6 +1570,7 @@ export function createNovelTools(
         engine.auditHistory({
           limit: args.limit,
           cursor: args.cursor,
+          latest: args.latest,
           chapter: args.chapter,
           op: args.op,
           status: args.status,

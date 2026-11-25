@@ -70,8 +70,60 @@ export async function appendJournal(
   await store.appendText(JOURNAL_PATH, `${JSON.stringify(record)}\n`)
 }
 
+/**
+ * 0.2.20 WP4: the parsed journal, keyed by the file's size and mtime.
+ *
+ * One read command used to parse the whole journal four to six times: status
+ * reads it, `reconcileJournal` reads it again, `report` reads it again for the
+ * activity feed. At 600 chapters that is 24,001 lines and eight megabytes per
+ * parse, and `getStatus` took 1.7 s against a 150 ms budget. The file is
+ * append-only, so size + mtime identifies its contents; a write changes both.
+ * Callers get copies of the two arrays because they sort and filter them.
+ */
+interface JournalSnapshot {
+  size: number
+  mtimeMs: number
+  /**
+   * 0.2.20 review 3: ctime and inode are part of the identity. A journal
+   * restored with `cp -p` / `rsync -a` keeps size and mtime but changes both,
+   * and the old key happily returned the previous parse — `reconcileJournal`
+   * then judged the restored file against stale hashes.
+   */
+  ctimeMs: number | null
+  ino: number | null
+  at: number
+  read: JournalRead
+}
+
+/** A restored journal must not be served from a parse older than the file. */
+const JOURNAL_CACHE_TTL_MS = 5_000
+
+const journalCache = new WeakMap<FsStore, JournalSnapshot>()
+
+/** Drop the cached parse: only needed when a caller bypasses the store. */
+export function forgetJournal(store: FsStore): void {
+  journalCache.delete(store)
+}
+
 /** Read every parsable record; malformed lines are counted, never rewritten. */
 export async function readJournal(store: FsStore): Promise<JournalRead> {
+  const info = await store.stat(JOURNAL_PATH)
+  if (info === null) return { rows: [], malformed: 0, records: [] }
+  const cached = journalCache.get(store)
+  if (
+    cached !== undefined &&
+    cached.size === info.size &&
+    cached.mtimeMs === info.mtimeMs &&
+    cached.ctimeMs === (info.ctimeMs ?? null) &&
+    cached.ino === (info.ino ?? null) &&
+    Date.now() - cached.at < JOURNAL_CACHE_TTL_MS
+  ) {
+    return {
+      rows: cached.read.rows.slice(),
+      malformed: cached.read.malformed,
+      records: cached.read.records.slice(),
+    }
+  }
   const text = await store.readText(JOURNAL_PATH)
   if (text === null) return { rows: [], malformed: 0, records: [] }
   const rows: AuditRow[] = []
@@ -153,7 +205,16 @@ export async function readJournal(store: FsStore): Promise<JournalRead> {
       malformed += 1
     }
   }
-  return { rows, malformed, records }
+  const read: JournalRead = { rows, malformed, records }
+  journalCache.set(store, {
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    ctimeMs: info.ctimeMs ?? null,
+    ino: info.ino ?? null,
+    at: Date.now(),
+    read,
+  })
+  return { rows: rows.slice(), malformed, records: records.slice() }
 }
 
 /** Fail with a diagnostic (never a mutation) when the journal is truncated. */
@@ -225,7 +286,16 @@ export async function reconcileJournal(store: FsStore): Promise<{
   if (expected.size === 0) return { malformed, mismatches: [] }
   const mismatches: JournalMismatch[] = []
   for (const [path, entry] of expected) {
-    const actual = await store.hashBytes(path)
+    // 0.2.20 review 3: a tracked path replaced by a directory made hashBytes
+    // throw a bare EISDIR, so every write (and novel_audit) failed with an
+    // English libuv string. An unreadable tracked path is a mismatch, reported
+    // like any other, not a crash.
+    let actual: string | null = null
+    try {
+      actual = await store.hashBytes(path)
+    } catch {
+      actual = null
+    }
     if (actual !== entry.hash) {
       mismatches.push({ txid: entry.txid, path, expected: entry.hash, actual })
     }
@@ -252,17 +322,34 @@ export async function inspectPending(store: FsStore): Promise<PendingInspection>
   const { records } = await readJournal(store)
   const last = [...records].reverse().find((record) => record.op !== 'lock_reclaimed')
   if (last?.status !== 'pending') return { state: 'none' }
+  /**
+   * A hash that cannot be read never matches.
+   *
+   * 0.2.20 review: a target replaced by a directory (or otherwise unreadable)
+   * made `store.hashBytes` throw EISDIR out of this function, so the recovery
+   * path crashed with a raw errno instead of reporting the `partial` state it
+   * exists to report. Fail-closed either way, but nothing upstream could then
+   * say *why* the next write was refused.
+   */
+  const UNREADABLE = '\u0000unreadable'
+  const hashOf = async (path: string): Promise<string | null | typeof UNREADABLE> => {
+    try {
+      return await store.hashBytes(path)
+    } catch {
+      return UNREADABLE
+    }
+  }
   const matchesExpected = async (): Promise<boolean> => {
     if (last.hashes === undefined) return false
     for (const [path, expected] of Object.entries(last.hashes)) {
-      if ((await store.hashBytes(path)) !== expected) return false
+      if ((await hashOf(path)) !== expected) return false
     }
     return Object.keys(last.hashes).length > 0
   }
   const matchesBefore = async (): Promise<boolean> => {
     if (last.before === undefined) return false
     for (const [path, expected] of Object.entries(last.before)) {
-      const actual = await store.hashBytes(path)
+      const actual = await hashOf(path)
       if (expected === null ? actual !== null : actual !== expected) return false
     }
     return Object.keys(last.before).length > 0
@@ -415,8 +502,13 @@ export async function assertJournalConsistent(
   }
   const { malformed: malformedAfter, mismatches } = await reconcileJournal(store)
   assertJournalHealthy(malformedAfter)
+  // 0.2.20 review 3: `'*'` is the explicit full-restore sentinel. A restore
+  // writes exactly the paths its transaction recorded, so the mismatch it is
+  // fixing cannot be known before the manifest is read — and refusing it made
+  // the engine's own hint ("restore the file from backups/") unreachable.
   const allowed = new Set(repairPaths)
-  const fatal = mismatches.filter((mismatch) => !allowed.has(mismatch.path))
+  const allowAll = allowed.has('*')
+  const fatal = allowAll ? [] : mismatches.filter((mismatch) => !allowed.has(mismatch.path))
   if (fatal.length > 0) {
     const first = fatal[0]!
     throw new EngineFaultError(

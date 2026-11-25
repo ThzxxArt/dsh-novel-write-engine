@@ -106,7 +106,11 @@ describe('context stages and panel draft projection', () => {
         ...patch,
       }) as never
 
-    expect(briefContext(input('unknown'))).toMatchObject({ chapter: 1, previous_ending: '' })
+    // 0.2.20: the roadmap blocks (previous_ending / book_plan / scene
+    // distribution) follow the stages that place a chapter.
+    expect(briefContext(input('unknown'))).toMatchObject({ chapter: 1 })
+    expect(briefContext(input('unknown'))).not.toHaveProperty('previous_ending')
+    expect(briefContext(input('P3'))).toMatchObject({ previous_ending: '', chapter: 1 })
     expect(briefContext(input('P1'))).toMatchObject({ volume: 1, volume_name: '', act: '' })
     expect(
       briefContext(
@@ -118,7 +122,10 @@ describe('context stages and panel draft projection', () => {
     expect(briefContext(input('P2'))).toHaveProperty('plan', null)
     expect(briefContext(input('P3'))).toHaveProperty('locks')
     expect(briefContext(input('P4'))).toMatchObject({ text: '', machine: null, summary: null })
-    expect(briefContext(input('P5'))).toMatchObject({ text: '', machine: null, review: null, issues: [] })
+    // 0.2.20 review 4: P5 no longer carries a second copy of `review.issues`
+    // (it was byte-identical and doubled the cost of the one block a revision
+    // cannot do without).
+    expect(briefContext(input('P5'))).toMatchObject({ text: '', machine: null, review: null })
     expect(briefContext(input('P6'))).toHaveProperty('timeline')
     expect(briefContext(input('P8'))).toMatchObject({ summary: null, review: null })
   })
@@ -186,11 +193,18 @@ describe('context stages and panel draft projection', () => {
         root,
       })
       const p5 = await engine.getBrief({ stage: 'P5', root })
-      expect(p5.data.context).toMatchObject({ text, issues: [expect.objectContaining({ id: 'REV-1' })] })
+      expect(p5.data.context).toMatchObject({
+        text,
+        review: { issues: [expect.objectContaining({ id: 'REV-1' })] },
+      })
 
+      // 0.2.20 review: a blocker cannot be closed by a byte-identical revision
+      // quoting text the review already scored; the revision must change the
+      // manuscript and cite the rewritten sentence.
+      const revised = text.replace('不快不慢', '忽快忽慢')
       await engine.submitRevision({
         chapter: 1,
-        content: text,
+        content: revised,
         issues: [
           {
             id: 'REV-1',
@@ -200,16 +214,16 @@ describe('context stages and panel draft projection', () => {
             problem: 'p',
             fix: 'f',
             status: 'fixed',
-            evidence: '风从窗缝里挤进来',
+            evidence: '走廊尽头传来脚步声，忽快忽慢',
           },
         ],
-        proof: sampleReview(1, text).proof,
+        proof: sampleReview(1, revised).proof,
         root,
       })
       await engine.getBrief({ stage: 'P4', root })
-      await engine.submitReview({ chapter: 1, ...sampleReview(1, text), root })
+      await engine.submitReview({ chapter: 1, ...sampleReview(1, revised), root })
       await engine.getBrief({ stage: 'P6', root })
-      await engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root })
+      await engine.runCheck({ chapter: 1, semantic: sampleSemantic(revised), root })
       const p8 = await engine.getBrief({ stage: 'P8', root })
       expect(p8.data.context).toMatchObject({
         check: expect.objectContaining({ verdict: 'pass' }),

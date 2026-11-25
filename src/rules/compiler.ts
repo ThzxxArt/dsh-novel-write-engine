@@ -2,7 +2,7 @@ import { SCORE_DIMENSIONS, FULL_SCORE, type Exclusion } from '../domain/scoring.
 import { stylePatternToRegExp } from '../domain/style.js'
 import { ALL_RULE_CODES } from '../codes.js'
 import { ERROR_CODES, GENRES, PLATFORMS, SCENE_TYPES, SCHEMA_VERSION, EngineFaultError } from '../types.js'
-import { compileToneMatcher, usesLineAnchor } from './ai-tone.js'
+import { AI_TONE_IMPLEMENTED_CODES, compileToneMatcher, usesLineAnchor } from './ai-tone.js'
 import type { AiToneEntry, Rulepack } from './types.js'
 
 const platformDefaults = (words: [number, number], dialogue: [number, number]) => ({
@@ -179,7 +179,7 @@ function validateSelfcheck(raw: unknown): void {
   const metaphor = object(block.metaphor, 'selfcheck.metaphor')
   knownKeys(metaphor, ['max_per_sentence', 'max_stacks_per_paragraph'], 'selfcheck.metaphor')
   positiveInt(metaphor.max_per_sentence, 'selfcheck.metaphor.max_per_sentence')
-  positiveInt(metaphor.max_stacks_per_paragraph, 'selfcheck.metaphor.max_stacks_per_paragraph', 2)
+  positiveInt(metaphor.max_stacks_per_paragraph, 'selfcheck.metaphor.max_stacks_per_paragraph', 1)
 
   const concrete = object(block.concrete, 'selfcheck.concrete')
   knownKeys(concrete, ['abstract_nouns', 'min_per_paragraph'], 'selfcheck.concrete')
@@ -195,8 +195,19 @@ function validateSelfcheck(raw: unknown): void {
     const frame = object(entry, path)
     knownKeys(frame, ['pattern', 'max'], path)
     const pattern = string(frame.pattern, `${path}.pattern`)
-    // 3. the bounded template is the only syntax a frame may use
+    // 3. the bounded template is the only syntax a frame may use, and it must
+    //    actually be a frame: `……` alone or a one-sided `不是……` compiles to a
+    //    matcher that fires on ordinary paragraphs, so FRAME_REPEAT would
+    //    report everywhere. Every gap needs a literal on both sides.
     if (!pattern.includes('……')) invalid(`${path}.pattern must contain …… between its two halves`)
+    const pieces = pattern.split('……')
+    const emptyInterior = pieces.slice(0, -1).some((piece) => piece === '')
+    const twoSided = pieces.some((piece, index) => piece !== '' && (pieces[index + 1] ?? '') !== '')
+    if (emptyInterior || !twoSided) {
+      invalid(
+        `${path}.pattern must put a literal on both sides of ……; a degenerate frame such as "……" or "不是……" matches ordinary paragraphs`,
+      )
+    }
     const compiled = stylePatternToRegExp(pattern)
     // A frame that compiles to the empty string matches everywhere and would
     // report every paragraph. `stylePatternToRegExp` never returns empty for a
@@ -285,8 +296,15 @@ function validateAiTone(raw: unknown): void {
       path,
     )
     const code = string(category.code, `${path}.code`)
-    // 2. the code is an engine rule code and no two categories share one.
+    // 2. the code is an engine rule code that has an implementation, and no two
+    // categories share one. An unknown AI_TONE_* code used to compile, produce
+    // no finding (no rule owns it) and still suppress C8 coverage.
     if (!/^AI_TONE_[A-Z_]+$/.test(code)) invalid(`${path}.code must match ^AI_TONE_[A-Z_]+$`)
+    if (!AI_TONE_IMPLEMENTED_CODES.includes(code)) {
+      invalid(
+        `${path}.code "${code}" has no rule implementation; use one of ${AI_TONE_IMPLEMENTED_CODES.join(', ')}`,
+      )
+    }
     if (codes.has(code)) invalid(`${path}.code duplicates ${code}`)
     codes.add(code)
     if (
@@ -713,7 +731,9 @@ export function compileRulepack(raw: unknown): Rulepack {
       const entry = object(raw, path)
       knownKeys(
         entry,
-        kind === 'limit' ? ['term', 'limit', 'genres'] : ['term', 'note', 'dialogueExempt', 'match'],
+        kind === 'limit'
+          ? ['term', 'limit', 'genres']
+          : ['term', 'note', 'dialogueExempt', 'match', 'excludeLeft', 'excludeRight'],
         path,
       )
       if (typeof entry.term !== 'string' || entry.term.trim() === '') {
@@ -735,6 +755,16 @@ export function compileRulepack(raw: unknown): Rulepack {
         if (entry.dialogueExempt !== undefined) bool(entry.dialogueExempt, `${path}.dialogueExempt`)
         if (entry.match !== undefined && !TERM_MATCH_MODES.includes(entry.match as string)) {
           invalid(`${path}.match must be one of ${TERM_MATCH_MODES.join(', ')}`)
+        }
+        for (const key of ['excludeLeft', 'excludeRight'] as const) {
+          if (entry[key] === undefined) continue
+          const values = array(entry[key], `${path}.${key}`)
+          if (values.length === 0) invalid(`${path}.${key} must not be empty`)
+          for (const value of values) {
+            if (typeof value !== 'string' || Array.from(value).length !== 1) {
+              invalid(`${path}.${key} must list single characters`)
+            }
+          }
         }
       }
     }

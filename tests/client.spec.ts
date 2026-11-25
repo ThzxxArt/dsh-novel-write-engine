@@ -721,6 +721,13 @@ describe('panel view model', () => {
   it('fetches and degrades without throwing', async () => {
     const ok = vi.fn(async () => ({ ok: true, json: async () => payload() }))
     expect((await fetchPanel(ok as unknown as typeof fetch, '/api')).payload?.summary?.chapter).toBe(2)
+    // 0.2.20 review 4: a 200 carrying the route's error envelope is a failure,
+    // not a payload. The panel used to blank itself (or throw on
+    // `payload.selection.root`) instead of showing the message.
+    const okButBroken = vi.fn(async () => ({ ok: true, json: async () => ({ error: '读取面板时崩了' }) }))
+    const degraded = await fetchPanel(okButBroken as unknown as typeof fetch, '/api')
+    expect(degraded.payload).toBeNull()
+    expect(degraded.error).toBe('读取面板时崩了')
     const notOk = vi.fn(async () => ({ ok: false, status: 503 }))
     expect((await fetchPanel(notOk as unknown as typeof fetch, '/api')).error).toContain('503')
     const explained = vi.fn(async () => ({
@@ -731,6 +738,12 @@ describe('panel view model', () => {
     expect((await fetchPanel(explained as unknown as typeof fetch, '/api')).error).toContain(
       'database unavailable',
     )
+    const aborted = vi.fn(async () => {
+      const error = new Error('This operation was aborted')
+      error.name = 'AbortError'
+      throw error
+    })
+    expect((await fetchPanel(aborted as unknown as typeof fetch, '/api')).error).toBe('请求已取消')
     const broken = vi.fn(async () => {
       throw new Error('offline')
     })
@@ -3539,5 +3552,44 @@ describe('panel style verdict row', () => {
     const markup = withVerdict('no-draft')
     expect(markup).toContain('尚无正文')
     expect(markup).not.toContain('本章贴合')
+  })
+})
+
+describe('0.2.20 WP6-B: the panel gives up instead of spinning', () => {
+  it('returns a retryable timeout error when a detail request hangs', async () => {
+    // A fetcher that only rejects when its signal aborts — exactly what a stuck
+    // socket looks like to the panel.
+    const hangs = vi.fn(
+      (_path: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    )
+    const started = Date.now()
+    const result = await fetchPanel(hangs as unknown as typeof fetch, '/api', undefined, undefined, 30)
+    expect(result.error).toContain('请求超时')
+    expect(result.error).toContain('可以重试')
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
+  it('does not report a timeout when the caller aborted the request itself', async () => {
+    // A tab switch aborts the in-flight detail; that is not a failure the user
+    // should see, so the timeout branch must not claim it.
+    const hangs = vi.fn(
+      (_path: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    )
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 5)
+    const result = await fetchPanel(
+      hangs as unknown as typeof fetch,
+      '/api',
+      controller.signal,
+      undefined,
+      5_000,
+    )
+    expect(result.error).not.toContain('请求超时')
   })
 })

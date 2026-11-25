@@ -41,9 +41,20 @@ const required = [
 ]
 const forbidden = /^(src|tests|scripts)\/|^DESIGN\.md$|^PLAN\.md$|\.map$/
 
+// 0.2.20 WP7: the published README must be the one in this tree.
+//
+// A byte comparison would be vacuous: `npm pack --dry-run` reads the same file
+// in the same run, so it always matches. What can actually go wrong is the file
+// being absent from the tarball (a `files` allow-list that forgot it) or being
+// excluded by `.npmignore`, and that is what this asserts.
+const problems = []
+if (!entry.files.some((file) => file.path === 'README.md')) {
+  problems.push('README.md is missing from the tarball')
+}
 const missing = required.filter((path) => !files.includes(path))
 const leaked = files.filter((path) => forbidden.test(path))
+if (problems.length > 0) for (const problem of problems) console.error(problem)
 if (missing.length > 0) console.error(`missing from tarball: ${missing.join(', ')}`)
 if (leaked.length > 0) console.error(`must not ship: ${leaked.join(', ')}`)
-if (missing.length > 0 || leaked.length > 0) process.exit(1)
+if (missing.length > 0 || leaked.length > 0 || problems.length > 0) process.exit(1)
 console.log(`pack check passed: ${files.length} files`)

@@ -22,6 +22,7 @@ import {
   archiveDelta,
   bootstrapToDraft,
   cleanText,
+  expectCompleteContext,
   harness,
   readyToArchive,
   sampleReview,
@@ -106,7 +107,7 @@ const gateInput = (patch: Partial<GateInput> = {}): GateInput => ({
   ...patch,
 })
 
-const outline = (sceneType: '日常过渡章' | '战斗/动作章') => ({
+const outline = (sceneType: '日常过渡章' | '战斗/动作章', status: 'planned' | 'archived' = 'planned') => ({
   schema_version: 1 as const,
   updated_at: '2026-01-01',
   book: {
@@ -133,8 +134,8 @@ const outline = (sceneType: '日常过渡章' | '战斗/动作章') => ({
       cast: [],
       target_words: [80, 400] as [number, number],
       notes: '',
-      status: 'planned' as const,
-      archived_at: null,
+      status,
+      archived_at: status === 'archived' ? '2026-01-02T00:00:00.000Z' : null,
       word_count: null,
       score: null,
     },
@@ -165,10 +166,17 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
     }
   })
 
-  it('B14 only waives PG-06 when the card pins the submitted scene type', () => {
-    const pinned = evaluateGates(gateInput({ outline: outline('日常过渡章') }), gateOptions)
+  it('B14 only waives PG-06 when an archived card pins the submitted scene type', () => {
+    // 0.2.20 WP2: only an archived card excuses monotony — it is a fact about a
+    // chapter that exists. A planned card is intent, so the block stays and the
+    // card explains it through the warning.
+    const pinned = evaluateGates(gateInput({ outline: outline('日常过渡章', 'archived') }), gateOptions)
     expect(pinned.blocking.some((item) => item.code === 'PG-06')).toBe(false)
     expect(pinned.warnings.map((warning) => warning.code)).toContain('PG-06_CARD_WINS')
+
+    const planned = evaluateGates(gateInput({ outline: outline('日常过渡章') }), gateOptions)
+    expect(planned.blocking.some((item) => item.code === 'PG-06')).toBe(true)
+    expect(planned.warnings.map((warning) => warning.code)).toContain('PG-06_CARD_WINS')
 
     // The card exists but pins a different type. Waiving the gate here hid the
     // monotony the *submission* creates, and PG-13 reports the mismatch anyway.
@@ -214,8 +222,10 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
       handoff: null,
     })
     // 0.2.17: no budget, no floor, no blame string. The eight rows arrive whole.
-    const meta = context.context_meta as { complete: boolean; used: number }
-    expect(meta.complete).toBe(true)
+    // 0.2.20 WP0: `complete` is a real boolean now, and `used` must equal the
+    // byte length of this very document — the old assertion could not fail.
+    expectCompleteContext(context, 'P3 context')
+    const meta = context.context_meta as { used: number }
     expect(meta.used).toBeGreaterThan(16_000)
     expect(context.open_foreshadows as Array<{ description: string }>).toHaveLength(8)
     for (const row of context.open_foreshadows as Array<{ description: string }>) {
@@ -260,7 +270,9 @@ describe('0.2.14 audit III: read models must not contradict themselves', () => {
         receipts: Array<{ chapter: number; stage: string }>
       }
       expect(live.receipts.filter((row) => row.chapter === 1 && row.stage === 'P4')).toHaveLength(4)
-      await expect(readFile(join(h.root, 'history/briefs/ch001.yaml'), 'utf8')).rejects.toThrow()
+      await expect(readFile(join(h.root, 'history/briefs/ch001.yaml'), 'utf8')).rejects.toMatchObject({
+        code: process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR',
+      })
     } finally {
       await h.cleanup()
     }

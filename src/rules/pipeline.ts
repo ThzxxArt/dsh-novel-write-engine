@@ -99,28 +99,15 @@ export function runMachineChecks(text: string, options: MachineOptions): Machine
     options.style === undefined
       ? undefined
       : measureStyle(text, options.style, styleVocabulary(options.rulepack))
-  // 1c. AI-tone hits, likewise computed once. `toneTerms` implements C8: a
-  // phrase an AI-tone entry claimed is not counted again as zero-tolerance.
+  // 1c. AI-tone hits, likewise computed once. The zero-tolerance rule reads the
+  // same hits and claims only the occurrences that lie inside a hit in the same
+  // paragraph (C8); a chapter-wide coverage count hid a narration blocker when
+  // the tone hit itself was inside dialogue.
   const toneHits = evaluateTone(text, options.rulepack.lexicon.ai_tone)
-  // C8 is span-scoped: only the *occurrences* a tone hit covers step aside, not
-  // the whole term. A chapter that says 意味深长 once as an AI-tone cliché and
-  // once as flat narration keeps its narration blocker; a term-level set would
-  // have hidden it. Counts, not a boolean.
-  const toneCoveredTerms = new Map<string, number>()
-  if (toneHits.length > 0) {
-    for (const entry of options.rulepack.lexicon.zero_tolerance) {
-      let covered = 0
-      for (const hit of toneHits) {
-        if (text.slice(hit.start, hit.end).includes(entry.term)) covered += 1
-      }
-      if (covered > 0) toneCoveredTerms.set(entry.term, covered)
-    }
-  }
   const shared = {
     ...options,
     ...(styleMetrics === undefined ? {} : { styleMetrics }),
     ...(toneHits.length === 0 ? {} : { toneHits }),
-    ...(toneCoveredTerms.size === 0 ? {} : { toneCoveredTerms }),
   }
   const context = toContext(text, shared)
 

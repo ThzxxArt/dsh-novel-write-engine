@@ -17,6 +17,18 @@ export function shortDigest(text: string): string {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16)}`
 }
 
+/** Construction options. Only performance knobs live here. */
+export interface FsStoreOptions {
+  /**
+   * How long a parsed document may be reused before it is re-read even when
+   * every stat field matches. 0 disables reuse. 0.2.21 review: stat equality
+   * alone is not proof the bytes are unchanged (FAT/exFAT/SMB round mtimes to
+   * 1–2 s, `cp -p`/`rsync -a` restore them), so the TTL bounds how long a
+   * stale parse can live on a filesystem that also hides ctime.
+   */
+  docCacheTtlMs?: number
+}
+
 /**
  * The only IO surface of the engine. Every path is resolved inside the project
  * root by `resolveInside`; no caller touches `node:fs` directly.
@@ -24,8 +36,33 @@ export function shortDigest(text: string): string {
 export class FsStore {
   readonly root: string
 
-  constructor(root: string) {
+  /**
+   * 0.2.20 WP4: parsed document cache, keyed by path and validated by the
+   * file's size + mtime + ctime + inode, with a short TTL.
+   *
+   * Parsing `state/timeline.yaml` at 600 chapters costs 183 ms — more than
+   * every read the panel makes put together — and a single `getStatus` parses
+   * the same ledgers once and every panel section parses them again. The cache
+   * stores the parse and hands out a structured clone (3.7 ms for the same
+   * document), so a read model can never mutate cached state.
+   *
+   * 0.2.21 review: (size, mtime) is not a content identity. An external edit
+   * that lands within the filesystem's mtime granularity, or that restores the
+   * mtime (`cp -p`, `rsync -a`, an editor), matched the old key and the stale
+   * parse was served forever. ctime changes even when mtime is restored, ino
+   * catches a replaced file, and the TTL caps the window on filesystems that
+   * only expose coarse timestamps.
+   */
+  private readonly docCache = new Map<
+    string,
+    { size: number; mtimeMs: number; ctimeMs: number; ino: number; cachedAt: number; document: unknown }
+  >()
+
+  private readonly docCacheTtlMs: number
+
+  constructor(root: string, options: FsStoreOptions = {}) {
     this.root = root
+    this.docCacheTtlMs = options.docCacheTtlMs ?? 5_000
   }
 
   /** Resolve a project-relative path, refusing escapes. */
@@ -96,10 +133,18 @@ export class FsStore {
     }
   }
 
-  async stat(relativePath: string): Promise<{ size: number; mtimeMs: number; isDirectory: boolean } | null> {
+  async stat(
+    relativePath: string,
+  ): Promise<{ size: number; mtimeMs: number; ctimeMs: number; ino: number; isDirectory: boolean } | null> {
     try {
       const stat = await fs.stat(await this.safePath(relativePath))
-      return { size: stat.size, mtimeMs: stat.mtimeMs, isDirectory: stat.isDirectory() }
+      return {
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ctimeMs: stat.ctimeMs,
+        ino: stat.ino,
+        isDirectory: stat.isDirectory(),
+      }
     } catch (error) {
       if (isMissing(error)) return null
       throw ioFailure(error)
@@ -199,48 +244,80 @@ export class FsStore {
     relativePath: string,
     kind: K,
   ): Promise<ReturnType<typeof narrow<K>> | null> {
-    const text = await this.readText(relativePath)
-    if (text === null) return null
+    const info = await this.stat(relativePath)
+    if (info === null) return null
+    const cached = this.docCache.get(relativePath)
     let parsed: unknown
-    try {
-      parsed = parseYaml(text) as unknown
-    } catch (error) {
-      throw new EngineFaultError(
-        ERROR_CODES.SCHEMA_INVALID,
-        `${relativePath} is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
-        'fix the YAML syntax; the engine will not rewrite a document it cannot parse',
-        { cause: error },
-      )
-    }
-    const version =
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as Record<string, unknown>).schema_version === 'number'
-        ? ((parsed as Record<string, unknown>).schema_version as number)
-        : 1
-    const document: unknown =
-      version < SCHEMA_VERSION
-        ? migrateDocument(parsed as Record<string, unknown>, MIGRATIONS, SCHEMA_VERSION)
-        : parsed
-    // A hand-written legacy document may omit `schema_version`. Either fill it
-    // or reject it; filling it here keeps readDoc and narrow consistent instead
-    // of defaulting to 1 for the migration decision and then refusing the same
-    // document as "missing schema_version" (X4).
-    if (typeof document === 'object' && document !== null && !Array.isArray(document)) {
-      const record = document as Record<string, unknown>
-      if (record.schema_version === undefined) record.schema_version = SCHEMA_VERSION
+    if (
+      cached !== undefined &&
+      cached.size === info.size &&
+      cached.mtimeMs === info.mtimeMs &&
+      cached.ctimeMs === info.ctimeMs &&
+      cached.ino === info.ino &&
+      Date.now() - cached.cachedAt < this.docCacheTtlMs
+    ) {
+      parsed = structuredClone(cached.document)
+    } else {
+      const text = await this.readText(relativePath)
+      if (text === null) return null
+      try {
+        parsed = parseYaml(text) as unknown
+      } catch (error) {
+        throw new EngineFaultError(
+          ERROR_CODES.SCHEMA_INVALID,
+          `${relativePath} is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
+          'fix the YAML syntax; the engine will not rewrite a document it cannot parse',
+          { cause: error },
+        )
+      }
+      const version =
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        typeof (parsed as Record<string, unknown>).schema_version === 'number'
+          ? ((parsed as Record<string, unknown>).schema_version as number)
+          : 1
+      const migrated: unknown =
+        version < SCHEMA_VERSION
+          ? migrateDocument(parsed as Record<string, unknown>, MIGRATIONS, SCHEMA_VERSION)
+          : parsed
+      // A hand-written legacy document may omit `schema_version`. Either fill it
+      // or reject it; filling it here keeps readDoc and narrow consistent instead
+      // of defaulting to 1 for the migration decision and then refusing the same
+      // document as "missing schema_version" (X4).
+      if (typeof migrated === 'object' && migrated !== null && !Array.isArray(migrated)) {
+        const record = migrated as Record<string, unknown>
+        if (record.schema_version === undefined) record.schema_version = SCHEMA_VERSION
+      }
+      // Cache a copy: the caller owns the graph it receives, so an in-place
+      // normalization downstream must not leak into the next reader.
+      this.docCache.set(relativePath, {
+        size: info.size,
+        mtimeMs: info.mtimeMs,
+        ctimeMs: info.ctimeMs,
+        ino: info.ino,
+        cachedAt: Date.now(),
+        document: structuredClone(migrated),
+      })
+      // Bound the cache generously: a 600-chapter book has 1,200 review/check
+      // documents plus ten ledgers, and a cap below that thrashed — every report
+      // re-parsed every document it had just cached.
+      if (this.docCache.size > 4096) {
+        const oldest = this.docCache.keys().next().value
+        if (oldest !== undefined) this.docCache.delete(oldest)
+      }
+      parsed = migrated
     }
     // A 0.2.0 check has no `scope` and mixes advisories into `violations`.
     // Normalize the in-memory view so the audit file stays untouched and the
     // document remains readable instead of failing `narrow` (U16). This runs
     // after the version fill: a legacy check that omits schema_version must not
     // be rejected by the branch that exists to accept legacy checks.
-    if (kind === 'check' && typeof document === 'object' && document !== null && !Array.isArray(document)) {
-      return narrow(kind, normalizeLegacyCheck(document as Record<string, unknown>)) as ReturnType<
+    if (kind === 'check' && typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return narrow(kind, normalizeLegacyCheck(parsed as Record<string, unknown>)) as ReturnType<
         typeof narrow<K>
       >
     }
-    return narrow(kind, document) as ReturnType<typeof narrow<K>>
+    return narrow(kind, parsed) as ReturnType<typeof narrow<K>>
   }
 
   /**
@@ -281,6 +358,8 @@ export class FsStore {
         await handle.close()
       }
       await fs.rename(temp, absolute)
+      // Same-millisecond rewrites of equal length would defeat the stat check.
+      this.docCache.delete(relativePath)
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
@@ -295,6 +374,7 @@ export class FsStore {
 
   async remove(relativePath: string): Promise<void> {
     await fs.rm(await this.safePath(relativePath), { force: true })
+    this.docCache.delete(relativePath)
   }
 
   /** Remove a directory tree inside the project root (backup GC only). */
@@ -345,6 +425,8 @@ export class FsStore {
         await handle.close()
       }
       await fs.rename(temp, absolute)
+      // Same-millisecond rewrites of equal length would defeat the stat check.
+      this.docCache.delete(relativePath)
       await syncDirectory(dirname(absolute))
     } catch (error) {
       await fs.rm(temp, { force: true }).catch(() => undefined)
@@ -388,17 +470,43 @@ function isMissing(error: unknown): boolean {
   )
 }
 
-function ioFailure(error: unknown): unknown {
+export function ioFailure(error: unknown): unknown {
   if (error instanceof EngineFaultError) return error
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code?: unknown }).code)
       : ''
-  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || code === 'EISDIR') {
     return new EngineFaultError(
       ERROR_CODES.IO_PERMISSION,
       `filesystem permission denied (${code}): ${error instanceof Error ? error.message : String(error)}`,
       'fix the project directory permissions, or restore a readable copy before retrying',
+      { cause: error },
+    )
+  }
+  // 0.2.20 WP3: three failures that used to surface as a bare errno string in an
+  // English libuv message, with no hint about what the author can do.
+  if (code === 'ENOSPC') {
+    return new EngineFaultError(
+      ERROR_CODES.IO_DISK_FULL,
+      `the disk is full (ENOSPC): ${error instanceof Error ? error.message : String(error)}`,
+      'free space on the filesystem that holds the project (or move the project to a bigger one), then retry; the transaction was rolled back and the project is intact',
+      { cause: error },
+    )
+  }
+  if (code === 'ENAMETOOLONG') {
+    return new EngineFaultError(
+      ERROR_CODES.IO_PATH_TOO_LONG,
+      `the path is longer than the filesystem allows (ENAMETOOLONG): ${error instanceof Error ? error.message : String(error)}`,
+      'shorten the project root path, or move the project closer to the filesystem root',
+      { cause: error },
+    )
+  }
+  if (code === 'EIO') {
+    return new EngineFaultError(
+      ERROR_CODES.IO_DEVICE,
+      `the device reported an I/O error (EIO): ${error instanceof Error ? error.message : String(error)}`,
+      'check the disk and its cables, or restore the project from backups/ on a healthy device before retrying',
       { cause: error },
     )
   }

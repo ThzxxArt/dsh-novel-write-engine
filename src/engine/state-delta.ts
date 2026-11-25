@@ -922,13 +922,24 @@ export function applyStateDelta(input: DeltaInput): DeltaResult {
       warnReclass(name, 'no_change', 'created', 'missing-no-change-as-created')
     }
     if (declared.detail !== undefined && action !== 'created') {
-      for (const reserved of ['name', 'first_appearance', 'description'] as const) {
+      for (const reserved of ['name', 'first_appearance', 'description', 'anchors'] as const) {
         if (Object.hasOwn(declared.detail, reserved)) {
           fail(`world.${name}.detail cannot rewrite the reserved field "${reserved}"`)
         }
       }
     }
     if (action === 'created') {
+      // 0.2.21 review: `anchors` is verified evidence, not a free-form
+      // attribute. The create path used to spread `detail` into the row, so
+      // `detail.anchors` landed in the ledger whenever the prose supplied no
+      // `summary.new_element_anchors`, bypassing the >= 8 character verbatim
+      // check that every other anchor goes through. Locations already refused
+      // it via locationDetail; every kind must.
+      if (declared.detail !== undefined && Object.hasOwn(declared.detail, 'anchors')) {
+        fail(
+          `world.${name}.detail cannot set the reserved field "anchors"; quote the prose in summary.new_element_anchors so the anchor can be verified`,
+        )
+      }
       if (name.trim() === '') fail('a created world entity has an empty name')
       if (existing !== null) fail(`world entity "${name}" already exists; use updated or no_change`)
       const kind = declared.kind ?? expected

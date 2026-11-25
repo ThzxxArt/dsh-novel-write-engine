@@ -101,7 +101,15 @@ describe('buildSelfCheck', () => {
     expect(document.chapter).toBe(3)
     expect(document.content_hash).toBe(hash)
     expect(document.items).toHaveLength(13)
-    expect(document.summary).toEqual({ pass: 11, fail: 0, na: 2 })
+    // 0.2.20 WP2: rows nobody answered are `na` and blocking, not `pass`. The
+    // five machine rows pass, two rows are `na` because the chapter has no
+    // dialogue, and the remaining six model rows are unanswered.
+    //
+    // 0.2.20 review: the pure-`model` row used to pass when the machine fired
+    // nothing ("机器未标出需要判定的段落"), so the one judgement the machine
+    // cannot make was never made. It is unanswered like the other five.
+    expect(document.summary).toEqual({ pass: 5, fail: 0, na: 8, unanswered: 6 })
+    expect(document.items.filter((item) => item.blocking === true)).toHaveLength(6)
   })
 
   it('passes a machine row when nothing behind it fired', () => {
@@ -119,23 +127,36 @@ describe('buildSelfCheck', () => {
     expect(dash.evidence[0]!.paragraph).toBe(2)
     expect(dash.evidence[0]!.quote).toContain('走廊尽头')
     expect(dash.evidence[0]!.detail).toContain('dash weight 9')
-    expect(document.summary).toEqual({ pass: 10, fail: 1, na: 2 })
+    expect(document.summary).toEqual({ pass: 4, fail: 1, na: 8, unanswered: 6 })
   })
 
-  it('reports na for the two dialogue rows in a chapter with no dialogue', () => {
-    const rows = block()
-      .items.filter((item) => item.verdict === 'na')
+  it('separates "does not apply" from "nobody answered"', () => {
+    // The two dialogue rows are na *and not blocking*: a chapter without
+    // dialogue must still be archiveable. The other eleven are na because the
+    // model said nothing, so they are blocking and PG-12 refuses the archive.
+    const notApplicable = block()
+      .items.filter((item) => item.verdict === 'na' && item.blocking !== true)
       .map((item) => item.id)
-    expect(rows).toEqual(['SC-DIALOGUE-BEAT', 'SC-QUOTE'])
-    for (const item of block().items.filter((entry) => entry.verdict === 'na')) {
+    expect(notApplicable).toEqual(['SC-DIALOGUE-BEAT', 'SC-QUOTE'])
+    for (const item of block().items.filter((entry) => entry.blocking !== true && entry.verdict === 'na')) {
       expect(item.note).toContain('没有对白')
       expect(item.evidence).toEqual([])
+    }
+    const unanswered = block()
+      .items.filter((item) => item.blocking === true)
+      .map((item) => item.id)
+    expect(unanswered.length).toBeGreaterThan(0)
+    expect(unanswered).not.toContain('SC-DIALOGUE-BEAT')
+    for (const item of block().items.filter((entry) => entry.blocking === true)) {
+      expect(item.note).toContain('缺少模型判定')
     }
   })
 
   it('reports na for every row when there is no prose at all', () => {
     const document = buildSelfCheck({ text: '   ', chapter: 3, contentHash: hash, violations: [] })
-    expect(document.summary).toEqual({ pass: 0, fail: 0, na: 13 })
+    // No prose at all is "does not apply", never "unanswered": an empty chapter
+    // has nothing to judge, so it must not be blocked by its own checklist.
+    expect(document.summary).toEqual({ pass: 0, fail: 0, na: 13, unanswered: 0 })
     expect(document.items.every((item) => item.note?.includes('没有正文'))).toBe(true)
   })
 
@@ -157,10 +178,29 @@ describe('buildSelfCheck', () => {
     expect(parallel.evidence.at(-1)!.quote).toBe('他走了。他停了。')
   })
 
-  it('says the judgement half is missing instead of pretending a model read it', () => {
+  it('records an unanswered hybrid row as na and blocking, never as pass', () => {
+    // 0.2.19 wrote `pass` here with a note nobody acted on; that is the lie this
+    // work package removes. The row is `na`, it is blocking, and PG-12 refuses
+    // to archive until it is answered or waived.
     const hybrid = block().items.find((item) => item.id === 'SC-FORMULA')!
-    expect(hybrid.verdict).toBe('pass')
-    expect(hybrid.note).toContain('没有模型判定')
+    expect(hybrid.verdict).toBe('na')
+    expect(hybrid.blocking).toBe(true)
+    expect(hybrid.note).toContain('缺少模型判定')
+  })
+
+  it('accepts a reasoned waiver and stops blocking that row', () => {
+    const document = buildSelfCheck({
+      text: cleanText(),
+      chapter: 3,
+      contentHash: hash,
+      violations: [],
+      waivers: [{ id: 'SC-FORMULA', reason: '本章没有固定句式可判' }],
+    })
+    const waived = document.items.find((item) => item.id === 'SC-FORMULA')!
+    expect(waived.verdict).toBe('na')
+    expect(waived.blocking).toBeUndefined()
+    expect(waived.note).toContain('已豁免：本章没有固定句式可判')
+    expect(document.waivers).toEqual([{ id: 'SC-FORMULA', reason: '本章没有固定句式可判' }])
   })
 
   it('lets the model pass SC-CONCRETE over a machine flag', () => {

@@ -611,14 +611,31 @@ export async function fetchPanel(
   path: string,
   signal?: AbortSignal,
   etag?: string,
+  /**
+   * 0.2.20 WP6-B: a hard deadline for detail requests.
+   *
+   * A chapter detail carries the whole manuscript. On a slow disk the request
+   * can hang for minutes behind a spinning button, and the user cannot tell a
+   * slow read from a dead panel. Ten seconds, then an error the user can retry.
+   */
+  timeoutMs?: number,
 ): Promise<{ payload: PanelPayloadDto | null; error: string | null; notModified?: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let timeoutController: AbortController | undefined
+  let effectiveSignal = signal
+  if (timeoutMs !== undefined && timeoutMs > 0) {
+    timeoutController = new AbortController()
+    effectiveSignal =
+      signal === undefined ? timeoutController.signal : anySignal([signal, timeoutController.signal])
+    timer = setTimeout(() => timeoutController!.abort(), timeoutMs)
+  }
   try {
     const response = await fetcher(path, {
       headers: {
         accept: 'application/json',
         ...(etag === undefined ? {} : { 'if-none-match': etag }),
       },
-      ...(signal === undefined ? {} : { signal }),
+      ...(effectiveSignal === undefined ? {} : { signal: effectiveSignal }),
     })
     if (response.status === 304) return { payload: null, error: null, notModified: true }
     if (!response.ok) {
@@ -632,8 +649,49 @@ export async function fetchPanel(
       return { payload: null, error: detail }
     }
     const payload = (await response.json()) as PanelPayloadDto
+    // 0.2.20 review 4: the panel route answers **200** with `{error}` when the
+    // read behind it crashed. Treating that as data blanked the panel (or threw
+    // on `payload.selection.root`) instead of showing the failure. A legitimate
+    // empty/choose payload always carries `selection`; an error envelope does
+    // not.
+    if (typeof payload !== 'object' || payload === null) {
+      return { payload: null, error: '宿主返回的 JSON 不是对象' }
+    }
+    if (
+      typeof payload.error === 'string' &&
+      payload.error !== '' &&
+      payload.selection === undefined &&
+      payload.summary === undefined
+    ) {
+      return { payload: null, error: payload.error }
+    }
     return { payload, error: null }
   } catch (error) {
+    if (timeoutController?.signal.aborted === true && signal?.aborted !== true) {
+      return { payload: null, error: `请求超时（${Math.round((timeoutMs ?? 0) / 1000)} 秒），可以重试` }
+    }
+    // 0.2.20 review 4: an abort surfaced as "This operation was aborted" — an
+    // English DOM message in a Chinese panel, and one that reads like a bug
+    // rather than "the view was replaced before the answer arrived".
+    const name = (error as { name?: unknown } | null)?.name
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      return { payload: null, error: '请求已取消' }
+    }
     return { payload: null, error: error instanceof Error ? error.message : '无法连接宿主' }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
+}
+
+/** Combine signals; aborts as soon as any of them does. */
+function anySignal(signals: readonly AbortSignal[]): AbortSignal {
+  const controller = new AbortController()
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort()
+      break
+    }
+    signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  return controller.signal
 }

@@ -51,7 +51,10 @@ describe('cross-process write lock', () => {
         content: emptyWorld('A 的能力'),
         // These two writes intentionally replace the ledger; the row-deletion
         // guard would otherwise treat the race as an accidental truncation.
-        allow_delete: true,
+        // 0.2.20 WP3: name the rows instead of the blanket flag. The fixture
+        // world has no locations, so nothing is deleted and the empty list is
+        // still an explicit statement.
+        deleted: [],
         reason: 'A 的修改',
         root,
       })
@@ -74,7 +77,9 @@ describe('cross-process write lock', () => {
       const secondWrite = second.amend({
         path: 'state/world.yaml',
         content: emptyWorld('B 的能力'),
-        allow_delete: true,
+        // B replaces the row A wrote; naming it is what makes the replacement
+        // an explicit deletion rather than a truncation.
+        deleted: ['abilities.name:A 的能力'],
         reason: 'B 的修改',
         root,
       })

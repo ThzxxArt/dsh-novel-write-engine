@@ -1,0 +1,40 @@
+{
+ "url": "http://127.0.0.1:46187/?token=5AoqoZyZC93qaVaRZje_KoEA0bj0KAeRTS7g1JO5Z7A",
+ "cleanUrl": "http://127.0.0.1:45091/?token=_AGMa3rIP4WS_IGVDYUKVzrT1w8ZwP7rnIpaoaUPXnQ",
+ "screenshots": [
+  "docs/evidence/0.2.20/panel-1280-overview.png",
+  "docs/evidence/0.2.20/panel-1280-概览.png",
+  "docs/evidence/0.2.20/panel-1280-章节.png",
+  "docs/evidence/0.2.20/panel-1280-人物.png",
+  "docs/evidence/0.2.20/panel-1280-线索.png",
+  "docs/evidence/0.2.20/panel-1280-设定.png",
+  "docs/evidence/0.2.20/panel-1280-质量.png",
+  "docs/evidence/0.2.20/panel-1280-健康.png",
+  "docs/evidence/0.2.20/panel-390-quality.png",
+  "docs/evidence/0.2.20/style-card.png",
+  "docs/evidence/0.2.20/selfcheck-card.png",
+  "docs/evidence/0.2.20/selfcheck-card-390.png",
+  "docs/evidence/0.2.20/selfcheck-clean.png"
+ ],
+ "warnCount": 5,
+ "overflow": {
+  "scrollWidth": 390,
+  "clientWidth": 390,
+  "body": 390,
+  "offenders": []
+ },
+ "checklist": {
+  "bookA": {
+   "pass": 10,
+   "fail": 1,
+   "na": 2,
+   "unanswered": 0
+  },
+  "clean": {
+   "pass": 11,
+   "fail": 0,
+   "na": 2,
+   "unanswered": 0
+  }
+ }
+}

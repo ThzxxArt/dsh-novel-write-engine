@@ -68,7 +68,17 @@ export async function listBackups(store: FsStore): Promise<BackupEntry[]> {
       files: fileNames,
     })
   }
-  return entries.sort((left, right) => right.mtimeMs - left.mtimeMs)
+  // 0.2.20 review 3: mtime alone cannot order two backups on a coarse-timestamp
+  // filesystem (FAT/exFAT/SMB), and a tie used to fall back to directory-name
+  // order — `pruneBackups` could then delete the transaction it had just
+  // committed and keep an older one. The manifest's `at` is the intent.
+  return entries.sort((left, right) => {
+    const byManifest =
+      (right.at === null ? -Infinity : Date.parse(right.at)) -
+      (left.at === null ? -Infinity : Date.parse(left.at))
+    if (Number.isFinite(byManifest) && byManifest !== 0) return byManifest
+    return right.mtimeMs - left.mtimeMs
+  })
 }
 
 /** Read one manifest, refusing a directory this engine did not create. */

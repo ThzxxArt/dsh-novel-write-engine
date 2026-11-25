@@ -705,6 +705,36 @@ export function normalizeOutlineChapters(
         `chapter ${num} has status ${String(raw.status)}; new cards must be planned|archived`,
       )
     }
+    // 0.2.20 WP3: reject unknown card fields instead of dropping them. A typo
+    // (`targetWords`, `summary`) used to be accepted and silently ignored, so
+    // the author's card looked wrong in the outline and nothing said why.
+    const knownCardFields = new Set([
+      'num',
+      'volume',
+      'title',
+      'scene_type',
+      'goal',
+      'conflict',
+      'hook',
+      'cast',
+      'target_words',
+      'notes',
+      'status',
+      'word_count',
+      'cjk_words',
+      'score',
+      'archived_at',
+      'summary',
+    ])
+    const unknown = Object.keys(raw).filter((key) => !knownCardFields.has(key))
+    if (unknown.length > 0) {
+      throw new EngineInputError(
+        ERROR_CODES.SCHEMA_INVALID,
+        `chapters[${index}] has unknown field(s): ${unknown.join(', ')}`,
+        `allowed: ${[...knownCardFields].join(', ')}`,
+        { details: { field: `chapters[${index}]`, received: unknown, allowed: [...knownCardFields] } },
+      )
+    }
     const title = chapterTitleBody(raw.title, options.titleRule, `chapters[${index}].title`)
     if (!['战斗/动作章', '日常过渡章', '情感爆发章', '纯叙事章'].includes(raw.scene_type as string)) {
       throw new EngineInputError(ERROR_CODES.SCHEMA_INVALID, `chapters[${index}].scene_type is invalid`)
@@ -752,6 +782,11 @@ export function normalizeOutlineChapters(
       archived_at: base.archived_at ?? record.archived_at ?? null,
       word_count: record.word_count,
       score: record.score,
+      // 0.2.20 review: the chapter record keeps its CJK count, and the card is
+      // the evidence PG-03 points at. Dropping it here lost the count on any
+      // outline re-created from records (and `novel_amend` cannot notice a
+      // field that is absent rather than different).
+      ...(record.cjk_words === undefined ? {} : { cjk_words: record.cjk_words }),
     })
   }
   return [...normalized.values()].sort((left, right) => left.num - right.num)
@@ -1172,11 +1207,28 @@ export function markOutlineArchived(
         }
       : card,
   )
+  let volumes = document.volumes
   if (!chapters.some((card) => card.num === record.num)) {
-    const volume =
-      document.volumes.findIndex(
-        (candidate) => record.num >= candidate.start_chapter && record.num <= candidate.end_chapter,
-      ) + 1
+    const found = document.volumes.findIndex(
+      (candidate) => record.num >= candidate.start_chapter && record.num <= candidate.end_chapter,
+    )
+    // 0.2.20 review 4: a chapter archived past the last volume used to get
+    // `volume: null`. The archive wrote a card that `assertArchivedCardsInVolumes`
+    // then refused on the *next* outline write, so the book could not be planned
+    // again without hand-editing. The chapter exists, so the volume that is open
+    // covers it: extend the last one. A chapter that falls in a gap between
+    // volumes keeps `null` and is reported by the caller, which refuses it.
+    let volume = found + 1
+    if (found < 0 && volumes.length > 0) {
+      const lastIndex = volumes.length - 1
+      const last = volumes[lastIndex]!
+      if (record.num > last.end_chapter) {
+        volumes = volumes.map((candidate, index) =>
+          index === lastIndex ? { ...candidate, end_chapter: record.num } : candidate,
+        )
+        volume = volumes.length
+      }
+    }
     chapters.push({
       num: record.num,
       volume: volume === 0 ? null : volume,
@@ -1196,7 +1248,7 @@ export function markOutlineArchived(
     })
     chapters.sort((left, right) => left.num - right.num)
   }
-  return { ...document, updated_at: now, chapters }
+  return { ...document, updated_at: now, chapters, ...(volumes === document.volumes ? {} : { volumes }) }
 }
 
 /** Return one archived card to planned after its backup was restored. */
@@ -1350,17 +1402,40 @@ export function worldbookBrief(
 ): Record<string, unknown> {
   const named = names.join('\n')
   const characters = pick(document.characters, named === '' ? mentioned : named, (entry) => entry.name, 8)
+  // 0.2.20 review: these `pick`/`slice` caps drop rows before the context window
+  // ever sees them, so `context_meta.omitted` could not report the loss and the
+  // block claimed to be complete while 22 of 30 characters were absent. The
+  // counts travel with the block, so the stage can tell "the bible has eight
+  // characters" from "eight of thirty are shown here".
+  const counts = {
+    characters: characters.length,
+    characters_total: document.characters.length,
+    locations: 0,
+    locations_total: document.locations.length,
+    factions_total: document.factions.length,
+    rules_total: document.rules.length,
+    glossary_total: document.glossary.length,
+    backstory_total: document.backstory.length,
+    facts_total: (document.facts ?? []).length,
+  }
+  const locations = pick(document.locations, mentioned, (entry) => entry.name, 6)
+  counts.locations = locations.length
   return {
-    premise: clip(document.premise, 600),
-    setting: clip(document.setting, 600),
+    // 0.2.20 review: 600 characters of premise and setting cost 1,200 code
+    // points of every P1/P2/P3 brief and left the window unable to show one
+    // recent summary on a real 58-chapter book. 320 matches the book-plan cap;
+    // the full text is one `novel_state {kind:'worldbook'}` away.
+    premise: clip(document.premise, 320),
+    setting: clip(document.setting, 320),
     themes: document.themes.slice(0, 12).map((theme) => clip(theme, 80)),
+    counts,
     characters: characters.map((entry) => ({
       name: entry.name,
       role: entry.role,
       description: clip(entry.description, 240),
       arc: clip(entry.arc, 160),
     })),
-    locations: pick(document.locations, mentioned, (entry) => entry.name, 6).map((entry) => ({
+    locations: locations.map((entry) => ({
       name: entry.name,
       description: clip(entry.description, 240),
       layout: clip(entry.layout, 120),
@@ -1399,18 +1474,33 @@ export function bookBrief(document: OutlineDocument, chapter: number): Record<st
     document.volumes.find(
       (candidate) => chapter >= candidate.start_chapter && chapter <= candidate.end_chapter,
     ) ?? null
+  // 0.2.20 WP1: these are the *brief* caps, not the storage caps. The full
+  // blueprint is one `novel_state {kind:'outline'}` away; carrying 600-character
+  // premise and logline into every task book cost 1,583 code points on a real
+  // 58-chapter project and left the window with nothing for the ledgers.
   return {
-    premise: clip(document.book.premise, 600),
-    logline: clip(document.book.logline, 600),
-    themes: document.book.themes.slice(0, 12).map((theme) => clip(theme, 80)),
-    tone: clip(document.book.tone, 200),
-    pov: clip(document.book.pov, 200),
-    audience: clip(document.book.audience, 200),
-    selling_points: document.book.selling_points.slice(0, 12).map((point) => clip(point, 120)),
-    ending: clip(document.book.ending, 400),
+    premise: clip(document.book.premise, 320),
+    logline: clip(document.book.logline, 320),
+    themes: document.book.themes.slice(0, 8).map((theme) => clip(theme, 40)),
+    tone: clip(document.book.tone, 120),
+    pov: clip(document.book.pov, 120),
+    audience: clip(document.book.audience, 120),
+    selling_points: document.book.selling_points.slice(0, 6).map((point) => clip(point, 60)),
+    ending: clip(document.book.ending, 220),
     strict: document.book.strict,
-    volume,
-    card: outlineCard(document, chapter),
+    // The chapter card is already `outline_card` in the context; carrying it a
+    // second time inside `book_plan` cost 395 code points of the same budget.
+    // The volume's three free-text fields are the remaining bulk, so they are
+    // clipped here rather than in storage.
+    volume:
+      volume === null
+        ? null
+        : {
+            ...volume,
+            goal: clip(volume.goal, 120),
+            arc: clip(volume.arc, 120),
+            climax: clip(volume.climax, 120),
+          },
   }
 }
 

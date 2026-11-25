@@ -108,6 +108,33 @@ const PREPOSITIONAL_HEADS: ReadonlySet<string> = new Set([
   '哪',
 ])
 
+/**
+ * 0.2.20 WP5: characters that, immediately before an anchor, make the anchor the
+ * tail of a verb or idiom rather than the object of the simile.
+ *
+ * `像` + `说不出口` was counted as a metaphor because 口 is in the anchor list.
+ * The simile has no vehicle there — nothing to picture — and the rule only fired
+ * because Chinese verbs like 出口 / 开口 / 住口 end in an anchor character. The
+ * list is grammar, so it lives in code next to the other metaphor constants.
+ */
+const ANCHOR_VERB_SUFFIXES: ReadonlySet<string> = new Set([
+  '出',
+  '进',
+  '开',
+  '住',
+  '入',
+  '起',
+  '上',
+  '下',
+  '过',
+  '来',
+  '去',
+  '不',
+  '得',
+  '了',
+  '着',
+])
+
 /** How far right of the marker a concrete anchor may sit. */
 const METAPHOR_RIGHT_WINDOW = 12
 
@@ -154,13 +181,26 @@ export function metaphorHits(text: string, vocabulary: MetaphorVocabulary): Meta
     const previous = start === 0 ? undefined : text[start - 1]
     if (marker === '似的' && (previous === undefined || !SIMILE_LEADS.has(previous))) continue
     if (previous !== undefined && METAPHOR_COMPOUND_HEADS.has(previous)) continue
-    const right = text.slice(end, end + METAPHOR_RIGHT_WINDOW)
+    // 0.2.20 review 3: the vehicle has to sit in the same clause as the marker.
+    // A 12-character window crossed the comma, so 「好像是这样的，画像挂在墙上」
+    // counted the 墙 of the next clause as this simile's vehicle.
+    const window = text.slice(end, end + METAPHOR_RIGHT_WINDOW)
+    const clauseEnd = window.search(/[，。！？；：、\n]/)
+    const right = clauseEnd === -1 ? window : window.slice(0, clauseEnd)
     if (PREPOSITIONAL_HEADS.has(right[0] ?? '')) continue
-    if (
-      vocabulary.concrete_anchors.length > 0 &&
-      !vocabulary.concrete_anchors.some((anchor) => right.includes(anchor))
-    ) {
-      continue
+    if (vocabulary.concrete_anchors.length > 0) {
+      // 0.2.20: the anchor must be an object, not a verb suffix. `indexOf` gives
+      // the position so the character before it can be judged.
+      const vehicle = vocabulary.concrete_anchors.some((anchor) => {
+        let at = right.indexOf(anchor)
+        while (at !== -1) {
+          const before = at === 0 ? previous : right[at - 1]
+          if (before === undefined || !ANCHOR_VERB_SUFFIXES.has(before)) return true
+          at = right.indexOf(anchor, at + anchor.length)
+        }
+        return false
+      })
+      if (!vehicle) continue
     }
     hits.push({ marker, start, paragraph: paragraphAtOffset(spans, start) })
   }

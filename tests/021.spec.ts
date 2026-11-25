@@ -387,7 +387,12 @@ describe('0.2.1 restore and audit guards', () => {
       expect(page.data.every((row) => row.seq! > committed.data[0]!.seq!)).toBe(true)
       expect((await engine.auditHistory({ limit: Number.NaN, root })).data.length).toBeGreaterThan(0)
       expect((await engine.auditHistory({ chapter: 999, root })).data).toEqual([])
-      expect((await engine.auditHistory({ op: 'missing-op', root })).data).toEqual([])
+      // 0.2.20 WP3: an unknown op is a schema error, not an empty page. A typo
+      // used to read as "this project never ran that operation".
+      await expect(engine.auditHistory({ op: 'missing-op', root })).rejects.toMatchObject({
+        code: 'ENGINE_SCHEMA_INVALID',
+      })
+      expect((await engine.auditHistory({ op: 'initProject', root })).data.length).toBeGreaterThan(0)
       expect((await engine.auditHistory({ until: '2000-01-01T00:00:00.000Z', root })).data).toEqual([])
     } finally {
       await cleanup()
@@ -1145,14 +1150,24 @@ describe('0.2.1 closure regressions', () => {
       }
       expect(firstHistory.entries).toHaveLength(50)
       expect(firstHistory.page).toMatchObject({ total: 201, has_more: true })
-      const secondHistory = await engine.queryState({
-        kind: 'history',
-        chapter: 1,
-        limit: 200,
-        cursor: firstHistory.page.next_cursor!,
-        root,
-      })
-      expect((secondHistory.data as { entries: unknown[] }).entries).toHaveLength(151)
+      // 0.2.20 review: a page is now sized to fit the host result limit, so the
+      // remaining 151 entries may arrive in more than one page. The contract the
+      // name promises is "nothing is hidden", not "one page holds everything".
+      const seen = new Set<string>()
+      let cursor: string | null = firstHistory.page.next_cursor
+      for (const entry of firstHistory.entries as Array<{ path: string }>) seen.add(entry.path)
+      let guard = 0
+      while (cursor !== null && guard < 20) {
+        guard += 1
+        const page = await engine.queryState({ kind: 'history', chapter: 1, limit: 200, cursor, root })
+        const body = page.data as {
+          entries: Array<{ path: string }>
+          page: { has_more: boolean; next_cursor: string | null }
+        }
+        for (const entry of body.entries) seen.add(entry.path)
+        cursor = body.page.has_more ? body.page.next_cursor : null
+      }
+      expect(seen.size).toBe(201)
 
       await engine.submitWorldbook({
         facts: [{ alias: '车费', value: 300, unit: '元' }],

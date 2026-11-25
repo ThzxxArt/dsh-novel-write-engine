@@ -125,7 +125,9 @@ describe('volumes', () => {
     expect(volumes.map((entry) => entry.id)).toEqual(['V2', 'V1'])
     expect(volumes.map((entry) => entry.title)).toEqual(['第一卷', '第二卷'])
     expect(() => normalizeVolumes({}, { totalChapters: null })).toThrow(EngineInputError)
-    expect(() => normalizeVolumes([{ title: '', start_chapter: 1, end_chapter: 1 }])).toThrow()
+    expect(() => normalizeVolumes([{ title: '', start_chapter: 1, end_chapter: 1 }])).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_SCHEMA_INVALID' }),
+    )
     expect(() =>
       normalizeVolumes([{ title: '卷', start_chapter: 3, end_chapter: 2 }], { totalChapters: null }),
     ).toThrow(EngineInputError)
@@ -430,7 +432,10 @@ describe('chapter cards', () => {
       archived: 1,
       coverage: 0.5,
     })
-    expect(bookBrief(outline, 1)).toMatchObject({ volume: null, card: { num: 1 } })
+    // 0.2.20: `bookBrief` no longer carries the chapter card — the context has a
+    // dedicated `outline_card` and the duplicate cost 395 code points.
+    expect(bookBrief(outline, 1)).toMatchObject({ volume: null })
+    expect(bookBrief(outline, 1)).not.toHaveProperty('card')
   })
 
   it('treats a blueprint-only outline as present and detects partial worldbooks', () => {

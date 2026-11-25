@@ -21,7 +21,7 @@
 > [!IMPORTANT]
 > 当前发布版本以 npm `latest` 标签为准。宿主范围：DSH `>=0.2.1-rc.2 <0.3.0-0`；Node `>=24.9.0`。
 >
-> 最近一版是**投稿自查**：把编辑脑子里的 13 条退稿标准做成引擎可判定的对象——5 项纯机器、7 项「机器举证 + 模型下结论」、1 项纯模型。`novel_check` 的 check 文档多出一张 13 行的 `self_check` 表，面板质量页多一张自查卡；11 个新规则码里只有 `QUOTE_UNBALANCED` 与 `PUNCT_STANDARD` 是 blocker，旧规则包没有 `selfcheck` 块时 11 码全静默。同一版补上 `DESIGN.md` 写了很久、代码里没有的**机检度**：`R-W-06`…`R-W-10` 这 5 个格式维度（15 分）改由引擎按 `min(单项上限, 权重 × 命中次数)` 计分，模型声明值只记录不生效，P4 任务书提前给出 `machine_scores`。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
+> 最近一版是**读模型不再说谎**：任务书交给模型之前先量一遍，装不下的按块裁剪并给出「少了什么、去哪取」（`context_meta` v2），七份任务书在 600 章夹具上从 1.03MB(被宿主剪成两截) 降到 ≤8,192 码点；`novel_status`/`novel_report`/面板在 600 章书上的 p95 从 1.7s 降到几十毫秒。同一版把「没人判」和「合法写法」分清：自查缺答不再算 `pass`、`TIME_REGRESSION` 升 blocker、引号口径由项目声明，而 50 段真实反例集上的 28 条误报归零。仍是 28 工具、13 门控、15 维、5 语义项、6 导出；`SCHEMA_VERSION` 仍为 1，`payload_version` 仍为 7。
 
 ---
 
@@ -184,9 +184,27 @@ P7、P8、P9 在 `novel_archive` 一次事务里完成。单章归档后状态�
 | S12 | 分章         | hybrid  | `CHAPTER_END_OPEN`                                         |
 | S13 | 转场         | machine | `SCENE_SEPARATOR`                                          |
 
-11 个新码里只有两个是 blocker：`QUOTE_UNBALANCED`（一段里半角引号个数为奇数，会把后文整段渲染成对白）与 `PUNCT_STANDARD`（中文紧邻半角标点、两字之间半角空格、`~ ～ ※ ★ ☆ →` 等装饰符）。两者都在 PG-04 就拦，不用等到 P6；`3.5%`、`10,000`、`U.S.`、`A/B` 和整段英文不会误杀。其余 9 个是 advisory，不阻塞归档。紧急情况可以在规则包写 `exemptions: [PUNCT_STANDARD]` 单条关闭，不改代码。
+11 个新码里只有两个是 blocker：`QUOTE_UNBALANCED`（一段里半角引号个数为奇数，会把后文整段渲染成对白）与 `PUNCT_STANDARD`（中文紧邻半角**标点**、`~ ～ ※ ★ ☆ →` 等装饰符）。两者都在 PG-04 就拦，不用等到 P6；`3.5%`、`10,000`、`U.S.`、`A/B` 和整段英文不会误杀。其余 9 个是 advisory，不阻塞归档。紧急情况可以在规则包写 `exemptions: [PUNCT_STANDARD]` 单条关闭，不改代码。
 
-读面：`novel_check` 的 check 文档带 `self_check`（13 行、判定、证据段落与规则码，恒按清单顺序）；`novel_report` 聚合全书 `pass/fail/na` 与最差三项；面板质量页有「自查清单」卡，13 行、√/×/—，390px 不横向溢出。完整口径见 [docs/selfcheck.md](docs/selfcheck.md)。
+**0.2.20 的两处口径变化**（都是真实稿抽样逼出来的）：
+
+- **两字之间的半角空格降为 advisory**。落款、账目、名片里的「经手人 周慎 押」是有意排版，不再拦；半角逗号、括号照旧是 blocker。
+- **引号按项目声明判**。`novel.yaml` 的 `quotes: ascii`（默认）只接受半角双引号，`curly` 接受弯引号与「」；两套混用始终拦。引擎**不会**替你改写正文里的引号。
+- **段长按汉字数算，标点不计**，默认上限 150 字。剧本式的短句加大量逗号不再被误判成长段。
+
+两个 `novel_amend` 例子：
+
+```json
+{ "path": "novel.yaml", "content": { "quotes": "curly" }, "reason": "本书统一用直角引号" }
+```
+
+```json
+{ "path": "novel.yaml", "content": { "strict_cross": true }, "reason": "资源与锁定描写不一致要拦" }
+```
+
+两者都只允许在**归档第一章之前**改一次；已归档章不回算。
+
+读面：`novel_check` 的 check 文档带 `self_check`（13 行、判定、证据段落与规则码，恒按清单顺序）；`novel_report` 聚合全书 `pass/fail/na` 与最差三项；面板质量页有「自查清单」卡，13 行、√/×/—，390px 不横向溢出。完整口径见 [docs/selfcheck.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/selfcheck.md)。
 
 ### 关键数字
 
@@ -329,11 +347,31 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
   "description": "一句话简介",
   "words_per_chapter": [2200, 2800],
   "total_chapters": 120,
+  "style": "cold-suspense",
+  "quotes": "ascii",
   "premise": "旧案重启，档案员被迫入局。",
   "strict_outline": true,
   "project_root": "/home/me/novels/星海"
 }
 ```
+
+**`style` 是必须做的选择，不是可选项。** 八个内置包，或 `"none"`（明确表示不要风格约束）：
+
+| id | 名字 | 适合 |
+| --- | --- | --- |
+| `cold-suspense` | 冷峻悬疑 | 克制的感官，线索前置，低温对白 |
+| `hot-blooded-fast` | 热血快节奏 | 短句推进，动作优先，章末钩子 |
+| `ensemble-power` | 群像权谋 | 多视角轮转，对白机锋，信息不对称 |
+| `infinite-flow` | 无限流 | 规则先行，倒计时压迫，关卡目标明确 |
+| `light-daily` | 轻松日常 | 口语吐槽，生活流细节，低比喻密度 |
+| `romance-push-pull` | 女频拉扯 | 情绪留白，关系张力，短对白 |
+| `steady-farming` | 稳健种田 | 具体生活细节，资源逐项积累 |
+| `weird-horror` | 怪谈克苏鲁 | 规则文本，感官错位，不可解释的恐惧 |
+| `none` | 不使用风格包 | 不加载任何风格规则，现有规则照常 |
+
+**`style` 一次性、不可改。** 建项目时会弹一次确认对话框；确认后写进 `novel.yaml`，之后 `novel_amend` 只能在这本书还没有已归档章节之前设置一次。选错就重建项目——这是为了让「这本书按什么风格评判」有唯一答案，而不是每次评审都换一把尺子。
+
+`quotes` 是对话引号风格（`ascii` 默认，`curly` 表示弯引号或「」），同样可在归档第一章前用 `novel_amend` 改一次。`strict_cross: true` 会把 `RESOURCE_MISMATCH` 与 `LOCKED_DETAIL_DRIFT` 从提示升为拦截。
 
 `premise`、`logline`、`themes`、`tone`、`pov`、`audience`、`selling_points`、`ending`、`strict_outline` 都是可选书级种子；不填也能开书，之后用 `novel_blueprint` 补。
 
@@ -417,7 +455,7 @@ tarball 已包含 `lib/`、`rulepacks/`、`briefs/`、`skills/`、`presets/` 和
 /novel admin novel_state {"kind":"pipeline"}
 ```
 
-面板「? 教程 → 全部命令」与 `/novel admin` 会列出 5 个入口、`/novel` 的 25 种带名写法、6 种导出、25 个 admin 操作和常用组合；本表只是摘要。
+面板「? 教程 → 全部命令」与 `/novel admin` 会列出 5 个入口、`/novel` 的 27 种带名写法、6 种导出、25 个 admin 操作和常用组合；本表只是摘要。
 
 `toolsMode=core` 时只注册 10 个高频工具：
 
@@ -493,7 +531,7 @@ novel_write_draft, novel_review, novel_revise, novel_check, novel_archive
 | `novel_plan_world`   | P1           | 提交世界观约束；数组/对象形状在服务边界校验                  |
 | `novel_plan_chapter` | P2           | 提交章节计划；5–8 个节拍、opening/ending、可选 `cast`        |
 | `novel_write_draft`  | P3           | 提交初稿；格式/字数/摘要不过整体拒绝                         |
-| `novel_review`       | P4           | 十五维评分、问题清单、三段阅读证明；`total` 必填且必须闭合   |
+| `novel_review`       | P4           | 十五维评分、问题清单、三段阅读证明；`total` 可省略（引擎实算），传了必须等于实算值   |
 | `novel_revise`       | P5/P6/待归档 | 整章 `content`、`patch:{expected_hash,edits}` 或仅 `summary` |
 | `novel_check`        | P6           | 机检 + 五个语义一致性项；advisory 与 blocker 分开            |
 | `novel_archive`      | P7–P9        | 事务归档；必须带 `state_delta`                               |
@@ -518,7 +556,7 @@ novel_write_draft, novel_review, novel_revise, novel_check, novel_archive
 | --------------- | --------------------------------------------------------------------------------------------------------- |
 | `novel_export`  | 导出 `md` / `txt` / `epub` / `outline` / `worldbook` / `proposal`                                         |
 | `novel_reopen`  | 从归档备份把紧邻的上一章重开到 P3；必须带非空 `reason`                                                    |
-| `novel_restore` | 从带 manifest 的 txid 备份恢复活动章、大纲、损坏 pipeline 或 state 的 7 个台账；已归档章先 `novel_reopen` |
+| `novel_restore` | 从带 manifest 的 txid 备份恢复活动章、大纲、损坏 pipeline 或 state 的 8 个台账（含 `state/chapters.yaml`）；已归档章先 `novel_reopen` |
 
 ### 编辑与修订的边界
 
@@ -641,7 +679,7 @@ corepack pnpm test
 - 归档、修订、恢复、大纲写入都走事务：staging → 校验 → 备份 → pending journal → rename → 读回 → committed journal。
 - `backupRetention` 控制保留数量，默认 5；`backups/migrations/` 不参与 retention prune。
 - 崩溃后引擎按 journal 恢复或拒绝半迁移；`.staging` 会清理，pending 会分类为 complete/untouched/partial。
-- `novel_restore` 只恢复活动章、大纲、损坏 pipeline，或 `state/` 的 7 个台账（`paths` 给台账时不能与章节文件混用）；已归档章先 `novel_reopen`。台账恢复还会拒绝 `next_seq` 回退与「本次新引入的悬空引用」。
+- `novel_restore` 只恢复活动章、大纲、损坏 pipeline，或 `state/` 的 8 个台账（`paths` 给台账时不能与章节文件混用）；已归档章先 `novel_reopen`。台账恢复还会拒绝 `next_seq` 回退与「本次新引入的悬空引用」。
 - 备份是引擎事务快照，不是外部备份。磁盘损坏、误删整目录、手动 `rm -rf` 不在保护范围；重要书稿请另做文件级备份。
 
 ### 手工修改的边界
@@ -673,11 +711,15 @@ dsh plugin --profile web add dsh-novel-write-engine@latest
 
 升级后刷新页面、新开会话；面板教程版本随之更新，旧标签页显示“需要刷新”时刷新即可。
 
-最近一版是 0.2.19，升级前要知道三件事：
+最近一版是 0.2.20，升级前要知道五件事：
 
-1. **在飞草稿可能过不了格式门**。新增的两个 blocker（`QUOTE_UNBALANCED`、`PUNCT_STANDARD`）在 PG-04 就开火：一段里半角引号个数为奇数，或中文紧邻半角标点/两字之间半角空格，会被拒绝并给逐段证据。机械可修；实在不想改，用 `exemptions: [PUNCT_STANDARD]` 单条关闭。已归档的章不会自动重算，只有重新 `novel_reopen` 再提交时才会撞上。
-2. **格式硬性五维的分数以引擎为准**。`R-W-06`…`R-W-10` 的模型声明值会被覆盖；如果你有脚本自己算 `total`，请按 `novel_brief` 返回的 `machine_scores` 复算，或干脆省略 `total` 让引擎实算，否则会收到 `ENGINE_SCORE_MISMATCH`（回执同时给两个数字）。
-3. **旧规则包不受影响**。规则包里没有 `selfcheck` 块时，11 个新码与 S13 的整段省略号扩展全部静默，check 文档不写 `self_check`，输出与 0.2.18 一致；给包补上该块即可启用。
+1. **用弯引号的书写必须在 `novel.yaml` 里声明 `quotes: curly`**。0.2.20 起引号口径由项目声明（默认 `ascii`），`curly` 下弯引号与「」合法、半角 `"` 才是违规。一本一直用弯引号/直角引号的书，升级后第一次 P4/P6 就会撞上 `ILLEGAL_QUOTE`——这不是新规则，而是引擎第一次知道你用的是哪套。改法：`novel_amend` 改 `novel.yaml` 的 `quotes`（只在第一章归档前可改）。0.2.19 的书里没有这个键，所以 `patch` 用 `add`：`{"path":"novel.yaml","patch":[{"op":"add","path":"quotes","value":"curly"}],"reason":"本书一直用弯引号"}`；已经有该键时用 `replace`。改完 `novel_status.project.quotes` 会显示 `curly`，不用等到撞门才发现没生效。
+2. **自查缺答不再算 `pass`**。P6 的 13 项自查里 8 项要模型回答；不回答又不豁免时，check 记 `na` + `blocking`，**PG-12 拒绝归档**。补答、用 `self_check_waivers: [{id, reason}]` 说明理由，或项目级 `self_check_required: false` 关掉这条（三选一，都在 `novel_check`/`novel_amend` 里）。
+3. **`novel_amend` 的 `allow_delete: true` 已经删除**。删除行必须逐条列键：`deleted: ["locations.name:当铺", "items.id:FS-003", "chapters.num:12"]`；列了没删、删了没列都会报 `ENGINE_SCHEMA_INVALID`。这是为了让「删了什么」出现在回执和 journal 里。
+4. **`TIME_REGRESSION`（故事时间倒退）升为 blocker，没有开关**。已归档章不重算；重开或新章撞上时，用 `novel_amend` 修 `state/timeline.yaml`，或 `novel_rollback {toStage:'P3'}` 重写本章时间。
+5. **任务书变了形状**：`context_meta` 升 `version: 2`（`complete` 是真布尔、新增 `strategy`/`budget`/`omitted`/`compacted`/`fetch`），超预算时按块给「少了什么、去哪取」。**P5 任务书不再有顶层 `issues`**（它一直是 `review.issues` 的副本），读 P5 上下文的脚本请改读 `review.issues`。
+
+另外三处行为变化不影响升级，但值得知道：`novel_state` 对损坏文档的 `raw` 上限改成 5,600 码点（带 `raw_total`/`raw_path`）；`novel_diff` 的 `before`/`after` 各截 1,000 码点、`hunks` 最多 60 条（`truncated` 回执给全量计数）；`final_check` 记 `pass` 要求 content + integrity 双域都跑过，只跑一域记 `fail` 并标 `final_check_partial`。
 
 `SCHEMA_VERSION` 仍为 1，面板协议 `payload_version` 保持 7，项目文件不需要迁移。
 
@@ -846,12 +888,11 @@ tests/            # 单测、集成、falsify、e2e
 
 以当前工作树实际跑出的结果为准：
 
-- `corepack pnpm test`：**117 个测试文件 / 1521 项全部通过**；
-- 覆盖率：**语句 94.29% / 分支 89.43% / 函数 97.62% / 行 94.29%**；逐文件与 `src/rules` 分支门禁通过；client bundle 251.38 KB（react-dom 外置）；
-- `typecheck`、`lint`、`build`、`check:docs`、`check:pack`（42 文件）、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`（191 文件）、`test:isolated`（71 源文件）、`validate:rulepack`、`validate:stylepacks`：通过；
-- `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通，13 个包全部解析；
-- 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行、自查清单 13 行在 390px 不横向溢出”；`check:visual` 需要 Playwright + Chromium，本轮真浏览器 **13 张截图**（1280 七个页签 + 390 质量页 + 文风卡 + 自查卡三态）见 `docs/evidence/0.2.19/`；
-- 真实模型：`agnes-2.5-flash` 在发布前复跑中再次走完一整章（P1→P8 归档→导出，`ok: true`）；`agnes-3.0-flash` 的六阶段一次通过记录来自上一跑，发布前复跑未能复现——它的一半失败是供应商免费额度 `HTTP 429`，另一半是自己反复写「」引号触发 `ILLEGAL_QUOTE`（0.2.17 起就有这条门）。逐阶段日志、正文与披露见 `docs/0.2.19-acceptance.md` §9 与 `docs/evidence/0.2.19/real-model-*.md`；
+- `corepack pnpm test`：**130 个测试文件全通过**（文件数由 `check:docs` 对着 `tests/**` 与 `src/**` 实测校验；项数、覆盖率与包体大小每跑一次都会变，不写死在文档里，见 [docs/0.2.20-acceptance.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.20-acceptance.md) 的门禁表）；
+- `typecheck`、`lint`、`build`、`test:coverage`、`check:docs`、`check:pack`、`check:artifacts`、`check:install`、`check:host`、`check:crash`、`check:hygiene`、`test:isolated`、`validate:rulepack`、`validate:stylepacks`、`check:scale`、`check:errno`：通过；
+- `check:preset` 需要 `DSH_BUNDLE_ROOT` 指向宿主 bundle 根目录；本机用宿主 checkout 的 `packages/bundle/web-app` 跑通；
+- 视觉：client 与 responsive 测试锁住“页面在宿主裁切盒内可滚、顶栏随内容移动、列表局部滚动、展开卡片跨整行、自查清单 13 行在 390px 不横向溢出”；`check:visual` 需要 Playwright + Chromium，本版真浏览器 **13 张截图**（1280 七个页签 + 390 质量页 + 文风卡 + 自查卡三态）见 [`docs/evidence/0.2.20/`](https://github.com/ThzxxArt/dsh-novel-write-engine/tree/main/docs/evidence/0.2.20)；
+- 真实模型：**本版没有重新跑**。0.2.20 改的是读模型、门禁口径与规则误报，没有动 P1–P8 的调用协议；上一版的真实模型记录（含 `agnes-3.0-flash` 免费额度 429 的失败披露）仍在 [`docs/0.2.19-acceptance.md`](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.19-acceptance.md) §9。本版哪些项没验证，逐条列在 [`docs/0.2.20-acceptance.md`](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/0.2.20-acceptance.md) §3；
 - 0.2.19 新增的 11 个码在真实 57 章稿上实测（只读、逐段统计）：命中段落占比最高的 `DIALOGUE_RUN` 1.42%、`FRAME_REPEAT` 0.88%，全部低于 2% 红线；两个新 blocker 中 `QUOTE_UNBALANCED` 0 命中、`PUNCT_STANDARD` 6 段（0.07%，分布在 4 章）——其中 2 段是真正的半角问号与半角引号，4 段是刻意的半角空格落款，重跑 P6 会被挡住，迁移办法（换成全角空格或顿号）写在 `docs/0.2.19-acceptance.md` §7.3；
 - 覆盖率请在**锁定依赖**的工作树上跑（`pnpm install --frozen-lockfile`）；本机 `node_modules` 漂到 vitest 5 时，V8 分支口径不同会误报未达阈值。
 
@@ -865,9 +906,9 @@ tests/            # 单测、集成、falsify、e2e
 | ------------------------------------ | -------------------------------------------------------- |
 | [DESIGN.md](DESIGN.md)               | 完整设计书：架构、数据模型、规则、门控、事务、面板、预设 |
 | [CHANGELOG.md](CHANGELOG.md)         | 版本变更与迁移说明                                       |
-| [docs/tools.md](docs/tools.md)       | 28 个工具与命令面速查                                    |
-| [docs/states.md](docs/states.md)     | 状态机、迁移表、轮次与回退                               |
-| [docs/rulepack.md](docs/rulepack.md) | 规则包结构、编译器断言、改词表流程                       |
+| [docs/tools.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/tools.md)       | 28 个工具与命令面速查                                    |
+| [docs/states.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/states.md)     | 状态机、迁移表、轮次与回退                               |
+| [docs/rulepack.md](https://github.com/ThzxxArt/dsh-novel-write-engine/blob/main/docs/rulepack.md) | 规则包结构、编译器断言、改词表流程                       |
 | [LICENSE](LICENSE)                   | MIT                                                      |
 
 ### 反馈

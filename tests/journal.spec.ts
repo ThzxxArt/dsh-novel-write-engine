@@ -30,23 +30,37 @@ describe('journal reconciliation', () => {
         root,
       })
       await writeFile(join(root, 'state/world.yaml'), world('EXTERNAL'), 'utf8')
+      // An unrelated write is still refused: detection is not reset by another
+      // document's amendment.
+      await expect(
+        engine.amend({
+          path: 'state/characters.yaml',
+          content: { schema_version: 1, next_seq: 1, characters: [] },
+          reason: '不相干的写',
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+      const blocked = await engine.auditHistory({ root, limit: 20 })
+      expect(blocked.warnings).toEqual([expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' })])
+      // 0.2.20 review 3: the edited document itself IS repairable. The mismatch
+      // hint used to point at a restore that the same gate refused.
       await expect(
         engine.amend({
           path: 'state/world.yaml',
           content: {
             schema_version: 1,
             locations: [],
-            abilities: [],
+            abilities: [{ name: 'EXTERNAL' }],
             artifacts: [],
             factions: [],
             rules: [],
           },
-          reason: '再次',
+          reason: '接受外部修改',
           root,
         }),
-      ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
-      const audit = await engine.auditHistory({ root, limit: 20 })
-      expect(audit.warnings).toEqual([expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' })])
+      ).resolves.toBeDefined()
+      const repaired = await engine.auditHistory({ root, limit: 20 })
+      expect(repaired.warnings).not.toContainEqual(expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' }))
     } finally {
       await cleanup()
     }

@@ -40,7 +40,12 @@ export function normalizeLegacyCheck(document: Record<string, unknown>): Record<
     typeof value === 'object' && value !== null && !Array.isArray(value)
   const record = structuredClone(document)
   let legacy = false
-  if (!Array.isArray(record.scope)) {
+  // 0.2.21 review: only a check written before `scope` existed is a legacy
+  // check. Treating *any* non-array value as legacy upgraded a damaged document
+  // (`scope: content`) to a full `['content','integrity']` check and recorded
+  // it as a pass, so corrupted audit evidence failed open. A non-array scope is
+  // left untouched here for `narrow` to reject as CHECK_UNREADABLE.
+  if (record.scope === undefined) {
     record.scope = ['content', 'integrity']
     legacy = true
   }

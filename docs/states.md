@@ -20,7 +20,7 @@
 - **brief 收据**：`BriefReceipt.dependencies` 记录各依赖块摘要；归档把该章 superseded 收据移入 `history/briefs/chNNN.yaml`，`state/briefs.yaml` 每章每阶段只留 current + 最近 2 条（合计 ≤3）。`novel_state {kind:"briefs", view:"all"}` 合并两处读取。
 - **doctor baseline**：`state/doctor-baseline.yaml` 保存 `{id, detail}` 列表；同 id 同 detail 的 warning 不再报告，计数或文案变化会恢复。`novel_doctor {reset:true}` 清空。
 - **实体锚点**：`summary.new_element_anchors` 的每个锚点是正文逐字短语，长度 8–120 字（0.2.14 从 2 字收紧；旧 world 文档里更短的既有锚点仍可读）。实体名本身仍可走 name fallback。
-- **amend 删除**：`novel_amend` 服务端比对行数/主键，缺行拒绝；`allow_delete:true` 表示有意删除。`before/after/changes` 是回执，不写入文档。
+- **amend 删除**：`novel_amend` 服务端比对行数/主键，缺行拒绝；**0.2.20 起**删除必须在 `deleted` 里逐行声明（`locations.name:当铺`、`items.id:FS-003`、`chapters.num:12`），只写 `allow_delete:true` 会被 `ENGINE_SCHEMA_INVALID` 拒绝（0.2.14 的旧语义已废止）。`before/after/changes` 是回执，不写入文档。
 
 ## 0.2.13 可选字段与分页
 
@@ -112,7 +112,7 @@ P7/P8/P9 在 `archiveChapter` 一次事务内完成，不单独成态。`done` �
 
 ## 0.1.3 台账恢复与长书状态
 
-- chapters/characters/world/locks/timeline/foreshadows/relationships/handoff 采用可恢复读取：错误进 `state_errors`，`novel_status`/panel 仍可读；`pipeline` 仍 fatal。`novel.yaml` 损坏进入 `PROJECT_UNREADABLE`，同样可读可修。
+- 八本台账 `state/chapters.yaml`、`state/characters.yaml`、`state/world.yaml`、`state/locks.yaml`、`state/timeline.yaml`、`state/foreshadows.yaml`、`state/relationships.yaml`、`state/handoff.yaml` 采用可恢复读取：错误进 `state_errors`，`novel_status`/panel 仍可读；`state/pipeline.yaml` 仍 fatal。`novel.yaml` 损坏进入 `PROJECT_UNREADABLE`，同样可读可修。
 - 损坏台账的 `novel_state` 返回 `{error,message,path,raw}`；`next` 指向 `novel_amend`，修复时当前所有不可读状态文档可绕过 journal 的既有 hash，其他可读文件的外部改动仍 fail-closed。
 - amend 不变量：chapters 只含已归档章、不减少、编号连续、已归档 `content_hash`/`archive_digest`/`assigned_ids` 不改写；`next_seq` 不降低且不撞已有 ID；chapters 不可读时不接受无法证明 floor 的 timeline/foreshadows/relationships 改写；locks/relationships 不引用不存在的实体；chapters 记录必须与 `chapters/` 文件 hash 一致。
 - `novel.yaml` 可改 title/author/description/targets.total_chapters；genre/platform/created_at/words_per_chapter/dialogue_ratio 不可变；total_chapters 不得低于已归档章数。`novel.yaml` 本身损坏时，amend 接受完整项目文档并优先从备份恢复不可变基线。

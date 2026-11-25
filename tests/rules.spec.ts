@@ -439,7 +439,9 @@ describe('machine pipeline', () => {
   })
 
   it('flags long paragraphs, bad titles and system labels', () => {
-    const long = '字'.repeat(95)
+    // 0.2.20 D3: the limit counts CJK characters and punctuation is excluded,
+    // so the fixture has to exceed 150 characters rather than 90 words.
+    const long = '字'.repeat(151)
     const result = runMachineChecks(`${long}\n\nDay 3 的风很大。`, options({ title: '错误的标题' }))
     const codes = result.violations.map((violation) => violation.code)
     expect(codes).toContain('LONG_PARAGRAPH')
@@ -455,9 +457,26 @@ describe('machine pipeline', () => {
     expect(codes).toContain('READER_INTRUSION')
     expect(codes).toContain('DASH_BUDGET')
     expect(codes).toContain('UNIFORM_SENTENCE')
-    expect(
-      codes.some((code) => code === 'PERIOD_DENSITY' || code === 'ELLIPSIS_RUN' || code === 'CONSECUTIVE_LE'),
-    ).toBe(true)
+  })
+
+  it('tells period density, ellipsis runs and 了-runs apart', () => {
+    // 0.2.20 WP0: one assertion used to accept any of the three codes, so
+    // deleting two of the rules left the suite green. Each sample must raise its
+    // own code and only its own.
+    const governed = ['PERIOD_DENSITY', 'ELLIPSIS_RUN', 'CONSECUTIVE_LE'] as const
+    const samples: Record<(typeof governed)[number], string> = {
+      PERIOD_DENSITY: '雨。'.repeat(60),
+      ELLIPSIS_RUN: '他想了很久…………然后转身走了。',
+      CONSECUTIVE_LE: '他了了了了，然后转身走了。',
+    }
+    for (const code of governed) {
+      const codes = runMachineChecks(samples[code], options()).violations.map((violation) => violation.code)
+      expect(codes, `${code} sample must raise ${code}`).toContain(code)
+      for (const other of governed) {
+        if (other === code) continue
+        expect(codes, `${code} sample must not raise ${other}`).not.toContain(other)
+      }
+    }
   })
 
   it('flags semantic densities and water words', () => {

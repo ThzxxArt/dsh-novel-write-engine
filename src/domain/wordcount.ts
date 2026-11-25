@@ -13,7 +13,7 @@ const CHINESE_PUNCT = /[\u3001-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014
 const INDENT = /\u3000/g
 const ENGLISH_PUNCT = /[^\p{L}\p{N}_\s\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2014\u2026]/gu
 /** A line participates in dialogue if it contains any of the four common quote pairs. */
-const DIALOGUE_MARKS = /["“”「」『』]/
+export const DIALOGUE_MARKS = /["“”「」『』]/
 const DIALOGUE_SPAN = /["“「『]([\s\S]*?)["”」』]/g
 
 const matchCount = (text: string, pattern: RegExp): number => text.match(pattern)?.length ?? 0
@@ -77,15 +77,19 @@ export function countWordMetrics(text: string): WordMetrics {
   }
 }
 
-/** Word count for a single paragraph, used by the long-paragraph rule. */
+/**
+ * Length of a single paragraph, used by the long-paragraph rule and by
+ * `WordMetrics.paragraph_max_words`.
+ *
+ * 0.2.20 D3: counted in CJK characters plus English words and numbers —
+ * punctuation is excluded. The old count included every punctuation mark, so a
+ * 120-character script-style paragraph (40 of them commas and dashes) read as
+ * 160 "words" and blocked. Both call sites go through this function, so the
+ * rule and `novel_word_count` cannot report two different lengths for the same
+ * paragraph.
+ */
 export function countWordMetricsOfParagraph(paragraph: string): number {
-  return (
-    matchCount(paragraph, CJK) +
-    matchCount(paragraph, ENGLISH_WORD) +
-    matchCount(paragraph, NUMBER) +
-    matchCount(paragraph, CHINESE_PUNCT) +
-    matchCount(paragraph, ENGLISH_PUNCT)
-  )
+  return matchCount(paragraph, CJK) + matchCount(paragraph, ENGLISH_WORD) + matchCount(paragraph, NUMBER)
 }
 
 /** Plain character count used when a caller explicitly wants characters. */

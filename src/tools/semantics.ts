@@ -57,6 +57,7 @@ export const ARRAY_PARAMETER_CONTRACT: Record<string, Record<string, ArrayParame
     stages: { semantics: 'replace' },
   },
   novel_amend: {
+    deleted: { semantics: 'replace' },
     patch: { semantics: 'replace' },
   },
   novel_check: {
@@ -64,6 +65,7 @@ export const ARRAY_PARAMETER_CONTRACT: Record<string, Record<string, ArrayParame
     semantic: { semantics: 'replace' },
     acknowledge: { semantics: 'replace' },
     self_check: { semantics: 'replace' },
+    self_check_waivers: { semantics: 'replace' },
   },
   novel_worldbook: {
     rules: { semantics: 'replace' },

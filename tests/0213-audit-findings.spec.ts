@@ -16,6 +16,7 @@ import {
   bootstrapToDraft,
   cleanText,
   FIXED_NOW,
+  FIXTURE_WAIVERS,
   harness,
   readyToArchive,
   sampleReview,
@@ -452,7 +453,9 @@ describe('0.2.13 post-implementation audit findings', () => {
         ...(document.genres['都市现代']!.profile ?? {}),
         [key]: value,
       }
-      expect(() => compileRulepack(document), key).toThrow()
+      expect(() => compileRulepack(document), key).toThrowError(
+        expect.objectContaining({ code: 'ENGINE_RULEPACK_INVALID' }),
+      )
     }
   })
 
@@ -1178,7 +1181,14 @@ describe('0.2.13 post-implementation audit findings', () => {
       await engine.getBrief({ stage: 'P4', root })
       await engine.submitReview({ chapter: 2, ...sampleReview(2, text2), root })
       await engine.getBrief({ stage: 'P6', root })
-      await engine.runCheck({ chapter: 2, semantic: sampleSemantic(text2), root })
+      await engine.runCheck({
+        chapter: 2,
+        semantic: sampleSemantic(text2),
+        // This spec builds its own engine, so the harness-level fixture waiver
+        // does not apply; PG-12 would otherwise refuse the archive.
+        self_check_waivers: FIXTURE_WAIVERS,
+        root,
+      })
       await engine.getBrief({ stage: 'P8', root })
       await engine.archiveChapter({
         chapter: 2,

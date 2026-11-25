@@ -6,12 +6,15 @@
  * engine is asserted here, so a stale figure is a red build instead of a wrong
  * answer the model reads out loud.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   GATE_ORDER,
   OPERATIONS,
+  PANEL_VERSION,
   SELF_CHECK_SPEC,
+  STATE_FILES,
   STYLE_PACK_LINES,
   TOOL_NAMES,
   loadStyleCatalogue,
@@ -27,6 +30,35 @@ const check = (label, condition, detail) => {
   if (condition) return
   problems.push(`${label}: ${detail}`)
 }
+
+// 0. 0.2.20 release review: the version is a product fact in four places —
+// package.json (what npm serves), PANEL_VERSION (what the panel tells a stale
+// tab to reload), DESIGN.md (what the design book claims) and CHANGELOG.md
+// (what the release notes describe). Only the first two were tied by a test;
+// the other two drifted silently through every release, and this review found
+// the whole tree still saying 0.2.19 while the changelog said 0.2.20.
+const manifest = JSON.parse(read('package.json'))
+const changelog = read('CHANGELOG.md')
+check(
+  'version/panel',
+  PANEL_VERSION === manifest.version,
+  `PANEL_VERSION is ${PANEL_VERSION}, package.json is ${manifest.version}`,
+)
+check(
+  'version/design',
+  new RegExp(`\\| 插件版本 \\| \\x60${manifest.version.replace(/\./g, '\\.')}\\x60`).test(design),
+  `DESIGN.md does not name the shipped version ${manifest.version}`,
+)
+check(
+  'version/changelog',
+  changelog.includes(`\n## ${manifest.version}\n`) || changelog.startsWith(`## ${manifest.version}\n`),
+  `CHANGELOG.md has no "## ${manifest.version}" section at the top`,
+)
+check(
+  'version/readme',
+  new RegExp(`最近一版是\\D{0,8}${manifest.version.replace(/\./g, '\\.')}`).test(read('README.md')),
+  `README.md does not say the latest version is ${manifest.version}`,
+)
 
 // 1. Tool count: one namespace, and the docs agree.
 check('tools', TOOL_NAMES.length === 28, `TOOL_NAMES has ${TOOL_NAMES.length}, expected 28`)
@@ -64,18 +96,23 @@ for (const [index, line] of STYLE_PACK_LINES.entries()) {
 }
 
 // 5. The ledgers the archive transaction writes.
-const LEDGERS = [
-  'chapters',
-  'characters',
-  'world',
-  'locks',
-  'timeline',
-  'foreshadows',
-  'relationships',
-  'handoff',
-]
-check('ledgers', LEDGERS.length === 8, `ledger list has ${LEDGERS.length}`)
+//
+// 0.2.20 review 4: this used to assert `LEDGERS.length === 8` against a literal
+// list typed into this file — a tautology that could not fail, and that named
+// the ledgers the engine had two releases ago without noticing. The list now
+// comes from `STATE_FILES`, and every ledger must be *described* by the state
+// contract doc, not merely mentioned somewhere in it.
+const LEDGERS = Object.keys(STATE_FILES).filter((key) => key !== 'pipeline' && key !== 'journal')
+const statesDoc = read('docs/states.md')
+check('ledgers', LEDGERS.length === 8, `STATE_FILES has ${LEDGERS.length} ledgers, expected 8`)
 check('ledgers/DESIGN', /八本台账|8 本台账|八个台账/.test(design), 'DESIGN does not mention eight ledgers')
+for (const ledger of LEDGERS) {
+  check(
+    `ledgers/${ledger}`,
+    statesDoc.includes(`state/${ledger}.yaml`) || statesDoc.includes(`${ledger}.yaml`),
+    `docs/states.md does not describe state/${ledger}.yaml`,
+  )
+}
 
 // 6. The rulepack contract doc must describe the 0.2.17 blocks it ships.
 // A block nobody documented is a block nobody can safely author.
@@ -99,7 +136,6 @@ for (const code of [
 }
 
 // 7. The state contract doc must describe the project's style field.
-const statesDoc = read('docs/states.md')
 check('states/style', statesDoc.includes('style'), 'docs/states.md does not mention style')
 
 // 8. 0.2.19: the thirteen submission self-check items are one table in code and
@@ -117,10 +153,16 @@ for (const entry of SELF_CHECK_SPEC) {
     selfCheckDoc.includes(entry.title),
     `docs/selfcheck.md does not carry the checklist wording of ${entry.id}`,
   )
+  // The basis must sit in *this row* of the table. `includes()` on the whole
+  // document was satisfied by the basis legend above it, so every row could
+  // claim any basis and the gate stayed green.
+  const row = selfCheckDoc
+    .split('\n')
+    .find((line) => line.startsWith('|') && line.includes(`\`${entry.id}\``))
   check(
     `selfcheck/${entry.id}/basis`,
-    selfCheckDoc.includes(`\`${entry.basis}\``),
-    `docs/selfcheck.md does not state the basis ${entry.basis} (${entry.id})`,
+    row !== undefined && row.includes(`\`${entry.basis}\``),
+    `docs/selfcheck.md row ${entry.id} does not state its basis ${entry.basis}`,
   )
 }
 check('selfcheck/count', SELF_CHECK_SPEC.length === 13, `SELF_CHECK_SPEC has ${SELF_CHECK_SPEC.length} rows`)
@@ -130,13 +172,46 @@ check('selfcheck/count', SELF_CHECK_SPEC.length === 13, `SELF_CHECK_SPEC has ${S
 for (const [stage, needles] of [
   ['P3', ['投稿自查清单', '13']],
   ['P4', ['self_check', 'machine_scores', 'must_answer']],
-  ['P6', ['自查清单复核', 'must_answer']],
+  // 0.2.20: the P6 brief no longer carries `self_check` (only P3/P4 do), so the
+  // page must name the eight model-judged ids instead of a field it cannot see.
+  ['P6', ['自查清单复核', 'SC-CONCRETE', 'SC-QUOTE']],
 ]) {
   const brief = read(`briefs/${stage}.md`)
   for (const needle of needles) {
     check(`briefs/${stage}`, brief.includes(needle), `briefs/${stage}.md does not mention ${needle}`)
   }
 }
+
+// 0.2.20 WP6: the README's test-file count is generated, not remembered.
+// It used to say "117 个测试文件" while the suite ran 120, then 121 — a number
+// nobody updates is a number that lies. `check:docs` counts the same globs
+// vitest does (tests/** and src/**) and requires the README to agree.
+const specFiles = []
+const walkSpecs = (dir) => {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (['node_modules', 'lib', 'dist', '.git', 'docs'].includes(entry.name)) continue
+      walkSpecs(join(dir, entry.name))
+    } else if (/\.spec\.tsx?$/.test(entry.name)) {
+      specFiles.push(join(dir, entry.name))
+    }
+  }
+}
+walkSpecs(join(root, 'tests'))
+walkSpecs(join(root, 'src'))
+const readme = read('README.md')
+const claimed = /\*\*(\d+) 个测试文件/.exec(readme)
+check(
+  'readme/test-file-count',
+  claimed !== null && Number(claimed[1]) === specFiles.length,
+  `README.md claims ${claimed?.[1] ?? 'no'} test files; the suite contains ${specFiles.length}`,
+)
 
 if (problems.length > 0) {
   for (const problem of problems) console.error(`docs check failed — ${problem}`)

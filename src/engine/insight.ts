@@ -395,14 +395,26 @@ export function buildBookReport(input: ReportInput): BookReport {
     warnings.push(`平均分 ${qualityAverage.toFixed(1)} 低于合格线 ${input.minScore}`)
   }
   const committed = (input.journal ?? []).filter((row) => row.status === 'committed')
-  const committedCount = (op: string, chapter: number): number =>
-    committed.filter((row) => row.op === op && row.chapter === chapter).length
-  const archivedAt = (chapter: number): string | null => {
-    const row = [...committed]
-      .reverse()
-      .find((entry) => entry.op === 'archiveChapter' && entry.chapter === chapter)
-    return row?.at ?? null
+  // 0.2.20 WP4: one pass over the journal, not one per chapter.
+  //
+  // `archivedAt` used to copy and reverse the whole committed journal for every
+  // chapter and `committedCount` filtered it, so a 600-chapter book with 24,001
+  // rows did ~14 million row copies per report and took 1.3 s. Both answers are
+  // maps now, and `archived_at` keeps the *last* committed archive row, which is
+  // what the reversed scan returned.
+  const committedOps = new Map<string, Map<number, number>>()
+  const archivedAtByChapter = new Map<number, string>()
+  for (const row of committed) {
+    let counts = committedOps.get(row.op)
+    if (counts === undefined) {
+      counts = new Map()
+      committedOps.set(row.op, counts)
+    }
+    counts.set(row.chapter, (counts.get(row.chapter) ?? 0) + 1)
+    if (row.op === 'archiveChapter') archivedAtByChapter.set(row.chapter, row.at)
   }
+  const committedCount = (op: string, chapter: number): number => committedOps.get(op)?.get(chapter) ?? 0
+  const archivedAt = (chapter: number): string | null => archivedAtByChapter.get(chapter) ?? null
   const projected = new Map((input.effortProjection?.chapters ?? []).map((row) => [row.num, row]))
   const effortChapters = records.map((record) => {
     const rounds = record.rounds
@@ -478,12 +490,23 @@ export function buildBookReport(input: ReportInput): BookReport {
       trend_basis: trendBasis,
       samples: qualitySamples,
       sample_basis: 'final_review_per_chapter',
+      // 0.2.20 WP6: how many of those samples were scored by the engine and how
+      // many carry the old self-report basis. The panel showed one average for
+      // two different yardsticks; a reader cannot tell a dropped score from a
+      // changed ruler without this count.
+      scoring_basis: {
+        machine: records.filter((record) => record.scoring_basis === 'machine').length,
+        self_report: legacyScoring.length,
+        mixed: records.some((record) => record.scoring_basis === 'machine') && legacyScoring.length > 0,
+      },
       // Which chapters the average actually covers, so a reader can verify the
       // sample rather than trust the count (U7).
-      sample_chapters: [...input.reviews]
-        .map((review) => review.chapter)
-        .filter((chapter, index, all) => all.indexOf(chapter) === index)
-        .sort((left, right) => left - right),
+      //
+      // 0.2.20 review: this listed every review passed in, including reviews for
+      // chapters that are not archived (and therefore not in `samples`), so the
+      // receipt could name a sample the average never saw. It is derived from the
+      // same final-review map the average is.
+      sample_chapters: [...finalReviews.keys()].sort((left, right) => left - right),
       attempts: qualityAttempts,
       attempt_basis: input.effortBasis === undefined ? 'committed_review_submissions' : input.effortBasis,
       dimensions: [...dimensions.entries()]
@@ -1207,6 +1230,9 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
       trend_basis: quality.trend_basis,
       samples: quality.samples,
       sample_basis: quality.sample_basis,
+      // 0.2.20 WP6: the panel shows one average; say how many chapters behind it
+      // were scored by the engine and how many carry the old self-report basis.
+      ...(quality.scoring_basis === undefined ? {} : { scoring_basis: quality.scoring_basis }),
       attempts: quality.attempts,
       attempt_basis: quality.attempt_basis,
       dimensions: quality.dimensions.slice(0, 15).map((entry) => ({ ...entry })),
@@ -1248,3 +1274,192 @@ export function buildPanelBookData(input: PanelBookDataInput): PanelBookData {
 
 /** Re-export the score helper for the report tests and the doctor. */
 export { scoreOf }
+
+/**
+ * 0.2.20 review: a whole-book report must survive the host result pruner.
+ *
+ * The host keeps the first 4,096 + last 1,024 code points of any task result
+ * above 8,192 and does not mark the cut, so a 15.6 KB report on a real
+ * 58-chapter book arrived as an unparseable fragment. `lean` existed for this,
+ * but a caller has to know to ask for it, and the default must not be the
+ * broken shape.
+ *
+ * The report is a summary, so the fix is to shrink its preview lists rather
+ * than to drop sections: every list is halved down to a floor, least load-
+ * bearing first, until the payload fits. What was cut is named in `window`, and
+ * `fetch` says where the full rows live. Numbers, coverage and warnings are
+ * never touched — they are the reason to call this tool.
+ */
+export const REPORT_TARGET_CODEPOINTS = 7_800
+
+const reportPoints = (value: unknown): number => Array.from(JSON.stringify(value) ?? '').length
+
+interface ReportStep {
+  key: string
+  /** How many rows the list has right now. */
+  size: () => number
+  /** Drop the oldest rows, keeping `floor` of the newest. */
+  tail: (floor: number) => boolean
+  floor: number
+  why: string
+  fetch: { tool: 'novel_state' | 'novel_export' | 'novel_doctor'; args: Record<string, unknown> }
+}
+
+export function windowBookReport(report: BookReport): BookReport {
+  if (reportPoints(report) <= REPORT_TARGET_CODEPOINTS) return report
+  const next = structuredClone(report)
+  const totals = new Map<string, number>()
+  const keepTail = <T>(list: T[], floor: number): boolean => {
+    if (list.length <= floor) return false
+    list.splice(0, list.length - Math.max(floor, Math.ceil(list.length / 2)))
+    return true
+  }
+  const keepHead = <T>(list: T[], floor: number): boolean => {
+    if (list.length <= floor) return false
+    list.length = Math.max(floor, Math.ceil(list.length / 2))
+    return true
+  }
+  const steps: ReportStep[] = [
+    {
+      key: 'effort.chapters',
+      size: () => next.effort.chapters.length,
+      tail: (floor) => keepTail(next.effort.chapters, floor),
+      floor: 3,
+      why: '每章工作量只列最近几章；完整序列在章节账本里',
+      fetch: { tool: 'novel_state', args: { kind: 'chapters' } },
+    },
+    {
+      key: 'quality.sample_chapters',
+      size: () => next.quality.sample_chapters?.length ?? 0,
+      tail: (floor) =>
+        next.quality.sample_chapters === undefined ? false : keepTail(next.quality.sample_chapters, floor),
+      floor: 5,
+      why: '评分样本章节只列最近几章；均分/中位数仍是全量',
+      fetch: { tool: 'novel_state', args: { kind: 'chapters' } },
+    },
+    {
+      key: 'self_check.items',
+      size: () => next.self_check?.items.length ?? 0,
+      tail: (floor) => (next.self_check === undefined ? false : keepHead(next.self_check.items, floor)),
+      floor: 3,
+      why: '自查只列前几行；完整 13 行在 check 文档里',
+      fetch: { tool: 'novel_state', args: { kind: 'check' } },
+    },
+    {
+      key: 'outline.volumes',
+      size: () => next.outline.volumes.length,
+      tail: (floor) => keepHead(next.outline.volumes, floor),
+      floor: 3,
+      why: '卷统计只列前几卷；完整卷在 outline 里',
+      fetch: { tool: 'novel_state', args: { kind: 'outline' } },
+    },
+    {
+      // 0.2.20 review 4: `drift` was the one list in `outline` with no step, so
+      // a 400-chapter book whose cards were renamed after the chapters landed
+      // returned 34 KB under a receipt that claimed to be complete. Drift is a
+      // pattern, not a work queue: the count stays whole and the first few rows
+      // show what kind of drift it is.
+      key: 'outline.drift',
+      size: () => next.outline.drift.length,
+      tail: (floor) => keepHead(next.outline.drift, floor),
+      floor: 5,
+      why: '大纲漂移只列前几条；完整对照在 outline 装置与章节账本里',
+      fetch: { tool: 'novel_state', args: { kind: 'outline' } },
+    },
+    {
+      key: 'worldbook.anchors',
+      size: () => next.worldbook.anchors?.length ?? 0,
+      tail: (floor) =>
+        next.worldbook.anchors === undefined ? false : keepHead(next.worldbook.anchors, floor),
+      floor: 2,
+      why: '实体锚点只列前几条；完整设定在 worldbook 里',
+      fetch: { tool: 'novel_state', args: { kind: 'worldbook' } },
+    },
+    {
+      key: 'cast.top',
+      size: () => next.cast.top.length,
+      tail: (floor) => keepHead(next.cast.top, floor),
+      floor: 3,
+      why: '出场统计只列前几人；完整人物在人物账本里',
+      fetch: { tool: 'novel_state', args: { kind: 'characters' } },
+    },
+    {
+      key: 'foreshadows.oldest',
+      size: () => next.foreshadows.oldest.length,
+      tail: (floor) => keepHead(next.foreshadows.oldest, floor),
+      floor: 3,
+      why: '最老伏笔只列前几条；完整台账在伏笔账本里',
+      fetch: { tool: 'novel_state', args: { kind: 'foreshadows' } },
+    },
+    {
+      key: 'activity',
+      size: () => next.activity.length,
+      tail: (floor) => keepTail(next.activity, floor),
+      floor: 3,
+      why: '最近活动只列后几条；完整审计用 novel_audit',
+      fetch: { tool: 'novel_state', args: { kind: 'pipeline' } },
+    },
+    {
+      // A warning is a message, not a row: keeping the first few is enough to
+      // act on, and `novel_doctor` re-runs the checks that produced them.
+      key: 'warnings',
+      size: () => next.warnings.length,
+      tail: (floor) => keepHead(next.warnings, floor),
+      floor: 5,
+      why: '报告警告只列前几条；完整检查用 novel_doctor 重跑',
+      fetch: { tool: 'novel_doctor', args: {} },
+    },
+  ]
+  for (const step of steps) totals.set(step.key, step.size())
+  // The receipt is part of the payload it describes, so measure *with* it
+  // attached: trimming to a target that excludes the window block leaves the
+  // result over the limit by exactly the size of its own explanation.
+  const buildWindow = (): NonNullable<BookReport['window']> => {
+    const omitted: Record<string, { total: number; shown: number }> = {}
+    const fetch: NonNullable<BookReport['window']>['fetch'] = []
+    const seen = new Set<string>()
+    for (const step of steps) {
+      const total = totals.get(step.key) ?? 0
+      const shown = step.size()
+      if (total > 0 && shown < total) {
+        omitted[step.key] = { total, shown }
+        const key = `${step.fetch.tool}:${JSON.stringify(step.fetch.args)}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          fetch.push({ ...step.fetch, why: step.why })
+        }
+      }
+    }
+    return {
+      complete: Object.keys(omitted).length === 0,
+      budget: { limit: 8_192, used: 0, overflow: false },
+      omitted,
+      fetch,
+    }
+  }
+  next.window = buildWindow()
+  for (let guard = 0; guard < 40; guard += 1) {
+    if (reportPoints(next) <= REPORT_TARGET_CODEPOINTS) break
+    let changed = false
+    for (const step of steps) {
+      if (step.size() <= step.floor) continue
+      if (!step.tail(step.floor)) continue
+      changed = true
+      next.window = buildWindow()
+      if (reportPoints(next) <= REPORT_TARGET_CODEPOINTS) break
+    }
+    if (!changed) break
+  }
+  // `effort.chapters_truncated` is the pre-0.2.20 field for the same fact; keep
+  // it in step with the window so two readers cannot disagree.
+  if (next.window.omitted['effort.chapters'] !== undefined) {
+    next.effort.chapters_truncated = {
+      shown: next.effort.chapters.length,
+      total: next.window.omitted['effort.chapters'].total,
+      note: 'report window: only recent chapters are listed; page the chapter ledger for every row',
+    }
+  }
+  const used = reportPoints(next)
+  next.window.budget = { limit: 8_192, used, overflow: used > 8_192 }
+  return next
+}

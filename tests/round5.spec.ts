@@ -123,16 +123,37 @@ it('does not let a pipeline-only brief reset external-edit detection', async () 
       'schema_version: 1\nlocations: [{ name: 外部, first_appearance: 1, locked: true, description: \"\", layout: \"\", capacity: 0, changes: [] }]\nabilities: []\nartifacts: []\nfactions: []\nrules: []\n',
       'utf8',
     )
+    // 0.2.20 review 3: a brief does not clear the detection (asserted below),
+    // but an explicit full-document amend for the edited path is the repair the
+    // mismatch hint points at. It used to be refused by the very gate it fixes,
+    // leaving the project with no repair entry at all.
     await expect(
       engine.amend({
         path: 'state/world.yaml',
-        content: { schema_version: 1, locations: [], abilities: [], artifacts: [], factions: [], rules: [] },
+        content: {
+          schema_version: 1,
+          locations: [
+            {
+              name: '外部',
+              first_appearance: 1,
+              locked: true,
+              description: '改过',
+              layout: '',
+              capacity: 0,
+              changes: [],
+            },
+          ],
+          abilities: [],
+          artifacts: [],
+          factions: [],
+          rules: [],
+        },
         reason: '外部修改后继续',
         root,
       }),
-    ).rejects.toMatchObject({ code: 'ENGINE_TXN_ABORTED' })
+    ).resolves.toBeDefined()
     const audit = await engine.auditHistory({ root, limit: 20 })
-    expect(audit.warnings).toContainEqual(expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' }))
+    expect(audit.warnings).not.toContainEqual(expect.objectContaining({ code: 'JOURNAL_HASH_MISMATCH' }))
   } finally {
     await cleanup()
   }

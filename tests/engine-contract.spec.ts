@@ -268,11 +268,14 @@ describe('0.1.2 input contracts', () => {
       }
       await engine.submitReview({ chapter: 1, ...sampleReview(1, text, { issues: [issue] }), root })
       await engine.getBrief({ stage: 'P5', root })
+      // 0.2.20 review: the revision must change the manuscript before a blocker
+      // can be marked fixed, and the evidence must come from the new text.
+      const changed = text.replace('不快不慢', '忽快忽慢')
       const revised = await engine.submitRevision({
         chapter: 1,
-        content: text,
-        issues: [{ id: issue.id, status: 'fixed', evidence: '风从窗缝里挤进来' }] as never,
-        proof: sampleReview(1, text).proof,
+        content: changed,
+        issues: [{ id: issue.id, status: 'fixed', evidence: '走廊尽头传来脚步声，忽快忽慢' }] as never,
+        proof: sampleReview(1, changed).proof,
         root,
       })
       expect(revised.data.stage).toBe('P4')

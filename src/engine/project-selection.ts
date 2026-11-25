@@ -47,7 +47,11 @@ const unreadableFsError = (error: unknown): boolean => {
   const code = (error as { code?: unknown }).code
   return (
     typeof code === 'string' &&
-    ['EACCES', 'EPERM', 'EIO', 'EBUSY', 'ELOOP', 'EMFILE', 'ENFILE', 'EISDIR'].includes(code)
+    // 0.2.20 review 3: `ioFailure` now wraps EISDIR/EACCES into ENGINE_IO_*.
+    // Those are still filesystem facts, not parse damage — without this the
+    // panel called a directory-instead-of-file "damaged".
+    (code.startsWith('ENGINE_IO_') ||
+      ['EACCES', 'EPERM', 'EIO', 'EBUSY', 'ELOOP', 'EMFILE', 'ENFILE', 'EISDIR'].includes(code))
   )
 }
 

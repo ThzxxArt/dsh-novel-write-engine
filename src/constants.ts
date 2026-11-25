@@ -7,7 +7,7 @@ export const PANEL_ROUTE = '/api/novel-write-engine/panel'
 export const SKILL_NAME = 'novel-write-engine'
 export const REMOTE_VERSION = 6
 /** User-visible panel/tutorial version; keep in sync with package.json. */
-export const PANEL_VERSION = '0.2.19'
+export const PANEL_VERSION = '0.2.20'
 /** The panel is a recent-history view; the wire payload and UI use one cap. */
 export const PANEL_CHAPTER_LIMIT = 30
 
@@ -98,6 +98,18 @@ export const LIMITS = {
   lockStaleMs: 8_000,
   /** How long a writer waits for the keyed mutex before failing. */
   lockWaitMs: 10_000,
+  /**
+   * 0.2.20 WP3: a foreign lock whose pid is alive but whose `startedAt` is older
+   * than this is a pid the container recycled, not a writer waiting on a disk.
+   *
+   * `processAlive` cannot tell "the process that took the lock" from "some
+   * process that inherited the pid" — inside a container the second is common
+   * and made the project permanently unwritable. Thirty minutes is far longer
+   * than any single transaction here (the journal row, staging and rename are
+   * milliseconds), so a live-but-ancient lock is reused-pid evidence, not
+   * contention.
+   */
+  lockMaxAgeMs: 30 * 60_000,
   /** Reading proofs shorter than this cannot be verified. */
   minQuoteChars: 12,
   /** World-plan text fields are protected context, so they need a hard bound. */

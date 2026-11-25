@@ -24,9 +24,26 @@ export function renderMarkdown(project: NovelProject, chapters: readonly ExportC
   if (project.author !== '') parts.push(`作者：${project.author}`, '')
   if (project.description !== '') parts.push(`> ${project.description}`, '')
   for (const chapter of chapters) {
-    parts.push(`## ${chapterHeading(chapter)}`, '', trimBlankEdges(chapter.text), '')
+    parts.push(`## ${chapterHeading(chapter)}`, '', escapeMarkdownProse(chapter.text), '')
   }
   return parts.join('\n')
+}
+
+/**
+ * 0.2.20 WP3: keep a paragraph that starts with Markdown syntax from becoming
+ * structure.
+ *
+ * A chapter line that opens with `#`, `>`, `-`, `*`, `+` or `1.` renders as a
+ * heading, a blockquote or a list in every Markdown viewer, so an export of a
+ * manuscript could silently gain structure the author never wrote — and lose the
+ * characters. The escape is a backslash, which CommonMark removes on render and
+ * which no Chinese manuscript contains at a line start by accident.
+ */
+function escapeMarkdownProse(text: string): string {
+  return trimBlankEdges(text)
+    .split('\n')
+    .map((line) => (/^[#>*+\-]|^\d+[.)]\s/.test(line) ? `\\${line}` : line))
+    .join('\n')
 }
 
 /** Plain-text export: no markdown syntax, no BOM. */

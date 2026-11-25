@@ -105,11 +105,14 @@ describe('gate evaluation', () => {
     expect(codes(input({ briefStage: null, summaryOnlyRevision: true }))).not.toContain('PG-01')
     expect(codes(input({ briefStage: 'P3', briefDigest: 'sha256:stale' }))).toContain('PG-01')
     expect(applicableGates(input())).toEqual(['PG-01', 'PG-02', 'PG-04', 'PG-03', 'PG-05', 'PG-06', 'PG-13'])
+    // 0.2.20 WP2: PG-08 also runs at P4, so a `fixed` claim is judged where it
+    // is made instead of costing a whole revise round before P6 catches it.
     expect(applicableGates(input({ operation: 'submitReview' }))).toEqual([
       'PG-01',
       'PG-02',
       'PG-09',
       'PG-07',
+      'PG-08',
       'PG-11',
     ])
     expect(applicableGates(input({ operation: 'runCheck' }))).toEqual([

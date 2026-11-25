@@ -39,6 +39,41 @@ describe('0.2.9 typed tool contract', () => {
     }
   })
 
+  it('describes every schema node the host compiled down to "any value"', () => {
+    // 0.2.20 review 4: `findType(parameters, 'json')` above can never fail. The
+    // host compiles `type:'json'` to an untyped node (`{}`), so the parameter a
+    // model must fill in arrived with no type and no description — and the
+    // assertion looked for a string the compiler had already removed.
+    const walk = (node: unknown, path: string, out: string[]): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item, index) => walk(item, `${path}[${index}]`, out))
+        return
+      }
+      if (typeof node !== 'object' || node === null) return
+      const record = node as Record<string, unknown>
+      const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(record, key)
+      const typed = has('type') || has('oneOf') || has('anyOf') || has('enum') || has('const') || has('$ref')
+      if (!typed && !has('properties') && !has('items') && !has('allOf')) {
+        if (typeof record.description !== 'string' || record.description.trim() === '') {
+          out.push(`${path} is an untyped schema node with no description`)
+        }
+      }
+      if (has('properties')) {
+        for (const [name, child] of Object.entries(record.properties as Record<string, unknown>)) {
+          walk(child, `${path}.${name}`, out)
+        }
+      }
+      if (has('items')) walk(record.items, `${path}[]`, out)
+      for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+        if (!Array.isArray(record[key])) continue
+        ;(record[key] as unknown[]).forEach((child, index) => walk(child, `${path}.${key}[${index}]`, out))
+      }
+    }
+    const problems: string[] = []
+    for (const [name, tool] of tools()) walk(tool.parameters, name, problems)
+    expect(problems).toEqual([])
+  })
+
   it('keeps the parameter block inside the agreed byte budget', () => {
     const bytes = [...tools().values()].reduce(
       (total, tool) => total + Buffer.byteLength(JSON.stringify(tool.parameters)),
@@ -49,7 +84,25 @@ describe('0.2.9 typed tool contract', () => {
     // model-facing contract, not padding. Recorded as deviation P9 in
     // docs/0.2.19-acceptance.md; the guard still exists so the next addition has
     // to justify itself the same way.
-    expect(bytes).toBeLessThanOrEqual(33_000)
+    //
+    // 0.2.20 raises it to 33,400 for `novel_check.self_check_waivers`, the only
+    // way out of the new PG-12 rule that an unanswered checklist row blocks
+    // archiving. The id enum is not repeated (the engine validates it against the
+    // same spec), so the addition is ~250 bytes: two short strings and a
+    // description that names the alternative to answering.
+    // 0.2.20 raises it to 33,600 for `novel_amend.deleted`, which replaces the
+    // blanket `allow_delete: true`. That parameter is gone, so the net addition
+    // is one string array plus its description (~130 bytes): the tool now says
+    // which rows it is deleting instead of asking permission to delete any.
+    // 0.2.20 review raises it to 34,600 for three parameters that were read by
+    // the engine but settable by no tool: `novel_init` could not create a
+    // `quotes: curly` book (the field its own schema then rejected) and
+    // `strict_cross` / `self_check_required` had no writer at all. `novel_audit`
+    // also gained `latest` (its default page is now the head, so the recent page
+    // needs a name) and a cursor description that explains the direction. Real
+    // model-facing contract, not padding; the guard stays so the next addition
+    // has to justify itself too.
+    expect(bytes).toBeLessThanOrEqual(34_600)
   })
 
   it('types the outline book blueprint patch', () => {

@@ -1,10 +1,10 @@
 import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
-import { dialogueCharacterRatio, sentenceRhythm, splitParagraphs } from '../domain/text.js'
-import { textSimilarity } from '../domain/simhash.js'
+import { dialogueCharacterRatio, paragraphSpans, sentenceRhythm, splitParagraphs } from '../domain/text.js'
+import { bigramSimilarity } from '../domain/simhash.js'
 import { resolveLockBaseline } from '../engine/entity-anchors.js'
 import { CROSS_RULES, FORMAT_RULES, LEXICON_RULES, PUNCTUATION_RULES, SEMANTIC_RULES } from '../codes.js'
 import { STYLE_RULE_IMPLEMENTATIONS } from './style-checks.js'
-import { AI_TONE_IMPLEMENTATIONS } from './ai-tone.js'
+import { AI_TONE_IMPLEMENTATIONS, evaluateTone } from './ai-tone.js'
 import { SELFCHECK_RULE_IMPLEMENTATIONS, separatorOnlyParagraph } from './selfcheck.js'
 import type { Severity, Violation } from '../types.js'
 import type { Rule, RuleContext, TermEntry } from './types.js'
@@ -38,26 +38,37 @@ const countOccurrences = (text: string, needle: string): number => {
 
 const countHits = (text: string, term: string): number => countOccurrences(text, term)
 
-/** A character that ends a word: whitespace or any Unicode punctuation. */
-const WORD_BOUNDARY = /[\s\p{P}]/u
-
 /** Occurrences of a term that satisfy the entry's declared match mode. */
 const termHits = (text: string, entry: TermEntry): number => {
   const term = entry.term
   if (term === '') return 0
   const mode = entry.match ?? 'substring'
   if (mode === 'line_start') {
-    return splitParagraphs(text).filter((paragraph) => paragraph.startsWith(term)).length
+    // 0.2.20 review 3: `excludeRight` was validated at compile time and then
+    // ignored here, so `话说` at the start of a paragraph flagged
+    // 「话说得漂亮」「话说清楚」 — ordinary modern Chinese, not storytelling filler.
+    const excludeRight = new Set(entry.excludeRight ?? [])
+    return splitParagraphs(text).filter((paragraph) => {
+      if (!paragraph.startsWith(term)) return false
+      const after = paragraph[term.length]
+      return after === undefined || !excludeRight.has(after)
+    }).length
   }
   if (mode === 'standalone') {
+    // 0.2.20: count the term unless a neighbouring character makes it part of a
+    // longer word. Requiring punctuation on both sides meant 不禁 / 仿佛 / 似乎
+    // never fired inside a normal sentence — the mode existed for them and could
+    // not match them. `excludeLeft` / `excludeRight` in the pack are the guards.
+    const excludeLeft = new Set(entry.excludeLeft ?? [])
+    const excludeRight = new Set(entry.excludeRight ?? [])
     let count = 0
     let at = text.indexOf(term)
     while (at !== -1) {
       const before = at === 0 ? undefined : text[at - 1]
-      const after = text[at + term.length]
+      const after = at + term.length < text.length ? text[at + term.length] : undefined
       if (
-        (before === undefined || WORD_BOUNDARY.test(before)) &&
-        (after === undefined || WORD_BOUNDARY.test(after))
+        (before === undefined || !excludeLeft.has(before)) &&
+        (after === undefined || !excludeRight.has(after))
       ) {
         count += 1
       }
@@ -66,6 +77,41 @@ const termHits = (text: string, entry: TermEntry): number => {
     return count
   }
   return countOccurrences(text, term)
+}
+
+/**
+ * Occurrence offsets of a term inside one paragraph, under its declared match
+ * mode. C8 needs positions, not a count: only the occurrences an AI-tone span
+ * actually covers may step aside.
+ */
+const termOccurrenceSpans = (paragraph: string, entry: TermEntry): Array<{ start: number; end: number }> => {
+  const term = entry.term
+  if (term === '') return []
+  const mode = entry.match ?? 'substring'
+  if (mode === 'line_start') {
+    if (!paragraph.startsWith(term)) return []
+    const excludeRight = new Set(entry.excludeRight ?? [])
+    const after = paragraph[term.length]
+    if (after !== undefined && excludeRight.has(after)) return []
+    return [{ start: 0, end: term.length }]
+  }
+  const excludeLeft = new Set(entry.excludeLeft ?? [])
+  const excludeRight = new Set(entry.excludeRight ?? [])
+  const occurrences: Array<{ start: number; end: number }> = []
+  let at = paragraph.indexOf(term)
+  while (at !== -1) {
+    const before = at === 0 ? undefined : paragraph[at - 1]
+    const after = at + term.length < paragraph.length ? paragraph[at + term.length] : undefined
+    if (
+      mode === 'substring' ||
+      ((before === undefined || !excludeLeft.has(before)) &&
+        (after === undefined || !excludeRight.has(after)))
+    ) {
+      occurrences.push({ start: at, end: at + term.length })
+    }
+    at = paragraph.indexOf(term, at + term.length)
+  }
+  return occurrences
 }
 
 /**
@@ -109,22 +155,39 @@ const mdContamination: Rule = (ctx) => {
   return results
 }
 
+/**
+ * 0.2.20 D1: judge quotes against the style the project declared.
+ *
+ * `ascii` (default) — `"` is the dialogue quote; curly and CJK marks are wrong.
+ * `curly` — 弯引号 or 「」/『』 are correct; a straight `"` is wrong.
+ * Either way, a paragraph that mixes the two families is wrong, because no
+ * typesetter switches mid-line. The engine never rewrites the manuscript: this
+ * reports, it does not repair.
+ */
+const CURLY_QUOTE_RE = /[“”「」『』]/g
+
 const illegalQuote: Rule = (ctx) => {
+  const style = ctx.quotes ?? 'ascii'
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
-    const matches = paragraph.match(/[“”「」『』]/g)
-    if (matches !== null)
-      results.push(
-        v(
-          FORMAT_RULES.ILLEGAL_QUOTE,
-          'blocker',
-          index + 1,
-          `contains ${matches.length} curly/CJK quote mark(s) ${[...new Set(matches)].join(' ')}; near "${excerptAround(
-            paragraph,
-            matches[0] as string,
-          )}"`,
-        ),
-      )
+    const curly = paragraph.match(CURLY_QUOTE_RE) ?? []
+    const straight = (paragraph.match(/"/g) ?? []).length
+    const mixed = curly.length > 0 && straight > 0
+    const wrong = style === 'curly' ? (straight > 0 ? ['"'] : []) : curly
+    if (wrong.length === 0 && !mixed) return
+    const marks = mixed ? [...new Set([...curly, '"'])] : [...new Set(wrong)]
+    const declared = style === 'curly' ? '弯引号或「」' : '半角 "'
+    results.push(
+      v(
+        FORMAT_RULES.ILLEGAL_QUOTE,
+        'blocker',
+        index + 1,
+        `${mixed ? '同一段混用两套引号' : `与项目声明的引号风格不符（本项目用 ${declared}）`}：${marks.join(' ')}；near "${excerptAround(
+          paragraph,
+          marks[0] as string,
+        )}"`,
+      ),
+    )
   })
   return results
 }
@@ -164,9 +227,11 @@ const englishEllipsis: Rule = (ctx) => {
 
 const sceneSeparator: Rule = (ctx) => {
   const results: Violation[] = []
+  const matched = new Set<number>()
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
     for (const separator of ctx.rulepack.format.scene_separators) {
-      if (paragraph.includes(separator))
+      if (paragraph.includes(separator)) {
+        matched.add(index + 1)
         results.push(
           v(
             FORMAT_RULES.SCENE_SEPARATOR,
@@ -175,12 +240,20 @@ const sceneSeparator: Rule = (ctx) => {
             `contains scene separator "${separator}"; near "${excerptAround(paragraph, separator)}"`,
           ),
         )
+      }
     }
   })
   // 0.2.19 S13: a paragraph that is nothing but ellipses or dashes is a
   // separator too. Same owner, not a new code: the checklist question is
   // "did a transition sign sneak in", and two codes would answer it twice.
-  return [...results, ...separatorOnlyParagraph(ctx)]
+  // A paragraph a configured separator already matched keeps the more specific
+  // finding; one paragraph must not produce two blockers for one separator.
+  return [
+    ...results,
+    ...separatorOnlyParagraph(ctx).filter(
+      (violation) => violation.location.paragraph === undefined || !matched.has(violation.location.paragraph),
+    ),
+  ]
 }
 
 const longParagraph: Rule = (ctx) => {
@@ -227,6 +300,11 @@ const systemLabel: Rule = (ctx) => {
   const labels = ctx.rulepack.format.system_labels
   const results: Violation[] = []
   splitParagraphs(ctx.text).forEach((paragraph, index) => {
+    // 0.2.20 review 3: a 【】 panel is in-story text — a game-system book writes
+    // `【Day 3 · 剩余时间 12:00】` as something the character reads. S5 already
+    // exempts the same paragraph, and SYSTEM_LABEL flagging it made the engine
+    // contradict itself on one screen.
+    if (paragraph.startsWith('【') && paragraph.endsWith('】')) return
     for (const label of labels) {
       const match = paragraph.match(new RegExp(label))
       if (match !== null)
@@ -245,32 +323,71 @@ const systemLabel: Rule = (ctx) => {
 
 /* ----------------------------------------------------------------- lexicon */
 
-const zeroTolerance: Rule = (ctx) =>
-  ctx.rulepack.lexicon.zero_tolerance.flatMap((entry) => {
-    const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
-    const paragraphs = splitParagraphs(ctx.text)
-    const eligible =
-      entry.dialogueExempt === true
-        ? paragraphs
-            .map((paragraph, index) => ({ paragraph, index }))
-            .filter(({ paragraph }) => dialogueCharacterRatio(paragraph) < dominant)
-        : paragraphs.map((paragraph, index) => ({ paragraph, index }))
-    // C8: an AI-tone entry is the more specific owner of the same span and
-    // carries a replacement, so those occurrences step aside. Only the covered
-    // ones — a second, plain occurrence still blocks.
-    const covered = ctx.toneCoveredTerms?.get(entry.term) ?? 0
-    const hits = eligible.reduce((total, { paragraph }) => total + termHits(paragraph, entry), 0) - covered
-    if (hits <= 0) return []
-    const paragraph = (eligible.find(({ paragraph }) => termHits(paragraph, entry) > 0)?.index ?? 0) + 1
+const zeroTolerance: Rule = (ctx) => {
+  const entries = ctx.rulepack.lexicon.zero_tolerance
+  const dominant = ctx.rulepack.punctuation.dialogue_dominant_ratio
+  // C8: an AI-tone entry is the more specific owner of a span, so the
+  // occurrences it actually covers step aside. Coverage is per paragraph:
+  // subtracting a chapter-wide count from the dialogue-filtered eligible
+  // count let a tone hit inside a dialogue paragraph cancel the *narration*
+  // occurrence of the same term, hiding a real zero-tolerance blocker.
+  const toneHits = ctx.toneHits ?? evaluateTone(ctx.text, ctx.rulepack.lexicon.ai_tone)
+  const spans = paragraphSpans(ctx.text)
+  // 0.2.20 review 3: the table contains nested terms (显而易见 / 显而易见地,
+  // 若有所思 / 若有所思地, 与此同时 / 与此同时的). Counting each entry on its own
+  // reported one span twice, as two blockers. The longer term owns the span.
+  type Occurrence = { entry: number; paragraph: number; start: number; end: number }
+  const occurrences: Occurrence[] = []
+  for (const [entryIndex, entry] of entries.entries()) {
+    for (const [index, span] of spans.entries()) {
+      if (entry.dialogueExempt === true && dialogueCharacterRatio(span.text) >= dominant) continue
+      for (const occurrence of termOccurrenceSpans(span.text, entry)) {
+        occurrences.push({
+          entry: entryIndex,
+          paragraph: index + 1,
+          start: span.start + occurrence.start,
+          end: span.start + occurrence.end,
+        })
+      }
+    }
+  }
+  const covered =
+    occurrences.length <= 2_000
+      ? occurrences.map((row) =>
+          occurrences.some(
+            (other) =>
+              other.entry !== row.entry &&
+              other.end - other.start > row.end - row.start &&
+              other.start <= row.start &&
+              row.end <= other.end,
+          ),
+        )
+      : occurrences.map(() => false)
+  const perEntry = entries.map(() => ({ hits: 0, first: 0 }))
+  occurrences.forEach((row, index) => {
+    if (covered[index] === true) return
+    const start = row.start
+    const end = row.end
+    if (toneHits.some((hit) => hit.paragraph === row.paragraph && hit.start <= start && end <= hit.end)) {
+      return
+    }
+    const bucket = perEntry[row.entry]!
+    bucket.hits += 1
+    if (bucket.first === 0) bucket.first = row.paragraph
+  })
+  return entries.flatMap((entry, index) => {
+    const { hits, first } = perEntry[index]!
+    if (hits === 0) return []
     return [
       v(
         LEXICON_RULES.ZERO_TOLERANCE,
         'blocker',
-        paragraph,
+        first,
         `"${entry.term}" is zero-tolerance (${hits}x)${entry.note === undefined ? '' : `: ${entry.note}`}`,
       ),
     ]
   })
+}
 
 /** Soft limits apply chapter-wide; contextual limits relax by genre (0 elsewhere). */
 const softLimit: Rule = (ctx) =>
@@ -369,7 +486,9 @@ const dashBudget: Rule = (ctx) => {
   const token = ctx.rulepack.punctuation.dash.token
   const total = countOccurrences(ctx.text, token)
   let inDialogue = 0
-  for (const match of ctx.text.matchAll(/["“][^"“”]*["”]/g)) {
+  // Same four quote families as `dialogueCharacterRatio`: a dash inside 「…」 is
+  // still two speakers interrupting.
+  for (const match of ctx.text.matchAll(/["“「『][^"“”「」『』]*["”」』]/g)) {
     inDialogue += countOccurrences(match[0], token)
   }
   // A dash inside dialogue carries two speakers' interruption, so it costs double.
@@ -1144,7 +1263,21 @@ const duplicateParagraph: Rule = (ctx) => {
   let best = { score: 0, current: 0, previous: 0 }
   for (const [currentIndex, current] of currentUnits.entries()) {
     for (const [previousIndex, previousUnit] of previousUnits.entries()) {
-      const score = textSimilarity(current.text, previousUnit.text)
+      // 0.2.20 WP5: character-bigram Dice, not SimHash. SimHash on short
+      // Chinese paragraphs has a high floor — two unrelated 40-character
+      // paragraphs commonly score 0.7 — so the 0.75 advisory fired on ordinary
+      // prose. Bigrams stay near 0 for unrelated text and still reach ~1 for a
+      // copied paragraph.
+      // A paragraph "hidden" by inserting line breaks is a substring of the
+      // original once whitespace is gone. Dice punishes the length difference
+      // (20 characters against 52), SimHash did not — so containment is scored
+      // explicitly instead of lowering the threshold for everyone.
+      const compactCurrent = current.text.replace(/\s+/g, '')
+      const compactPrevious = previousUnit.text.replace(/\s+/g, '')
+      const score =
+        compactCurrent.length >= minChars && compactPrevious.includes(compactCurrent)
+          ? 1
+          : bigramSimilarity(current.text, previousUnit.text)
       if (score > best.score) {
         best = { score, current: currentIndex, previous: previousIndex }
       }
@@ -1161,7 +1294,7 @@ const duplicateParagraph: Rule = (ctx) => {
   let paragraphScore = 0
   for (const [currentIndex, current] of currentUnit.paragraphs.entries()) {
     for (const [previousIndex, previousText] of matched.paragraphs.entries()) {
-      const score = textSimilarity(current, previousText)
+      const score = bigramSimilarity(current, previousText)
       if (score > paragraphScore) {
         paragraphScore = score
         currentParagraph = currentUnit.start + currentIndex
@@ -1179,7 +1312,7 @@ const duplicateParagraph: Rule = (ctx) => {
   const severity = overlap !== null && best.score >= blocker ? 'blocker' : 'advisory'
   const evidence =
     overlap === null
-      ? `SimHash similarity ${Math.round(best.score * 100)}%, but no shared 8-character run; not counted as reuse`
+      ? `bigram similarity ${Math.round(best.score * 100)}%, but no shared 8-character run; not counted as reuse`
       : `overlap "${overlap}"`
   return [
     v(
@@ -1426,7 +1559,7 @@ const resourceMismatch: Rule = (ctx) => {
       : [
           v(
             CROSS_RULES.RESOURCE_MISMATCH,
-            'advisory',
+            crossSeverity(CROSS_RULES.RESOURCE_MISMATCH, ctx),
             paragraphOfIndex(ctx.text, conflict.index),
             `${change.character} 的 ${change.resource} 变化为 ${change.delta >= 0 ? '+' : ''}${change.delta}，但正文写的是 "${conflict.trigger}"（「${conflict.clause.slice(0, 40)}」）`,
           ),
@@ -1434,20 +1567,47 @@ const resourceMismatch: Rule = (ctx) => {
   })
 }
 
+/**
+ * 0.2.20 D2: the one place a cross-chapter rule decides its own severity.
+ *
+ * `runCheck` (P6) and PG-10 call `runRules` with the same `RuleContext`, so both
+ * read the same answer here. Before 0.2.20 the severity was literals scattered
+ * through six rules; a project that wanted strict behaviour had no way to ask
+ * for it, and `TIME_REGRESSION` — a story moving backwards in time — was only an
+ * advisory.
+ */
+export const crossSeverity = (code: string, ctx: RuleContext): 'blocker' | 'advisory' => {
+  if (code === CROSS_RULES.DUPLICATE_PARAGRAPH) return 'blocker'
+  // A story cannot run its clock backwards. No switch, by design.
+  if (code === CROSS_RULES.TIME_REGRESSION) return 'blocker'
+  if (code === CROSS_RULES.RESOURCE_MISMATCH || code === CROSS_RULES.LOCKED_DETAIL_DRIFT) {
+    return ctx.strictCross === true ? 'blocker' : 'advisory'
+  }
+  return 'advisory'
+}
+
 const timeRegression: Rule = (ctx) => {
   if (!ctx.rulepack.crosschapter.check_time) return []
   const ledger = ctx.evidence.timeline
   if (ledger === null || ledger.items.length === 0) return []
   const dayOf = (value: string): number | null => {
-    const match = /(?:Day\s*(\d+)|第\s*(\d+)\s*[天日])/i.exec(value)
+    // 0.2.20 review 3: the ledger may write 「第三日」 — the engine never validates
+    // `story_time`, so a Chinese numeral made a blocker-level rule silently
+    // switch itself off.
+    const match = /(?:Day\s*(\d+)|第\s*(\d+|[一二两三四五六七八九十百千]+)\s*[天日])/i.exec(value)
     if (match === null) return null
-    return Number(match[1] ?? match[2])
+    return match[1] === undefined ? parseSmallNumber(match[2] ?? '') : Number(match[1])
   }
   const ordered = [...ledger.items].sort((left, right) => left.chapter - right.chapter)
   const last = ordered[ordered.length - 1]!
   const previous = ordered.length >= 2 ? ordered[ordered.length - 2]! : null
-  const currentMatch = /(?:Day\s*(\d+)|第\s*(\d+)\s*[天日])/i.exec(ctx.text)
-  const currentFromText = currentMatch === null ? null : Number(currentMatch[1] ?? currentMatch[2])
+  const currentMatch = /(?:Day\s*(\d+)|第\s*(\d+|[一二两三四五六七八九十百千]+)\s*[天日])/i.exec(ctx.text)
+  const currentFromText =
+    currentMatch === null
+      ? null
+      : currentMatch[1] === undefined
+        ? parseSmallNumber(currentMatch[2] ?? '')
+        : Number(currentMatch[1])
   const current = currentFromText ?? dayOf(last.story_time)
   const before = previous === null ? null : dayOf(previous.story_time)
   if (current === null) return []
@@ -1459,7 +1619,7 @@ const timeRegression: Rule = (ctx) => {
     return [
       v(
         CROSS_RULES.TIME_REGRESSION,
-        'advisory',
+        crossSeverity(CROSS_RULES.TIME_REGRESSION, ctx),
         paragraphOfIndex(ctx.text, currentMatch!.index),
         `story time goes back from ${last.story_time} to Day ${currentFromText}`,
       ),
@@ -1469,7 +1629,7 @@ const timeRegression: Rule = (ctx) => {
   return [
     v(
       CROSS_RULES.TIME_REGRESSION,
-      'advisory',
+      crossSeverity(CROSS_RULES.TIME_REGRESSION, ctx),
       last.chapter,
       `story time goes back from ${previous!.story_time} to ${last.story_time}`,
     ),
@@ -1706,7 +1866,7 @@ const lockedDetailDrift: Rule = (ctx) => {
         results.push(
           v(
             CROSS_RULES.LOCKED_DETAIL_DRIFT,
-            'advisory',
+            crossSeverity(CROSS_RULES.LOCKED_DETAIL_DRIFT, ctx),
             mention.index + 1,
             `${name} (${kind}) is described differently from its canonical ${baseline.source} baseline; expected "${baseline.texts[0]!.slice(0, 40)}", actual "${mention.text.slice(0, 60)}"`,
           ),

@@ -22,7 +22,15 @@ import { loadRulepack } from '../src/rulepack.js'
 import type { MachineOptions } from '../src/rules/pipeline.js'
 import type { EngineService } from '../src/engine/service.js'
 import type { HandoffDocument, OutlineDocument } from '../src/types.js'
-import { bootstrapToDraft, cleanText, harness, sampleReview, sampleSummary, writeDraft } from './helpers.js'
+import {
+  bootstrapToDraft,
+  cleanText,
+  expectCompleteContext,
+  harness,
+  sampleReview,
+  sampleSummary,
+  writeDraft,
+} from './helpers.js'
 
 const pack = loadRulepack()
 
@@ -229,8 +237,19 @@ describe('0.2.17 P1-05 lexicon entries declare how they match', () => {
     expect(codesOf('读者朋友们，故事到这里就结束了。')).toContain('SYSTEM_LABEL')
   })
 
-  it('does not flag 仿佛 inside an ordinary clause', () => {
-    expect(codesOf('他站住了，仿佛一切都停了下来，连风也停了。')).not.toContain('LEX_ZERO_TOLERANCE')
+  it('flags 仿佛 inside an ordinary clause', () => {
+    // 0.2.20 reverses this expectation. `standalone` used to demand punctuation
+    // on both sides, so 仿佛 — one of the three terms the mode exists for — could
+    // never fire inside a sentence. The mode now counts the term unless a
+    // neighbouring character makes it part of a longer word.
+    expect(codesOf('他站住了，仿佛一切都停了下来，连风也停了。')).toContain('LEX_ZERO_TOLERANCE')
+  })
+
+  it('can still exclude a compound with excludeLeft / excludeRight', () => {
+    const custom = structuredClone(pack)
+    const entry = custom.lexicon.zero_tolerance.find((row) => row.term === '似乎')
+    entry!.excludeRight = ['是']
+    expect(codesOf('他似乎是不来了。', { rulepack: custom })).not.toContain('LEX_ZERO_TOLERANCE')
   })
 })
 
@@ -423,13 +442,11 @@ describe('0.2.17 P1-10 the brief reports its real size in UTF-8 bytes', () => {
       })
       const brief = await engine.getBrief({ stage: 'P1', root })
       const context = brief.data.context as Record<string, unknown>
-      const meta = context.context_meta as { used: number; complete: boolean }
-      const bytes = Buffer.byteLength(JSON.stringify(context), 'utf8')
       // The reported size is the size of the document the caller holds, and the
       // document is complete — the 0.2.17 removal of the context budget means
       // `used` no longer gates anything, only reports.
-      expect(meta.used).toBe(bytes)
-      expect(meta.complete).toBe(true)
+      expectCompleteContext(context, 'P1 brief context')
+      const bytes = Buffer.byteLength(JSON.stringify(context), 'utf8')
       expect(bytes).toBeGreaterThan(JSON.stringify(context).length)
     } finally {
       await cleanup()
@@ -490,7 +507,8 @@ describe('0.2.17 P1-12 a blocker cannot be marked fixed without evidence', () =>
           root,
         }),
       ).rejects.toThrow(/evidence/i)
-      // The same amendment succeeds once the quote is real.
+      // 0.2.20 review: a quote from the manuscript the review already scored is
+      // not evidence of a fix, so the same amendment is refused even with one.
       const quote = cleanText().split('\n\n')[1]!.slice(0, 14)
       await expect(
         engine.submitReview({
@@ -499,7 +517,32 @@ describe('0.2.17 P1-12 a blocker cannot be marked fixed without evidence', () =>
           amend_note: 'quote the revised sentence',
           root,
         }),
-      ).resolves.toBeDefined()
+      ).rejects.toThrow(/has not changed/)
+      // A real revision with a quote from the rewritten paragraph is accepted.
+      const revised = cleanText().replace('不快不慢', '忽快忽慢')
+      await engine.getBrief({ stage: 'P5', root })
+      await engine.submitRevision({
+        chapter: 1,
+        content: revised,
+        summary: sampleSummary(),
+        proof: sampleReview(1, revised).proof,
+        issues: [
+          {
+            id: 'REV-001',
+            severity: 'blocker',
+            dimension: 'R-W-01',
+            location: '第 2 段',
+            problem: '动作缺少动机',
+            fix: '补一句动机',
+            status: 'fixed',
+            evidence: '走廊尽头传来脚步声，忽快忽慢',
+          },
+        ],
+        root,
+      })
+      const review = await engine.queryState({ kind: 'review', chapter: 1, root })
+      const issues = (review.data as { issues: Array<{ id: string; status: string }> }).issues
+      expect(issues.find((issue) => issue.id === 'REV-001')?.status).toBe('fixed')
     } finally {
       await cleanup()
     }

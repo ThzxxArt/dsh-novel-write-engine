@@ -1,7 +1,7 @@
 import { FORMAT_RULES, PUNCTUATION_RULES, SELFCHECK_RULES, STYLE_RULES } from '../codes.js'
 import { dialogueCharacterRatio, paragraphSpans, splitSentenceSpans } from '../domain/text.js'
 import { metaphorHits, stylePatternToRegExp, styleVocabulary } from '../domain/style.js'
-import { isBlank } from '../domain/wordcount.js'
+import { isBlank, DIALOGUE_MARKS } from '../domain/wordcount.js'
 import type { Rule, RuleContext } from './types.js'
 import type {
   SelfCheckBasis,
@@ -74,9 +74,11 @@ const countOccurrences = (text: string, needle: string): number => {
  * S1 · 比喻只保留最贴切的一个.
  *
  * A stack is more similes than `max_per_sentence` inside **one sentence**; a
- * paragraph is also reported when `max_stacks_per_paragraph` sentences in it
- * each stack. Two sentences with one simile each is ordinary prose — that is the
- * boundary the item is often misread as crossing.
+ * paragraph is reported once the number of stacked sentences reaches
+ * `max_stacks_per_paragraph`. The default is 1, so any stacked sentence reports;
+ * raising the threshold tolerates that many stacked sentences per paragraph. Two
+ * sentences with one simile each is ordinary prose — that is the boundary the
+ * item is often misread as crossing.
  */
 const metaphorStack: Rule = (ctx) => {
   const block = selfcheckOf(ctx)
@@ -114,16 +116,17 @@ const metaphorStack: Rule = (ctx) => {
       rows[0]!,
     )
     const stacked = rows.length
-    // A paragraph is reported when one sentence already overflows the limit, or
-    // when several sentences each overflow it.
-    const overLimit = worst.markers.length > block.metaphor.max_per_sentence
-    if (!overLimit && stacked < block.metaphor.max_stacks_per_paragraph) continue
+    // docs/selfcheck.md S1: the paragraph reports when its stacked sentences
+    // reach `max_stacks_per_paragraph`. The old `overLimit` test was true for
+    // every row in this bucket (rows are already over `max_per_sentence`), so
+    // the threshold was inert. With the default 1 any stacked sentence reports.
+    if (stacked < block.metaphor.max_stacks_per_paragraph) continue
     results.push(
       v(
         SELFCHECK_RULES.METAPHOR_STACK,
         'advisory',
         paragraph,
-        `比喻堆叠：一句里 ${worst.markers.length} 个（上限 ${block.metaphor.max_per_sentence}），本段 ${stacked} 句堆叠（上限 ${block.metaphor.max_stacks_per_paragraph}）；命中 ${[...new Set(worst.markers)].join('、')}；原句「${excerpt(sentenceBody(worst.sentence.text))}」`,
+        `比喻堆叠：一句里 ${worst.markers.length} 个（上限 ${block.metaphor.max_per_sentence}），本段 ${stacked} 句堆叠（阈值 ${block.metaphor.max_stacks_per_paragraph}）；命中 ${[...new Set(worst.markers)].join('、')}；原句「${excerpt(sentenceBody(worst.sentence.text))}」`,
       ),
     )
   }
@@ -224,6 +227,12 @@ const frameRepeat: Rule = (ctx) => {
       const head = Array.from(paragraph).slice(0, prefixChars).join('')
       if (Array.from(head).length < prefixChars) continue
       const first = Array.from(paragraph)[0]!
+      // 0.2.20 review 3: the compiler accepts one- and two-character excludes,
+      // and docs describe them as openers. Comparing only the first character
+      // made every two-character entry dead config (exclude: [雨点] did nothing).
+      if (block.opening_repeat.exclude.some((value) => value !== '' && head.startsWith(value))) {
+        continue
+      }
       if (block.opening_repeat.exclude.includes(first)) continue
       if ([...names].some((name) => name !== '' && paragraph.startsWith(name))) continue
       const rows = openers.get(head) ?? []
@@ -278,6 +287,27 @@ const lengthsClose = (run: readonly SentenceRow[], delta: number): boolean => {
 }
 
 /**
+ * 0.2.20 WP5: the head a run of sentences shares, one or two characters.
+ *
+ * The same test `sameShape` applies, returned as a value so the caller can ask
+ * whether the repeated head is a subject rather than a verb frame.
+ */
+const sharedHead = (run: readonly SentenceRow[]): string => {
+  const bodies = run.map((row) => Array.from(row.body))
+  const first = bodies[0] ?? []
+  // The two-character head wins when it matches: 「看见血／看见火」 shares 看 *and*
+  // 看见, and 看 alone would look like a subject. Order matters.
+  const two = first.slice(0, 2).join('')
+  if (two.length === 2 && bodies.every((body) => body.slice(0, 2).join('') === two)) return two
+  const one = first[0] ?? ''
+  return one !== '' && bodies.every((body) => body[0] === one) ? one : ''
+}
+
+/** Character names on stage; a repeated name head is a subject, not a frame. */
+const castNames = (ctx: RuleContext): string[] =>
+  (ctx.evidence.characters?.characters ?? []).map((character) => character.name).filter((name) => name !== '')
+
+/**
  * S4 · 短句排比.
  *
  * (a) A run of at least `min_run` sentences inside one paragraph, all of the
@@ -323,6 +353,21 @@ const parallelRun: Rule = (ctx) => {
       if (run.length > best.length) best = run
     }
     if (best.length < minRun) continue
+    // 0.2.20 WP5: a run that repeats the *subject* is staccato narration, not
+    // 排比. 「他推开门。他看见血。他退了一步。」 and 「老屠放下刀。老屠解了围裙。」
+    // are the two shapes real manuscripts use most, and the rule used to flag
+    // both because they share a first character. A one-character shared head is
+    // a pronoun or a noun subject in Chinese; a character name is a subject by
+    // definition. What remains — a repeated two-character verb frame such as
+    // 「看见血／看见火」 — is the parallelism this rule is for.
+    const head = sharedHead(best)
+    // 0.2.20 review 3: a single-character head cannot be classified without a
+    // part-of-speech tagger. Allowing one turned 「雨停了。雨小了。雨走了。」 (the
+    // corpus A6 boundary: one noun subject, three predicates) into parallelism,
+    // which is a worse error than missing 「看天是天。看水是水。」. The miss is
+    // recorded in docs/0.2.20-review.md instead of paid for with false positives.
+    if (Array.from(head).length <= 1) continue
+    if (castNames(ctx).includes(head)) continue
     results.push(
       v(
         SELFCHECK_RULES.PARALLEL_RUN,
@@ -376,12 +421,34 @@ const parallelRun: Rule = (ctx) => {
 const PARAGRAPH_KEY_RE = /^([^：:，。]{1,8})[：:](.{1,})$/u
 
 /**
+ * A key ending in a speech verb or a pronoun is an attribution, not a list
+ * label: 「他说：走吧。」 is one quoted line of dialogue, not a 短名词 row.
+ */
+const SPEECH_KEY_TAILS: readonly string[] = [
+  '说',
+  '道',
+  '问',
+  '答',
+  '喊',
+  '叫',
+  '笑',
+  '低声',
+  '开口',
+  '他',
+  '她',
+  '我',
+  '你',
+]
+
+const isListKey = (key: string): boolean => !SPEECH_KEY_TAILS.some((tail) => key.endsWith(tail))
+
+/**
  * S5 · 清单罗列.
  *
  * (a) three consecutive sentences opening with an ordinal, (b) one sentence
- * carrying five or more 顿号 with short items, (c) three consecutive
- * `短名词：说明` paragraphs. System panels (`【】`, `system_labels`) are exempt:
- * they are the one place a list is the right form.
+ * carrying seven or more 顿号 with short items (eight items), (c) three
+ * consecutive `短名词：说明` paragraphs. System panels (`【】`, `system_labels`)
+ * are exempt: they are the one place a list is the right form.
  */
 const enumeration: Rule = (ctx) => {
   const block = selfcheckOf(ctx)
@@ -391,41 +458,62 @@ const enumeration: Rule = (ctx) => {
   const exempt = (paragraph: string): boolean =>
     (paragraph.startsWith('【') && paragraph.endsWith('】')) ||
     labels.some((label) => new RegExp(label).test(paragraph))
+  const exemptParagraph = paragraphs.map((paragraph) => exempt(paragraph))
   const results: Violation[] = []
 
   // (a) ordinal-led sentence run
   const ordinals = block.enumeration.ordinals.filter((ordinal) => ordinal !== '')
   if (ordinals.length > 0) {
     const rows = sentenceRows(ctx.text)
-    let run = 0
-    let runStart = 0
-    let reported = false
+    let runStart = -1
+    let runLast = -1
+    let runParagraph = 0
+    // 0.2.20 review 3: `reported` was a chapter-level flag that never reset, so
+    // only the first ordinal run in a chapter was ever reported. A run is
+    // reported once, when it ends, with its full length.
+    const flush = (): void => {
+      const count = runLast - runStart + 1
+      if (runStart >= 0 && count >= block.enumeration.min_items) {
+        results.push(
+          v(
+            SELFCHECK_RULES.ENUMERATION,
+            'advisory',
+            runParagraph,
+            `连续 ${count} 句以序数开头（第 ${runStart + 1}…${runLast + 1} 句，阈值 ${block.enumeration.min_items}）`,
+          ),
+        )
+      }
+      runStart = -1
+      runLast = -1
+    }
     for (const [index, row] of rows.entries()) {
-      const starts = ordinals.some((ordinal) => row.body.startsWith(ordinal))
-      if (starts) {
-        if (run === 0) runStart = index
-        run += 1
-        if (run >= block.enumeration.min_items && !reported) {
-          reported = true
-          results.push(
-            v(
-              SELFCHECK_RULES.ENUMERATION,
-              'advisory',
-              row.paragraph,
-              `连续 ${run} 句以序数开头（第 ${runStart + 1}…${index + 1} 句，阈值 ${block.enumeration.min_items}）`,
-            ),
-          )
-        }
+      // A system panel is exempt from every S5 shape, not only from the
+      // 「短名词：说明」 block. An exempt paragraph also interrupts a run.
+      if (exemptParagraph[row.paragraph - 1] === true) {
+        flush()
         continue
       }
-      run = 0
+      if (ordinals.some((ordinal) => row.body.startsWith(ordinal))) {
+        if (runStart < 0) runStart = index
+        runLast = index
+        runParagraph = row.paragraph
+        continue
+      }
+      flush()
     }
+    flush()
   }
 
   // (b) a 顿号 run inside one sentence
+  //
+  // 0.2.20 WP5: six items is how a manuscript writes an inventory of objects
+  // that are in the room — 「架子上摆着刀、剑、枪、棍、绳、鞭」. docs/selfcheck.md S5
+  // sets the threshold at 8 items (7 separators); the code counted 6 separators,
+  // one off, so a 7-item list fired a shape the document says is ordinary.
   for (const row of sentenceRows(ctx.text)) {
+    if (exemptParagraph[row.paragraph - 1] === true) continue
     const parts = row.body.split('、')
-    if (parts.length - 1 < 5) continue
+    if (parts.length - 1 < 7) continue
     const short = parts.filter((part) => Array.from(part).length <= block.enumeration.max_item_chars).length
     if (short < 3) continue
     results.push(
@@ -442,7 +530,9 @@ const enumeration: Rule = (ctx) => {
   let runStart = -1
   for (let index = 0; index <= paragraphs.length; index += 1) {
     const paragraph = paragraphs[index]
-    const shaped = paragraph !== undefined && !exempt(paragraph) && PARAGRAPH_KEY_RE.test(paragraph)
+    const key = paragraph === undefined ? null : PARAGRAPH_KEY_RE.exec(paragraph)
+    const shaped =
+      paragraph !== undefined && exemptParagraph[index] !== true && key !== null && isListKey(key[1]!)
     if (shaped) {
       if (runStart === -1) runStart = index
       continue
@@ -511,27 +601,92 @@ const dialogueRun: Rule = (ctx) => {
  *
  * An odd number of straight quotes in one paragraph means one of them is
  * unpaired, so the rest of the paragraph renders as dialogue. That is mechanical
- * damage, not taste, which is why it blocks. Curly and CJK quotes stay with
- * `ILLEGAL_QUOTE`, the more specific owner of "wrong quote character".
+ * damage, not taste, which is why it blocks — in **both** quote styles: a
+ * project that declared curly quotes still broke a line with a stray `"`.
+ * Curly and CJK quotes stay with `ILLEGAL_QUOTE`, the more specific owner of
+ * "wrong quote character".
  */
+const CURLY_PAIRS: ReadonlyMap<string, string> = new Map([
+  ['“', '”'],
+  ['「', '」'],
+  ['『', '』'],
+])
+
+/**
+ * S8 · 引号成对.
+ *
+ * 0.2.20 review 3: the half-width branch was a per-paragraph parity count, so a
+ * quotation that spans paragraphs (段1 `"我知道你在想什么。` / 段2 `"但我不在乎。"`)
+ * was reported in paragraph 1 even though it closes on the next one. GB/T 15834
+ * allows exactly this form, and it is the default style. The same state machine
+ * as the curly branch decides it now: a leading `"` while a quotation is open is
+ * the continuation mark, and only a quote still open at the end is a defect.
+ */
+const asciiUnbalanced = (paragraphs: readonly string[]): Violation[] => {
+  let open: number | null = null
+  for (const [index, paragraph] of paragraphs.entries()) {
+    const chars = Array.from(paragraph)
+    const from = open !== null && chars[0] === '"' ? 1 : 0
+    for (let at = from; at < chars.length; at += 1) {
+      if (chars[at] !== '"') continue
+      open = open === null ? index + 1 : null
+    }
+  }
+  if (open === null) return []
+  return [
+    v(
+      SELFCHECK_RULES.QUOTE_UNBALANCED,
+      'blocker',
+      open,
+      `第 ${open} 段开引号到章末仍未闭合（缺半角引号）；near "${excerpt(paragraphs[open - 1] ?? '')}"`,
+    ),
+  ]
+}
+
+/**
+ * 0.2.20 D1: curly style, judged across paragraphs.
+ *
+ * A quotation that spans paragraphs re-opens with the same mark on the next
+ * one (段1「他说，」/ 段2「别走。」), so a per-paragraph count cannot decide
+ * anything: paragraph 1 alone looks unbalanced and the pair looks balanced.
+ * One state machine over the chapter, and only a quote still open at the end
+ * is a defect.
+ */
+const curlyUnbalanced = (paragraphs: readonly string[]): Violation[] => {
+  let open: { closer: string; at: number } | null = null
+  for (const [index, paragraph] of paragraphs.entries()) {
+    const chars = Array.from(paragraph)
+    // A leading opener that matches the pending one is the continuation mark.
+    const from = open !== null && chars[0] !== undefined && CURLY_PAIRS.get(chars[0]) === open.closer ? 1 : 0
+    for (let at = from; at < chars.length; at += 1) {
+      const char = chars[at]!
+      const closer = CURLY_PAIRS.get(char)
+      if (closer !== undefined) {
+        if (open === null) open = { closer, at: index + 1 }
+        continue
+      }
+      if (open !== null && char === open.closer) open = null
+    }
+  }
+  if (open === null) return []
+  return [
+    v(
+      SELFCHECK_RULES.QUOTE_UNBALANCED,
+      'blocker',
+      open.at,
+      `第 ${open.at} 段开引号到章末仍未闭合（缺「${open.closer}」）；near "${excerpt(paragraphs[open.at - 1] ?? '')}"`,
+    ),
+  ]
+}
+
 const quoteUnbalanced: Rule = (ctx) => {
   // 0.2.19: gated like the other ten. A pack without the block must keep the
   // pre-0.2.19 output, and this code did not exist before 0.2.19.
   if (selfcheckOf(ctx) === null) return []
-  const results: Violation[] = []
-  for (const [index, paragraph] of splitParagraphsOf(ctx.text).entries()) {
-    const count = (paragraph.match(/"/g) ?? []).length
-    if (count === 0 || count % 2 === 0) continue
-    results.push(
-      v(
-        SELFCHECK_RULES.QUOTE_UNBALANCED,
-        'blocker',
-        index + 1,
-        `本段 ${count} 个半角引号，未配对；near "${excerpt(paragraph)}"`,
-      ),
-    )
-  }
-  return results
+  const paragraphs = splitParagraphsOf(ctx.text)
+  const results = asciiUnbalanced(paragraphs)
+  if ((ctx.quotes ?? 'ascii') === 'ascii') return results
+  return [...results, ...curlyUnbalanced(paragraphs)]
 }
 
 /* -------------------------------------------------------- S9 punctuation */
@@ -572,6 +727,8 @@ const punctStandard: Rule = (ctx) => {
   for (const [index, span] of spans.entries()) {
     const text = span.text
     const marks: string[] = [...(margins.get(index + 1) ?? [])]
+    // Notes that never block: deliberate spacing in a signature or ledger line.
+    const spaces: string[] = []
     if (block.punctuation.halfwidth) {
       for (let at = 0; at < text.length; at += 1) {
         const char = text[at]!
@@ -594,21 +751,43 @@ const punctStandard: Rule = (ctx) => {
         const left = text[at - 1]
         const right = text[at + 1]
         if (left !== undefined && right !== undefined && CJK.test(left) && CJK.test(right)) {
-          marks.push('中文字之间的半角空格')
+          // 0.2.20 WP5: a half-width space between two Chinese characters is how
+          // a manuscript spaces a signature line, a ledger entry or a name card
+          // (「经手人 周慎 押」). It is deliberate typography, so it is noted and
+          // never blocks. A half-width comma or bracket still does.
+          spaces.push('中文字之间的半角空格')
           break
         }
       }
     }
     for (const symbol of block.punctuation.odd_symbols) {
-      if (symbol !== '' && text.includes(symbol)) marks.push(`特殊符号「${symbol}」`)
+      if (symbol === '' || !text.includes(symbol)) continue
+      // 0.2.20 review 3: ～ only appears in numeric ranges (3～5 天). The
+      // half-width branch above already exempts Latin/digit neighbours; this
+      // branch was a bare `includes` and turned a legal range into a blocker.
+      let at = text.indexOf(symbol)
+      let flagged = false
+      while (at !== -1) {
+        const left = text[at - 1]
+        const right = text[at + symbol.length]
+        const numeric =
+          left !== undefined && right !== undefined && /[0-9A-Za-z]/.test(left) && /[0-9A-Za-z]/.test(right)
+        if (!numeric) {
+          flagged = true
+          break
+        }
+        at = text.indexOf(symbol, at + symbol.length)
+      }
+      if (flagged) marks.push(`特殊符号「${symbol}」`)
     }
-    if (marks.length === 0) continue
+    if (marks.length === 0 && spaces.length === 0) continue
+    const all = [...new Set([...marks, ...spaces])].join('；')
     results.push(
       v(
         SELFCHECK_RULES.PUNCT_STANDARD,
-        'blocker',
+        marks.length === 0 ? 'advisory' : 'blocker',
         index + 1,
-        `${[...new Set(marks)].join('；')}；near "${excerpt(text, 20)}"`,
+        `${all}；near "${excerpt(text, 20)}"`,
       ),
     )
   }
@@ -637,6 +816,10 @@ const shortParagraph: Rule = (ctx) => {
   // WP7: a *run* of stubs is the habit the checklist describes. One four-character
   // paragraph is a beat ("咸。"), and reporting each one put this code at 2.97% of
   // paragraphs on a real manuscript.
+  // 0.2.20 WP5: an action chapter is *supposed* to be a run of short beats —
+  // 「他一刀。对面退了。他跟上。」 is choreography, not a formatting habit. Same
+  // +1 the parallel-run rule applies in that scene type.
+  const minRun = block.paragraph.min_run + (ctx.sceneType === '战斗/动作章' ? 1 : 0)
   const results: Violation[] = []
   let runStart = -1
   for (let index = 0; index <= paragraphs.length; index += 1) {
@@ -646,7 +829,7 @@ const shortParagraph: Rule = (ctx) => {
       continue
     }
     const length = runStart === -1 ? 0 : index - runStart
-    if (length >= block.paragraph.min_run) {
+    if (length >= minRun) {
       results.push(
         v(
           SELFCHECK_RULES.SHORT_PARAGRAPH,
@@ -700,7 +883,16 @@ const midSentenceBreak: Rule = (ctx) => {
 
 /* ------------------------------------------------------- S12 chapter break */
 
-const CHAPTER_END_CLOSERS = new Set(['。', '！', '？', '…', '"', '!', '?'])
+// 0.2.20 D1: a manuscript that ends on a closing curly quote has finished its
+// sentence; only the ASCII `"` was in this set, so 「“吃了。”」 read as truncated.
+const CHAPTER_END_CLOSERS = new Set(['。', '！', '？', '…', '"', '!', '?', '”', '」', '』'])
+
+/**
+ * A paragraph that only says "the chapter ends here". Real manuscripts mark it
+ * as （本章完）, 本章完, 【完】 or 全文完; none of those is a truncation.
+ */
+const CHAPTER_END_MARKER = /^[（(【\[「]?\s*(本章完|全文完|本章终|完)\s*[）)】\]」]?$/u
+const CHAPTER_END_MARKERS = new Set(['本章完', '全文完', '（本章完）', '（全文完）', '【完】', '完'])
 
 /**
  * S12 · 在句子完整结束处，或者形成悬念的卡点位置分章.
@@ -713,15 +905,22 @@ const chapterEndOpen: Rule = (ctx) => {
   const block = selfcheckOf(ctx)
   if (block === null) return []
   const paragraphs = splitParagraphsOf(ctx.text)
-  const last = paragraphs.at(-1)
+  // 0.2.20 WP5: a chapter-end marker is how a chapter ends, not a truncation.
+  // 「（本章完）」 ends with a bracket, so the closer test said "the sentence did
+  // not finish" and the rule flagged the author for marking the chapter closed.
+  // The marker is skipped and the sentence before it is judged instead.
+  let index = paragraphs.length - 1
+  while (index >= 0 && CHAPTER_END_MARKER.test(paragraphs[index]!)) index -= 1
+  const last = paragraphs[index]
   if (last === undefined) return []
   const end = last.at(-1)!
   if (CHAPTER_END_CLOSERS.has(end)) return []
+  if (CHAPTER_END_MARKERS.has(last)) return []
   return [
     v(
       SELFCHECK_RULES.CHAPTER_END_OPEN,
       'advisory',
-      paragraphs.length,
+      index + 1,
       `正文以「${end}」结尾，句子没有结束；最后一段「${excerpt(last)}」`,
     ),
   ]
@@ -921,6 +1120,8 @@ export interface SelfCheckInput {
   contentHash: string
   violations: readonly Violation[]
   answers?: readonly SelfCheckAnswer[]
+  /** 0.2.20 WP2: explicit exemptions, each with a reason that is recorded. */
+  waivers?: readonly { id: string; reason: string }[]
 }
 
 const evidenceOf = (text: string, violations: readonly Violation[], limit = 4): SelfCheckEvidence[] => {
@@ -949,8 +1150,12 @@ const evidenceOf = (text: string, violations: readonly Violation[], limit = 4): 
  */
 export function buildSelfCheck(input: SelfCheckInput): SelfCheckDocument {
   const answers = new Map((input.answers ?? []).map((answer) => [answer.id, answer]))
+  const waivedById = new Map((input.waivers ?? []).map((waiver) => [waiver.id, waiver.reason]))
   const textEmpty = input.text.trim() === ''
-  const hasDialogue = input.text.includes('"')
+  // 0.2.20 review: `includes('"')` made every curly/CJK-quote chapter look like
+  // narration with no dialogue, so the two dialogue-dependent rows were `na`
+  // (non-blocking) for exactly the manuscripts 0.2.20 D1 allows.
+  const hasDialogue = DIALOGUE_MARKS.test(input.text)
   const items: SelfCheckItem[] = SELF_CHECK_SPEC.map((entry) => {
     const fired = input.violations.filter((violation) => entry.codes.includes(violation.code))
     const answer = answers.get(entry.id)
@@ -979,10 +1184,19 @@ export function buildSelfCheck(input: SelfCheckInput): SelfCheckDocument {
         row.verdict = 'fail'
         notes.push('机器已给出证据：模型不得改判为 pass')
       } else if (answer === undefined) {
-        // Nothing mechanical to show and no judgement offered: the machine half
-        // passed, so the row passes, but the receipt says the other half is
-        // missing rather than pretending a model read it.
-        notes.push('机器未发现证据；本章没有模型判定')
+        // 0.2.20 WP2: no evidence and no judgement is an *unanswered* row, not a
+        // pass. The old receipt said "pass" with a note nobody read, so a model
+        // could archive having answered none of the eight rows it must answer.
+        const waived = waivedById.get(entry.id)
+        row.verdict = 'na'
+        if (waived !== undefined) {
+          notes.push(`已豁免：${waived}`)
+        } else {
+          row.blocking = true
+          notes.push(
+            '缺少模型判定：机器没有证据，本行又没有人回答；给出 pass/fail 与理由，或提交 self_check_waivers',
+          )
+        }
       } else {
         row.verdict = answer.verdict
         notes.push(answer.note)
@@ -996,11 +1210,22 @@ export function buildSelfCheck(input: SelfCheckInput): SelfCheckDocument {
       if (answer.evidence !== undefined && answer.evidence.trim() !== '') {
         row.evidence = [...row.evidence, { paragraph: 0, quote: answer.evidence, detail: '模型给出的理由' }]
       }
-    } else if (fired.length > 0) {
+    } else if (entry.basis === 'model') {
+      // 0.2.20 review: a pure-model row is applicable whenever the chapter has
+      // prose, so an unanswered one is exactly the case PG-12 must refuse. It
+      // used to be `na` without `blocking` when a machine finding fired, which
+      // read as "not applicable" and let the archive through with the model's
+      // one judgement missing.
+      const waived = waivedById.get(entry.id)
       row.verdict = 'na'
-      notes.push(`机器已标出 ${fired.length} 段抽象描写，等待模型判定「可成像 / 不可成像」`)
-    } else {
-      notes.push('机器未标出需要判定的段落')
+      if (waived !== undefined) {
+        notes.push(`已豁免：${waived}`)
+      } else {
+        row.blocking = true
+        notes.push(
+          `缺少模型判定：机器${fired.length > 0 ? `标出 ${fired.length} 段，等待「可成像 / 不可成像」的判断` : '没有证据，本行仍需回答'}；给出 pass/fail 与理由，或提交 self_check_waivers`,
+        )
+      }
     }
     if (notes.length > 0) row.note = notes.join('；')
     return row
@@ -1010,10 +1235,14 @@ export function buildSelfCheck(input: SelfCheckInput): SelfCheckDocument {
     chapter: input.chapter,
     content_hash: input.contentHash,
     items,
+    ...(input.waivers === undefined || input.waivers.length === 0
+      ? {}
+      : { waivers: input.waivers.map((waiver) => ({ ...waiver })) }),
     summary: {
       pass: items.filter((item) => item.verdict === 'pass').length,
       fail: items.filter((item) => item.verdict === 'fail').length,
       na: items.filter((item) => item.verdict === 'na').length,
+      unanswered: items.filter((item) => item.blocking === true).length,
     },
   }
 }

@@ -287,10 +287,11 @@ describe('R2: a ledger restore may not dangle cross-ledger references', () => {
       ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
       // The guard is about the dangle the restore introduces, not a ban on
       // restoring this file: clear the row and the same restore is accepted.
+      // 0.2.20 WP3: name the deleted row instead of granting a blanket delete.
       await engine.amend({
         path: 'state/relationships.yaml',
         content: { schema_version: 1, next_seq: 2, items: [] },
-        allow_delete: true,
+        deleted: ['items.id:RL-001'],
         reason: 'drop the relationship',
         root,
       })

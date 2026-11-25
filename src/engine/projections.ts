@@ -58,6 +58,14 @@ export interface PanelSnapshot {
   }
   health?: { ok: boolean; blocking: number; stateErrors: number; pending?: boolean }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+  /**
+   * 0.2.20 WP2: the stored check no longer matches the manuscript.
+   *
+   * A check is evidence for one text. After a revise, the old checklist and
+   * advisories are not the current verdict; the panel drops them and says so
+   * instead of showing a stale pass.
+   */
+  checkStale?: boolean
   /** Unacknowledged machine advisories; never mixed into `blocking`. */
   advisories?: Array<{ code: string; detail: string; hint?: string }>
   /** Number of advisory codes already acknowledged for the current check. */
@@ -143,6 +151,14 @@ export interface PanelSummaryDto {
   }
   health?: { ok: boolean; blocking: number; stateErrors: number; pending?: boolean }
   activity?: Array<{ at: string; op: string; chapter: number; status: string }>
+  /**
+   * 0.2.20 WP2: the stored check no longer matches the manuscript.
+   *
+   * A check is evidence for one text. After a revise, the old checklist and
+   * advisories are not the current verdict; the panel drops them and says so
+   * instead of showing a stale pass.
+   */
+  checkStale?: boolean
   /** Unacknowledged machine advisories; never mixed into `blocking`. */
   advisories?: Array<{ code: string; detail: string; hint?: string }>
   /** Number of advisory codes already acknowledged for the current check. */

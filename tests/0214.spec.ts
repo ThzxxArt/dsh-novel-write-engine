@@ -13,6 +13,7 @@ import { checkReference } from '../src/engine/gates.js'
 import {
   archiveDelta,
   cleanText,
+  expectCompleteContext,
   harness,
   readyToArchive,
   sampleReview,
@@ -397,7 +398,7 @@ describe('0.2.14 brief lifecycle and budget floors', () => {
     // 0.2.17 removed the budget: all sixty open foreshadows arrive, not the
     // eight the old floor guaranteed.
     expect((context.open_foreshadows as unknown[]).length).toBe(60)
-    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
+    expectCompleteContext(context, 'P1 context')
   })
 
   it('signs P8 against its own dependencies, not the whole world ledger', async () => {
@@ -508,11 +509,22 @@ describe('0.2.14 amend, restore and review correction', () => {
           root,
         }),
       ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      // 0.2.20 WP3: the blanket flag is refused; the rows are named instead.
       await expect(
         engine.amend({
           path: 'state/foreshadows.yaml',
           content: { schema_version: 1, next_seq: before.next_seq, items: [] },
           allow_delete: true,
+          reason: 'intentional truncation',
+          root,
+        }),
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
+      const foregone = (before.items as Array<{ id: string }>).map((item) => `items.id:${item.id}`)
+      await expect(
+        engine.amend({
+          path: 'state/foreshadows.yaml',
+          content: { schema_version: 1, next_seq: before.next_seq, items: [] },
+          deleted: foregone,
           reason: 'intentional truncation',
           root,
         }),
@@ -780,10 +792,12 @@ describe('0.2.14 gates and counts', () => {
           cast: [],
           target_words: [80, 400] as [number, number],
           notes: '',
-          status: 'planned' as const,
-          archived_at: null,
-          word_count: null,
-          score: null,
+          // 0.2.20 WP2: the waiver is for an *archived* card; a planned card is
+          // intent, so it no longer excuses the monotony block.
+          status: 'archived' as const,
+          archived_at: '2026-01-02T00:00:00.000Z',
+          word_count: 2000,
+          score: 130,
         },
       ],
     }

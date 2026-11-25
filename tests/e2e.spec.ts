@@ -105,7 +105,8 @@ describe('three-chapter end to end', () => {
       await engine.submitRevision({
         chapter: 1,
         content: revised,
-        issues: [{ ...blocker, status: 'fixed', evidence: '风从窗缝里挤进来' }],
+        // 0.2.20 review: the evidence must come from the rewritten text.
+        issues: [{ ...blocker, status: 'fixed', evidence: '背面有一行被水晕开的字' }],
         proof: sampleReview(1, revised).proof,
         root,
       })
@@ -187,8 +188,11 @@ describe('three-chapter end to end', () => {
       const stats = await engine.stats({ root })
       expect(stats.chapters).toBe(3)
       expect(stats.totalWords).toBeGreaterThan(300)
-      const journal = await engine.auditHistory({ root, limit: 200 })
-      expect(journal.data.filter((row) => row.op === 'archiveChapter')).toHaveLength(3)
+      // 0.2.20 review: a journal page is sized to the host limit, so filter by
+      // op in the engine (the filtered set is small and fits) instead of paging
+      // a 200-row window and hoping all three rows are inside it.
+      const journal = await engine.auditHistory({ root, op: 'archiveChapter', limit: 200 })
+      expect(journal.data).toHaveLength(3)
       const epub = await engine.export({ kind: 'epub', root })
       expect(epub.data.files).toContain('exports/book.epub')
       const oneChapter = await engine.export({ kind: 'md', chapter: 1, root })

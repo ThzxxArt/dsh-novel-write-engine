@@ -297,6 +297,23 @@ const seedBook = async ({ title, failRow, activate = false }) => {
     semantic: ['L2-SCENE-ANCHOR', 'L2-CHARACTER-STATE', 'L2-CAUSALITY', 'L2-VOICE', 'L2-POV'].map(
       (id, index) => ({ id, verdict: 'pass', evidence: quotes[index], note: '已核对' }),
     ),
+    // 0.2.20 WP2: PG-12 refuses to archive a check whose eight model rows
+    // nobody answered. This gate archives a chapter to photograph it, and it has
+    // no reviewer, so it records a reasoned waiver for each row — the same path
+    // a real project uses when a row cannot be judged. The second book below
+    // answers the rows for real, which is what the checklist card photographs.
+    // The eight rows the model owns. The five machine rows (dash, punctuation,
+    // paragraph, line-break, transition) are the engine's and cannot be waived.
+    self_check_waivers: [
+      'SC-METAPHOR',
+      'SC-CONCRETE',
+      'SC-FORMULA',
+      'SC-PARALLEL',
+      'SC-LIST',
+      'SC-DIALOGUE-BEAT',
+      'SC-QUOTE',
+      'SC-CHAPTER-BREAK',
+    ].map((id) => ({ id, reason: 'visual gate: 没有审稿人，本行按豁免记录' })),
     root: projectRoot,
   })
   await engine.getBrief({ stage: 'P8', root: projectRoot })
@@ -461,17 +478,72 @@ try {
     await page.screenshot({ path: join(shots, `panel-1280-${tab}.png`) })
   }
 
+  // 0.2.20 WP6-C: one form or the other, not both. A phone used to render a
+  // nine-column table it never showed and hide it with CSS; the DOM was twice
+  // the size and the hidden half still ran layout.
+  await page.getByRole('tab', { name: '章节' }).click()
+  await page.waitForTimeout(700)
+  const desktopTable = await page.locator('.nwe-table-wrap').count()
+  const desktopCards = await page.locator('.nwe-chapter-cards-mobile').count()
+  check(desktopTable > 0, 'the chapters tab renders no table at 1280px')
+  check(desktopCards === 0, `the chapters tab renders ${desktopCards} mobile card lists at 1280px`)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.waitForTimeout(900)
+  const narrowTable = await page.locator('.nwe-table-wrap').count()
+  const narrowCards = await page.locator('.nwe-chapter-cards-mobile').count()
+  check(narrowTable === 0, `the chapters tab still renders ${narrowTable} tables at 390px`)
+  check(narrowCards > 0, 'the chapters tab renders no cards at 390px')
+  await page.screenshot({ path: join(shots, 'panel-390-chapters.png') })
+  // 0.2.20 review: the CSS breakpoint is 760px, so the form switch must happen
+  // there too. At 700px the table is hidden by CSS but `useIsNarrow` used to be
+  // false (599px), so neither form rendered: a tablet or a narrow window showed
+  // the tab header and the pager with zero chapter rows.
+  await page.setViewportSize({ width: 700, height: 900 })
+  await page.waitForTimeout(900)
+  const midTable = await page.locator('.nwe-table-wrap').count()
+  const midCards = await page.locator('.nwe-chapter-cards-mobile').count()
+  const midRows = await page.locator('.nwe-chapter-cards-mobile .nwe-mobile-chapter').count()
+  check(midTable === 0, `the chapters tab still renders ${midTable} tables at 700px`)
+  check(midCards > 0, 'the chapters tab renders no cards at 700px')
+  check(midRows > 0, 'the chapters tab renders cards but no rows at 700px')
+  await page.screenshot({ path: join(shots, 'panel-700-chapters.png') })
+  await page.setViewportSize({ width: 1280, height: 1000 })
+  await page.waitForTimeout(700)
+
+  // The folds live on the overview page.
+  await page.getByRole('tab', { name: '概览' }).click()
+  await page.waitForTimeout(700)
+  // 0.2.20 WP6-C: a closed fold builds no body. `<details>` hides children but
+  // React still builds them, so a closed "逐章 effort" on a long book paid for
+  // every row.
+  const foldState = await page.evaluate(() => {
+    const folds = [...document.querySelectorAll('.nwe-root details.nwe-fold')]
+    return {
+      folds: folds.length,
+      closedWithBody: folds.filter((node) => !node.open && node.querySelector('.nwe-fold-body') !== null)
+        .length,
+    }
+  })
+  check(foldState.folds > 0, 'the overview page has no folds, so the lazy-body check proves nothing')
+  check(foldState.closedWithBody === 0, `${foldState.closedWithBody} closed folds still built their body`)
+
   // The style card is the 0.2.17 surface: nine readings with their targets.
   await page.getByRole('tab', { name: '质量' }).click()
   await page.waitForTimeout(700)
+  // 0.2.20 review 4: find the card itself. "longest node containing 文风 · "
+  // always resolves to an ancestor wrapper (the panel root is a descendant of
+  // `.nwe-root`), so every assertion below was reading the whole page.
   const styleText = await page.evaluate(() => {
-    const nodes = [...document.querySelectorAll('.nwe-root *')].filter((node) =>
-      /文风 · /.test(node.textContent ?? ''),
-    )
-    // The header chip also matches "文风 · "; the card is the longest match.
-    const card = nodes.sort((a, b) => (b.textContent ?? '').length - (a.textContent ?? '').length)[0]
+    const card = document.querySelector('.nwe-root .nwe-style-card')
     return card?.textContent ?? ''
   })
+  check(styleText !== '', 'the style card is missing (no .nwe-style-card)')
+  check(
+    (await page.evaluate(
+      () => (document.querySelector('.nwe-root .nwe-style-card')?.textContent ?? '').length,
+    )) < 4000,
+    'the style card node holds the whole panel, not the card',
+  )
   check(styleText.includes('文风 · 冷峻悬疑'), 'the style card did not render the bound pack name')
   for (const label of [
     '短句',
@@ -492,7 +564,7 @@ try {
   )
   // A full-page shot at 1280 cuts the card off below the fold; capture the
   // element itself so the release record shows what the reader sees.
-  const styleCard = page.locator('.nwe-subsection').filter({ hasText: '文风 · ' }).first()
+  const styleCard = page.locator('.nwe-root .nwe-style-card').first()
   if ((await styleCard.count()) > 0) {
     await styleCard.scrollIntoViewIfNeeded()
     await page.waitForTimeout(300)
@@ -503,6 +575,41 @@ try {
 
   const warnCount = await page.evaluate(() => document.querySelectorAll('.nwe-root .nwe-style-warn').length)
   check(warnCount > 0, 'no deviating metric was marked, so the warn styling never ran')
+  // 0.2.20 WP6-C: every warn carries a direction glyph; colour alone says
+  // nothing to a colour-blind reader.
+  const warnDirs = await page.evaluate(() => document.querySelectorAll('.nwe-root .nwe-style-dir').length)
+  check(
+    warnDirs === warnCount,
+    `only ${warnDirs} of ${warnCount} deviating metrics carry an ↑/↓ direction marker`,
+  )
+
+  // 0.2.20 WP6-C: the tablist is one tab stop with arrow navigation, not seven.
+  const selectedStop = await page.evaluate(() => {
+    const tabs = [...document.querySelectorAll('.nwe-root [role="tab"]')]
+    return {
+      count: tabs.length,
+      stops: tabs.filter((node) => node.getAttribute('tabindex') === '0').length,
+      negatives: tabs.filter((node) => node.getAttribute('tabindex') === '-1').length,
+    }
+  })
+  check(selectedStop.count === 7, `the tablist renders ${selectedStop.count} tabs, expected 7`)
+  check(selectedStop.stops === 1, `the tablist has ${selectedStop.stops} tab stops, expected 1`)
+  check(
+    selectedStop.negatives === selectedStop.count - 1,
+    `the tablist has ${selectedStop.negatives} non-focusable tabs, expected ${selectedStop.count - 1}`,
+  )
+  // ArrowRight moves the selection: the active class must follow.
+  const beforeArrow = await page.evaluate(
+    () => document.querySelector('.nwe-root [role="tab"][aria-selected="true"]')?.id ?? '',
+  )
+  await page.locator('.nwe-root [role="tab"][aria-selected="true"]').press('ArrowRight')
+  await page.waitForTimeout(600)
+  const afterArrow = await page.evaluate(
+    () => document.querySelector('.nwe-root [role="tab"][aria-selected="true"]')?.id ?? '',
+  )
+  check(afterArrow !== beforeArrow, `ArrowRight did not move the tab selection (${beforeArrow})`)
+  await page.keyboard.press('ArrowLeft')
+  await page.waitForTimeout(600)
 
   // 0.2.19: the submission checklist card. The expected marks come from the
   // document the engine persisted (`bookA.summary`), not from numbers typed into
@@ -538,6 +645,19 @@ try {
     await page.waitForTimeout(300)
     await selfCheckSection.screenshot({ path: join(shots, 'selfcheck-card.png') })
   }
+
+  // 0.2.20 WP6-C: the panel must say who decided each row. The five format
+  // dimensions are engine arithmetic, the checklist rows are machine / hybrid /
+  // model, and a reader compares them as one scale without the labels.
+  const engineMarks = await page.locator('.nwe-dim-engine').count()
+  check(
+    engineMarks === 5,
+    `the quality tab marks ${engineMarks} format dimensions as engine-scored, expected 5`,
+  )
+  const basisMarks = await page.locator('.nwe-selfcheck .nwe-basis').count()
+  check(basisMarks === 13, `the checklist card labels ${basisMarks} rows with a basis, expected 13`)
+  const hybridMarks = await page.locator('.nwe-selfcheck .nwe-basis.is-hybrid').count()
+  check(hybridMarks > 0, 'no checklist row is labelled hybrid, but the pack has hybrid rows')
 
   // Mobile must not scroll sideways: the panel is a full-bleed surface.
   await page.setViewportSize({ width: 390, height: 844 })

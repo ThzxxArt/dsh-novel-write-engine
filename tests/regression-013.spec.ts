@@ -10,6 +10,7 @@ import {
   bootstrapToDraft,
   harness,
   cleanText,
+  expectCompleteContext,
   sampleSummary,
   readyToArchive,
 } from './helpers.js'
@@ -233,7 +234,7 @@ describe('review probes', () => {
     const context = briefContext(input)
     // Complete, not trimmed: all 120 candidates are present.
     expect((context as { characters: unknown[] }).characters).toHaveLength(120)
-    expect((context as { context_meta: { complete: boolean } }).context_meta.complete).toBe(true)
+    expectCompleteContext(context, 'P1 with 120 candidates')
   })
 
   it('surfaces a readable journal mismatch before recommending a write', async () => {

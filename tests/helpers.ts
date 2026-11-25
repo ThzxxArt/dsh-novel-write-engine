@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { expect } from 'vitest'
 import { EngineService } from '../src/engine/service.js'
 import type { EngineConfig } from '../src/engine/state.js'
 import { loadRulepack } from '../src/rulepack.js'
 import { splitSentenceSpans } from '../src/domain/text.js'
 import { SEMANTIC_CHECK_IDS } from '../src/engine/semantic.js'
+import { SELF_CHECK_SPEC } from '../src/rules/selfcheck.js'
 import type {
   ChapterSummary,
   ReviewDocument,
@@ -30,8 +32,26 @@ export const TEST_CONFIG: EngineConfig = {
 export interface Harness {
   root: string
   engine: EngineService
+  /**
+   * 0.2.20 WP2: the unwrapped `runCheck`.
+   *
+   * `engine.runCheck` waives the eight model-judged checklist rows by default,
+   * because a fixture has no reviewer and PG-12 now refuses to archive a check
+   * with unanswered rows. A test that is *about* the checklist calls this to see
+   * the real behaviour.
+   */
+  rawRunCheck: EngineService['runCheck']
   cleanup: () => Promise<void>
 }
+
+/**
+ * The rows P6 must answer; a fixture waives them with a reason. Derived from the
+ * spec so a rulepack that adds a row cannot silently leave a fixture unanswered.
+ */
+export const FIXTURE_WAIVERS = SELF_CHECK_SPEC.filter((entry) => entry.basis !== 'machine').map((entry) => ({
+  id: entry.id,
+  reason: 'fixture: 没有审稿人，本行按豁免记录',
+}))
 
 /** A fresh project root per test; the engine is wired exactly like the plugin. */
 export async function harness(config: Partial<EngineConfig> = {}): Promise<Harness> {
@@ -43,9 +63,17 @@ export async function harness(config: Partial<EngineConfig> = {}): Promise<Harne
     () => loadRulepack(),
     { now: FIXED_NOW },
   )
+  // A fixture is not a reviewer. Rather than fabricate eight `pass` verdicts
+  // (which the engine would refuse whenever the machine half disagreed), the
+  // harness records a reasoned waiver for each model row, which is exactly the
+  // path a real project uses when a row cannot be judged.
+  const rawRunCheck = engine.runCheck.bind(engine)
+  engine.runCheck = ((input: Parameters<EngineService['runCheck']>[0]) =>
+    rawRunCheck({ self_check_waivers: FIXTURE_WAIVERS, ...input })) as EngineService['runCheck']
   return {
     root,
     engine,
+    rawRunCheck,
     cleanup: async () => {
       await rm(root, { recursive: true, force: true })
       await rm(config.stateDir ?? defaultStateDir, { recursive: true, force: true })
@@ -64,6 +92,38 @@ export function cleanText(paragraphs = 5): string {
     '窗外天色暗下来，楼下的路灯一盏接一盏亮起，照见窗台上薄薄一层灰。',
   ]
   return lines.slice(0, paragraphs).join('\n\n')
+}
+
+/**
+ * 0.2.20 WP0: assertions on `context_meta` used to be vacuous.
+ *
+ * `complete` was typed as the literal `true` (`interface ContextMeta { complete: true }`),
+ * so every `expect(meta.complete).toBe(true)` in the suite could not fail, no
+ * matter what the brief actually returned. This helper asserts the contract that
+ * makes the field worth reading:
+ *
+ * - `complete` is a real boolean, not a constant;
+ * - `strategy` says how it was built;
+ * - `used` is the UTF-8 byte length of the exact document the caller holds,
+ *   measured rather than estimated.
+ *
+ * It is only for small projects. A brief that has to omit rows reports
+ * `complete: false` and describes the omissions, which is asserted separately
+ * (WP1) on a 600-chapter fixture.
+ */
+export function expectCompleteContext(context: unknown, label = 'context'): void {
+  const document = context as { context_meta?: Record<string, unknown> }
+  const meta = document.context_meta
+  expect(meta, `${label} has no context_meta`).toBeDefined()
+  expect(typeof meta!.complete, `${label} context_meta.complete must be a boolean`).toBe('boolean')
+  expect(meta!.complete, `${label} is a small project, so nothing may be omitted`).toBe(true)
+  expect(meta!.strategy, `${label} strategy`).toBe('complete')
+  const used = meta!.used
+  expect(typeof used, `${label} context_meta.used must be a number`).toBe('number')
+  expect(used as number).toBeGreaterThan(0)
+  expect(used, `${label} reports a size it does not have`).toBe(
+    Buffer.byteLength(JSON.stringify(document), 'utf8'),
+  )
 }
 
 /** The ten PG-05 fields. */
@@ -172,6 +232,8 @@ export async function bootstrapToDraft(input: {
   narrator?: string
   /** 0.2.17: bind a style pack at creation so downstream stages see one. */
   style?: string
+  /** 0.2.20 D1: the dialogue quote style written into novel.yaml. */
+  quotes?: 'ascii' | 'curly'
 }): Promise<void> {
   const root = input.root
   await input.engine.initProject({
@@ -179,6 +241,7 @@ export async function bootstrapToDraft(input: {
     genre: '都市现代',
     platform: 'fanqie',
     ...(input.style === undefined ? {} : { style: input.style }),
+    ...(input.quotes === undefined ? {} : { quotes: input.quotes }),
     root,
     words_per_chapter: [80, 400],
   })
@@ -284,7 +347,13 @@ export async function readyToArchive(input: {
     root: input.root,
   })
   await input.engine.getBrief({ stage: 'P6', root: input.root })
-  await input.engine.runCheck({ chapter: 1, semantic: sampleSemantic(text), root: input.root })
+  await input.engine.runCheck({
+    chapter: 1,
+    semantic: sampleSemantic(text),
+    // Explicit here as well as in `harness`: some specs build their own engine.
+    self_check_waivers: FIXTURE_WAIVERS,
+    root: input.root,
+  })
   await input.engine.getBrief({ stage: 'P8', root: input.root })
   return text
 }

@@ -367,11 +367,22 @@ describe('0.1.3 state repair and context truth', () => {
       })
       await engine.getBrief({ stage: 'P2', root })
       const p2 = await engine.getBrief({ stage: 'P2', root })
-      // 0.2.17 removed the context budget: the brief is complete, so every one
-      // of the 120 declared candidates must reach P2 rather than being trimmed
-      // to fit a byte target.
-      expect((p2.data.context as { characters: unknown[] }).characters).toHaveLength(120)
-      expect((p2.data.context as { context_meta: { complete: boolean } }).context_meta.complete).toBe(true)
+      // 0.2.20 WP1: a 120-candidate world plan no longer arrives whole. The
+      // required world-plan block is windowed to the host budget and the
+      // receipt says which rows were left out; the active cast at P3 is still
+      // delivered in full below.
+      const p2Context = p2.data.context as {
+        characters: unknown[]
+        context_meta: {
+          complete: boolean
+          omitted: Record<string, { total: number; shown: number }>
+        }
+      }
+      expect(p2Context.characters.length).toBeLessThanOrEqual(120)
+      expect(p2Context.context_meta.complete).toBe(false)
+      expect(p2Context.context_meta.omitted.world_plan?.total).toBe(122)
+      expect(p2Context.context_meta.omitted.world_plan!.shown).toBeGreaterThanOrEqual(0)
+      expect(p2Context.context_meta.omitted.world_plan!.shown).toBeLessThan(122)
       await engine.submitChapterPlan({
         chapter: 0,
         title: '雨夜碰头',

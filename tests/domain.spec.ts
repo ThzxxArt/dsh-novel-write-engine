@@ -371,7 +371,9 @@ describe('id allocation', () => {
     expect(parseId('FS', 'TE-007')).toBeNull()
     expect(parseId('FS', 'FS-0')).toBeNull()
     expect(allocateIds('TE', 3, 2)).toEqual({ ids: ['TE-003', 'TE-004'], nextSeq: 5 })
-    expect(() => formatId('FS', 0)).toThrow()
-    expect(() => allocateIds('FS', 1, -1)).toThrow()
+    expect(() => formatId('FS', 0)).toThrowError(expect.objectContaining({ code: 'ENGINE_ID_EXHAUSTED' }))
+    expect(() => allocateIds('FS', 1, -1)).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_ID_EXHAUSTED' }),
+    )
   })
 })

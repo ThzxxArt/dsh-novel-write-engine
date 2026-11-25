@@ -39,7 +39,9 @@ describe('path guard', () => {
 
   it('recognises project-relative paths', () => {
     expect(toProjectPath('/tmp/root', '/tmp/root/state/a.yaml')).toBe('state/a.yaml')
-    expect(() => assertSafeRelative('a//b')).toThrow()
+    expect(() => assertSafeRelative('a//b')).toThrowError(
+      expect.objectContaining({ code: 'ENGINE_PATH_ESCAPE' }),
+    )
   })
 })
 
@@ -139,7 +141,7 @@ describe('FsStore', () => {
       expect(leftovers).toEqual([])
       await store.remove('state/a.yaml')
       expect(await store.exists('state/a.yaml')).toBe(false)
-      await expect(store.writeText('../escape', 'x')).rejects.toThrow()
+      await expect(store.writeText('../escape', 'x')).rejects.toMatchObject({ code: 'ENGINE_PATH_ESCAPE' })
       await store.ensureDir('chapters')
       expect(await store.exists('chapters')).toBe(true)
       await writeFile(join(root, 'conflict'), 'file')

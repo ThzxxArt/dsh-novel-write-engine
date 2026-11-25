@@ -155,6 +155,10 @@ export const ERROR_CODES = {
   CHECK_SUBMISSION_INVALID: 'ENGINE_CHECK_SUBMISSION_INVALID',
   PENDING_PARTIAL: 'ENGINE_PENDING_PARTIAL',
   IO_PERMISSION: 'ENGINE_IO_PERMISSION',
+  /** 0.2.20 WP3: disk full, name too long, or a device-level failure. */
+  IO_DISK_FULL: 'ENGINE_IO_DISK_FULL',
+  IO_PATH_TOO_LONG: 'ENGINE_IO_PATH_TOO_LONG',
+  IO_DEVICE: 'ENGINE_IO_DEVICE',
   READING_PROOF_INVALID: 'ENGINE_READING_PROOF_INVALID',
   SCORE_MISMATCH: 'ENGINE_SCORE_MISMATCH',
   /** A revision tried to rewrite reviewer-owned issue fields. */
@@ -173,6 +177,8 @@ export const ERROR_CODES = {
   CONFIRMATION_ABORTED: 'ENGINE_CONFIRMATION_ABORTED',
   PATH_ESCAPE: 'ENGINE_PATH_ESCAPE',
   LOCK_TIMEOUT: 'ENGINE_LOCK_TIMEOUT',
+  /** The lock this writer held was reclaimed by another writer mid-transaction. */
+  LOCK_LOST: 'ENGINE_LOCK_LOST',
   TXN_ABORTED: 'ENGINE_TXN_ABORTED',
   JOURNAL_MISSING: 'ENGINE_JOURNAL_MISSING',
   TXN_IN_PROGRESS: 'ENGINE_TXN_IN_PROGRESS',
@@ -449,6 +455,12 @@ export interface SelfCheckItem {
   title: string
   basis: SelfCheckBasis
   verdict: 'pass' | 'fail' | 'na'
+  /**
+   * 0.2.20 WP2: `na` because nobody answered, not because the row does not
+   * apply. PG-12 refuses to archive while any row is blocking; a chapter with no
+   * dialogue is `na` but never blocking, or half the catalogue could not archive.
+   */
+  blocking?: boolean
   /** Every rule code that contributed to this verdict, in canonical order. */
   codes: string[]
   evidence: SelfCheckEvidence[]
@@ -463,7 +475,15 @@ export interface SelfCheckDocument {
   content_hash: string
   /** Always thirteen, always in checklist order. */
   items: SelfCheckItem[]
-  summary: { pass: number; fail: number; na: number }
+  /** 0.2.20 WP2: explicit, reasoned exemptions recorded with the check. */
+  waivers?: Array<{ id: string; reason: string }>
+  summary: {
+    pass: number
+    fail: number
+    na: number
+    /** Rows that are `na` for lack of an answer rather than for applicability. */
+    unanswered?: number
+  }
 }
 
 /** Every persisted document whose damage status/panel can report. */
@@ -562,6 +582,14 @@ export interface ChapterRecord {
   /** How hard this chapter was before it was archived. */
   rounds?: RoundCounters
   final_check?: 'pass' | 'fail'
+  /**
+   * 0.2.20 WP2: the chapter closed with a check that covered only one domain.
+   *
+   * `final_check` is `pass` only when both content and integrity passed; a
+   * partial check records `fail` and marks this flag, so a reader can tell "the
+   * prose was not good enough" from "half the gate never ran".
+   */
+  final_check_partial?: boolean
   /**
    * 0.2.19: the submission checklist outcome at archive time.
    *
@@ -949,6 +977,26 @@ export interface NovelProject {
    */
   style?: string | null
   /**
+   * 0.2.20 D1: the dialogue quote style this book uses.
+   *
+   * Absent means `ascii`, which keeps every pre-0.2.20 project behaving exactly
+   * as it did: `"`是对话引号，弯引号与「」是错的。声明 `curly` 之后反过来。
+   * The engine never rewrites a manuscript's quotes; it only judges them.
+   */
+  quotes?: 'ascii' | 'curly'
+  /**
+   * 0.2.20 D2: `true` turns the two heuristic cross-chapter advisories
+   * (`RESOURCE_MISMATCH`, `LOCKED_DETAIL_DRIFT`) into blockers. Absent is
+   * `false`, which is exactly what 0.2.19 did.
+   */
+  strict_cross?: boolean
+  /**
+   * 0.2.20 WP2: whether an unanswered self-check row blocks archiving. Default
+   * `true`. `false` is the documented escape for a project that does not want the
+   * checklist gate; the rows are still recorded as `na`.
+   */
+  self_check_required?: boolean
+  /**
    * 0.2.17: how the style choice was made, recorded once at creation.
    *
    * `confirmed` means a human saw the five permanent fields; `skipped:*` means no
@@ -1225,6 +1273,14 @@ export interface BookReport {
     samples: number
     /** The unit behind `samples`; 0.2.13 makes the old ambiguity explicit. */
     sample_basis?: 'final_review_per_chapter'
+    /**
+     * 0.2.20: how the samples were scored.
+     *
+     * `machine` — the chapter's review carried engine-computed format scores.
+     * `self_report` — the model scored all fifteen dimensions itself (0.2.18 and
+     * earlier). `mixed` is true when one average covers both yardsticks.
+     */
+    scoring_basis?: { machine: number; self_report: number; mixed: boolean }
     /** Which chapters the average covers (U7). */
     sample_chapters?: number[]
     /** Committed review rounds for this report, including history. */
@@ -1354,6 +1410,25 @@ export interface BookReport {
     findings: string[]
     verdict: 'pass' | 'attention' | 'no-draft'
   } | null
+  /**
+   * 0.2.20 review: what the host result limit cost this report.
+   *
+   * Absent when the whole report fit. The host keeps 4,096 + 1,024 code points
+   * of anything above 8,192 without marking the cut, so a report that does not
+   * fit is a report the caller cannot parse. Preview lists are halved (least
+   * load-bearing first) until the payload fits; `omitted` names every list that
+   * lost rows and `fetch` says where the full rows are.
+   */
+  window?: {
+    complete: boolean
+    budget: { limit: number; used: number; overflow: boolean }
+    omitted: Record<string, { total: number; shown: number }>
+    fetch: Array<{
+      tool: 'novel_state' | 'novel_export' | 'novel_doctor'
+      args: Record<string, unknown>
+      why: string
+    }>
+  }
   warnings: string[]
 }
 
@@ -1475,6 +1550,12 @@ export interface GateInput {
     worldbook?: WorldbookDocument | null
   }
   previousText: string | null
+  /**
+   * 0.2.20 WP2: the newest archived revision of *this* chapter, from
+   * `history/chapters/`. `previousText` above is the previous chapter and cannot
+   * answer "did this sentence already exist before the revision?".
+   */
+  previousDraftText?: string | null
   /** The three preceding chapters, newest first, for the duplicate rule. */
   previousTexts: string[]
   /** Chapter numbers matching `previousTexts`, so evidence names the real chapter. */
@@ -1544,7 +1625,24 @@ export interface ChapterProgress {
 
 /** The `getStatus` payload. */
 export interface StatusReport {
-  project: { title: string; genre: Genre; platform: Platform; root: string }
+  project: {
+    title: string
+    genre: Genre
+    platform: Platform
+    root: string
+    /**
+     * 0.2.20 release review: the three project switches that change what the
+     * gates accept. They were readable only by opening `novel.yaml`, so after
+     * the documented migration (`quotes: curly`, `self_check_required: false`)
+     * an author could not confirm the switch took effect short of triggering a
+     * refusal — and a support conversation could not tell which convention a
+     * book was on.
+     */
+    quotes?: 'ascii' | 'curly'
+    strict_cross?: boolean
+    self_check_required?: boolean
+    style?: string
+  }
   /** Why this project was chosen; lets the model notice a wrong book. */
   selection?: { source: SelectionSource; root: string }
   /** The chapter requested for metrics; may be historical. */
@@ -1698,6 +1796,17 @@ export interface DiffReport {
   added: number
   removed: number
   hunks: Array<{ kind: 'add' | 'remove' | 'same'; line: string }>
+  /**
+   * 0.2.20 review 4: a full-chapter diff is larger than the host's task-result
+   * pruner keeps (8,192 code points), and the host cuts the JSON — the model
+   * then reads a diff that is silently half a diff. Text and hunks are capped
+   * and this receipt says by how much. Absent means nothing was cut.
+   */
+  truncated?: {
+    before?: { total: number; shown: number }
+    after?: { total: number; shown: number }
+    hunks?: { total: number; shown: number }
+  }
 }
 
 /** Export capabilities; the last three are book-planning deliverables. */

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { LIMITS } from '../constants.js'
 import { ERROR_CODES, EngineFaultError } from '../types.js'
+import { ioFailure as ioError } from './fs.js'
 
 /** Per-key serialization: same project waits, different projects proceed. */
 export class KeyedMutex {
@@ -84,12 +85,24 @@ export class FileLock {
     private readonly waitMs: number = LIMITS.lockWaitMs,
     /** Optional audit hook; the engine records `lock_reclaimed` in the journal. */
     private readonly onReclaim?: (record: LockRecord | null) => Promise<void>,
+    /** 0.2.20 WP3: age past which a live-looking foreign lock is reclaimed. */
+    private readonly maxAgeMs: number = LIMITS.lockMaxAgeMs,
   ) {}
 
   /** Try to take the lock; records the nonce this instance owns. */
   async acquire(): Promise<void> {
     const deadline = Date.now() + this.waitMs
     for (;;) {
+      // 0.2.20 review 3: the deadline is checked at the top of every iteration.
+      // It used to be checked after `tryReclaim`, and a reclaimable lock
+      // `continue`d past it — so `waitMs` bounded nothing but the sleep path.
+      if (Date.now() >= deadline) {
+        throw new EngineFaultError(
+          ERROR_CODES.LOCK_TIMEOUT,
+          `timed out waiting for ${this.absolutePath}`,
+          'another DSH instance is writing this project; close it or wait',
+        )
+      }
       try {
         const handle = await fs.open(this.absolutePath, 'wx')
         const record: LockRecord = {
@@ -111,6 +124,10 @@ export class FileLock {
           throw error
         }
         this.held = record
+        // A tombstone can only describe a lock that has been released, so a
+        // leftover one is stale the moment this acquire succeeded. Leaving it
+        // would let it authorise a future reclaim of *this* lock (0.2.20 review).
+        await fs.rm(this.tombstonePath(), { force: true }).catch(() => undefined)
         return
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code
@@ -119,15 +136,38 @@ export class FileLock {
         // those as lock contention and let the normal deadline decide.
         if (code !== 'EEXIST' && code !== 'EPERM' && code !== 'EACCES') throw error
         if (await this.tryReclaim()) continue
-        if (Date.now() >= deadline) {
-          throw new EngineFaultError(
-            ERROR_CODES.LOCK_TIMEOUT,
-            `timed out waiting for ${this.absolutePath}`,
-            'another DSH instance is writing this project; close it or wait',
-          )
-        }
         await delay(25)
       }
+    }
+  }
+
+  /**
+   * 0.2.20 review 4: prove this instance still owns the lock.
+   *
+   * `tryReclaim` deliberately takes a lock whose holder looks dead, including a
+   * live foreign pid older than `maxAgeMs` (pid reuse in a container). A slow
+   * transaction on the other side of that decision kept writing and renamed its
+   * staging over the newer writer's files — two live writers, last one wins.
+   * The transaction calls this immediately before its first rename; if the lock
+   * is gone or carries another owner's record, the commit aborts with nothing
+   * written.
+   */
+  async assertOwned(): Promise<void> {
+    const held = this.held
+    if (held === null) {
+      throw new EngineFaultError(
+        ERROR_CODES.LOCK_LOST,
+        `no lock is held for ${this.absolutePath}`,
+        'this is an engine bug: a write ran without its lock; report it and retry',
+      )
+    }
+    const record = await this.read()
+    if (record === null || record.pid !== held.pid || record.nonce !== held.nonce) {
+      throw new EngineFaultError(
+        ERROR_CODES.LOCK_LOST,
+        `the lock on ${this.absolutePath} was taken by another writer; this transaction aborted with nothing written`,
+        'another DSH instance is writing this project; re-read novel_status and retry once it is idle',
+      )
     }
   }
 
@@ -136,20 +176,28 @@ export class FileLock {
     const record = await this.read()
     const held = this.held
     this.held = null
-    if (held?.nonce !== undefined) liveNonces.delete(held.nonce)
-    if (record !== null && held !== null && record.pid === held.pid && record.nonce === held.nonce) {
-      // A failed unlink (Windows AV/EPERM) must not turn into a permanent
-      // same-pid lock: the nonce is no longer live, so the next acquire can
-      // reclaim the file instead of waiting forever.
-      const removed = await fs.rm(this.absolutePath, { force: true }).then(
-        () => true,
-        () => false,
-      )
-      // 0.2.17: when the unlink fails, leave a tombstone beside the lock. The
-      // next acquirer cannot rely on the lock's own mtime — an AV scan or a
-      // sharing violation can keep refreshing it — so the tombstone carries the
-      // owner's own "I am done" statement and is reclaimed by age.
-      if (!removed) await this.writeTombstone(held)
+    // 0.2.20 review 3: the nonce is the only proof that a same-pid record is
+    // still owned by this instance. Dropping it *before* awaiting the unlink let
+    // a concurrent acquirer treat the (still present) lock as a crashed
+    // leftover, claim it, and then have our own rm delete the new lock.
+    try {
+      if (record !== null && held !== null && record.pid === held.pid && record.nonce === held.nonce) {
+        // A failed unlink (Windows AV/EPERM) must not turn into a permanent
+        // same-pid lock: the nonce is no longer live, so the next acquire can
+        // reclaim the file instead of waiting forever.
+        const removed = await fs.rm(this.absolutePath, { force: true }).then(
+          () => true,
+          () => false,
+        )
+        // 0.2.17: when the unlink fails, leave a tombstone beside the lock. The
+        // next acquirer cannot rely on the lock's own mtime — an AV scan or a
+        // sharing violation can keep refreshing it — so the tombstone carries the
+        // owner's own "I am done" statement and is reclaimed by age.
+        if (!removed) await this.writeTombstone(held)
+        else await fs.rm(this.tombstonePath(), { force: true }).catch(() => undefined)
+      }
+    } finally {
+      if (held?.nonce !== undefined) liveNonces.delete(held.nonce)
     }
   }
 
@@ -168,12 +216,23 @@ export class FileLock {
     await fs.writeFile(this.tombstonePath(), JSON.stringify(payload), 'utf8').catch(() => undefined)
   }
 
-  /** Read the tombstone's release time, or null when absent/unreadable. */
-  private async tombstoneReleasedAt(): Promise<number | null> {
+  /**
+   * Read the tombstone that belongs to *this* lock record, or null.
+   *
+   * 0.2.20 review: the age check alone let one release's tombstone authorise
+   * reclaiming a later, live lock. A tombstone is evidence about exactly one
+   * record — the one whose unlink failed — so pid, start time and nonce must all
+   * match before it may be believed.
+   */
+  private async tombstoneOf(record: LockRecord): Promise<number | null> {
     try {
       const raw: unknown = JSON.parse(await fs.readFile(this.tombstonePath(), 'utf8'))
       if (typeof raw !== 'object' || raw === null) return null
-      const releasedAt = (raw as { released_at?: unknown }).released_at
+      const value = raw as Record<string, unknown>
+      if (value.pid !== record.pid || value.startedAt !== record.startedAt || value.nonce !== record.nonce) {
+        return null
+      }
+      const releasedAt = value.released_at
       if (typeof releasedAt !== 'string') return null
       const parsed = Date.parse(releasedAt)
       return Number.isFinite(parsed) ? parsed : null
@@ -201,9 +260,27 @@ export class FileLock {
     let mtimeMs: number
     try {
       mtimeMs = (await fs.stat(this.absolutePath)).mtimeMs
-    } catch {
-      // The lock disappeared between the failed create and this check.
-      return true
+    } catch (error) {
+      // 0.2.20 review 3: only "it is gone" justifies a retry. A dangling
+      // symlink (EEXIST + ENOENT), a directory we may not stat, ELOOP or EIO
+      // used to return true here, and `acquire` retried without ever reaching
+      // its deadline — a busy loop that also held the project mutex forever.
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        // `stat` follows symlinks, so ENOENT alone does not prove the entry is
+        // gone: a dangling symlink at the lock path reports ENOENT forever while
+        // `open(..., 'wx')` keeps answering EEXIST. Only a failed lstat is a
+        // disappearance.
+        const entry = await fs.lstat(this.absolutePath).catch(() => null)
+        if (entry === null) return true
+        throw new EngineFaultError(
+          ERROR_CODES.LOCK_TIMEOUT,
+          `${this.absolutePath} exists but cannot be read as a lock (dangling symlink or unreadable entry)`,
+          'remove the lock path (it is not a lock this engine wrote), then retry',
+          { cause: error },
+        )
+      }
+      throw ioError(error)
     }
     let record: LockRecord | null = null
     try {
@@ -224,11 +301,21 @@ export class FileLock {
       // a crashed/restarted instance (pid reuse, container PID 1, or a release
       // that failed to unlink).
       if (lockRecordIsLive(record)) {
-        // 0.2.17: the owner released but could not unlink. Its tombstone is the
-        // authority once it is older than the staleness window — the lock file's
-        // own mtime may keep being refreshed by an AV scan or a sharing window.
-        const releasedAt = await this.tombstoneReleasedAt()
-        if (releasedAt === null || Date.now() - releasedAt <= this.staleMs) return false
+        // 0.2.20 WP3: a live *foreign* pid is not proof of a live writer — pid
+        // reuse (containers, a restarted service) makes an abandoned lock look
+        // alive forever. `startedAt` older than the maximum transaction age is
+        // the evidence that the holder is gone. A same-pid record is judged by
+        // its nonce below, not by age.
+        const startedAt = Date.parse(record.startedAt)
+        const aged =
+          record.pid !== process.pid && Number.isFinite(startedAt) && Date.now() - startedAt > this.maxAgeMs
+        if (!aged) {
+          // 0.2.17: the owner released but could not unlink. Its tombstone is the
+          // authority once it is older than the staleness window — the lock file's
+          // own mtime may keep being refreshed by an AV scan or a sharing window.
+          const releasedAt = await this.tombstoneOf(record)
+          if (releasedAt === null || Date.now() - releasedAt <= this.staleMs) return false
+        }
       }
     }
 

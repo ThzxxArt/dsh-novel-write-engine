@@ -67,6 +67,14 @@ const SCHEMAS: Record<DocKind, Record<string, Field>> = {
     style: f('any'),
     // 0.2.17: how the style choice was made; written once at creation.
     style_confirmation: f('string'),
+    // 0.2.20 review: `initProject` has been writing these three since 0.2.20 and
+    // this table did not list them, so `novel_init {quotes:'curly'}` produced a
+    // project the engine itself then refused to read ("unknown key quotes") and
+    // every write was blocked. They are optional on disk: absence is the
+    // pre-0.2.20 default.
+    quotes: f('string'),
+    strict_cross: f('boolean'),
+    self_check_required: f('boolean'),
   },
   pipeline: {
     revision: req('integer'),
@@ -364,6 +372,17 @@ const validateNested = (kind: DocKind, record: Record<string, unknown>): void =>
         const style = stringAt(kind, record.style, 'style')
         if (!/^[a-z][a-z0-9-]{1,31}$/.test(style)) {
           invalid(kind, 'style must be a style pack id or null')
+        }
+      }
+      // 0.2.20 D1/D2: the quote style and the two switches are absent on a
+      // pre-0.2.20 project and validated here when present.
+      if (record.quotes !== undefined) {
+        const quotes = stringAt(kind, record.quotes, 'quotes')
+        if (quotes !== 'ascii' && quotes !== 'curly') invalid(kind, 'quotes must be ascii or curly')
+      }
+      for (const key of ['strict_cross', 'self_check_required'] as const) {
+        if (record[key] !== undefined && typeof record[key] !== 'boolean') {
+          invalid(kind, `${key} must be a boolean`)
         }
       }
       return

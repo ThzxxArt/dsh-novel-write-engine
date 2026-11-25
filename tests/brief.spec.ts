@@ -4,7 +4,15 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { EngineService } from '../src/engine/service.js'
 import { loadRulepack } from '../src/rulepack.js'
-import { bootstrapToDraft, cleanText, harness, sampleSummary, TEST_CONFIG, writeDraft } from './helpers.js'
+import {
+  bootstrapToDraft,
+  cleanText,
+  expectCompleteContext,
+  harness,
+  sampleSummary,
+  TEST_CONFIG,
+  writeDraft,
+} from './helpers.js'
 
 const characters = (identity: string): Record<string, unknown> => ({
   schema_version: 1,
@@ -45,12 +53,15 @@ describe('brief context packs', () => {
       const brief = await engine.getBrief({ stage: 'P3', root })
       expect(brief.data.context).toMatchObject({
         context_meta: {
-          version: 1,
+          version: 2,
           stage: 'P3',
           complete: true,
           strategy: 'complete',
         },
       })
+      // 0.2.20 WP0: the object match above cannot fail on `complete`, because it
+      // used to be the literal `true`. Pin the measured size as well.
+      expectCompleteContext(brief.data.context, 'P3 brief context')
       const context = brief.data.context as {
         characters: Array<{ name: string; profile: { identity: string } }>
         locks: { characters: Record<string, { appearance: string }> }
@@ -118,6 +129,9 @@ describe('brief context packs', () => {
     try {
       await bootstrapToDraft({ root, engine })
       const brief = await engine.getBrief({ stage: 'P6', root })
+      // 0.2.20: P6 no longer carries the P4/P5 `machine` snapshot — it runs its
+      // own check, and the stale block cost the code points that made the brief
+      // fit. The ledger set and the manuscript are still whole.
       expect(Object.keys(brief.data.context)).toEqual(
         expect.arrayContaining([
           'characters',
@@ -128,7 +142,6 @@ describe('brief context packs', () => {
           'relationships',
           'check',
           'text',
-          'machine',
         ]),
       )
     } finally {

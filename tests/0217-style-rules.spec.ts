@@ -187,11 +187,21 @@ describe('0.2.17 style rules', () => {
   })
 
   it('STYLE_PARAGRAPH_CHARS only speaks when the pack is stricter than the global limit (C5)', () => {
-    // cold-suspense allows 110 chars, the global blocker owns 90 — so it defers.
+    // 0.2.20 D3 raised the global blocker to 150 CJK characters, so both packs
+    // (110 and 80) are stricter and both report.
     const wide = run(60, 2)
-    expect(codesOf(wide, cold).has(STYLE_RULES.PARAGRAPH_CHARS)).toBe(false)
-    // infinite-flow allows 80, which is stricter than 90.
+    expect(codesOf(wide, cold).has(STYLE_RULES.PARAGRAPH_CHARS)).toBe(true)
     expect(codesOf(wide, infinite).has(STYLE_RULES.PARAGRAPH_CHARS)).toBe(true)
+    // The deferral is still real: with the global blocker at 60, both packs
+    // (110 and 80) are looser, so the style rule stays silent and
+    // LONG_PARAGRAPH owns the finding. Two owners for one paragraph is the C5
+    // defect this guard exists to prevent.
+    const narrowGlobal = {
+      ...rulepack,
+      format: { ...rulepack.format, paragraph_max_words: 60 },
+    }
+    expect(codesOf(wide, cold, { rulepack: narrowGlobal }).has(STYLE_RULES.PARAGRAPH_CHARS)).toBe(false)
+    expect(codesOf(wide, infinite, { rulepack: narrowGlobal }).has(STYLE_RULES.PARAGRAPH_CHARS)).toBe(false)
   })
 
   it('STYLE_PARAGRAPH_SENTENCES reports a paragraph over the pack limit', () => {

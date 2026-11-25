@@ -211,6 +211,12 @@ export {
 // 0.2.19: the thirteen-item submission checklist is a public contract — the docs
 // gate compares docs/selfcheck.md against it row by row.
 export { SELF_CHECK_SPEC, buildSelfCheck, selfCheckSpec } from './rules/selfcheck.js'
+// 0.2.20: the machine pass is public for the same reason the checklist is — a
+// release review needs to compare rule output on a real manuscript before and
+// after a threshold change (`scripts/check-real-project.mjs --rules-dump`).
+// Reading it does not touch project state.
+export { runMachineChecks, runRules } from './rules/pipeline.js'
+export type { MachineOptions, MachineResult } from './rules/pipeline.js'
 export type { SelfCheckAnswer, SelfCheckSpecEntry } from './rules/selfcheck.js'
 export {
   MACHINE_DIMENSIONS,

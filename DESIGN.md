@@ -2,7 +2,7 @@
 
 | 项       | 值                                                                                                       |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| 插件版本 | `0.2.16`                                                                                                 |
+| 插件版本 | `0.2.20`（本版的实施、复审与验收记录见 `CHANGELOG.md` 与 `docs/0.2.20-*.md`）                            |
 | 目标仓库 | `https://github.com/ThzxxArt/dsh-novel-write-engine`                                                     |
 | 协议     | MIT                                                                                                      |
 | 目标宿主 | DeepSeek Harness `>=0.2.1-rc.2 <0.3.0-0`，Node `>=24.9.0`                                                |
@@ -1817,9 +1817,9 @@ parameters: { stage: { type: 'string', required: true, enum: ['P1','P2','P3','P4
 output: { stage, chapter, digest, title, content, content_hash, fields, context }
 ```
 
-`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。`fields` 同时暴露 `world_plan_error`/`plan_error`/`review_error`/`check_error`。`context.context_meta` 是 `{version, stage, used, complete, strategy}`。0.2.17 删除了上下文预算：任务书**不做任何裁剪**，`used` 只是对返回文档自身的 UTF-8 字节数报告。各阶段的 pack 形状（活跃卡、最近五章摘要、世界书投影）仍是"这个阶段需要什么"，但那由阶段决定，不是由字节上限决定。
+`chapter` 省略时使用当前活跃章；显式传非活跃章会被 `ENGINE_SCHEMA_INVALID` 拒绝，因为 digest 只能签当前快照。`fields` 必须包含 `score_exclusions`、`next_tool`、`min_words`、`min_score` 等模型算分所需的值；只返回 `content` 会让 P4 无法正确应用互斥扣分。`fields` 同时暴露 `world_plan_error`/`plan_error`/`review_error`/`check_error`。`context.context_meta` 是 version 2：`{version, stage, used, budget, complete, strategy, omitted, compacted, fetch}`。0.2.20 恢复了窗口化：宿主在 8,192 码点处静默剪断结果，所以任务书按阶段预算裁剪并**如实回报**——`complete:false` 时 `omitted`/`compacted` 说明砍了什么，`fetch` 给出补取路径。`strategy` 为 `full` 表示未裁剪。各阶段的 pack 形状（活跃卡、最近五章摘要、世界书投影）仍由阶段决定，但装不下时按"最不重要先减半"收缩。
 
-**这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「世界计划 + 本章活跃角色完整卡 + 前章结尾 + 待推进伏笔」；P6 拿「全量台账 + active_cast + 机检报告」；不相关的一律不给。
+**这是替代 9 份 SKILL.md 的关键**：上下文包只给对方需要的数据。P3 拿「世界计划 + 本章活跃角色完整卡 + 前章结尾 + 待推进伏笔」；P6 拿「台账 + active_cast + 校验输入」（全量时受窗口预算约束，`context_meta` 会说明）；不相关的一律不给。
 
 #### `novel_write_draft`
 
@@ -1895,7 +1895,7 @@ relationships: { ['a|b']: string → { action, reason?, a?, b?, type?, descripti
 /novel admin | admin <op> <json>
 ```
 
-`/novel` 共 25 种带名写法；`/novel admin` 提供 25 个操作（18 个非核心工具、5 个登记/导入、2 个核心工具冗余入口）。面板「? 教程 → 全部命令」给出完整命令表、admin 操作分组和常用组合；`/novel admin` 空参数也会列出全部操作名。
+`/novel` 共 27 种带名写法；`/novel admin` 提供 25 个操作（18 个非核心工具、5 个登记/导入、2 个核心工具冗余入口）。面板「? 教程 → 全部命令」给出完整命令表、admin 操作分组和常用组合；`/novel admin` 空参数也会列出全部操作名。
 
 命令与工具共用同一套投影（§6.6），不引入第二条数据路径；命令是「少一次工具调用」的糖，不是新能力。
 

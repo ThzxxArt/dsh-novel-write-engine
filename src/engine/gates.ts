@@ -38,6 +38,12 @@ import type {
 export interface GateOptions {
   rulepack: Rulepack
   minScore: number
+  /** 0.2.20 D1: the project's declared dialogue quote style (default ascii). */
+  quotes?: 'ascii' | 'curly'
+  /** 0.2.20 D2: escalate RESOURCE_MISMATCH / LOCKED_DETAIL_DRIFT to blockers. */
+  strictCross?: boolean
+  /** 0.2.20 WP2: `false` is the project-level escape from the self-check gate. */
+  selfCheckRequired?: boolean
 }
 
 const block = (
@@ -203,6 +209,13 @@ const format: Gate = (input, options) => {
       sceneType: input.sceneType ?? '日常过渡章',
       rulepack: options.rulepack,
       summary: input.summary,
+      strictCross: options.strictCross === true,
+      // 0.2.20 D1: `ILLEGAL_QUOTE` judges against the style the project
+      // declared. Without this, the rule fell back to `ascii` inside PG-04 and
+      // every draft of a `quotes: curly` book was blocked at P3 — the P6 check
+      // and the archive passed the real value, so the feature only worked where
+      // it did not matter.
+      quotes: options.quotes ?? 'ascii',
       evidence: {
         characters: input.evidence.characters,
         previousText: input.previousText,
@@ -248,7 +261,14 @@ const format: Gate = (input, options) => {
     block(
       'PG-04',
       `${violations.length} format blocker(s) remain: ${summary}`,
-      `dialogue must use ASCII double quotes (U+0022), never curly quotes; split paragraphs over ${options.rulepack.format.paragraph_max_words} chars; remove full-width semicolons. samples: ${samples
+      `${
+        // 0.2.20 D1: the hint states the project's declared quote style instead
+        // of hard-coding the ASCII preference; a 「」 manuscript was being told
+        // to fix quotes that its own project had declared correct.
+        (options.quotes ?? 'ascii') === 'curly'
+          ? 'dialogue uses curly “” or CJK 「」 quotes — do not switch to ASCII "'
+          : 'dialogue must use ASCII double quotes (U+0022), never curly quotes'
+      }; split paragraphs over ${options.rulepack.format.paragraph_max_words} chars; remove full-width semicolons. samples: ${samples
         .map((sample) => `${sample.code}${sample.index > 0 ? ` @第${sample.index}段` : ''} ${sample.text}`)
         .join(' | ')}`,
       undefined,
@@ -482,9 +502,22 @@ const sceneType: Gate = (input) => {
   // otherwise the card and the gate lock each other and the only escape is a
   // rollback (M13). A card that pins a different type does not excuse the
   // monotony the submission actually creates.
+  // 0.2.20 WP2: only an *archived* card excuses monotony. A planned card is the
+  // author's intent, not a fact about a chapter that already exists — letting it
+  // excuse the gate meant a plan could pin three identical scene types and every
+  // chapter would pass unexamined. A planned card still explains the block via
+  // the `PG-06_CARD_WINS` warning.
   const card = input.outline?.chapters.find((candidate) => candidate.num === input.chapter)
-  if (card !== undefined && card.scene_type === input.sceneType) return []
-  return [block('PG-06', problems.join('; '), 'pick a different scene type')]
+  if (card !== undefined && card.status === 'archived' && card.scene_type === input.sceneType) return []
+  return [
+    block(
+      'PG-06',
+      problems.join('; '),
+      card === undefined || card.scene_type !== input.sceneType
+        ? 'pick a different scene type'
+        : 'the outline card pins this scene type but is not archived yet; archive the chapter first or change the card',
+    ),
+  ]
 }
 
 /** PG-06 warnings: what a card-pinned scene type costs in rhythm diversity. */
@@ -614,12 +647,25 @@ const score: Gate = (input, options) => {
     : [block('PG-07', problems.join('; '), 'fix the deductions and the total, then resubmit')]
 }
 
-/** PG-08: blocker issues must be fixed with evidence that exists in the text. */
+/**
+ * PG-08: blocker issues must be fixed with evidence that exists in the text.
+ *
+ * 0.2.20 WP2 adds two things:
+ *
+ * 1. the evidence must be *new* — a sentence that already existed in the previous
+ *    version of the chapter proves nothing about a fix, it only proves the author
+ *    can copy. The exception is an issue whose paragraph really changed: the same
+ *    sentence may survive inside a rewritten paragraph.
+ * 2. at P4 (`submitReview`) only the `fixed` claims are judged. Requiring every
+ *    blocker to be fixed at review time would make the stage impossible — the
+ *    review is where blockers are found.
+ */
 const issuesCleared: Gate = (input) => {
   if (input.review === null) return []
   if (!Array.isArray(input.review.issues)) {
     return [block('PG-08', 'review issues must be an array')]
   }
+  const atReview = input.operation === 'submitReview'
   const blockers = input.review.issues.filter((issue) => issue.severity === 'blocker')
   const problems: string[] = []
   const details: ErrorDetails = {}
@@ -629,7 +675,8 @@ const issuesCleared: Gate = (input) => {
       continue
     }
     if (issue.status !== 'fixed') {
-      problems.push(`${issue.id} is still ${issue.status}`)
+      // Findings are supposed to be open when the review is submitted.
+      if (!atReview) problems.push(`${issue.id} is still ${issue.status}`)
       continue
     }
     if (typeof issue.evidence !== 'string' || issue.evidence.trim() === '') {
@@ -641,6 +688,20 @@ const issuesCleared: Gate = (input) => {
       continue
     }
     const match = matchEvidence(input.text, issue.evidence)
+    const staleParagraph = staleEvidenceParagraph(
+      input.text,
+      issue.evidence,
+      input.previousDraftText ?? null,
+      match.paragraph ?? null,
+    )
+    if (staleParagraph !== null) {
+      problems.push(
+        `${issue.id} cites evidence that already existed in the previous version (paragraph ${staleParagraph} was not changed); quote the sentence you rewrote`,
+      )
+      details.field = `${issue.id}.evidence`
+      details.expected = 'a verbatim quote of text that changed in this revision'
+      details.received = issue.evidence.slice(0, 200)
+    }
     if (!match.found) {
       problems.push(
         `${issue.id} cites evidence that is not in the text${
@@ -672,6 +733,36 @@ const issuesCleared: Gate = (input) => {
           Object.keys(details).length === 0 ? undefined : details,
         ),
       ]
+}
+
+/**
+ * The paragraph a `fixed` claim fails to justify, or null.
+ *
+ * 0.2.20 review 4: PG-08 and `amend_issues` used to answer this question
+ * differently — the gate compared paragraphs, the amendment compared the whole
+ * manuscript hash. A review restored from an older copy therefore let a blocker
+ * be closed with a quote from a paragraph the revision never touched: the read
+ * model said "clear", the next write was refused. Both paths now call this.
+ *
+ * A quote that already existed before the revision proves nothing about a fix
+ * unless the paragraph it sits in was rewritten; the same sentence may legally
+ * survive inside a rewritten paragraph.
+ */
+export function staleEvidenceParagraph(
+  text: string,
+  evidence: string,
+  previousText: string | null,
+  paragraph: number | null,
+): number | null {
+  if (previousText === null || previousText === '') return null
+  if (typeof evidence !== 'string' || evidence.trim() === '') return null
+  if (!previousText.includes(evidence)) return null
+  const index = paragraph ?? 0
+  if (index <= 0) return null
+  const current = splitParagraphs(text)
+  const previous = splitParagraphs(previousText)
+  if (current[index - 1] === undefined) return null
+  return current[index - 1] === previous[index - 1] ? index : null
 }
 
 /** Outcome of checking one reading-proof reference against the manuscript. */
@@ -873,6 +964,11 @@ const consistency: Gate = (input, options) => {
       sceneType: input.sceneType ?? '日常过渡章',
       rulepack: options.rulepack,
       summary: input.summary,
+      // 0.2.20 D2: same switch the P6 check reads, or `strict_cross: true`
+      // would escalate RESOURCE_MISMATCH / LOCKED_DETAIL_DRIFT in `novel_check`
+      // and leave PG-10 calling them advisories — the documented "one source"
+      // for cross severity was two.
+      strictCross: options.strictCross === true,
       evidence: {
         characters: input.evidence.characters,
         previousText: input.previousText,
@@ -919,7 +1015,7 @@ const rounds: Gate = (input) => {
 }
 
 /** PG-12: the archive transaction's preconditions, checked before staging. */
-const archiveAtomic: Gate = (input) => {
+const archiveAtomic: Gate = (input, options) => {
   if (input.operation !== 'archiveChapter') return []
   if (input.archive === null) return [block('PG-12', 'archive preconditions were not gathered')]
   const problems: string[] = []
@@ -933,6 +1029,18 @@ const archiveAtomic: Gate = (input) => {
     !input.check.scope.includes('integrity')
   ) {
     problems.push('the check document did not cover content+integrity')
+  }
+  // 0.2.20 WP2: a checklist row that nobody answered is not a pass. Rows that do
+  // not apply (no dialogue, empty chapter) are `na` without `blocking` and stay
+  // archiveable, or half a catalogue could never close.
+  const unanswered = input.check?.self_check?.summary.unanswered ?? 0
+  if (options.selfCheckRequired !== false && unanswered > 0) {
+    const ids = (input.check?.self_check?.items ?? [])
+      .filter((item) => item.blocking === true)
+      .map((item) => item.id)
+    problems.push(
+      `self-check has ${unanswered} unanswered row(s) (${ids.join(', ')}); answer them or submit self_check_waivers`,
+    )
   }
   return problems.length === 0
     ? []
@@ -992,7 +1100,10 @@ export function applicableGates(input: GateInput): GateId[] {
         ? [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-06']
         : [...always, 'PG-04', 'PG-03', 'PG-05', 'PG-09', 'PG-08', 'PG-11']
     case 'submitReview':
-      return [...always, 'PG-09', 'PG-07', 'PG-11']
+      // 0.2.20 WP2: a `fixed` claim is judged where it is made. Before this,
+      // P4 could mark a blocker fixed with a quote from the old text and only
+      // find out at P6 — after a whole round had been spent.
+      return [...always, 'PG-09', 'PG-07', 'PG-08', 'PG-11']
     case 'runCheck':
       // A check is an archive precursor: it must not pass a manuscript that is
       // below the word floor or no longer matches the review it claims to

@@ -28,12 +28,18 @@ describe('root patch', () => {
     expect(rows[0]).toMatchObject({ id: 'novel-write-engine', name: 'dsh-novel-write-engine' })
   })
 
-  it('declares the 0.2.19 host range without admitting the next minor prerelease', () => {
+  it('declares the host range without admitting the next minor prerelease', () => {
     const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
+      name: string
       version: string
       engines: { node: string; dsh: string }
     }
-    expect(manifest.version).toBe('0.2.19')
+    // 0.2.20 release review: this assertion pinned the literal `0.2.19`, so
+    // every release had to edit a test to ship — and a release that forgot it
+    // failed the suite for a reason that has nothing to do with the preset. The
+    // invariant is "a real package version", not "the version I saw last time".
+    expect(manifest.name).toBe('dsh-novel-write-engine')
+    expect(manifest.version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
     expect(manifest.engines).toEqual({
       node: '>=24.9.0',
       dsh: '>=0.2.1-rc.2 <0.3.0-0',

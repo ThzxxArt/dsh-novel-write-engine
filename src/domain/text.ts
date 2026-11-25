@@ -144,7 +144,11 @@ export function dialogueCharacterRatio(paragraph: string): number {
   const total = Array.from(paragraph).length
   if (total === 0) return 0
   let quoted = 0
-  for (const match of paragraph.matchAll(/["“]([^"“”]*)["”]/g)) {
+  // 0.2.20 D1 allows 「」/『』 and curly quotes, so dialogue density must count
+  // every family. Matching only `"` and `“”` made a corner-quote paragraph read
+  // as narration: PROSE_ABSTRACT fired on dialogue, DIALOGUE_RUN never did, and
+  // a `dialogueExempt` term inside 「…」 was not exempt.
+  for (const match of paragraph.matchAll(/["“「『]([^"“”「」『』]*)["”」』]/g)) {
     quoted += Array.from(match[1]!).length
   }
   return quoted / total

@@ -114,7 +114,9 @@ describe('maintenance operations', () => {
           root,
         }),
       ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
-      const audit = await engine.auditHistory({ root, limit: 5 })
+      // 0.2.20 review: the audit page without a cursor is the head now; the
+      // most recent rows need `latest`.
+      const audit = await engine.auditHistory({ root, limit: 5, latest: true })
       expect(audit.data.at(-1)?.op).toBe('amend')
     } finally {
       await cleanup()

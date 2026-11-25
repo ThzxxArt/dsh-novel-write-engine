@@ -1,6 +1,7 @@
 import { STYLE_RULES } from '../codes.js'
 import { dialogueRatioFor } from '../domain/style.js'
-import { countWordMetrics } from '../domain/wordcount.js'
+import { countWordMetrics, countWordMetricsOfParagraph } from '../domain/wordcount.js'
+import { paragraphSpans } from '../domain/text.js'
 import { styleTolerances } from './style.js'
 import type { Rule, RuleContext } from './types.js'
 import type { Severity, Violation } from '../types.js'
@@ -113,8 +114,17 @@ const paragraphChars: Rule = (ctx) => {
   const limit = pack.paragraph.max_chars
   // C5: the global blocker (`LONG_PARAGRAPH`) stays the only blocker owner; this
   // rule only speaks when the pack is stricter than the global limit.
+  //
+  // 0.2.20 review 3: the guard compared a character limit against a word limit
+  // (`format.paragraph_max_words`), so a paragraph with 100 CJK characters and
+  // 30 punctuation marks looked "under the global limit" while the pack — which
+  // counts characters — was already exceeded. Ask the global rule's own question
+  // in its own unit instead: if it blocks, it owns the paragraph.
   const globalLimit = ctx.rulepack.format.paragraph_max_words
-  if (limit >= globalLimit) return []
+  const globalFires = paragraphSpans(ctx.text).some(
+    (span) => countWordMetricsOfParagraph(span.text) > globalLimit,
+  )
+  if (globalFires) return []
   if (metrics.paragraph.max_chars <= limit) return []
   return [
     v(

@@ -62,12 +62,33 @@ describe('file lock reclaim', () => {
     }
   })
 
-  it('does not steal a long-held lock from a live process', async () => {
+  it('reclaims a live foreign pid whose lock is older than the maximum transaction age', async () => {
+    // 0.2.20 WP3: `processAlive` cannot tell the lock's owner from a process
+    // that inherited the pid (containers, restarts), so an abandoned lock looked
+    // alive forever and made the project unwritable. A transaction here takes
+    // milliseconds; a lock stamped 1999 is reused-pid evidence, not contention.
     const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
     const path = join(dir, '.engine.lock')
     try {
       await writeFile(path, JSON.stringify({ pid: process.ppid, startedAt: '1999-01-01T00:00:00.000Z' }))
-      const lock = new FileLock(path, 10, 80)
+      const reclaimed: Array<{ pid: number }> = []
+      const lock = new FileLock(path, 10, 200, async (record) => {
+        if (record !== null) reclaimed.push({ pid: record.pid })
+      })
+      await lock.acquire()
+      expect(reclaimed).toEqual([{ pid: process.ppid }])
+      await lock.release()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not steal a fresh lock from a live foreign process', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      await writeFile(path, JSON.stringify({ pid: process.ppid, startedAt: new Date().toISOString() }))
+      const lock = new FileLock(path, 10_000, 80)
       await expect(lock.acquire()).rejects.toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -268,6 +289,66 @@ describe('file lock reclaim', () => {
       await lock.acquire()
       await lock.release()
       expect(await readFile(path, 'utf8').catch(() => null)).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * 0.2.20 review: a release tombstone must speak only for the lock it released.
+ *
+ * `release()` writes `<lock>.dead` when the unlink fails (Windows AV/EPERM).
+ * The tombstone was consulted by age alone, so one left behind by an earlier
+ * release made the *next* live lock reclaimable: a second acquirer hard-linked
+ * the live lock, deleted it and installed its own record while the first writer
+ * still believed it held the lock — two writers, one project.
+ */
+describe('file lock tombstone ownership', () => {
+  it('does not let an orphan tombstone reclaim a live lock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      const first = new FileLock(path, 1_000, 500)
+      await first.acquire()
+      const owned = JSON.parse(await readFile(path, 'utf8')) as {
+        pid: number
+        startedAt: string
+        nonce: string
+      }
+      await writeFile(
+        `${path}.dead`,
+        JSON.stringify({
+          pid: owned.pid,
+          startedAt: owned.startedAt,
+          nonce: 'a-previous-releases-nonce',
+          released_at: new Date(Date.now() - 10_000).toISOString(),
+        }),
+      )
+      const second = new FileLock(path, 1_000, 120)
+      await expect(second.acquire()).rejects.toMatchObject({ code: 'ENGINE_LOCK_TIMEOUT' })
+      expect(JSON.parse(await readFile(path, 'utf8')).nonce).toBe(owned.nonce)
+      await first.release()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('still reclaims a dead lock whose own tombstone is old', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'novel-lock-'))
+    const path = join(dir, '.engine.lock')
+    try {
+      const dead = { pid: 999_999, startedAt: '1999-01-01T00:00:00.000Z', nonce: 'dead-nonce' }
+      await writeFile(path, JSON.stringify(dead))
+      await writeFile(
+        `${path}.dead`,
+        JSON.stringify({ ...dead, released_at: new Date(Date.now() - 10_000).toISOString() }),
+      )
+      const lock = new FileLock(path, 1_000, 500)
+      await lock.acquire()
+      expect(JSON.parse(await readFile(path, 'utf8')).nonce).not.toBe('dead-nonce')
+      await lock.release()
+      expect(await readFile(`${path}.dead`, 'utf8').catch(() => null)).toBeNull()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

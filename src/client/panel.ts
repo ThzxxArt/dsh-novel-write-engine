@@ -20,12 +20,22 @@ import {
   COMMAND_GROUPS,
 } from '../command-reference.js'
 import { PANEL_CHAPTER_LIMIT, PANEL_ROUTE, PANEL_VERSION } from '../constants.js'
+import { countWordMetrics } from '../domain/wordcount.js'
 import { buildView, fetchPanel, type PanelChapter, type PanelProject, type PanelView } from './viewmodel.js'
 import type { PanelPayloadDto } from './dto.js'
 
 interface NweWindow {
   setInterval: (handler: () => void, timeout: number) => unknown
   clearInterval: (handle: unknown) => void
+  /** 0.2.20 WP6-C: present in a real browser; absent under jsdom/SSR. */
+  matchMedia?: (query: string) => {
+    matches: boolean
+    addEventListener?: (name: string, handler: () => void) => void
+    removeEventListener?: (name: string, handler: () => void) => void
+    /** Safari < 14 / older WebViews only have the MediaQueryList methods. */
+    addListener?: (handler: () => void) => void
+    removeListener?: (handler: () => void) => void
+  }
   addEventListener: (name: string, handler: () => void) => void
   removeEventListener: (name: string, handler: () => void) => void
 }
@@ -308,6 +318,21 @@ const CSS = `
 .nwe-kv { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr); gap: 4px 12px; margin: 0; padding: 0 11px 11px; font-size: 12px; }
 .nwe-kv dt { color: var(--nwe-muted); }
 .nwe-kv dd { margin: 0; overflow-wrap: anywhere; }
+.nwe-stale-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--nwe-warn, #b8860b) 45%, var(--nwe-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--nwe-warn, #b8860b) 8%, transparent);
+  color: var(--nwe-muted);
+  font-size: 12px;
+}
+.nwe-quality-basis { margin: 0 0 6px; color: var(--nwe-muted); font-size: 11.5px; }
 .nwe-quality-summary { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 6px; color: var(--nwe-muted); font-size: 12px; }
 .nwe-dim { display: grid; grid-template-columns: 72px minmax(0, 1fr) 76px; align-items: center; gap: 9px; font-size: 12px; }
 .nwe-dim > span:last-child { color: var(--nwe-muted); text-align: right; font-variant-numeric: tabular-nums; }
@@ -1384,8 +1409,31 @@ const CSS = `
 .nwe-dim-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .nwe-dim-card-head span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--nwe-muted); }
 .nwe-dim-card-head strong { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.nwe-basis {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--nwe-muted) 14%, transparent);
+  color: var(--nwe-muted);
+  font-size: 9.5px;
+  font-style: normal;
+}
+.nwe-basis.is-hybrid { background: color-mix(in srgb, var(--nwe-accent) 12%, transparent); color: var(--nwe-accent); }
+.nwe-basis.is-model { background: color-mix(in srgb, var(--nwe-warn, #b8860b) 14%, transparent); color: var(--nwe-warn, #b8860b); }
+.nwe-dim-engine {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--nwe-accent) 12%, transparent);
+  color: var(--nwe-accent);
+  font-family: inherit;
+  font-size: 9.5px;
+  font-style: normal;
+  letter-spacing: .02em;
+}
 .nwe-dim-card .nwe-v6-bar { display: block; margin-top: 8px; }
 .nwe-style-warn { color: var(--nwe-warn); }
+.nwe-style-dir { margin-left: 3px; font-size: 11px; }
 .nwe-dim-card .nwe-v6-bar > span { display: block; height: 5px; border-radius: 99px; background: var(--nwe-border); }
 .nwe-dim-card .nwe-v6-bar i { display: block; height: 100%; border-radius: inherit; background: var(--nwe-accent); }
 .nwe-health-layout { display: block; }
@@ -1425,6 +1473,9 @@ const CSS = `
 .nwe-selfcheck-row.is-na .nwe-mark { color: var(--nwe-muted); }
 .nwe-selfcheck-row strong { display: block; font-size: 12px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
 .nwe-selfcheck-row em { display: block; margin-top: 2px; color: var(--nwe-muted); font-size: 10.5px; font-style: normal; line-height: 1.5; overflow-wrap: anywhere; }
+/* The basis badge rides with the title instead of taking its own line: thirteen
+   extra lines is a card nobody scrolls. */
+.nwe-selfcheck-row strong .nwe-basis { display: inline-block; vertical-align: 1px; margin-top: 0; }
 .nwe-selfcheck-row code { color: var(--nwe-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; }
 @media (max-width: 430px) {
   .nwe-selfcheck-row { padding: 8px 10px; }
@@ -1903,19 +1954,36 @@ interface FoldOptions {
   bodyClassName?: string
 }
 
-/** One disclosure language for every nested detail panel. */
-const foldBlock = (
-  key: string,
-  title: string,
-  body: ReactElement | ReactElement[] | null,
-  options: FoldOptions = {},
-): ReactElement =>
-  createElement(
+/**
+ * One disclosure language for every nested detail panel.
+ *
+ * 0.2.20 WP6-C: the body is built when the fold opens.
+ *
+ * `<details>` hides its children but React still builds them, so a closed
+ * "逐章 effort" fold on a 600-chapter book constructed every row for a section
+ * nobody had opened. A component (rather than a builder) is what makes the
+ * open state observable; the call sites keep the same arguments.
+ */
+const FoldBlock = (props: {
+  title: string
+  body: () => ReactElement | ReactElement[] | null
+  options: FoldOptions
+}): ReactElement => {
+  const { title, body, options } = props
+  const [open, setOpen] = useState(options.open === true)
+  // 0.2.20 review: the body is a thunk. Every call site used to evaluate its
+  // element tree before `foldBlock` ran, so a closed fold still built a row for
+  // every chapter in the book. Only an open fold pays for its body now.
+  const content = open ? body() : null
+  return createElement(
     'details',
     {
       className: `nwe-fold${options.className === undefined ? '' : ` ${options.className}`}`,
-      key,
-      ...(options.open === true ? { open: true } : {}),
+      ...(open ? { open: true } : {}),
+      onToggle: (event: { currentTarget?: { open?: boolean } }) => {
+        const next = event.currentTarget?.open === true
+        if (next !== open) setOpen(next)
+      },
     },
     createElement(
       'summary',
@@ -1924,7 +1992,7 @@ const foldBlock = (
       options.meta === undefined ? null : createElement('span', { className: 'nwe-fold-meta' }, options.meta),
       createElement('span', { className: 'nwe-fold-caret', 'aria-hidden': 'true' }, '+'),
     ),
-    body === null
+    !open || content === null
       ? null
       : createElement(
           'div',
@@ -1934,9 +2002,18 @@ const foldBlock = (
             'aria-label': `${title} 内容`,
             tabIndex: 0,
           },
-          body,
+          content,
         ),
   )
+}
+
+/** Builder form: the key identifies the element; the body is only built on open. */
+const foldBlock = (
+  key: string,
+  title: string,
+  body: () => ReactElement | ReactElement[] | null,
+  options: FoldOptions = {},
+): ReactElement => createElement(FoldBlock, { key, title, body, options })
 
 interface TutorialStep {
   title: string
@@ -2141,8 +2218,13 @@ const bookSection = (view: PanelView): ReactElement => {
   const total = view.book.outlineTotal
   const target = view.book.target
   const denominator = target ?? total
-  const percent =
-    denominator === 0 ? 0 : Math.min(100, Math.round((view.book.archivedCards / denominator) * 100))
+  // 0.2.20 review 4: the bar is labelled 全书归档进度 and the legend says
+  // "N% 已归档", but the numerator was archived *cards*. A book whose outline
+  // has no card for its archived chapters (or has extra archived cards from an
+  // import) showed a different percentage than `novel_status.progress.percent`,
+  // which counts chapter records.
+  const archived = view.stats.chapters
+  const percent = denominator === 0 ? 0 : Math.min(100, Math.round((archived / denominator) * 100))
   const chips = [
     ['角色', view.book.worldbook.characters],
     ['地点', view.book.worldbook.locations],
@@ -2437,7 +2519,12 @@ const footer = (view: PanelView, onRefresh: () => void): ReactElement =>
     { className: 'nwe-footer' },
     createElement(
       'span',
-      { role: 'status', 'aria-live': 'polite' },
+      // 0.2.20 WP6-C: a live region that re-announces the timestamp every 15
+      // seconds is noise, not status. Only the failure is announced; the clock
+      // stays readable but silent.
+      view.syncError !== undefined && view.syncError !== null && view.syncError !== ''
+        ? { role: 'status', 'aria-live': 'polite' }
+        : {},
       view.syncError !== undefined && view.syncError !== null && view.syncError !== ''
         ? `同步失败：${view.syncError}`
         : view.lastSync !== undefined && view.lastSync !== null
@@ -2453,6 +2540,73 @@ const footer = (view: PanelView, onRefresh: () => void): ReactElement =>
       createElement('code', null, 'novel-workshop'),
     ),
   )
+
+/**
+ * 0.2.20 WP6-C: is the surface narrow enough for cards instead of a table?
+ *
+ * The panel used to render both forms and hide one with CSS, so a phone paid for
+ * a nine-column table it never showed. A hook keeps the DOM honest; it defaults
+ * to the desktop form when `matchMedia` is unavailable (SSR, jsdom, tests).
+ *
+ * 0.2.20 review: the query must match the CSS breakpoint. The stylesheet hides
+ * `.nwe-chapters-section .nwe-table-wrap` and shows the cards at
+ * `max-width: 760px`; with 599px here the XOR left nothing on screen between
+ * 600 and 760px — a tablet, a phone in landscape, or a narrow split window got
+ * the tab header, the pager and zero chapter rows.
+ */
+const NARROW_QUERY = '(max-width: 760px)'
+const useIsNarrow = (): boolean => {
+  // Read the media query before the first paint: the stylesheet already hides
+  // the table at this width, so mounting with `false` would show neither form
+  // until the effect below ran.
+  const [narrow, setNarrow] = useState(
+    () => (globalThis as { window?: NweWindow }).window?.matchMedia?.(NARROW_QUERY)?.matches ?? false,
+  )
+  useEffect(() => {
+    const win = (globalThis as { window?: NweWindow }).window
+    const match = win?.matchMedia?.(NARROW_QUERY)
+    if (match === undefined) return
+    const apply = (): void => setNarrow(match.matches)
+    apply()
+    // 0.2.20 review 4: `addEventListener?.()` alone left the legacy API
+    // (Safari < 14, older WebViews) with no listener at all — the panel mounted
+    // in the right form and then never reacted to a resize, so a tablet docked
+    // into a keyboard stayed in the wrong layout.
+    if (match.addEventListener !== undefined) {
+      match.addEventListener('change', apply)
+      return () => match.removeEventListener?.('change', apply)
+    }
+    match.addListener?.(apply)
+    return () => match.removeListener?.(apply)
+  }, [])
+  return narrow
+}
+
+/**
+ * 0.2.20 WP6-B: how long a chapter/quality detail may take before the panel
+ * gives up. The payload is a whole manuscript; ten seconds is already far
+ * longer than a healthy read and short enough that a spinner is not a lie.
+ */
+const DETAIL_TIMEOUT_MS = 10_000
+
+/**
+ * 0.2.20 WP6-B: say that this refresh failed while the old data is on screen.
+ *
+ * The footer already reports the failure, but a reader looking at a table does
+ * not connect "同步失败" in the corner with the numbers in front of them. The
+ * banner sits above the data it describes and offers the retry.
+ */
+const staleBanner = (error: string | null, onRetry: (() => void) | undefined): ReactElement | null =>
+  error === null || error === ''
+    ? null
+    : createElement(
+        'div',
+        { className: 'nwe-stale-banner', role: 'status', 'aria-live': 'polite' },
+        createElement('span', null, `本次刷新失败：${error}。下面是上次读到的数据。`),
+        onRetry === undefined
+          ? null
+          : createElement('button', { type: 'button', className: 'nwe-copy', onClick: onRetry }, '重试'),
+      )
 
 const loadingState = (): ReactElement =>
   createElement(
@@ -3964,22 +4118,23 @@ const bookDataSection = (view: PanelView): ReactElement | null => {
         foldBlock(
           'effort',
           '逐章 effort',
-          createElement(
-            'ul',
-            { className: 'nwe-v6-list' },
-            ...data.effort.chapters.map((chapter) =>
-              createElement(
-                'li',
-                { key: chapter.num },
-                createElement('b', null, `第 ${chapter.num} 章`),
+          () =>
+            createElement(
+              'ul',
+              { className: 'nwe-v6-list' },
+              ...data.effort.chapters.map((chapter) =>
                 createElement(
-                  'span',
-                  null,
-                  `评 ${chapter.reviews} / 修 ${chapter.revisions} / 检 ${chapter.checks} / 回滚 ${chapter.rollbacks} · ${finalCheckLabel(chapter.final_check)}`,
+                  'li',
+                  { key: chapter.num },
+                  createElement('b', null, `第 ${chapter.num} 章`),
+                  createElement(
+                    'span',
+                    null,
+                    `评 ${chapter.reviews} / 修 ${chapter.revisions} / 检 ${chapter.checks} / 回滚 ${chapter.rollbacks} · ${finalCheckLabel(chapter.final_check)}`,
+                  ),
                 ),
               ),
             ),
-          ),
           { meta: `${data.effort.chapters.length} 章` },
         ),
       ]),
@@ -4140,6 +4295,18 @@ const TAB_META: Record<SectionTab, { title: string; desc: string; glyph: Section
 const sectionItemCount = (section: PanelSectionState | null): number | undefined => {
   const payload = section?.payload
   if (payload === null || payload === undefined) return undefined
+  // `total` is the size of the filtered set; `items` is only the page that fit
+  // in this response. Counting the page made a 120-chapter book say "50 章"
+  // under a table header that said "显示 50 / 共 120".
+  if (typeof payload.total === 'number') return payload.total
+  const counts = asRow(payload.counts)
+  if (counts !== null) {
+    const counted = Object.values(counts).reduce<number>(
+      (sum, entry) => sum + Number(asRow(entry)?.total ?? 0),
+      0,
+    )
+    if (counted > 0) return counted
+  }
   if (Array.isArray(payload.items)) return payload.items.length
   const row = asRow(payload.items)
   if (row !== null) {
@@ -4149,7 +4316,7 @@ const sectionItemCount = (section: PanelSectionState | null): number | undefined
     )
     if (count > 0) return count
   }
-  return payload.total ?? payload.returned
+  return payload.returned
 }
 
 const tabIntro = (tab: SectionTab, view: PanelView, section: PanelSectionState | null): ReactElement => {
@@ -4180,11 +4347,19 @@ const tabIntro = (tab: SectionTab, view: PanelView, section: PanelSectionState |
   )
 }
 
+/**
+ * 0.2.20 WP6-C: a tablist that a keyboard can actually use.
+ *
+ * Every tab used to be in the tab order, so reaching the panel content took
+ * seven Tab presses, and arrow keys did nothing — the WAI-ARIA tabs pattern
+ * expects one stop and arrow navigation. ArrowLeft/Right/Home/End move the
+ * selection and focus; only the selected tab has tabIndex 0.
+ */
 const tabBar = (tab: PanelTab, onTab: (tab: PanelTab) => void): ReactElement =>
   createElement(
     'nav',
     { className: 'nwe-tabs', role: 'tablist', 'aria-label': '网文工坊栏目' },
-    ...PANEL_TABS.map((item) =>
+    ...PANEL_TABS.map((item, index) =>
       createElement(
         'button',
         {
@@ -4194,8 +4369,25 @@ const tabBar = (tab: PanelTab, onTab: (tab: PanelTab) => void): ReactElement =>
           id: `nwe-tab-${item.id}`,
           'aria-controls': `nwe-panel-${item.id}`,
           'aria-selected': tab === item.id,
+          tabIndex: tab === item.id ? 0 : -1,
           className: `nwe-tab${tab === item.id ? ' is-active' : ''}`,
           onClick: () => onTab(item.id),
+          onKeyDown: (event: { key?: string; preventDefault?: () => void }) => {
+            const key = event.key ?? ''
+            const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0
+            let next: number | null = null
+            if (step !== 0) next = (index + step + PANEL_TABS.length) % PANEL_TABS.length
+            else if (key === 'Home') next = 0
+            else if (key === 'End') next = PANEL_TABS.length - 1
+            if (next === null) return
+            event.preventDefault?.()
+            onTab(PANEL_TABS[next]!.id)
+            // Move focus with the selection, or the roving tabindex leaves the
+            // focus on a tab that is now -1.
+            const doc = (globalThis as { document?: NweDocument }).document as
+              (NweDocument & { getElementById?: (id: string) => { focus?: () => void } | null }) | undefined
+            doc?.getElementById?.(`nwe-tab-${PANEL_TABS[next]!.id}`)?.focus?.()
+          },
         },
         item.label,
       ),
@@ -4301,7 +4493,10 @@ const sectionKv = (row: Record<string, unknown>): ReactElement => {
     ['锚点', textOf(row.anchor)],
     ['容忍', textOf(row.tolerance)],
     ['备注', textOf(row.note)],
-    ['推进记录', Array.isArray(row.advance_log) ? `${row.advance_log.length} 条` : '—'],
+    // The server ships the compact read model: it replaces the full advance_log
+    // with its length, so the old "推进记录" row (which read the removed array)
+    // never rendered anything.
+    ['推进次数', textOf(row.advance_count)],
     ['成长', Array.isArray(row.growth) ? `${row.growth.length} 条` : '—'],
     ['当前状态', textOf(row.current_state)],
     ['人物档案', textOf(row.profile)],
@@ -4329,7 +4524,7 @@ const sectionKv = (row: Record<string, unknown>): ReactElement => {
     'anchor',
     'tolerance',
     'note',
-    'advance_log',
+    'advance_count',
     'growth',
   ])
   const extraLabels: Record<string, string> = {
@@ -4646,33 +4841,57 @@ const qualitySection = (
   if (row === null) return sectionList('质量', items)
   const quality = asRow(row.quality)
   const dimensions = Array.isArray(row.dimensions) ? row.dimensions : []
+  // 0.2.20 WP6: name the yardstick. One average can cover chapters scored by the
+  // engine and chapters a model scored itself; without this line a reader reads
+  // a mixed number as a single trend.
+  const scoringBasis = quality === null ? null : asRow(quality.scoring_basis)
+  const basisNote =
+    scoringBasis === null || quality === null || Number(quality.samples ?? 0) === 0
+      ? null
+      : createElement(
+          'p',
+          { className: 'nwe-quality-basis' },
+          `口径：引擎计分 ${textOf(scoringBasis.machine, '0')} 章`,
+          Number(scoringBasis.self_report ?? 0) === 0
+            ? '（全书统一口径）'
+            : `；含 ${textOf(scoringBasis.self_report, '0')} 章旧口径（模型自评，重跑 P6 会按机检分重算）`,
+        )
   const summary =
     quality === null || Number(quality.samples ?? 0) === 0
       ? createElement('div', { className: 'nwe-empty' }, '质量：暂无评审')
       : createElement(
-          'div',
-          { className: 'nwe-quality-kpis' },
-          ...(
-            [
-              ['全书均分', textOf(quality.average), '/ 150'],
-              ['可读评审', textOf(quality.samples), '章'],
-              ['中位分', textOf(quality.median), ''],
-              ['评分区间', `${textOf(quality.min)}–${textOf(quality.max)}`, ''],
-            ] as const
-          ).map(([label, value, unit]) =>
-            createElement(
-              'article',
-              { className: 'nwe-quality-kpi', key: label },
-              createElement('span', { className: 'nwe-quality-kpi-label' }, label),
+          Fragment,
+          null,
+          basisNote,
+          createElement(
+            'div',
+            { className: 'nwe-quality-kpis' },
+            ...(
+              [
+                ['全书均分', textOf(quality.average), '/ 150'],
+                ['可读评审', textOf(quality.samples), '章'],
+                ['中位分', textOf(quality.median), ''],
+                ['评分区间', `${textOf(quality.min)}–${textOf(quality.max)}`, ''],
+              ] as const
+            ).map(([label, value, unit]) =>
               createElement(
-                'strong',
-                { className: 'nwe-quality-kpi-value' },
-                value,
-                unit === '' ? null : createElement('small', null, unit),
+                'article',
+                { className: 'nwe-quality-kpi', key: label },
+                createElement('span', { className: 'nwe-quality-kpi-label' }, label),
+                createElement(
+                  'strong',
+                  { className: 'nwe-quality-kpi-value' },
+                  value,
+                  unit === '' ? null : createElement('small', null, unit),
+                ),
               ),
             ),
           ),
         )
+  // 0.2.20 WP6-C: the five format dimensions are scored by the engine, not by
+  // the reviewer. Without a label a reader compares them with the ten judged
+  // dimensions as if they came from the same place.
+  const engineScored = new Set(['R-W-06', 'R-W-07', 'R-W-08', 'R-W-09', 'R-W-10'])
   const bars = dimensions.map((entry, index) => {
     const dimension = asRow(entry)
     if (dimension === null) return null
@@ -4686,7 +4905,14 @@ const qualitySection = (
       createElement(
         'div',
         { className: 'nwe-dim-card-head' },
-        createElement('span', null, id),
+        createElement(
+          'span',
+          null,
+          id,
+          engineScored.has(id)
+            ? createElement('em', { className: 'nwe-dim-engine', title: '引擎计分' }, '引擎计分')
+            : null,
+        ),
         createElement('strong', null, `${Number.isFinite(average) ? average : '—'} / ${max > 0 ? max : '—'}`),
       ),
       createElement(
@@ -4833,6 +5059,19 @@ const selfCheckCard = (value: unknown): ReactElement | null => {
             textOf(row.title, ''),
             ' ',
             createElement('code', null, textOf(row.id, '')),
+            // 0.2.20 WP6-C: who decided this row. A machine row is a fact, a
+            // hybrid row is the engine's evidence plus the model's judgement,
+            // and a model row is judgement alone — a reader cannot weigh them
+            // without the label.
+            createElement(
+              'em',
+              { className: `nwe-basis is-${textOf(row.basis, 'machine')}` },
+              textOf(row.basis, 'machine') === 'machine'
+                ? '机器'
+                : textOf(row.basis, 'machine') === 'hybrid'
+                  ? '混合'
+                  : '模型',
+            ),
           ),
           createElement(
             'em',
@@ -4931,7 +5170,11 @@ const styleCard = (metrics: unknown, targets: unknown): ReactElement | null => {
   ]
   return createElement(
     'section',
-    { className: 'nwe-subsection' },
+    // 0.2.20 review 4: a dedicated hook. `check:visual` used to find this card
+    // by the longest node whose text contains "文风 · " — which is always an
+    // ancestor wrapper, so the nine-row assertion and the float-precision scan
+    // were reading the whole panel and could not fail.
+    { className: 'nwe-subsection nwe-style-card' },
     createElement(
       'div',
       { className: 'nwe-group-head' },
@@ -4957,6 +5200,19 @@ const styleCard = (metrics: unknown, targets: unknown): ReactElement | null => {
               'strong',
               { className: Math.abs(actual - wantedRatio) > tolerance ? 'nwe-style-warn' : undefined },
               `${pct(actual)} / ${pct(wantedRatio)}`,
+              // 0.2.20 WP6-C: a direction, not only a colour. Colour alone is
+              // invisible to a colour-blind reader and to a screen reader, and
+              // "above or below the target" is the whole point of the row.
+              Math.abs(actual - wantedRatio) > tolerance
+                ? createElement(
+                    'span',
+                    {
+                      className: 'nwe-style-dir',
+                      'aria-label': actual > wantedRatio ? '高于目标' : '低于目标',
+                    },
+                    actual > wantedRatio ? '↑' : '↓',
+                  )
+                : null,
             ),
           ),
           createElement(
@@ -4985,7 +5241,15 @@ const styleCard = (metrics: unknown, targets: unknown): ReactElement | null => {
             'div',
             { className: 'nwe-dim-card-head' },
             createElement('span', null, entry.label),
-            createElement('strong', { className: entry.warn ? 'nwe-style-warn' : undefined }, entry.value),
+            createElement(
+              'strong',
+              { className: entry.warn ? 'nwe-style-warn' : undefined },
+              entry.value,
+              // These rows are ceilings: a warning always means "over".
+              entry.warn
+                ? createElement('span', { className: 'nwe-style-dir', 'aria-label': '高于上限' }, '↑')
+                : null,
+            ),
           ),
         ),
       ),
@@ -5139,7 +5403,24 @@ const chapterDetailPanel = (
     detail.section.loading && payload === null
       ? createElement('div', { className: 'nwe-section-note' }, '正在读取章节详情…')
       : detail.section.error !== null
-        ? createElement('div', { className: 'nwe-empty' }, `章节详情读取失败：${detail.section.error}`)
+        ? createElement(
+            'div',
+            { className: 'nwe-empty' },
+            `章节详情读取失败：${detail.section.error}`,
+            // 0.2.20 review 5: the section banner has a retry button, the
+            // detail drawer did not — a transient read failure left the reader
+            // with no way back except closing and reopening the row. The same
+            // callback that opened the drawer re-fetches when given a chapter.
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'nwe-copy',
+                onClick: () => onClose(detail.chapter),
+              },
+              '重试',
+            ),
+          )
         : createElement(
             Fragment,
             null,
@@ -5148,35 +5429,51 @@ const chapterDetailPanel = (
               : foldBlock(
                   'manuscript',
                   '正文',
-                  createElement('pre', { className: 'nwe-detail-text' }, manuscript),
-                  { meta: `${Array.from(manuscript).length} 字`, open: true, className: 'nwe-detail-fold' },
+                  () => createElement('pre', { className: 'nwe-detail-text' }, manuscript),
+                  {
+                    // 0.2.20 review 4: a code-point count is not the engine's
+                    // word count (English words and digits count once each, and
+                    // punctuation counts too), so the drawer disagreed with the
+                    // chapter table next to it by a few percent on mixed text.
+                    meta: `${countWordMetrics(manuscript).total_word_count} 字`,
+                    open: true,
+                    className: 'nwe-detail-fold',
+                  },
                 ),
             plan === null
               ? null
-              : foldBlock('plan', '归档 plan', createElement('pre', { className: 'nwe-detail-text' }, plan), {
-                  className: 'nwe-detail-fold',
-                }),
+              : foldBlock(
+                  'plan',
+                  '归档 plan',
+                  () => createElement('pre', { className: 'nwe-detail-text' }, plan),
+                  {
+                    className: 'nwe-detail-fold',
+                    // A detail panel is opened to be read; its folds start open.
+                    open: true,
+                  },
+                ),
             worldPlan === null
               ? null
               : foldBlock(
                   'world',
                   '世界计划',
-                  createElement('pre', { className: 'nwe-detail-text' }, worldPlan),
-                  { className: 'nwe-detail-fold' },
+                  () => createElement('pre', { className: 'nwe-detail-text' }, worldPlan),
+                  { className: 'nwe-detail-fold', open: true },
                 ),
             summaryEvents.length === 0
               ? null
               : foldBlock(
                   'summary-events',
                   '本章摘要',
-                  createElement(
-                    'ul',
-                    { className: 'nwe-v6-list' },
-                    ...summaryEvents.map((event, index) =>
-                      createElement('li', { key: `${index}-${event}` }, event),
+                  () =>
+                    createElement(
+                      'ul',
+                      { className: 'nwe-v6-list' },
+                      ...summaryEvents.map((event, index) =>
+                        createElement('li', { key: `${index}-${event}` }, event),
+                      ),
                     ),
-                  ),
-                  { meta: `${summaryEvents.length} 条`, className: 'nwe-detail-fold' },
+                  { meta: `${summaryEvents.length} 条`, className: 'nwe-detail-fold', open: true },
                 ),
           ),
   )
@@ -5210,7 +5507,20 @@ const qualityDetailPanel = (
     detail.section.loading && payload === null
       ? createElement('div', { className: 'nwe-section-note' }, '正在读取质量详情…')
       : detail.section.error !== null
-        ? createElement('div', { className: 'nwe-empty' }, `质量详情读取失败：${detail.section.error}`)
+        ? createElement(
+            'div',
+            { className: 'nwe-empty' },
+            `质量详情读取失败：${detail.section.error}`,
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'nwe-copy',
+                onClick: () => onClose(detail.chapter),
+              },
+              '重试',
+            ),
+          )
         : review === null && check === null
           ? createElement('div', { className: 'nwe-empty' }, '还没有评审或检查文档。')
           : createElement(
@@ -5221,7 +5531,7 @@ const qualityDetailPanel = (
                 : foldBlock(
                     'review',
                     '评审 review',
-                    createElement('pre', { className: 'nwe-detail-text' }, review),
+                    () => createElement('pre', { className: 'nwe-detail-text' }, review),
                     { open: true, className: 'nwe-detail-fold' },
                   ),
               check === null
@@ -5229,8 +5539,8 @@ const qualityDetailPanel = (
                 : foldBlock(
                     'check',
                     '检查 check',
-                    createElement('pre', { className: 'nwe-detail-text' }, check),
-                    { className: 'nwe-detail-fold' },
+                    () => createElement('pre', { className: 'nwe-detail-text' }, check),
+                    { className: 'nwe-detail-fold', open: true },
                   ),
             ),
   )
@@ -5243,6 +5553,9 @@ const chapterTable = (
   onQuery: (patch: Partial<ChapterQuery>) => void,
   detail: ChapterDetailState | null = null,
   onDetail: (chapter: number | null) => void = () => undefined,
+  /** 0.2.20 WP6-C: render cards or the table, never both. */
+  narrow = false,
+  onRetry: (() => void) | undefined = undefined,
 ): ReactElement => {
   if (section === null || (section.loading && section.payload === null)) return chaptersSection(view)
   if (section.error !== null && section.payload === null) {
@@ -5298,6 +5611,9 @@ const chapterTable = (
   return createElement(
     'section',
     { className: 'nwe-chapters-section', 'aria-label': '章节表' },
+    // 0.2.20 WP6-B: a failed refresh over existing rows says so, above the rows,
+    // and the retry re-runs this section instead of only the bundle.
+    staleBanner(section.error, onRetry),
     createElement(
       'div',
       { className: 'nwe-section-head' },
@@ -5314,68 +5630,70 @@ const chapterTable = (
     ),
     rows.length === 0
       ? createElement('div', { className: 'nwe-empty' }, '没有匹配的章节。')
-      : createElement(
-          'div',
-          {
-            className: 'nwe-table-wrap',
-            role: 'region',
-            'aria-label': '章节表，可滚动',
-            tabIndex: 0,
-          },
-          createElement(
-            'table',
-            { className: 'nwe-chapter-table' },
+      : narrow
+        ? null // the card list above is the whole surface on a phone
+        : createElement(
+            'div',
+            {
+              className: 'nwe-table-wrap',
+              role: 'region',
+              'aria-label': '章节表，可滚动',
+              tabIndex: 0,
+            },
             createElement(
-              'thead',
-              null,
+              'table',
+              { className: 'nwe-chapter-table' },
               createElement(
-                'tr',
+                'thead',
                 null,
-                ...['章', '标题', '状态', '字数', '评分', '场景', '终检', '归档', '详情'].map((label) =>
-                  createElement('th', { key: label, scope: 'col' }, label),
+                createElement(
+                  'tr',
+                  null,
+                  ...['章', '标题', '状态', '字数', '评分', '场景', '终检', '归档', '详情'].map((label) =>
+                    createElement('th', { key: label, scope: 'col' }, label),
+                  ),
                 ),
               ),
-            ),
-            createElement(
-              'tbody',
-              null,
-              ...rows.map((row, index) => {
-                const num = textOf(row.num, String(index + 1))
-                const score = typeof row.score === 'number' ? String(row.score) : '—'
-                return createElement(
-                  'tr',
-                  { key: `${num}-${index}` },
-                  createElement('td', { className: 'is-num' }, `第 ${num} 章`),
-                  createElement('td', { className: 'nwe-table-title' }, textOf(row.title)),
-                  createElement('td', null, row.status === 'draft' ? '草稿' : '已归档'),
-                  createElement('td', null, textOf(row.word_count)),
-                  createElement('td', null, score),
-                  createElement('td', null, textOf(row.scene_type)),
-                  createElement('td', null, finalCheckLabel(row.final_check)),
-                  createElement(
-                    'td',
-                    null,
-                    localTime(typeof row.archived_at === 'string' ? row.archived_at : null),
-                  ),
-                  createElement(
-                    'td',
-                    null,
+              createElement(
+                'tbody',
+                null,
+                ...rows.map((row, index) => {
+                  const num = textOf(row.num, String(index + 1))
+                  const score = typeof row.score === 'number' ? String(row.score) : '—'
+                  return createElement(
+                    'tr',
+                    { key: `${num}-${index}` },
+                    createElement('td', { className: 'is-num' }, `第 ${num} 章`),
+                    createElement('td', { className: 'nwe-table-title' }, textOf(row.title)),
+                    createElement('td', null, row.status === 'draft' ? '草稿' : '已归档'),
+                    createElement('td', null, textOf(row.word_count)),
+                    createElement('td', null, score),
+                    createElement('td', null, textOf(row.scene_type)),
+                    createElement('td', null, finalCheckLabel(row.final_check)),
                     createElement(
-                      'button',
-                      {
-                        type: 'button',
-                        className: 'nwe-refresh',
-                        onClick: () => onDetail(Number(num) || index + 1),
-                      },
-                      '详情',
+                      'td',
+                      null,
+                      localTime(typeof row.archived_at === 'string' ? row.archived_at : null),
                     ),
-                  ),
-                )
-              }),
+                    createElement(
+                      'td',
+                      null,
+                      createElement(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'nwe-refresh',
+                          onClick: () => onDetail(Number(num) || index + 1),
+                        },
+                        '详情',
+                      ),
+                    ),
+                  )
+                }),
+              ),
             ),
           ),
-        ),
-    mobileCards,
+    narrow ? mobileCards : null,
     sectionPager(payload, cursor, (next) => onQuery({ cursor: next })),
     chapterDetailPanel(detail, onDetail),
   )
@@ -5490,6 +5808,7 @@ const sectionPanel = (
   onQualityDetail: (chapter: number | null) => void = () => undefined,
   sectionCursor = '',
   onSectionCursor?: (cursor: string) => void,
+  onSectionRetry?: () => void,
 ): ReactElement => {
   if (section === null || (section.loading && section.payload === null)) {
     return createElement('div', { className: 'nwe-section-note' }, '正在读取栏目…')
@@ -5497,6 +5816,7 @@ const sectionPanel = (
   if (section.error !== null && section.payload === null) {
     return createElement('div', { className: 'nwe-empty' }, `栏目读取失败：${section.error}`)
   }
+  const banner = staleBanner(section.error, onSectionRetry)
   const items = section.payload?.items
   const searchLabel =
     tab === 'characters'
@@ -5511,6 +5831,7 @@ const sectionPanel = (
     return createElement(
       Fragment,
       null,
+      banner,
       createElement(
         'label',
         { className: 'nwe-section-search' },
@@ -5551,8 +5872,14 @@ const sectionPanel = (
       leadsSection(items, section.payload?.counts, sectionCursor, onSectionCursor, section.payload),
     )
   if (tab === 'worldbook') return withSearch(worldbookSection(items, section.payload?.counts))
-  if (tab === 'quality') return qualitySection(items, chapter, qualityDetail, onQualityDetail)
-  if (tab === 'health') return healthSection(items)
+  if (tab === 'quality')
+    return createElement(
+      Fragment,
+      null,
+      banner,
+      qualitySection(items, chapter, qualityDetail, onQualityDetail),
+    )
+  if (tab === 'health') return createElement(Fragment, null, banner, healthSection(items))
   return sectionList('数据', Array.isArray(items) ? items : [items])
 }
 
@@ -5578,6 +5905,11 @@ export function panelElement(
   onQualityDetail: (chapter: number | null) => void = () => undefined,
   sectionCursor = '',
   onSectionCursor?: (cursor: string) => void,
+  /** 0.2.20 WP6-C: the host component decides cards vs table; the builder does
+   * not own a media query. */
+  narrow = false,
+  /** 0.2.20 review: re-run the current section after a refresh failed. */
+  onSectionRetry: (() => void) | undefined = undefined,
 ): ReactElement {
   const ready = view.state === 'ready'
   const selectable =
@@ -5735,7 +6067,16 @@ export function panelElement(
               tabIntro('chapters', view, section),
               blockingSection(view),
               chapterToolbar(chapterQuery, onChapterQuery),
-              chapterTable(section, view, chapterQuery, onChapterQuery, chapterDetail, onChapterDetail),
+              chapterTable(
+                section,
+                view,
+                chapterQuery,
+                onChapterQuery,
+                chapterDetail,
+                onChapterDetail,
+                narrow,
+                onSectionRetry,
+              ),
             ),
           )
         : null,
@@ -5769,6 +6110,7 @@ export function panelElement(
               onQualityDetail,
               sectionCursor,
               onSectionCursor,
+              onSectionRetry,
             ),
           )
         : null,
@@ -5814,6 +6156,10 @@ const panelPath = (root: string | null): string => {
 
 /** Stateful wrapper: fetch once, refresh on demand and after returning to the tab. */
 export function NovelPanel(): ReactElement {
+  // 0.2.20 WP6-C: one form or the other, decided once per render at the top of
+  // the component (hooks cannot live inside `panelElement`, which is a plain
+  // builder rather than a component).
+  const narrow = useIsNarrow()
   const [view, setView] = useState<PanelView>(() => buildView(null))
   const [loading, setLoading] = useState(true)
   const [switching, setSwitching] = useState(false)
@@ -5828,8 +6174,13 @@ export function NovelPanel(): ReactElement {
   const [sectionCursor, setSectionCursor] = useState('')
   const [chapterDetail, setChapterDetail] = useState<ChapterDetailState | null>(null)
   const [qualityDetail, setQualityDetail] = useState<ChapterDetailState | null>(null)
-  const detailController = useRef<AbortController | null>(null)
+  /** 0.2.20 review: which detail panel owns the in-flight request. */
+  const detailController = useRef<{
+    controller: AbortController
+    section: 'chapter_detail' | 'quality_detail'
+  } | null>(null)
   const [revisionTick, setRevisionTick] = useState(0)
+  const [sectionRetryTick, setSectionRetryTick] = useState(0)
   const syncFailures = useRef(0)
   const nextSyncAt = useRef(0)
   const [selectedRoot, setSelectedRoot] = useState<string | null>(() => readStoredRoot())
@@ -5838,110 +6189,182 @@ export function NovelPanel(): ReactElement {
   const visibleRequest = useRef(0)
   const controllerRef = useRef<AbortController | null>(null)
   const queryRootRef = useRef<string | null>(selectedRoot)
+  /** The committed view, read by async bundle callbacks that cannot see state. */
+  const viewRef = useRef<PanelView>(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
+  /** 0.2.20 WP6-B: the last projection that actually rendered, for failure recovery. */
+  const lastReadyView = useRef<{ view: PanelView; root: string | null } | null>(null)
   const sectionEtagRef = useRef<{ key: string; etag: string } | null>(null)
   // Which query key the current `section` payload actually belongs to. A
   // validator can outlive the payload it describes (switching to 概览 clears the
   // section), so a 304 must only be honoured when we still hold that payload.
   const sectionLoadedKeyRef = useRef<string | null>(null)
+  /** 0.2.20 WP6-B: which tab the current section payload belongs to. */
+  const sectionTabRef = useRef<string | null>(null)
   const bundleEtagRef = useRef<{ root: string; etag: string } | null>(null)
   const lastSilentAt = useRef(0)
   const quietPolls = useRef(0)
   const loadRef = useRef<(silent?: boolean, root?: string | null) => Promise<void>>(async () => undefined)
 
-  const load = useCallback(async (silent = false, root = queryRootRef.current) => {
-    // A background poll/focus must never abort a user-visible refresh and leave
-    // the loading state owned by a request that will be discarded.
-    if (silent && visibleRequest.current !== 0) return
-    if (silent && Date.now() - lastSilentAt.current < 1_000) return
-    if (silent) lastSilentAt.current = Date.now()
-    const id = ++requestId.current
-    controllerRef.current?.abort()
-    const controller = new AbortController()
-    controllerRef.current = controller
-    if (!silent) {
-      visibleRequest.current = id
-      setLoading(true)
-    }
-    const timeout =
-      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(10_000)
-        : undefined
-    const any =
-      typeof AbortSignal === 'undefined'
-        ? undefined
-        : (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any?.bind(AbortSignal)
-    const anySignal =
-      timeout === undefined
-        ? controller.signal
-        : typeof any === 'function'
-          ? any([controller.signal, timeout])
-          : controller.signal
-    // AbortSignal.any() is newer than AbortSignal.timeout(). If only timeout()
-    // exists, do not silently lose the deadline; a hung fetch would otherwise
-    // keep visibleRequest non-zero forever and disable every later refresh.
-    const timeoutTimer =
-      timeout === undefined || typeof any !== 'function'
-        ? setTimeout(() => controller.abort(), 10_000)
-        : undefined
-    try {
-      const rootKey = root ?? ''
-      const cachedBundleEtag =
-        bundleEtagRef.current?.root === rootKey ? bundleEtagRef.current.etag : undefined
-      const result = await fetchPanel(fetch, panelPath(root), anySignal, cachedBundleEtag)
-      if (!alive.current || id !== requestId.current) return
-      if (result.notModified === true) {
-        syncFailures.current = 0
-        quietPolls.current += 1
-        nextSyncAt.current = Date.now() + (quietPolls.current >= 2 ? 60_000 : 30_000)
-        setSync({ lastSync: new Date().toISOString(), syncError: null })
-        return
-      }
-      if (result.error === null) {
-        syncFailures.current = 0
-        quietPolls.current = 0
-        nextSyncAt.current = 0
-        setSync({ lastSync: new Date().toISOString(), syncError: null })
-      } else {
-        syncFailures.current += 1
-        nextSyncAt.current = Date.now() + (syncFailures.current === 1 ? 30_000 : 60_000)
-        setSync((previous) => ({ ...previous, syncError: result.error }))
-      }
-      const payload = result.payload as PanelPayloadDto | null
-      if (payload !== null && payload.missing?.reason === 'not_registered' && root !== null) {
-        // A stale localStorage preference must not wedge the panel. Clear it and
-        // retry once without a query root; the same response's projects remain
-        // available for the selector.
-        queryRootRef.current = null
-        storeRoot(null)
-        setSelectedRoot(null)
-        await loadRef.current(false, null)
-        return
-      }
-      if (payload !== null) {
-        if (payload.etag !== undefined) bundleEtagRef.current = { root: rootKey, etag: payload.etag }
-        setSelectedRoot(payload.selection.root)
-        setRevisionTick((tick) => tick + 1)
-      }
-      setView((previous) => {
-        const next = buildView(payload, result.error)
-        // A failed refresh must not wipe a readable panel or the choose/missing
-        // view. Keep the last project list and selection on the visible path
-        // too, and surface the failure in the footer exactly like the silent
-        // path — otherwise one timeout replaces every tab with an error page.
-        if (result.error !== null && previous.projects.length > 0) {
-          return { ...previous, syncError: result.error }
-        }
-        return next
-      })
-    } finally {
-      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
-      if (!silent && visibleRequest.current === id) visibleRequest.current = 0
-      if (id === requestId.current && !silent && alive.current) {
-        setLoading(false)
-        setSwitching(false)
-      }
-    }
+  /**
+   * 0.2.20 review: every state that pointed at the old book.
+   *
+   * A project switch and the not_registered recovery used to clear different
+   * subsets, so filters, cursors and open detail panels survived into another
+   * book. Both paths call this; the section is dropped synchronously with the
+   * root change so a render cannot show A's payload under B's header.
+   */
+  const resetQueryState = useCallback((): void => {
+    setChapterQuery((previous) => ({ ...EMPTY_CHAPTER_QUERY, sort: previous.sort }))
+    setSectionSearch('')
+    setSectionCursor('')
+    setSection(null)
+    sectionEtagRef.current = null
+    sectionLoadedKeyRef.current = null
+    sectionTabRef.current = null
+    setChapterDetail(null)
+    setQualityDetail(null)
+    detailController.current?.controller.abort()
+    detailController.current = null
   }, [])
+
+  const load = useCallback(
+    async (silent = false, root = queryRootRef.current) => {
+      // A background poll/focus must never abort a user-visible refresh and leave
+      // the loading state owned by a request that will be discarded.
+      if (silent && visibleRequest.current !== 0) return
+      if (silent && Date.now() - lastSilentAt.current < 1_000) return
+      if (silent) lastSilentAt.current = Date.now()
+      const id = ++requestId.current
+      controllerRef.current?.abort()
+      const controller = new AbortController()
+      controllerRef.current = controller
+      if (!silent) {
+        visibleRequest.current = id
+        setLoading(true)
+      }
+      const timeout =
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(10_000)
+          : undefined
+      const any =
+        typeof AbortSignal === 'undefined'
+          ? undefined
+          : (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any?.bind(
+              AbortSignal,
+            )
+      const anySignal =
+        timeout === undefined
+          ? controller.signal
+          : typeof any === 'function'
+            ? any([controller.signal, timeout])
+            : controller.signal
+      // AbortSignal.any() is newer than AbortSignal.timeout(). If only timeout()
+      // exists, do not silently lose the deadline; a hung fetch would otherwise
+      // keep visibleRequest non-zero forever and disable every later refresh.
+      const timeoutTimer =
+        timeout === undefined || typeof any !== 'function'
+          ? setTimeout(() => controller.abort(), 10_000)
+          : undefined
+      try {
+        const rootKey = root ?? ''
+        // 0.2.20 review 3: a validator may only be sent for the payload it
+        // describes. A `missing`/`busy` bundle carries no etag, so the old value
+        // survived and a later refresh got 304 — the panel kept showing "项目不在了".
+        const cachedBundleEtag =
+          viewRef.current.state === 'ready' && bundleEtagRef.current?.root === rootKey
+            ? bundleEtagRef.current.etag
+            : undefined
+        const result = await fetchPanel(fetch, panelPath(root), anySignal, cachedBundleEtag)
+        if (!alive.current || id !== requestId.current) return
+        if (result.notModified === true) {
+          // A 304 is only meaningful while the view still renders the payload the
+          // validator described. Anything else (a restored project after a
+          // `missing` poll) must refetch without the validator.
+          if (viewRef.current.state !== 'ready') {
+            bundleEtagRef.current = null
+            await loadRef.current(false, root)
+            return
+          }
+          syncFailures.current = 0
+          quietPolls.current += 1
+          nextSyncAt.current = Date.now() + (quietPolls.current >= 2 ? 60_000 : 30_000)
+          setSync({ lastSync: new Date().toISOString(), syncError: null })
+          return
+        }
+        if (result.error === null) {
+          syncFailures.current = 0
+          quietPolls.current = 0
+          nextSyncAt.current = 0
+          setSync({ lastSync: new Date().toISOString(), syncError: null })
+        } else {
+          syncFailures.current += 1
+          nextSyncAt.current = Date.now() + (syncFailures.current === 1 ? 30_000 : 60_000)
+          setSync((previous) => ({ ...previous, syncError: result.error }))
+        }
+        const payload = result.payload as PanelPayloadDto | null
+        if (payload !== null && payload.missing?.reason === 'not_registered' && root !== null) {
+          // A stale localStorage preference must not wedge the panel. Clear it and
+          // retry once without a query root; the same response's projects remain
+          // available for the selector. The retry is a book change, so it resets
+          // the same query state a manual switch does.
+          resetQueryState()
+          queryRootRef.current = null
+          storeRoot(null)
+          setSelectedRoot(null)
+          await loadRef.current(false, null)
+          return
+        }
+        if (payload !== null) {
+          if (payload.etag !== undefined) bundleEtagRef.current = { root: rootKey, etag: payload.etag }
+          else bundleEtagRef.current = null
+          setSelectedRoot(payload.selection.root)
+          setRevisionTick((tick) => tick + 1)
+        } else if (result.error !== null) {
+          // 0.2.20 WP6-B: a project switch that fails must land somewhere the user
+          // can act. `selectProject` has already replaced the view with a loading
+          // skeleton, so keeping "previous" kept the skeleton forever. Restore the
+          // last ready view — and its query root, or the section/detail requests
+          // and the refresh button would keep reading B under A's header.
+          const committed = viewRef.current.state
+          const canRestore = committed === 'ready' || committed === 'loading'
+          const ready = lastReadyView.current
+          if (canRestore && ready !== null && ready.root !== null) {
+            if (ready.root !== rootKey) setSelectedRoot(ready.root)
+            queryRootRef.current = ready.root
+            storeRoot(ready.root)
+          }
+        }
+        setView((previous) => {
+          const next = buildView(payload, result.error)
+          if (next.state === 'ready') {
+            lastReadyView.current = { view: next, root: payload?.selection.root ?? null }
+          }
+          if (result.error === null) return next
+          // A failed refresh must not wipe a readable panel and must not replace a
+          // choose/missing screen with some earlier book. Only the switching
+          // skeleton (and a ready panel) may fall back to the last ready view.
+          const canRestore = previous.state === 'ready' || previous.state === 'loading'
+          const ready = lastReadyView.current
+          if (canRestore && ready !== null) return { ...ready.view, syncError: result.error }
+          if (previous.projects.length > 0) {
+            return { ...previous, syncError: result.error }
+          }
+          return next
+        })
+      } finally {
+        if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
+        if (!silent && visibleRequest.current === id) visibleRequest.current = 0
+        if (id === requestId.current && !silent && alive.current) {
+          setLoading(false)
+          setSwitching(false)
+        }
+      }
+    },
+    [resetQueryState],
+  )
   loadRef.current = load
 
   useEffect(() => {
@@ -5966,21 +6389,32 @@ export function NovelPanel(): ReactElement {
     const path = `${base}${base.includes('?') ? '&' : '?'}${params.toString()}`
     const queryKey = `${tab}|${root ?? ''}|${JSON.stringify(chapterQuery)}|${sectionSearch}|${sectionCursor}`
     const cachedEtag = sectionEtagRef.current?.key === queryKey ? sectionEtagRef.current.etag : undefined
+    // The payload this effect starts from; a 304 is only a success when the
+    // section it would settle onto actually holds data.
+    const hadPayload = section?.payload !== null && section?.payload !== undefined
     const controller = new AbortController()
+    // 0.2.20 WP6-B: a new tab must not render the previous tab's payload while
+    // it loads. Keeping it made the characters tab paint the chapter array for a
+    // few frames; switching tabs now clears the data and shows the skeleton.
+    const tabChanged = sectionTabRef.current !== tab
+    sectionTabRef.current = tab
     setSection((previous) =>
-      previous === null
+      previous === null || tabChanged
         ? { loading: true, error: null, payload: null }
         : { ...previous, loading: true, error: null },
     )
     void (async () => {
-      let result = await fetchPanel(fetch, path, controller.signal, cachedEtag)
+      // 0.2.20 review: a section request had no deadline, so a stalled socket
+      // left 「正在读取栏目…」 up forever. The detail timeout gives the same
+      // retryable message here.
+      let result = await fetchPanel(fetch, path, controller.signal, cachedEtag, DETAIL_TIMEOUT_MS)
       if (controller.signal.aborted) return
       // A validator survives a section reset: 概览 clears the payload but the
       // etag ref still holds this tab's validator, so coming back would get a
       // 304 and render 「暂无数据」 over a section that has data. Only honour a
       // 304 when the payload it describes is still the one on screen.
-      if (result.notModified === true && sectionLoadedKeyRef.current !== queryKey) {
-        result = await fetchPanel(fetch, path, controller.signal, undefined)
+      if (result.notModified === true && (sectionLoadedKeyRef.current !== queryKey || !hadPayload)) {
+        result = await fetchPanel(fetch, path, controller.signal, undefined, DETAIL_TIMEOUT_MS)
         if (controller.signal.aborted) return
       }
       if (result.notModified === true) {
@@ -5991,26 +6425,44 @@ export function NovelPanel(): ReactElement {
         )
         return
       }
-      if (result.payload?.etag !== undefined) {
-        sectionEtagRef.current = { key: queryKey, etag: result.payload.etag }
+      if (result.error === null && result.payload !== null) {
+        if (result.payload.etag !== undefined) {
+          sectionEtagRef.current = { key: queryKey, etag: result.payload.etag }
+        }
+        sectionLoadedKeyRef.current = queryKey
+        setSection({ loading: false, error: null, payload: result.payload as PanelPayloadDto })
+        return
       }
-      sectionLoadedKeyRef.current = queryKey
-      setSection({ loading: false, error: result.error, payload: result.payload as PanelPayloadDto | null })
+      // A failed refresh keeps the payload it could not replace: the table, its
+      // filter and its page stay readable under the stale banner, and the next
+      // request must not validate against an ETag that describes nothing.
+      sectionEtagRef.current = null
+      sectionLoadedKeyRef.current = null
+      setSection((previous) => ({
+        loading: false,
+        error: result.error,
+        payload: previous?.payload ?? null,
+      }))
     })()
     return () => controller.abort()
-  }, [tab, view.state, selectedRoot, chapterQuery, revisionTick, sectionSearch, sectionCursor])
+  }, [
+    tab,
+    view.state,
+    selectedRoot,
+    chapterQuery,
+    revisionTick,
+    sectionSearch,
+    sectionCursor,
+    sectionRetryTick,
+  ])
 
   const selectProject = useCallback(
     (root: string | null): void => {
+      resetQueryState()
       queryRootRef.current = root
       storeRoot(root)
       setSelectedRoot(root)
-      setChapterDetail(null)
-      setQualityDetail(null)
-      detailController.current?.abort()
       setSwitching(true)
-      setChapterQuery((previous) => ({ ...previous, cursor: '' }))
-      setSectionCursor('')
       // Do not keep A's ready data under B's selector while the request is in
       // flight. Preserve the project list so the selector stays usable.
       setView((previous) => ({
@@ -6027,7 +6479,7 @@ export function NovelPanel(): ReactElement {
       }))
       void load(false, root)
     },
-    [load],
+    [load, resetQueryState],
   )
 
   useEffect(() => {
@@ -6047,7 +6499,7 @@ export function NovelPanel(): ReactElement {
     return () => {
       alive.current = false
       controllerRef.current?.abort()
-      detailController.current?.abort()
+      detailController.current?.controller.abort()
       win.clearInterval(timer)
       win.removeEventListener('focus', refreshWhenVisible)
       doc.removeEventListener('visibilitychange', refreshWhenVisible)
@@ -6058,19 +6510,36 @@ export function NovelPanel(): ReactElement {
     section: 'chapter_detail' | 'quality_detail',
     chapter: number | null,
     setter: (value: ChapterDetailState | null) => void,
+    otherSetter: (value: ChapterDetailState | null) => void,
   ): void => {
-    detailController.current?.abort()
+    const active = detailController.current
     if (chapter === null) {
+      // Closing one panel must not abort the other panel's request.
+      if (active?.section === section) {
+        active.controller.abort()
+        detailController.current = null
+      }
       setter(null)
       return
     }
+    if (active !== null) {
+      active.controller.abort()
+      detailController.current = null
+      // The shared controller aborts whichever panel was still loading. Its
+      // promise returns on the abort without touching state, so clear that
+      // spinner here instead of leaving it up forever.
+      if (active.section !== section) otherSetter(null)
+    }
     const root = queryRootRef.current
     const controller = new AbortController()
-    detailController.current = controller
+    detailController.current = { controller, section }
     const path = `${panelPath(root)}&section=${section}&chapter=${encodeURIComponent(String(chapter))}`
     setter({ chapter, section: { loading: true, error: null, payload: null } })
-    void fetchPanel(fetch, path, controller.signal).then((result) => {
+    // 0.2.20 WP6-B: a detail request carries the whole manuscript; without a
+    // deadline the button spins forever on a slow disk.
+    void fetchPanel(fetch, path, controller.signal, undefined, DETAIL_TIMEOUT_MS).then((result) => {
       if (!alive.current || controller.signal.aborted || queryRootRef.current !== root) return
+      if (detailController.current?.controller === controller) detailController.current = null
       setter({
         chapter,
         section: {
@@ -6083,9 +6552,9 @@ export function NovelPanel(): ReactElement {
   }
 
   const openChapterDetail = (chapter: number | null): void =>
-    loadDetail('chapter_detail', chapter, setChapterDetail)
+    loadDetail('chapter_detail', chapter, setChapterDetail, setQualityDetail)
   const openQualityDetail = (chapter: number | null): void =>
-    loadDetail('quality_detail', chapter, setQualityDetail)
+    loadDetail('quality_detail', chapter, setQualityDetail, setChapterDetail)
 
   return panelElement(
     { ...view, selectedRoot, ...sync },
@@ -6116,6 +6585,8 @@ export function NovelPanel(): ReactElement {
     openQualityDetail,
     sectionCursor,
     setSectionCursor,
+    narrow,
+    () => setSectionRetryTick((tick) => tick + 1),
   )
 }
 

@@ -1,5 +1,5 @@
 import { AI_TONE_RULES } from '../codes.js'
-import { splitSentenceSpans } from '../domain/text.js'
+import { paragraphAtOffset, paragraphSpans, splitSentenceSpans } from '../domain/text.js'
 import type { AiToneBlock, AiToneEntry, Rule, RuleContext } from './types.js'
 import type { Severity, Violation } from '../types.js'
 
@@ -138,13 +138,6 @@ const isBoundaryAfter = (text: string, index: number): boolean => {
   return SENTENCE_BREAK.includes(next) || DIALOGUE_OPEN.includes(next) || DIALOGUE_CLOSE.includes(next)
 }
 
-/** Paragraph number for a character offset; paragraphs are newline-separated. */
-const paragraphAt = (text: string, index: number): number => {
-  let paragraph = 1
-  for (let cursor = 0; cursor < index; cursor += 1) if (text[cursor] === '\n') paragraph += 1
-  return paragraph
-}
-
 /**
  * Every tone hit in the text, before window escalation.
  *
@@ -155,6 +148,10 @@ export function collectToneHits(text: string, block: AiToneBlock | undefined): T
   if (block === undefined || block.entries.length === 0) return []
   const spans = quoteSpans(text)
   const sentences = sentenceSpans(text)
+  // Paragraph numbers are the same 1-based non-empty-line numbers every other
+  // rule reports. Counting `\n` instead made a two-paragraph chapter report its
+  // second paragraph as the third.
+  const paragraphs = paragraphSpans(text)
   const hits: ToneHit[] = []
 
   for (const entry of block.entries) {
@@ -196,7 +193,7 @@ export function collectToneHits(text: string, block: AiToneBlock | undefined): T
         phrase: match[0],
         inDialogue,
         severity: inDialogue ? severityInDialogue : severity,
-        paragraph: paragraphAt(text, start),
+        paragraph: paragraphAtOffset(paragraphs, start),
       })
     }
   }
@@ -287,3 +284,13 @@ export const AI_TONE_IMPLEMENTATIONS: Readonly<Record<string, Rule>> = {
   [AI_TONE_RULES.TEMPLATE]: toneRule(AI_TONE_RULES.TEMPLATE),
   [AI_TONE_RULES.JUDGMENT]: toneRule(AI_TONE_RULES.JUDGMENT),
 }
+
+/**
+ * The category codes this module actually implements.
+ *
+ * The compiler validates `ai_tone.categories[].code` against this list: a pack
+ * used to be able to declare `AI_TONE_UNKNOWN`, which compiled, produced no
+ * finding, yet still suppressed zero-tolerance occurrences through C8 because
+ * the category looked real to the coverage pass.
+ */
+export const AI_TONE_IMPLEMENTED_CODES: readonly string[] = Object.keys(AI_TONE_IMPLEMENTATIONS)

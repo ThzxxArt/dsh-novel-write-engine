@@ -24,7 +24,9 @@ describe('store extras', () => {
       await expect(store.writeText('escape/leak.txt', 'leak')).rejects.toMatchObject({
         code: 'ENGINE_PATH_ESCAPE',
       })
-      await expect(readFile(join(outside, 'leak.txt'), 'utf8')).rejects.toThrow()
+      await expect(readFile(join(outside, 'leak.txt'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      })
       await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8')
       await symlink(join(outside, 'secret.txt'), join(root, 'leak.txt'), 'file')
       await expect(store.readText('leak.txt')).rejects.toMatchObject({ code: 'ENGINE_PATH_ESCAPE' })

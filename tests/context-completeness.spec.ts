@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { briefContext, type BriefContextInput } from '../src/engine/context.js'
 import { emptyPipeline } from '../src/engine/state.js'
+import { expectCompleteContext } from './helpers.js'
 import type { ChapterRecord, ChapterSummary, ReviewDocument, CheckDocument } from '../src/types.js'
 
 const summary = (index: number): ChapterSummary => ({
@@ -179,38 +180,77 @@ describe('0.2.17 context completeness', () => {
     input.locks.characters = { 角色1: input.locks.characters['角色1']! }
     input.locks.locations = { 地点1: input.locks.locations['地点1']! }
     const context = briefContext(input)
-    const meta = context.context_meta as { used: number; complete: boolean; strategy: string }
     // No budget, no truncation report: the document is what it is.
-    expect(meta.complete).toBe(true)
-    expect(meta.strategy).toBe('complete')
-    expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
+    expectCompleteContext(context, 'small project P6')
+    expect((context.timeline as unknown[]).length).toBe(input.timeline.items.length)
     expect(context.text).toBe(input.text)
-    expect(context.plan).toEqual(input.plan)
+    // P6 reads the summary it archives with; the P2 card belongs to P3–P5.
+    expect(context.summary).toEqual(input.plan?.summary)
   })
 
-  it('delivers every ledger row of a 100-chapter P6 brief, however large', () => {
+  it('windows a 100-chapter P6 brief to the host budget and reports what it kept', () => {
     const input = largeInput()
-    const context = briefContext(input)
-    const meta = context.context_meta as { used: number; complete: boolean }
-    expect(meta.complete).toBe(true)
+    input.budget = 6000
+    const context = briefContext(input) as Record<string, unknown> & {
+      context_meta: {
+        version: number
+        complete: boolean
+        strategy: string
+        used: number
+        omitted: Record<string, { total: number; shown: number }>
+        fetch: Array<{ tool: string; args: Record<string, unknown> }>
+      }
+    }
+    // 0.2.20 reverses the 0.2.17 decision this test used to encode: "deliver
+    // every ledger row however large" is exactly what the host prunes. The
+    // contract is now windowed + honest, not complete-or-bust.
+    expect(Array.from(JSON.stringify(context)).length).toBeLessThanOrEqual(6000)
+    const meta = context.context_meta
+    expect(meta.version).toBe(2)
+    expect(meta.complete).toBe(false)
+    expect(meta.strategy).toBe('windowed')
     expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
-    // Every row survives; nothing is trimmed to fit a target.
-    expect((context.characters as unknown[]).length).toBe(input.characters.characters.length)
-    const openForeshadows = input.foreshadows.items.filter((item) => item.status !== 'resolved')
-    expect((context.foreshadows as { items: unknown[] }).items).toHaveLength(openForeshadows.length)
+    // Every omission is internally consistent and points somewhere real.
+    for (const [block, row] of Object.entries(meta.omitted)) {
+      expect(row.shown, `${block} shown is a row count`).toBeGreaterThanOrEqual(0)
+      expect(row.shown, `${block} cannot show more rows than it has`).toBeLessThanOrEqual(row.total)
+    }
+    expect(meta.omitted.characters?.total).toBe(100)
+    expect(meta.omitted.timeline?.total).toBe(100)
+    expect(meta.fetch.length).toBe(Object.keys(meta.omitted).length)
+    for (const entry of meta.fetch) {
+      expect(entry.tool).toBe('novel_state')
+      expect(typeof entry.args.kind).toBe('string')
+    }
+    // Required blocks survive whole, including the manuscript and the two
+    // documents P6 judges. 0.2.20 gives P6 the summary it will archive with,
+    // not the P2 card or the book roadmap (see context.ts READS_ROADMAP).
+    for (const key of [
+      'project',
+      'chapter',
+      'stage',
+      'summary',
+      'check',
+      'review',
+      'active_cast',
+      'score_history',
+      'outline_card',
+    ]) {
+      expect(context[key], `required block ${key}`).toBeDefined()
+    }
     expect(context.text).toBe(input.text)
-    expect(context.plan).toEqual(input.plan)
-    expect(context.review).toEqual(review)
-    expect(context.check).toEqual(check)
+    // The two documents are compacted above the threshold, so the assertion is
+    // that P6 still gets their verdicts — the full bodies are one call away.
+    expect((context.review as { total: number }).total).toBe(review.total)
+    expect((context.check as { content_hash: string }).content_hash).toBe(check.content_hash)
   })
 
   it('returns the same complete pack for every stage', () => {
     for (const stage of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P8']) {
       const context = briefContext({ ...largeInput(), stage })
-      const meta = context.context_meta as { stage: string; complete: boolean; used: number }
+      const meta = context.context_meta as { stage: string }
       expect(meta.stage).toBe(stage)
-      expect(meta.complete).toBe(true)
-      expect(meta.used).toBe(Buffer.byteLength(JSON.stringify(context), 'utf8'))
+      expectCompleteContext(context, `${stage} context`)
     }
   })
 
@@ -221,7 +261,7 @@ describe('0.2.17 context completeness', () => {
     // The old design reported an over-budget flag and kept the text; the point is
     // that nothing else was dropped to make room for it either.
     expect(context.text).toBe(input.text)
-    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
+    expectCompleteContext(context, 'overlong manuscript')
   })
 
   it('is deterministic for equal input', () => {
@@ -334,7 +374,7 @@ describe('0.2.17 context completeness', () => {
         ],
       },
     })
-    expect((p6.context_meta as { complete: boolean }).complete).toBe(true)
+    expectCompleteContext(p6, 'P6 with plan cast')
     // The plan cast plus the characters the summary says appeared are all active.
     expect((p6.active_cast as Array<{ name: string }>).map((row) => row.name)).toEqual([
       '角色9',
@@ -410,7 +450,7 @@ describe('0.2.17 context completeness', () => {
     // The stage emits a five-row score history; that is the stage's shape, not
     // a budget the trimmer imposed afterwards.
     expect((context.score_history as unknown[]).length).toBeLessThanOrEqual(5)
-    expect((context.context_meta as { complete: boolean }).complete).toBe(true)
+    expectCompleteContext(context, 'P6 with 300-chapter history')
   })
 
   it('does not activate a shorter ledger name when only a longer name is mentioned', () => {

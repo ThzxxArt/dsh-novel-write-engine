@@ -169,14 +169,15 @@ describe('0.2.14 tool branches for new optional parameters', () => {
     expect(calls[2]!.args).toMatchObject({ amend_note: '修正段号' })
   })
 
-  it('passes amend patch/allow_delete, doctor switches, check expiry and briefs view', async () => {
+  it('passes amend patch/deleted, doctor switches, check expiry and briefs view', async () => {
     const { engine, calls } = engineStub()
     const tools = toolMap(engine)
     await tools.get('novel_amend')!.execute(
       {
         path: 'state/world.yaml',
         patch: [{ op: 'replace', path: 'rules', value: [] }],
-        allow_delete: true,
+        // 0.2.20 WP3: the blanket flag is gone; deletions are named.
+        deleted: ['rules.name:旧规'],
         reason: 'patch',
       },
       {} as never,
@@ -193,7 +194,7 @@ describe('0.2.14 tool branches for new optional parameters', () => {
     await tools.get('novel_state')!.execute({ kind: 'briefs', view: 'current' }, {} as never)
     await tools.get('novel_state')!.execute({ kind: 'briefs', view: 'all' }, {} as never)
     const byMethod = (method: string) => calls.filter((call) => call.method === method)
-    expect(byMethod('amend')[0]!.args).toMatchObject({ allow_delete: true })
+    expect(byMethod('amend')[0]!.args).toMatchObject({ deleted: ['rules.name:旧规'] })
     expect(byMethod('amend')[0]!.args).not.toHaveProperty('content')
     expect(byMethod('amend')[1]!.args).not.toHaveProperty('patch')
     expect(byMethod('doctor').map((call) => call.args)).toEqual([{ baseline: true }, { reset: true }, {}])
@@ -468,7 +469,7 @@ describe('0.2.14 restore guards and baseline reset', () => {
           chapter: 1,
           root,
         }),
-      ).rejects.toThrow()
+      ).rejects.toMatchObject({ code: 'ENGINE_SCHEMA_INVALID' })
       await expect(
         engine.restoreBackup({
           txid,
@@ -1060,10 +1061,11 @@ describe('0.2.14 restore and review stage guards', () => {
               cast: [],
               target_words: [8, 400],
               notes: '',
-              status: 'planned',
-              archived_at: null,
-              word_count: null,
-              score: null,
+              // 0.2.20 WP2: only an archived card excuses the monotony block.
+              status: 'archived',
+              archived_at: '2026-01-02T00:00:00.000Z',
+              word_count: 2000,
+              score: 130,
             },
           ],
         },

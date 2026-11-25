@@ -1,3 +1,125 @@
+## 0.2.20
+
+0.2.20 修的是「引擎说的和引擎做的不是一回事」：任务书超过宿主 8,192 码点会被从中间剪掉、读模型在 600 章规模上慢十几倍、门禁把「没人判」写成 `pass`、真实稿的合法写法被当成缺陷。仍是 28 工具、13 门控、15 维、150 分制、8 个风格包、8 个台账；`SCHEMA_VERSION` 保持 1。
+
+### Added
+
+- **`novel.yaml` 新增可选 `quotes: ascii | curly`（默认 `ascii`）**：对白引号风格由项目声明。`curly` 下弯引号与「」合法、半角 `"` 才是 `ILLEGAL_QUOTE`；两套混用仍然拦。`QUOTE_UNBALANCED` 在 `curly` 下按**跨段状态机**判（段首续引号不算新开，章末未闭合才报）。`novel_init` 可传；`novel_amend` 可在归档第一章前改一次。**引擎不会自动改写正文里的引号。**
+- **项目字段 `strict_cross`（默认 `false`）**：设为 `true` 时 `RESOURCE_MISMATCH` 与 `LOCKED_DETAIL_DRIFT` 从 advisory 升为 blocker。`DUPLICATE_PARAGRAPH` 与 `TIME_REGRESSION` 无论开关都是 blocker。
+- **`novel_check` 新增可选 `self_check_waivers: [{id, reason}]`**：自查行确实无法判定时显式豁免，理由写入 check 文档（`self_check.waivers`），PG-12 不再因此拦。机器项不可豁免。
+- **项目字段 `self_check_required`（默认 `true`）**：唯一关闭「缺答即拒归档」的开关。
+- **check 文档 `self_check.summary.unanswered`** 与每行的 `blocking` 标记：区分「本章不适用」（无对白、空章）与「没人回答」。
+- **章节账本 `final_check_partial`**：`final_check` 记 `pass` 要求 content + integrity 双域都过；只跑一域时记 `fail` 并打此标记。
+- **面板快照 `checkStale`**：check 的 `content_hash` 与当前正文不符时置位，清单与 advisory 一并置空，不再展示过期结论。
+- **`novel_state {kind:'history', with_chars:true}`**：`chars` 改为显式请求。
+
+### Changed
+
+- **任务书窗口化**：七份任务书在 120 人物 / 4,800 时间线夹具与 600 章夹具上都 ≤ 8,192 码点（此前 P6 281KB @58 章、1.03MB @600 章）。`context_meta` 升 version 2：`complete` 是真布尔、`strategy: complete|windowed`、`budget{unit,limit,used,exempt,overflow}`、`omitted`、`compacted`、`fetch`（`novel_state` 或 `novel_export`）。**正文从「豁免」改为「最后裁、按段裁」**——宿主会从中间剪断且没有任何回执，按段裁 + 指针至少让读者知道自己缺什么。
+- **按阶段装填**：`book_plan` / `scene_distribution` / `previous_ending` 只给 P1–P3 与 P5；P6/P8 不再带 `plan`（读的是要归档的 `summary`）；P4/P6/P8 不带计数口径字段。review / check / machine 超阈值时换成「码 + 段号 + 摘录」的定位器，完整文档用 `novel_state` 取；`self_check` 只留 id 与短标题，且只发 P3/P4。
+- **规则阈值（真实稿误报治理）**：`PARALLEL_RUN` 不再把同主语/同人名的连续短句当排比（两字动词骨架仍报）；`ENUMERATION` 从 6 项提高到 7 项才报；`PUNCT_STANDARD` 的「中文字之间的半角空格」降为 advisory（半角逗号/括号仍是 blocker）；`CHAPTER_END_OPEN` 认「（本章完）」「本章完」与弯引号收尾；`LONG_PARAGRAPH` 改按 **CJK 字数（标点不计）** 计，默认值 90 → 150，`WordMetrics.paragraph_max_words` 同口径。
+- **`TIME_REGRESSION` 升为 blocker**：故事时间倒退不再只是提示。迁移方式：用 `novel_amend` 修 `state/timeline.yaml`，或回 `novel_rollback {toStage:'P3'}` 重写本章时间；**没有关闭开关**。
+- **自查缺答不再算 pass**：P6 `novel_check` 不回答 8 项且不豁免时，check 记 `na` + `blocking`，PG-12 拒绝归档。迁移方式：补 `self_check`，或用 `self_check_waivers` 说明理由，或项目级 `self_check_required: false`。
+- **PG-08 在 `submitReview`（P4）也开始跑**：`fixed` 声明在被作出时就被判，不再等到 P6 才打回。证据必须逐字出现在当前正文，**且不能是上一版已有的句子**（同一段落被改写过的除外）。
+- **PG-06 的卡片豁免只对已归档卡生效**：计划卡不再豁免「连续同类型」，只给出 `PG-06_CARD_WINS` 警告说明卡片钉住了类型。
+- **读模型**：`FsStore.readDoc` 按 `(size, mtime)` 缓存解析结果（命中返回 `structuredClone`），`readJournal` 同样缓存；`effortProjection` / `report` / `panel` 的 journal 扫描从「每章一次」改成一次遍历建 Map；review attempts 按 journal 身份记忆。600 章 / 24,001 行 / 8.1MB journal 上的 p95：`getStatus` 1,774→72ms、`report` 1,689→94ms、`panelSection` 843→62ms、`auditHistory(50)` 769→31ms。
+
+### Fixed
+
+- **任务书被宿主静默剪断**：0.2.17 起 `context_meta.complete` 恒为 `true`，而宿主超过 8,192 码点只保留前 4,096 + 后 1,024。现在七阶段全部装得下，装不下时如实报 `overflow` 并给出取回路径。
+- **`PARALLEL_RUN` / `ENUMERATION` / `PUNCT_STANDARD` / `CHAPTER_END_OPEN` 误伤真实稿**：50 段去标识化反例集在 0.2.19 上 28 条误报，现在 0。
+- **`novel_review {amend_issues}` 丢掉分数门**：修正后与 `submitReview`/`rollback` 共用同一个 blocking 构造，不会出现「状态说没拦、归档却拒绝」。
+- **面板自查清单展示过期 check**：正文改过之后仍显示上一版结论。
+
+### 发布准备（0.2.20 发布前复审）
+
+- **版本树统一到 0.2.20**：`package.json`、`PANEL_VERSION`、`DESIGN.md`、`README.md`、`CHANGELOG.md` 此前只有 CHANGELOG 是 0.2.20，其余仍是 0.2.19。现在五处一致，并由 `check:docs` 的四条 `version/*` 断言固定（`version/panel`、`version/design`、`version/changelog`、`version/readme`）。
+- **`novel_status.project` 给出三个门控开关**：`quotes`（缺省按 `ascii` 显示）、`strict_cross`、`self_check_required`，以及绑定文风包时的 `style`。此前它们只能靠打开 `novel.yaml` 才能看到，作者做完升级迁移无法确认是否生效。
+- **README 的升级须知按 0.2.20 重写**：五件必须知道的事（弯引号书声明 `quotes`、自查缺答不再算 pass、`allow_delete` 移除、`TIME_REGRESSION` 升 blocker、任务书形状变化）与三条行为变化；`quotes` 的迁移示例用 `add`（0.2.19 的书没有这个键，`replace` 会被拒）。
+- **README 不再写死会变的数字**：覆盖率、包体大小、`check:hygiene` 文件数此前写死且已全部过期，现在只留能被门禁验证的测试文件数，其余指向 `docs/0.2.20-acceptance.md` 的门禁表。
+- **README 的 7 个 `docs/` 相对链接改成 GitHub 绝对地址**：`files` 不含 `docs/`，npm 页面上相对链接是 404。
+- **`tests/preset.spec.ts` 不再钉死版本字面量**：改为「名字对 + 合法 semver + engines 不变」，发版不再需要改与预设无关的测试。
+- **测试与证据**：新增 `tests/0224-release.spec.ts`（迁移路径：`quotes`/`self_check_required` 可改、归档后不可改、`status.project` 可见）；产出 `docs/evidence/0.2.20/`（13 张截图）；新增 `docs/0.2.20-release-review.md` 记录本轮全部发现、红灯证据与门禁实测。
+
+### Fixed（0.2.20 第六轮复审）
+
+- **详情抽屉读失败后没有重试**：章节详情与质量详情的失败态只有一行文字，只能关掉重开。两个抽屉现在各带一个「重试」按钮，复用打开抽屉的同一个回调（传章号重新拉取）。
+- **核实**：P5/P6 的 brief digest 覆盖 `summary` 一事**已由加载层保证**（`loadAt` 把 `pipeline.draft.summary` 补进内存里的 plan，digest 依赖项本就签 `plan.summary`）。本轮先按 brief 层再补一次实现，红灯测试未变红，遂删掉重复逻辑，只留回归测试。
+
+### Fixed（0.2.20 第五轮复审）
+
+- **面板 `worldbook` 的卷列表与大纲漂移不受预览预算约束**：50 卷可到 76 KB 而 `truncated` 仍是 `false`，400 行的 drift 更大。现在卷列表留 12 条、drift 留 10 条，两者都进 `counts`（`{total,shown}`）并参与 `truncated`。
+- **概览「全书归档进度」的分子是章卡数**，图例却写「N% 已归档」，与 `novel_status.progress.percent`（按章节记录）不是一个数。改为归档章数。
+- **章节详情的字数按码点算**，与旁边章节表的词数口径不同；改用引擎的 `countWordMetrics`。
+- **`fetchPanel` 把 200 响应里的 `{error}` 信封当数据**：面板清空或读 `payload.selection.root` 抛错。现在识别为失败并显示原文；abort 也不再显示英文「This operation was aborted」。
+- **`useIsNarrow` 缺 `addListener` 回退**：旧 Safari/WebView 上没有监听器，面板宽度永不更新。
+- **`check:visual` 的文风卡选择器永远命中外层容器**：九行断言与浮点扫描实际在读整页。面板新增 `nwe-style-card` 钩子，门禁改为精确选择器并断言节点长度。
+- **复核确认**：`amend_issues` 保留 check 阻断（第三轮）、`done` 退回后可 `reopen`（第三轮）两条已修，旧清单未更新。
+
+### Fixed（0.2.20 第四轮复审）
+
+- **`novel_report` 的大纲漂移列表不受预算约束**：400 章、卡名被改过的书返回 34 KB 并带 `window.complete: true`。收缩步骤补上 `outline.drift`（保留前 5 条，计数不裁）。
+- **P5 任务书把评审带了两遍**：`issues` 一直是 `review.issues` 的逐字节副本，30 条 issue 的合法评审到 21,528 码点，`complete: true` 与 `overflow: true` 同时出现。副本删除；`review` 进入压缩集，保留**每一条** issue 的 `problem`/`fix`（各截 96 码点）与全部 blocker id，实在装不下才退成「阻断优先 + 前 10 条」。压缩后的 `issues` 仍是数组、键名不变，计数移到 `issue_counts`。
+- **损坏台账的修复原文上限是 64 KiB 字节**：宿主只保留 8,192 码点，且按字节切会切断多字节字符。改为 5,600 码点、按码点截断，回执加 `raw_total` / `raw_path`。
+- **`novel_archive` 会写出不在任何卷内的 archived card**：章号超出最后一卷时，`markOutlineArchived` 现在扩展该卷的 `end_chapter`（记 `OUTLINE_VOLUME_EXTENDED` 警告）；落在两卷之间的空档直接拒绝归档并说明改法。此前这种情况让之后每次 `novel_outline` 写入都被自己的不变量拦死。
+- **`novel_restore` 恢复正文后用旧正文推导 blocking**：`pipeline.blocking` 现在按恢复后的文本重算，`novel_status` 不再展示与磁盘不符的 check 阻断。
+- **锁被回收后仍会提交**：新增 `FileLock.assertOwned()` 与错误码 `ENGINE_LOCK_LOST`，事务在第一次 rename 前校验自己仍是锁的持有者。此前 `lockMaxAgeMs` 抢走一个慢事务的锁之后，两个 writer 都会 rename。
+- **回滚删除新建文件后不 fsync 目录**：掉电窗口里会出现「日志说已回滚、文件还在」的台账。
+- **`novel_diff` 原样回显 before/after**：整章 diff 可到 40 KB，宿主剪成半截 JSON。现在 `before`/`after` 各 1,000 码点、`hunks` 60 条，`added`/`removed` 仍是全量计数，被截时给 `truncated` 回执。
+- **`novel_amend.patch[].value` 在宿主侧变成无类型无说明的参数**：`type: 'json'` 编译后是 `{}`，模型拿到的替换值参数没有任何说明。补上 description（schema 仍是开放的）。
+- **`check:docs` 的两条恒真断言**：台账数量改成从 `STATE_FILES` 派生并逐本要求 `docs/states.md` 描述文件（`docs/states.md` 已补上八本台账的文件名）；自查 basis 从「全文出现」改成「这一行出现」。
+- **三个错误码不在任何文档里**：`docs/tools.md` 补记 `ENGINE_JOURNAL_MISSING` / `ENGINE_TXN_IN_PROGRESS` / `ENGINE_CONFIG_INVALID` / `ENGINE_LOCK_LOST`。
+
+### Fixed（0.2.20 第三轮复审）
+
+- **工具结果按缩进 JSON 度量、按紧凑 JSON 之外的字节交付**：`jsonOutput` 用 2 空格缩进渲染，而每个预算都按 `JSON.stringify` 的紧凑结果算，实测 7,200 码点的页到宿主手里是 10,086——引擎证明「装得下」的结果仍被剪断。现在渲染紧凑 JSON，与预算同源。
+- **P1 任务书在 65 章真实书上一条伏笔都装不下**：公平分配把 290 码点分给伏笔块，而最近的伏笔行裁到 80 字/条后仍要 330，块直接归零，同时全文只用了 4,354 / 8,192。现在严格裁剪不下的行再做一次「最小形态」（24 字/条、列表留 1）裁剪，并在公平分配之后把剩余预算还给仍被截断的块。真实书 P1 恢复 `open_foreshadows: 1/97` 并带 `clipped` 收据。
+- **`novel_state {kind:'outline'|'worldbook'}` 完全没有预算**：600 张章卡的大纲 344KB、2,000 条设定可到 74KB，直接整份返回。现在这两类文档也收缩并回执 `truncated` / `omitted{key:{total,shown}}` / `hint`。
+- **`novel_status` 的归档预检用另一套 gate 参数**：`archivePreflight` 自建 `{rulepack,minScore}`，curly 书被判 `PG-04 ILLEGAL_QUOTE`、`self_check_required:false` 的书被判 `PG-12`，而直接归档却能成功。预检与写路径现在共用 `gateOptions(snapshot)`。
+- **`novel_rollback` 让 PG-08 把已修 blocker 判成「上一版就有」**：rollback 把当前正文复制进 `history/chapters`，`previousDraftTextFor` 取到这份同字节副本，之后任何 fixed 证据都不算新。基线现在跳过与当前正文相同的版本。
+- **外部编辑后没有任何修复入口**：journal hash 闸门拦掉所有写，而 hint 让用户去 restore——restore 自己被同一闸门拒。`novel_restore` 现在把要回写的路径（全量恢复用 `'*'` 哨兵）交给闸门；`novel_amend` 允许重写它显式命名的那个文档。不相干的写仍然 `ENGINE_TXN_ABORTED`。
+- **`novel_amend` 的删除守卫对 map 形台账失效**：`state/locks.yaml` 可以在没有 `deleted` 的情况下整段清空，而 lock 是 `LOCKED_DETAIL_DRIFT` 的 baseline。map 形 section 现在也逐行比对。
+- **`novel_state` 的 `issues`/summary 变更不改变 P5/P6 任务书 digest**：原地 amend 台账或仅补 summary 后旧收据仍算 current。P3/P4/P5/P6/P8 的依赖补上 `summary`，P6 补上实际渲染的台账。
+- **`novel_reopen` 在「下一章已起草再 rollback 到 P1」时永久拒绝**：`idle`/`P2` 现在算空章（草稿留在磁盘上会带 `REOPEN_DRAFT_LEFT` 警告）。上一轮改成 `stage==='done'` 后，这条合法序列成了死路。
+- **锁：`stat` 失败被当成「锁没了」**：悬空 symlink / ELOOP 会让 `acquire` 在 deadline 之前无限忙等并永久占住项目互斥锁；现在只有 lstat 也失败才算消失，其余按 `ENGINE_IO_*` 立刻抛。
+- **`release()` 先删 nonce 再 unlink**：并发 acquirer 会在这段 await 里把活锁判成遗留并抢走，随后被我们的 rm 删掉。nonce 现在在 `finally` 里删。
+- **journal 解析缓存只按 (size, mtime)**：`cp -p` / `rsync -a` 恢复的等长 journal 会永远读到旧解析。键补 ctime/ino 与 5s TTL。
+- **`reconcileJournal` 对「目标被换成目录」抛裸 EISDIR**：所有写与 `novel_audit` 变成非引擎错误；不可读的受跟踪路径现在记成 mismatch。
+- **`pruneBackups` 在 mtime 相同时按目录名排序**，可能删掉刚提交事务的备份（reopen 因此永久失败）。排序主键改 manifest `at`。
+- **`ascii` 引号按段算奇偶**：跨段续引（GB/T 15834 合法写法）被 `QUOTE_UNBALANCED` 拦。改为章节级状态机。
+- **`line_start` 词条无视 `excludeRight`**：「话说得漂亮」「话说清楚」被判元叙述 blocker。
+- **`好像` 不是比喻标记**：`METAPHOR_STACK` / 风格比喻密度对它永久漏报；同时把右侧窗口收到同一分句，避免把下一分句的 `墙` 当成喻体。
+- **同一 span 两个零容忍 blocker**（`显而易见` + `显而易见地` 等嵌套词条）：长词条独占 span。
+- **`【Day 3 · …】` 系统面板被判出戏**：`SYSTEM_LABEL` 现在豁免整段 `【】` 面板（与 S5 一致）。
+- **`3～5 天` 被判特殊符号**：数值区间豁免。
+- **`opening_repeat.exclude` 的两字项是死配置**：运行时只比首字；现在按 opener 前缀匹配。
+- **`ENUMERATION` 一章只报第一处序数排比**：`reported` 是章级标志且从不重置；现在每个 run 报一次。
+- **`CONCLUSION_FIRST` 把「觉得…所以…」判成结论前置**：`causals` 收窄为后置理由词（因为/由于/只因）。
+- **`STYLE_PARAGRAPH_CHARS` 的守卫混用单位**（字符上限比字数上限）：改为「全局 blocker 已经拦下就让位」。
+- **`TIME_REGRESSION` 只认阿拉伯数字**：`第十日` / `第三日` 现在也能解析（`story_time` 从不校验格式，等于一条 blocker 规则可被写法关掉）。
+- **面板 bundle 的 etag 活过 `missing`/`busy`**：恢复项目后刷新永远 304，面板停在「项目不在了」。无 etag 的 payload 现在清空校验值，且只有 ready 视图才发 `if-none-match`。
+
+### Fixed（0.2.20 复审轮）
+
+- **`quotes` / `strict_cross` / `self_check_required` 不在项目 schema 里**：`novel_init {quotes:'curly'}` 会写出引擎自己读不回来的 `novel.yaml`，之后所有写都被 `PROJECT_UNREADABLE` 拦死。三个字段现在都进 schema，`novel_init` 与 `novel_amend` 都能设置。**这是本轮唯一的 P0。**
+- **窗口化回执不诚实**：行内字段被截到 80 字、嵌套列表只留 2 条时不再谎报 `complete:true`；`omitted` 新增 `clipped` 计数，`complete` 转 false 并给 `fetch`。行装得下就整行给（一章五个事件不会再变成两个）。
+- **P4 任务书超上限**：必填块（活跃人物卡）现在也能被按行窗口化并写收据；P4 的 machine 块改为「计数 + 字数指标」形态；`BRIEF_DIGEST_PLACEHOLDER` 改为真实 digest 长度（此前少算 96 码点）。8 张 400 字人物卡的项目上 P4 从 11.4KB 降到 ≤8,192。
+- **两阶段 `novel_brief` 超上限**：合并结果装不下时仍返回全部阶段（调用方要的），但附 `BRIEF_BATCH_OVERSIZE` 警告，提示逐份调用取回的 digest 与本批相同。（0.2.20 复审更正：原条目误写为「只返回第一个 + `BRIEF_BATCH_SPLIT`」，该警告码从未实现。）
+- **`novel_state` / `novel_report` / `novel_audit` 被宿主静默剪断**：真实 58 章书上分别到 19.8KB / 15.6KB / 16.3KB。分页类读模型按成形后载荷自适应收页并标 `reduced`；`report` 新增 `window:{complete,omitted,fetch}`；`auditHistory` 默认页改为头部（cursor 可向后走完全部），新增 `latest:true`，超限给 `JOURNAL_PAGE_PARTIAL` 警告。
+- **PG-04 不传 `quotes`**：`quotes:'curly'` 的书在 P3 被 `ILLEGAL_QUOTE` 拦死（P6 与归档都传了真值，只有 PG-04 用默认 ascii）。
+- **PG-10 不传 `strict_cross`**：`strict_cross:true` 下 `RESOURCE_MISMATCH` / `LOCKED_DETAIL_DRIFT` 在 P6 是 blocker，在 PG-10 却仍是 advisory。
+- **字节不变的修订能关掉 blocker**：首次修订没有历史基线，PG-08 的「这句话是不是新的」形同虚设。修订现在以被替换的正文为基线；`amend_issues` 把 blocker 标 `fixed` 还要求正文真的变过；首次 review 也不能「生而 fixed」。
+- **`novel_restore` 可删掉已归档章**：恢复 `state/chapters.yaml` 现在要求每个已归档行的 `content_hash`/`archive_digest` 原样保留。
+- **归档后的 P1 任务书让 `novel_reopen` 永久失败**：`state/briefs.yaml`（追加式收据）移出「归档后变更」检查与 reopen 回滚集——这正是 `novel_status.next` 自己推荐过的下一步。
+- **释放墓碑能抢走活锁**：`.dead` 现在必须 pid/startedAt/nonce 全等才被采信，`acquire` 成功即清墓碑。
+- **补偿失败仍写 `aborted`**：事务补偿不完整时保留 `pending`，下一次写判 `partial` 并拒绝，不再在半恢复的项目上继续。
+- **`novel_amend` 路径可污染 `Object.prototype`**：`__proto__` / `constructor` / `prototype` 段一律拒绝，遍历改用 `Object.hasOwn`。
+- **SC-CONCRETE 不可答 pass、未回答的纯模型行不阻塞**：`pass` 冲突只对 `hybrid` 行生效；纯 `model` 行未回答 = `na` + blocking。
+- **面板 600–760px 章节表一行不渲染**：`NARROW_QUERY` 与 CSS 断点统一到 760px，首帧读 `matchMedia`。
+- **面板其余 11 项**：切换失败后仍向失败项目发请求、304 毒化失败页、失败刷新丢 payload 使回退横幅不可达、栏目无超时、两个详情面板互相取消后永久 spinner、`not_registered` 不重置查询状态、过滤器跨项目残留、页签计数是当前页、`FoldBlock` 不惰性、推进次数不渲染、页签简介与表头计数不一致。
+- **存储/规则层 16 项**：`detail.anchors` 注入、`readDoc` 缓存只按 (size,mtime)、`normalizeLegacyCheck` fail-open、`pruneBackups` 静默失败、卷改名误报；AI-tone 段号、顿号阈值、S5 豁免、`他说：` 误报、退化 frame、分隔符双报、C8 覆盖数掩盖零容忍 blocker、未知 `AI_TONE_*` 码、curly 下未闭合半角引号、`max_stacks` 形同虚设。
+- 详细清单、复现证据与**未修复项**见 `docs/0.2.20-review.md`。
+
 ## 0.2.19
 
 0.2.19 把「投稿前自查表」那 13 项从**编辑脑子里的经验**变成引擎里的**可核查对象**：各有稳定 id、判定来源与证据段落；同时把 `DESIGN.md` 写了很久、代码里一行没有的「机检度」补上——格式硬性 15 分从自评改成引擎给分。

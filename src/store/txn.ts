@@ -29,6 +29,12 @@ export interface TransactionInput {
   backup: boolean
   /** How many backup directories to keep after a successful commit. */
   backupRetention?: number
+  /**
+   * Post-commit maintenance failures (DESIGN §6.7: GC failures are logged, not
+   * fatal). The commit result stays intact; this only surfaces the message so a
+   * caller that has a log can record it. Omitted means "ignore".
+   */
+  onWarning?: (message: string) => void
   /** Optional abort signal; checked before any target file is touched. */
   signal?: AbortSignal
   /** Human reason for a maintenance transaction; persisted in the journal. */
@@ -56,8 +62,17 @@ async function restoreTargets(
         problems.push(`${path}: no pre-commit image was captured`)
         continue
       }
-      if (previous === null) await fs.rm(store.path(path), { force: true })
-      else await store.writeBytes(path, previous)
+      if (previous === null) {
+        // 0.2.20 review 4: `writeBytes` fsyncs its directory, the deletion path
+        // did not. A power cut in that window leaves a file whose journal row
+        // says it never existed — the project then reports a mismatch for a
+        // transaction that was honestly rolled back.
+        const absolute = store.path(path)
+        await fs.rm(absolute, { force: true })
+        await syncDirectory(dirname(absolute))
+      } else {
+        await store.writeBytes(path, previous)
+      }
     } catch (error) {
       problems.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -308,7 +323,16 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
     journaledCommitted = true
 
     if (input.backup) {
-      await pruneBackups(store, input.backupRetention ?? 5).catch(() => undefined)
+      // DESIGN §6.7: retention runs after the archive and its failure must not
+      // change the archive result — but silently swallowing it left a project
+      // that kept every backup forever with nobody knowing. Many callers have
+      // no logger, so the default is an explicit no-op.
+      const warn = input.onWarning ?? ((): void => undefined)
+      await pruneBackups(store, input.backupRetention ?? 5).catch((error: unknown) => {
+        warn(
+          `backup retention failed after commit: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
     }
     await fs.rm(store.path(staging), { recursive: true, force: true }).catch(() => undefined)
   } catch (error) {
@@ -328,13 +352,20 @@ export async function runTransaction(store: FsStore, input: TransactionInput): P
       // is not a recovery source; remove our own partial copy.
       await store.removeTree(backupDir(input.txid)).catch(() => undefined)
     }
-    if (!journaledCommitted && !rootDisappeared) {
+    if (!journaledCommitted && !rootDisappeared && rollbackProblem === null) {
       // 0.2.17: when files had already been renamed and the compensation put
       // them back, the journal may hold a partial `committed` row for this
       // txid. Recording `aborted` left that row authoritative and every later
       // write failed TXN_ABORTED forever. `rolled_back` is the terminal row
       // that says "the files are at the pre-image again".
-      const status = renamed.length > 0 && rollbackProblem === null ? 'rolled_back' : 'aborted'
+      //
+      // 0.2.20 review: when compensation itself failed, there is no such
+      // statement to make. A terminal row here claimed the targets were back at
+      // the pre-image while one of them was not, so `inspectPending` returned
+      // `none` and the next write went ahead over a half-restored project. The
+      // pending row is written before the first rename and must stay the last
+      // word: the next write then classifies it as `partial` and refuses.
+      const status = renamed.length > 0 ? 'rolled_back' : 'aborted'
       await appendJournal(
         store,
         {

@@ -1,3 +1,4 @@
+import { matchEvidence } from '../domain/text.js'
 import { ERROR_CODES, EngineInputError } from '../types.js'
 
 /** The three `summary.new_elements` groups that may carry anchors. */
@@ -128,7 +129,11 @@ export interface EntityMatch {
  */
 export function matchEntityText(text: string, name: string, anchors: readonly string[] = []): EntityMatch {
   const attempted = anchors.length > 0 ? [...anchors] : [name]
-  const matched = attempted.find((anchor) => anchor !== '' && text.includes(anchor)) ?? null
+  // 0.2.20 WP3: the same matcher the reading proofs use. A raw `includes` says
+  // yes to an anchor that is a substring of a longer word, and no to a quote
+  // whose punctuation the manuscript renders differently — PG-09 and PG-05 then
+  // disagree about what "appears in the text" means.
+  const matched = attempted.find((anchor) => anchor !== '' && matchEvidence(text, anchor).found) ?? null
   return { ok: matched !== null, matched, attempted, usedFallback: anchors.length === 0 }
 }
 

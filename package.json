@@ -1,6 +1,6 @@
 {
   "name": "dsh-novel-write-engine",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "description": "Novel writing engine for DeepSeek Harness: state machine, gates, rulepacks and ledgers moved from prompts into code.",
   "keywords": [
     "dsh-plugin",
@@ -92,6 +92,8 @@
     "check:host": "node scripts/check-host.mjs",
     "check:crash": "node scripts/check-crash.mjs",
     "check:hygiene": "node scripts/check-hygiene.mjs",
+    "check:scale": "node scripts/check-scale.mjs",
+    "check:errno": "node scripts/check-errno.mjs",
     "check:real-project": "node scripts/check-real-project.mjs",
     "check:visual": "node scripts/check-visual.mjs"
   },

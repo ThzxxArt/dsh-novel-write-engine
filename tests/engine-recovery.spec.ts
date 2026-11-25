@@ -82,9 +82,25 @@ describe('0.1.2 recoverable state', () => {
         args: { stage: 'P4', chapter: 1 },
       })
       await engine.getBrief({ stage: 'P4', root })
+      // 0.2.20 WP2: a `fixed` claim needs a *new* sentence. Re-submitting the
+      // same review over an unchanged manuscript is exactly what PG-08 now
+      // refuses, so the recovery takes the real path: review, revise, re-review.
+      await engine.submitReview({ chapter: 1, ...sampleReview(1, text, { issues: [blocker] }), root })
+      await engine.getBrief({ stage: 'P5', root })
+      const revised = text.replace('不快不慢', '忽快忽慢')
+      await engine.submitRevision({
+        chapter: 1,
+        content: revised,
+        issues: [{ ...blocker, status: 'fixed', evidence: '走廊尽头传来脚步声，忽快忽慢，在门口停了两秒' }],
+        proof: sampleReview(1, revised).proof,
+        root,
+      })
+      await engine.getBrief({ stage: 'P4', root })
       await engine.submitReview({
         chapter: 1,
-        ...sampleReview(1, text, { issues: [{ ...blocker, status: 'fixed', evidence: '风从窗缝里挤进来' }] }),
+        ...sampleReview(1, revised, {
+          issues: [{ ...blocker, status: 'fixed', evidence: '走廊尽头传来脚步声，忽快忽慢，在门口停了两秒' }],
+        }),
         root,
       })
       const recovered = await engine.getStatus({ root })

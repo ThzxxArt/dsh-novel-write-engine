@@ -171,8 +171,33 @@ describe('S3 SC-FORMULA · FRAME_REPEAT', () => {
 })
 
 describe('S4 SC-PARALLEL · PARALLEL_RUN', () => {
-  it('reports three same-shape short sentences in a row', () => {
-    expect(hits('他走。他停。他看。', 'PARALLEL_RUN')).toHaveLength(1)
+  it('reports three sentences sharing a verb frame', () => {
+    // 0.2.20 WP5 changed what "same shape" means: a repeated *subject* is
+    // staccato narration, a repeated two-character verb frame is 排比.
+    expect(hits('看见血。看见火。看见门。', 'PARALLEL_RUN')).toHaveLength(1)
+  })
+
+  it('stays silent when the sentences repeat their subject', () => {
+    expect(codes('他走。他停。他看。').has('PARALLEL_RUN')).toBe(false)
+    // A name is a subject too: the shared head is looked up in the cast ledger.
+    const ledger = {
+      schema_version: 1 as const,
+      characters: [
+        {
+          name: '老屠',
+          role: '配角' as const,
+          first_appearance: 1,
+          profile: {},
+          current_state: {},
+          growth: [],
+          updated_at: 1,
+        },
+      ],
+    }
+    const withCast: Partial<MachineOptions> = {
+      evidence: { ...base().evidence, characters: ledger },
+    }
+    expect(codes('老屠放下刀。老屠解了围裙。老屠掩上门。', withCast).has('PARALLEL_RUN')).toBe(false)
   })
 
   it('stays silent when the shapes differ', () => {
@@ -221,11 +246,13 @@ describe('S5 SC-LIST · ENUMERATION', () => {
   })
 
   it('reports a long 顿号 list of short items', () => {
-    expect(hits('他买了米、面、油、盐、酱、醋。', 'ENUMERATION')).toHaveLength(1)
+    // Seven items (six separators) is a list habit; six items is an inventory.
+    expect(hits('他买了米、面、油、盐、酱、醋、茶、糖。', 'ENUMERATION')).toHaveLength(1)
   })
 
   it('allows a short 顿号 list', () => {
     expect(codes('他买了米、面、油。').has('ENUMERATION')).toBe(false)
+    expect(codes('架子上摆着刀、剑、枪、棍、绳、鞭。').has('ENUMERATION')).toBe(false)
   })
 
   it('reports three paragraphs shaped like 短名词：说明', () => {
@@ -401,7 +428,8 @@ describe('S10 SC-PARAGRAPH · LONG_PARAGRAPH and SHORT_PARAGRAPH', () => {
   })
 
   it('keeps the existing long-paragraph blocker as the only upper bound', () => {
-    const long = '他'.repeat(120) + '。'
+    // 0.2.20 D3: the bound is 150 CJK characters, punctuation excluded.
+    const long = '他'.repeat(151) + '。'
     expect(severity(long, 'LONG_PARAGRAPH')).toBe('blocker')
     expect(codes(long).has('SHORT_PARAGRAPH')).toBe(false)
   })
@@ -508,7 +536,7 @@ describe('the eleven new codes are owned, bounded and self-gated', () => {
     ])
     expect(severity('他笑了~', 'PUNCT_STANDARD')).toBe('blocker')
     expect(severity('他说："走吧。', 'QUOTE_UNBALANCED')).toBe('blocker')
-    expect(severity('他走。他停。他看。', 'PARALLEL_RUN')).toBe('advisory')
+    expect(severity('看见血。看见火。看见门。', 'PARALLEL_RUN')).toBe('advisory')
     expect(severity('空气里有一种说不清的气氛，整个人的状态都变得很微妙。', 'PROSE_ABSTRACT')).toBe(
       'advisory',
     )
@@ -545,7 +573,7 @@ describe('the eleven new codes are owned, bounded and self-gated', () => {
       ['METAPHOR_STACK', '她的眼睛像两口井，像两潭死水。'],
       ['PROSE_ABSTRACT', '空气里有一种说不清的气氛，整个人的状态都变得很微妙。'],
       ['FRAME_REPEAT', '他不是要钱，而是要命。他不是怕死，而是怕疼。'],
-      ['PARALLEL_RUN', '他走。他停。他看。'],
+      ['PARALLEL_RUN', '看见血。看见火。看见门。'],
       ['ENUMERATION', '第一，他要钱。第二，他要命。第三，他还要脸。'],
       ['DIALOGUE_RUN', run],
       ['QUOTE_UNBALANCED', '他说："走吧。'],
