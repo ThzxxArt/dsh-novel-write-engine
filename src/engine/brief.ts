@@ -57,7 +57,15 @@ export class BriefLibrary {
         { cause: error },
       )
     }
-    return { stage, title: TITLES[stage], content, contentHash: hash(content) }
+    // 0.2.20 release: a Windows checkout with `core.autocrlf=true` gives every
+    // template CRLF, so the rendered task book is one code point longer per
+    // line. The brief budget then over-runs by the template's line count (a P8
+    // brief measured 8,227 on the Windows runner against the same 8,192 limit
+    // that fitted on Linux). Normalise once, where the file is read: the brief
+    // the model sees and the brief the budget measured must be the same string
+    // on every platform.
+    const normalized = content.replace(/\r\n/g, '\n')
+    return { stage, title: TITLES[stage], content: normalized, contentHash: hash(normalized) }
   }
 
   /** Replace `{{name}}` placeholders; unknown placeholders are left visible. */

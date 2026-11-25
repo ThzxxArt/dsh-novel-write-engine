@@ -76,3 +76,27 @@ describe('0.2.20 release: the documented migration paths work', () => {
     }
   }, 60_000)
 })
+
+describe('0.2.20 release: a CRLF checkout renders the same brief', () => {
+  it('normalises template line endings when it loads them', async () => {
+    const { BriefLibrary } = await import('../src/engine/brief.js')
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const directory = await mkdtemp(join(tmpdir(), 'brief-crlf-'))
+    try {
+      await writeFile(join(directory, 'P8.md'), '第一行\r\n第二行\r\n{{chapter}}\r\n', 'utf8')
+      const library = new BriefLibrary(directory)
+      const loaded = library.load('P8')
+      // A Windows checkout with core.autocrlf=true gives every template CRLF.
+      // The rendered book was one code point per line longer than the one the
+      // budget measured, and a P8 brief came out at 8,227 on the Windows runner
+      // against 8,192 on Linux.
+      expect(loaded.content).not.toContain('\r')
+      expect(loaded.content.split('\n')).toHaveLength(4)
+      expect(library.render('P8', { chapter: 7 }).content).toContain('7')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})

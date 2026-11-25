@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { compileRulepack } from '../src/rules/compiler.js'
 import {
@@ -33,7 +34,10 @@ import type { Rulepack } from '../src/rules/types.js'
  * | RESOURCE_MISMATCH     | advisory| blocker      |
  * | LOCKED_DETAIL_DRIFT   | advisory| blocker      |
  */
-const repoRoot = new URL('..', import.meta.url).pathname
+// 0.2.20 release: `URL.pathname` keeps the Windows drive letter
+// (`/D:/a/...`), so `${repoRoot}rulepacks` became `D:\D:\a\...`. Use the
+// file URL helper, which yields a real filesystem path on every platform.
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const pack = compileRulepack(
   structuredClone(
     parseYaml(readFileSync(`${repoRoot}rulepacks/default.yaml`, 'utf8')) as Record<string, unknown>,
